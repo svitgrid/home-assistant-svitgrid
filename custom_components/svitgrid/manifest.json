@@ -1,0 +1,12 @@
+{
+  "domain": "svitgrid",
+  "name": "Svitgrid",
+  "version": "0.1.0",
+  "documentation": "https://github.com/svitgrid/home-assistant-svitgrid",
+  "issue_tracker": "https://github.com/svitgrid/home-assistant-svitgrid/issues",
+  "codeowners": ["@svitgrid"],
+  "iot_class": "cloud_push",
+  "requirements": ["aiohttp>=3.9", "cryptography>=42.0"],
+  "dependencies": [],
+  "config_flow": false
+}
