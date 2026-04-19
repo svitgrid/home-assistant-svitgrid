@@ -68,6 +68,30 @@ class SvitgridApiClient:
                 raise RateLimited(await _err(resp))
             raise BootstrapFailed(f"HTTP {resp.status}: {await _err(resp)}")
 
+    async def push_reading(self, api_key: str, reading: dict[str, Any]) -> None:
+        url = f"{self._base}/api/v1/ingest/reading"
+        async with self._session.post(url, headers={"x-api-key": api_key}, json=reading) as resp:
+            if resp.status >= 400:
+                _LOGGER.warning(
+                    "push_reading failed: status=%s body=%s", resp.status, await _err(resp)
+                )
+
+    async def poll_commands(self, api_key: str) -> dict[str, Any]:
+        url = f"{self._base}/api/v3/executors/commands"
+        async with self._session.get(url, headers={"x-api-key": api_key}) as resp:
+            if resp.status >= 400:
+                _LOGGER.warning(
+                    "poll_commands failed: status=%s body=%s", resp.status, await _err(resp)
+                )
+                return {"commands": [], "serverTime": None}
+            return await resp.json()
+
+    async def ack_command(self, api_key: str, command_id: str, body: dict[str, Any]) -> None:
+        url = f"{self._base}/api/v3/executors/commands/{command_id}/ack"
+        async with self._session.post(url, headers={"x-api-key": api_key}, json=body) as resp:
+            if resp.status >= 400:
+                raise CommandAckFailed(f"HTTP {resp.status}: {await _err(resp)}")
+
 
 async def _err(resp: aiohttp.ClientResponse) -> str:
     try:

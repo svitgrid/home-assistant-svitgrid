@@ -10,6 +10,7 @@ import pytest
 from custom_components.svitgrid.api_client import (
     BootstrapFailed,
     BootstrapWindowExpired,
+    CommandAckFailed,
     DeviceNotFound,
     PublicKeyMismatch,
     RateLimited,
@@ -95,4 +96,93 @@ class TestBootstrap:
         with pytest.raises(BootstrapFailed):
             await client.bootstrap(
                 device_id="dev-1", public_key_hex="04" + "aa" * 64, signing_key_id="k"
+            )
+
+
+@pytest.mark.asyncio
+class TestReadingsPush:
+    async def test_posts_reading_with_api_key_header(self):
+        session, resp = _mock_session_with_response(200, {"ok": True})
+        client = SvitgridApiClient(session, api_base="https://api.example")
+        await client.push_reading(
+            api_key="secret-key",
+            reading={
+                "inverterId": "inv-1",
+                "timestamp": "2026-04-19T12:00:00Z",
+                "batterySoc": 80,
+                "batteryPower": -1000,
+                "pvPower": 2500,
+                "gridPower": -500,
+                "loadPower": 3000,
+                "source": "edge-device",
+            },
+        )
+        call_args = session.post.call_args
+        assert call_args.args[0].endswith("/api/v1/ingest/reading")
+        assert call_args.kwargs["headers"]["x-api-key"] == "secret-key"
+        body = call_args.kwargs["json"]
+        assert body["inverterId"] == "inv-1"
+        assert body["source"] == "edge-device"
+
+
+@pytest.mark.asyncio
+class TestPollCommands:
+    async def test_returns_commands_list(self):
+        session, _ = _mock_session_with_response(
+            200,
+            {
+                "commands": [
+                    {
+                        "commandId": "c1",
+                        "command": "set_battery_charge",
+                        "signature": "sig",
+                        "signingKeyId": "k",
+                    }
+                ],
+                "serverTime": "2026-04-19T12:00:00Z",
+            },
+        )
+        client = SvitgridApiClient(session, api_base="https://api.example")
+        resp = await client.poll_commands(api_key="secret")
+        assert len(resp["commands"]) == 1
+        assert resp["commands"][0]["commandId"] == "c1"
+
+    async def test_empty_list_ok(self):
+        session, _ = _mock_session_with_response(200, {"commands": [], "serverTime": "t"})
+        client = SvitgridApiClient(session, api_base="https://api.example")
+        resp = await client.poll_commands(api_key="secret")
+        assert resp["commands"] == []
+
+
+@pytest.mark.asyncio
+class TestAckCommand:
+    async def test_posts_signed_ack_body(self):
+        session, _ = _mock_session_with_response(200, {"ok": True})
+        client = SvitgridApiClient(session, api_base="https://api.example")
+        await client.ack_command(
+            api_key="secret",
+            command_id="c1",
+            body={
+                "success": False,
+                "rejected": True,
+                "reason": "unsupported",
+                "executorTime": "2026-04-19T12:00:00Z",
+                "executorVersion": "0.1.0",
+                "signature": "sigbase64",
+                "signingKeyId": "our-key",
+            },
+        )
+        call_args = session.post.call_args
+        assert call_args.args[0].endswith("/api/v3/executors/commands/c1/ack")
+        assert call_args.kwargs["headers"]["x-api-key"] == "secret"
+        assert call_args.kwargs["json"]["signature"] == "sigbase64"
+
+    async def test_401_raises_command_ack_failed(self):
+        session, _ = _mock_session_with_response(401, {"error": "invalid signature"})
+        client = SvitgridApiClient(session, api_base="https://api.example")
+        with pytest.raises(CommandAckFailed):
+            await client.ack_command(
+                api_key="secret",
+                command_id="c1",
+                body={"success": False, "signature": "bad", "signingKeyId": "k"},
             )
