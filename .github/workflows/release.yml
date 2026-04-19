@@ -1,0 +1,29 @@
+name: Release
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate version matches tag
+        run: |
+          tag="${GITHUB_REF#refs/tags/v}"
+          manifest_ver=$(python -c "import json; print(json.load(open('custom_components/svitgrid/manifest.json'))['version'])")
+          if [ "$tag" != "$manifest_ver" ]; then
+            echo "ERROR: tag v$tag does not match manifest.json version $manifest_ver"
+            exit 1
+          fi
+      - name: Build release zip
+        run: |
+          cd custom_components/svitgrid
+          zip -r ../../svitgrid.zip .
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: svitgrid.zip
+          generate_release_notes: true
