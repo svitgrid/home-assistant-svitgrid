@@ -13,10 +13,10 @@ from __future__ import annotations
 import asyncio
 import logging
 
-import aiohttp
 import voluptuous as vol
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import Event, HomeAssistant
+from homeassistant.helpers import aiohttp_client
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.typing import ConfigType
 
@@ -78,7 +78,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     readings_interval = conf["readings_interval_seconds"]
     command_interval = conf["command_poll_interval_seconds"]
 
-    session = aiohttp.ClientSession()
+    session = aiohttp_client.async_get_clientsession(hass)
     api_client = SvitgridApiClient(session, api_base=api_base)
     keystore = SvitgridKeystore(hass)
 
@@ -96,7 +96,6 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 "Svitgrid bootstrap failed. Integration will not start. "
                 "Check device_id and that the mobile app opened a bootstrap window."
             )
-            await session.close()
             return False
 
     # Trusted-keys cache: signingKeyId → publicKeyHex for each approved
@@ -114,7 +113,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     # resolves the real inverter ID from the bootstrap response.
     inverter_id = device_id
 
-    readings_task = hass.loop.create_task(
+    readings_task = hass.async_create_background_task(
         run_readings_loop(
             hass=hass,
             api_client=api_client,
@@ -122,10 +121,11 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             inverter_id=inverter_id,
             entity_map=entity_map,
             interval_s=readings_interval,
-        )
+        ),
+        name="svitgrid_readings_publisher",
     )
 
-    poller_task = hass.loop.create_task(
+    poller_task = hass.async_create_background_task(
         run_command_loop(
             hass=hass,
             api_client=api_client,
@@ -133,14 +133,14 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             trusted_public_keys_hex=trusted_public_keys_hex,
             executor_version="0.1.0",
             interval_s=command_interval,
-        )
+        ),
+        name="svitgrid_command_poller",
     )
 
     async def _on_stop(_event: Event) -> None:
         for task in (readings_task, poller_task):
             task.cancel()
         await asyncio.gather(readings_task, poller_task, return_exceptions=True)
-        await session.close()
 
     hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _on_stop)
 
