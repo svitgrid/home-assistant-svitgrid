@@ -104,3 +104,21 @@ class TestCanonicalJsonEncode:
             '"validUntil":"2026-12-31T23:59:59Z"}'
         )
         assert canonical_json_encode(payload) == expected
+
+    def test_tuple_raises_type_error(self):
+        # Tuples are NOT valid — callers must use lists. This pins the
+        # current strict behavior: surprise coercion would be worse than
+        # a clear error.
+        with pytest.raises(TypeError):
+            canonical_json_encode({"items": ("a", "b")})
+
+    def test_bytes_raises_type_error(self):
+        # bytes aren't JSON-serializable — caller must decode to str first.
+        with pytest.raises(TypeError):
+            canonical_json_encode({"blob": b"data"})
+
+    def test_float_precision_edge_case(self):
+        # Both Python and JS use shortest-round-trip float formatting.
+        # 0.1 + 0.2 == 0.30000000000000004 in both. This test pins
+        # the cross-language parity for float precision edge cases.
+        assert canonical_json_encode({"val": 0.1 + 0.2}) == '{"val":0.30000000000000004}'

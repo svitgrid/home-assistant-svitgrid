@@ -5,10 +5,19 @@ in the svitgrid monorepo. Byte-level compatibility is required — mismatched
 output here makes every signed ACK fail on the server.
 
 Canonical JSON rules (from TS):
-  - Keys sorted alphabetically (ASCII-only) at every nesting level.
+  - Keys sorted by Unicode codepoint at every nesting level. This matches
+    JavaScript's default `Array.prototype.sort()` ordering. Non-ASCII keys
+    are supported but SHOULD be avoided in the signed ACK payload — the
+    entire cloud API uses ASCII-only keys, and a non-ASCII key on the add-on
+    side is almost certainly a bug.
   - Arrays preserve source order (not sorted).
   - Numbers: integer-valued doubles emit as ints ("1", not "1.0"). Non-integer
     doubles emit as their Python repr (matches JS toString for sanely-sized nums).
+  - Number-size boundary: JavaScript's `number` loses precision above 2**53
+    (Number.MAX_SAFE_INTEGER). Python ints do not, so integer-valued payloads
+    with values > 2^53 will serialize DIFFERENTLY across languages. Callers
+    MUST use strings (not numbers) for any identifier or counter that could
+    exceed the JS safe-integer range.
   - NaN / Infinity / -Infinity raise ValueError.
   - undefined (missing keys) are omitted by the caller; None IS preserved
     as JSON null (the TS side distinguishes between them — Python does not,
