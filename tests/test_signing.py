@@ -11,6 +11,11 @@ import pytest
 from custom_components.svitgrid.signing import (
     canonical_json_bytes,
     canonical_json_encode,
+    generate_keypair,
+    public_key_from_hex,
+    public_key_to_hex,
+    sign_payload,
+    verify_payload,
 )
 
 
@@ -122,3 +127,42 @@ class TestCanonicalJsonEncode:
         # 0.1 + 0.2 == 0.30000000000000004 in both. This test pins
         # the cross-language parity for float precision edge cases.
         assert canonical_json_encode({"val": 0.1 + 0.2}) == '{"val":0.30000000000000004}'
+
+
+class TestEcdsaP256:
+    def test_generate_keypair_returns_tuple(self):
+        private_key, public_key_hex = generate_keypair()
+        # Uncompressed EC point: '04' + x (64 hex) + y (64 hex) = 130 chars total
+        assert isinstance(public_key_hex, str)
+        assert len(public_key_hex) == 130
+        assert public_key_hex.startswith("04")
+
+    def test_sign_and_verify_roundtrip(self):
+        private_key, public_key_hex = generate_keypair()
+        payload = {"commandId": "cmd-1", "success": True}
+        signature_b64 = sign_payload(payload, private_key)
+        assert verify_payload(payload, signature_b64, public_key_hex)
+
+    def test_verify_fails_for_tampered_payload(self):
+        private_key, public_key_hex = generate_keypair()
+        sig = sign_payload({"commandId": "cmd-1", "success": True}, private_key)
+        # Different payload — signature must NOT verify.
+        assert not verify_payload({"commandId": "cmd-2", "success": True}, sig, public_key_hex)
+
+    def test_verify_fails_for_wrong_key(self):
+        priv_a, _ = generate_keypair()
+        _, pub_b_hex = generate_keypair()
+        sig = sign_payload({"commandId": "cmd-1"}, priv_a)
+        assert not verify_payload({"commandId": "cmd-1"}, sig, pub_b_hex)
+
+    def test_public_key_hex_roundtrip(self):
+        _, hex1 = generate_keypair()
+        pub = public_key_from_hex(hex1)
+        hex2 = public_key_to_hex(pub)
+        assert hex1 == hex2
+
+    def test_public_key_from_hex_rejects_malformed(self):
+        with pytest.raises(ValueError):
+            public_key_from_hex("not-hex")
+        with pytest.raises(ValueError):
+            public_key_from_hex("04" + "aa" * 10)  # too short
