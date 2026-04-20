@@ -49,7 +49,7 @@ class SvitgridApiClient:
     async def bootstrap(
         self, device_id: str, public_key_hex: str, signing_key_id: str
     ) -> dict[str, Any]:
-        url = f"{self._base}/edge-devices/bootstrap"
+        url = f"{self._base}/api/v1/edge-devices/bootstrap"
         body = {
             "deviceId": device_id,
             "publicKeyHex": public_key_hex,
