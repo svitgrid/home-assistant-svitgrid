@@ -61,3 +61,29 @@ def test_build_payload_omits_missing_entity(hass):
         entity_map={"batterySoc": "sensor.does_not_exist"},
     )
     assert "batterySoc" not in payload
+
+
+def test_build_payload_aggregates_pv_power(hass):
+    hass.states.async_set("sensor.pv1", "1500", {})
+    hass.states.async_set("sensor.pv2", "2000", {})
+    payload = build_reading_payload(
+        hass=hass,
+        inverter_id="inv-1",
+        entity_map={
+            "pv1Power": "sensor.pv1",
+            "pv2Power": "sensor.pv2",
+        },
+    )
+    assert payload["pv1Power"] == 1500.0
+    assert payload["pv2Power"] == 2000.0
+    assert payload["pvPower"] == 3500.0
+
+
+def test_build_payload_single_mppt_aggregates_to_pv1_total(hass):
+    hass.states.async_set("sensor.pv1", "1500", {})
+    payload = build_reading_payload(
+        hass=hass,
+        inverter_id="inv-1",
+        entity_map={"pv1Power": "sensor.pv1"},
+    )
+    assert payload["pvPower"] == 1500.0

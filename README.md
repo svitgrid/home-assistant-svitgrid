@@ -26,14 +26,14 @@ svitgrid:
   device_id: "<paste from mobile app>"
   signing_key_id: "<your chosen id, e.g. ha-home>"
   entity_map:
-    # Required (all 5 must be present)
+    # Required (all 6 must be present)
     batterySoc: sensor.my_inverter_battery_soc
     batteryPower: sensor.my_inverter_battery_power
+    batteryVoltage: sensor.my_inverter_battery_voltage
     pv1Power: sensor.my_inverter_pv1_power
     gridPower: sensor.my_inverter_grid_power
     loadPower: sensor.my_inverter_load_power
     # Optional — include only those your HA integration exposes
-    batteryVoltage: sensor.my_inverter_battery_voltage
     pv2Power: sensor.my_inverter_pv2_power
     dailyPvEnergy: sensor.my_inverter_daily_pv
     gridVoltageL1: sensor.my_inverter_grid_voltage_l1

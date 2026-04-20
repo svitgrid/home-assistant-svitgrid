@@ -11,7 +11,9 @@ STORAGE_KEY = "svitgrid"
 STORAGE_VERSION = 1
 
 # Required canonical entity-map fields
-REQUIRED_FIELDS = frozenset({"batterySoc", "batteryPower", "pv1Power", "gridPower", "loadPower"})
+REQUIRED_FIELDS = frozenset(
+    {"batterySoc", "batteryPower", "batteryVoltage", "pv1Power", "gridPower", "loadPower"}
+)
 
 # All recognized canonical fields (required + optional)
 ALL_FIELDS = REQUIRED_FIELDS | frozenset(
@@ -19,7 +21,6 @@ ALL_FIELDS = REQUIRED_FIELDS | frozenset(
         "pv2Power",
         "pv3Power",
         "pv4Power",
-        "batteryVoltage",
         "batteryCurrent",
         "batteryTemperature",
         "gridVoltageL1",

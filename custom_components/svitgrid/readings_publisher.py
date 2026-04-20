@@ -45,6 +45,17 @@ def build_reading_payload(
             payload[field] = float(raw)
         except (TypeError, ValueError):
             continue
+    # Aggregate pvPower from the per-MPPT values the server requires.
+    # (Server schema requires `pvPower` as a top-level scalar; we keep
+    # the pvN fields alongside for diagnostic purposes.)
+    pv_total = 0.0
+    has_any_pv = False
+    for pv_field in ("pv1Power", "pv2Power", "pv3Power", "pv4Power"):
+        if pv_field in payload:
+            pv_total += payload[pv_field]
+            has_any_pv = True
+    if has_any_pv:
+        payload["pvPower"] = pv_total
     return payload
 
 

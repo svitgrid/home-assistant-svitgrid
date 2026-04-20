@@ -20,6 +20,7 @@ async def test_setup_with_no_saved_state_runs_bootstrap(hass, enable_custom_inte
             "entity_map": {
                 "batterySoc": "sensor.soc",
                 "batteryPower": "sensor.batt_power",
+                "batteryVoltage": "sensor.bv",
                 "pv1Power": "sensor.pv1",
                 "gridPower": "sensor.grid",
                 "loadPower": "sensor.load",
@@ -51,6 +52,7 @@ async def test_setup_rejects_missing_required_field(hass, enable_custom_integrat
                 # Missing loadPower
                 "batterySoc": "sensor.soc",
                 "batteryPower": "sensor.batt_power",
+                "batteryVoltage": "sensor.bv",
                 "pv1Power": "sensor.pv1",
                 "gridPower": "sensor.grid",
             },
@@ -91,6 +93,7 @@ async def test_setup_skips_bootstrap_when_state_already_saved(hass, enable_custo
             "entity_map": {
                 "batterySoc": "sensor.soc",
                 "batteryPower": "sensor.bp",
+                "batteryVoltage": "sensor.bv",
                 "pv1Power": "sensor.pv1",
                 "gridPower": "sensor.gp",
                 "loadPower": "sensor.lp",
