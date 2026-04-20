@@ -153,6 +153,26 @@ class TestPollCommands:
         resp = await client.poll_commands(api_key="secret")
         assert resp["commands"] == []
 
+    async def test_aliases_server_id_field_to_commandId(self):
+        # Server response uses `id` as the doc ID (per
+        # services/api/src/routes/v3/executor-commands.ts:284). Downstream
+        # command_poller.process_command expects `commandId`. The client
+        # normalizes the wire format at the boundary.
+        session, _ = _mock_session_with_response(
+            200,
+            {
+                "commands": [
+                    {"id": "cmd-abc", "command": "set_battery_charge"},
+                ],
+                "serverTime": "t",
+            },
+        )
+        client = SvitgridApiClient(session, api_base="https://api.example")
+        resp = await client.poll_commands(api_key="secret")
+        assert resp["commands"][0]["commandId"] == "cmd-abc"
+        # Original `id` still preserved for anyone who needs the raw wire form.
+        assert resp["commands"][0]["id"] == "cmd-abc"
+
 
 @pytest.mark.asyncio
 class TestAckCommand:

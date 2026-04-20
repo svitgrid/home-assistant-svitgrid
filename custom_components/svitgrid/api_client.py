@@ -84,7 +84,14 @@ class SvitgridApiClient:
                     "poll_commands failed: status=%s body=%s", resp.status, await _err(resp)
                 )
                 return {"commands": [], "serverTime": None}
-            return await resp.json()
+            data = await resp.json()
+            # Normalize: server sends `id` as the doc ID; downstream code
+            # (command_poller.process_command) reads `commandId`. Aliasing
+            # here keeps the wire format change contained at the boundary.
+            for cmd in data.get("commands", []):
+                if "id" in cmd and "commandId" not in cmd:
+                    cmd["commandId"] = cmd["id"]
+            return data
 
     async def ack_command(self, api_key: str, command_id: str, body: dict[str, Any]) -> None:
         url = f"{self._base}/api/v3/executors/commands/{command_id}/ack"
