@@ -43,18 +43,31 @@ async def run_first_time(
         encryption_algorithm=serialization.NoEncryption(),
     ).decode("ascii")
 
+    # Build trusted_public_keys_hex from the Plan A bootstrap-response
+    # field. Back-compat: if the field is absent (un-upgraded Plan A),
+    # default to an empty dict. The B1 fallback is being removed in
+    # B2.2 Task 5, so an empty cache = all signed commands get skipped
+    # until add_trusted_key commands arrive.
+    trusted_keys_list = resp.get("trustedKeys", [])
+    trusted_public_keys_hex = {
+        k["keyId"]: k["publicKeyHex"]
+        for k in trusted_keys_list
+        if "keyId" in k and "publicKeyHex" in k
+    }
+
     await keystore.save(
         api_key=resp["apiKey"],
         public_key_hex=public_key_hex,
         private_key_pem=pem,
         signing_key_id=signing_key_id,
         trusted_key_ids=list(resp.get("trustedKeyIds", [])),
+        trusted_public_keys_hex=trusted_public_keys_hex,
     )
     state = await keystore.load()
     assert state is not None
     _LOGGER.info(
-        "Svitgrid bootstrap complete: apiKey=%s..., trustedKeys=%s",
+        "Svitgrid bootstrap complete: apiKey=%s..., trustedKeys=%d",
         state.api_key[:8],
-        state.trusted_key_ids,
+        len(state.trusted_public_keys_hex),
     )
     return state
