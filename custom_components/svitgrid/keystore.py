@@ -21,6 +21,7 @@ class KeystoreState:
     private_key_pem: str
     signing_key_id: str
     trusted_key_ids: list[str]
+    trusted_public_keys_hex: dict[str, str]
 
     def load_private_key(self) -> ec.EllipticCurvePrivateKey:
         return serialization.load_pem_private_key(
@@ -54,6 +55,7 @@ class SvitgridKeystore:
             private_key_pem=data["private_key_pem"],
             signing_key_id=data["signing_key_id"],
             trusted_key_ids=list(data.get("trusted_key_ids", [])),
+            trusted_public_keys_hex=dict(data.get("trusted_public_keys_hex", {})),
         )
 
     async def save(
@@ -64,6 +66,7 @@ class SvitgridKeystore:
         private_key_pem: str,
         signing_key_id: str,
         trusted_key_ids: list[str],
+        trusted_public_keys_hex: dict[str, str] | None = None,
     ) -> None:
         await self._store.async_save(
             asdict(
@@ -73,6 +76,7 @@ class SvitgridKeystore:
                     private_key_pem=private_key_pem,
                     signing_key_id=signing_key_id,
                     trusted_key_ids=trusted_key_ids,
+                    trusted_public_keys_hex=trusted_public_keys_hex or {},
                 )
             )
         )
@@ -83,4 +87,14 @@ class SvitgridKeystore:
         if current is None:
             return
         current.trusted_key_ids = trusted_key_ids
+        await self._store.async_save(asdict(current))
+
+    async def update_trusted_keys_hex(self, trusted_public_keys_hex: dict[str, str]) -> None:
+        """Replace the trusted-keys cache atomically. Keeps trusted_key_ids in
+        sync (derived as the dict's keys)."""
+        current = await self.load()
+        if current is None:
+            return
+        current.trusted_public_keys_hex = dict(trusted_public_keys_hex)
+        current.trusted_key_ids = sorted(trusted_public_keys_hex.keys())
         await self._store.async_save(asdict(current))

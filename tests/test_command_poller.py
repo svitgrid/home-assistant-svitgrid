@@ -29,6 +29,7 @@ def _make_keystore_state(priv, pub_hex, trusted_hex_by_id):
         private_key_pem=pem,
         signing_key_id="our-key",
         trusted_key_ids=list(trusted_hex_by_id.keys()),
+        trusted_public_keys_hex=dict(trusted_hex_by_id),
     )
 
 
