@@ -1,7 +1,7 @@
 {
   "domain": "svitgrid",
   "name": "Svitgrid",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "documentation": "https://github.com/svitgrid/home-assistant-svitgrid",
   "issue_tracker": "https://github.com/svitgrid/home-assistant-svitgrid/issues",
   "codeowners": ["@svitgrid"],
