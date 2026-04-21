@@ -29,6 +29,7 @@ from .const import (
     READINGS_INTERVAL_S,
     REQUIRED_FIELDS,
 )
+from .executors import create_executor
 from .keystore import SvitgridKeystore
 from .readings_publisher import run_loop as run_readings_loop
 
@@ -58,6 +59,18 @@ CONFIG_SCHEMA = vol.Schema(
                 vol.Optional(
                     "command_poll_interval_seconds", default=COMMAND_POLL_INTERVAL_S
                 ): vol.All(vol.Coerce(int), vol.Range(min=2, max=60)),
+                vol.Optional("executor"): vol.Schema(
+                    {
+                        vol.Optional("type", default="read_only"): vol.In(["read_only", "smg_ii"]),
+                        vol.Optional("modbus_hub"): cv.string,
+                        vol.Optional("modbus_slave", default=1): vol.All(
+                            vol.Coerce(int), vol.Range(min=1, max=247)
+                        ),
+                        vol.Optional("battery_nominal_voltage", default=48.0): vol.All(
+                            vol.Coerce(float), vol.Range(min=12.0, max=600.0)
+                        ),
+                    }
+                ),
             }
         )
     },
@@ -98,16 +111,14 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             )
             return False
 
-    # Trusted-keys cache: signingKeyId → publicKeyHex for each approved
-    # household admin device. Plan A's bootstrap response gives us the IDs
-    # but not the hex values (those arrive via add_trusted_key commands).
-    # In B1 this dict stays empty — command_poller.process_command has a
-    # documented fallback that sends signed rejection ACKs without admin-
-    # signature verification when the cache is empty. This lets us validate
-    # the wire-protocol contract end-to-end in B1. B2 replaces this with
-    # live updates driven by add_trusted_key / revoke_trusted_key commands,
-    # after which the fallback stops triggering.
-    trusted_public_keys_hex: dict[str, str] = {}
+    # In-memory cache populated from the keystore (which is written by
+    # bootstrap + updated live via add_trusted_key / revoke_trusted_key
+    # commands handled in command_poller.process_command).
+    trusted_public_keys_hex: dict[str, str] = dict(state.trusted_public_keys_hex)
+
+    # Build executor from YAML config (or None for read_only / missing block)
+    executor_config = conf.get("executor") or {}
+    executor = create_executor(executor_config, hass)
 
     # Inverter ID — B1 uses device_id as a placeholder. B2's config flow
     # resolves the real inverter ID from the bootstrap response.
@@ -131,8 +142,8 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             api_client=api_client,
             keystore=keystore,
             trusted_public_keys_hex=trusted_public_keys_hex,
-            executor_version="0.1.0",
-            executor=None,
+            executor_version="0.2.0",
+            executor=executor,
             interval_s=command_interval,
         ),
         name="svitgrid_command_poller",
@@ -149,6 +160,8 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         "session": session,
         "api_client": api_client,
         "keystore": keystore,
+        "executor": executor,
+        "trusted_public_keys_hex": trusted_public_keys_hex,
         "readings_task": readings_task,
         "poller_task": poller_task,
     }
