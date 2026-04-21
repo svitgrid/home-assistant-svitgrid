@@ -132,6 +132,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             keystore=keystore,
             trusted_public_keys_hex=trusted_public_keys_hex,
             executor_version="0.1.0",
+            executor=None,
             interval_s=command_interval,
         ),
         name="svitgrid_command_poller",

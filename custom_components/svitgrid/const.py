@@ -38,3 +38,11 @@ ALL_FIELDS = REQUIRED_FIELDS | frozenset(
 # Source tag on pushed readings (accepted by Plan A's readings endpoint).
 # The integrationType field on the device doc distinguishes HA from ESP32 already.
 READING_SOURCE = "edge-device"
+
+# Internal commands the add-on handles itself (never dispatched to an executor).
+ADD_TRUSTED_KEY_COMMAND = "add_trusted_key"
+REVOKE_TRUSTED_KEY_COMMAND = "revoke_trusted_key"
+INTERNAL_COMMANDS = frozenset({ADD_TRUSTED_KEY_COMMAND, REVOKE_TRUSTED_KEY_COMMAND})
+
+# Inverter-control commands dispatched to the configured executor.
+DISPATCHABLE_COMMANDS = frozenset({"set_battery_charge"})
