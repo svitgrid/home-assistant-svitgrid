@@ -4,7 +4,7 @@ Custom component that connects a Home Assistant install to the [Svitgrid](https:
 
 ## Status
 
-**v0.1.0** — wire-protocol MVP. YAML config only; commands are acknowledged but not executed. The next release (v0.2.0) adds a config-flow UI and starts handling commands against real inverters.
+**v0.2.0** — real inverter control (experimental). Trusted-keys lifecycle now works end-to-end: admin public keys from the Svitgrid mobile app reach the add-on via the bootstrap response and `add_trusted_key` commands; signed commands from admins are verified locally before acting. The first Tier 1 executor (`smg_ii`) ships as experimental (see below). YAML-only config; native config flow UI comes in v0.3.0.
 
 ## Install (HACS custom repository)
 
@@ -57,6 +57,32 @@ INFO (MainThread) [custom_components.svitgrid] Command poller started
 
 Within 30 seconds, readings will show up in the Svitgrid mobile app.
 
+## Executors (experimental — v0.2.0)
+
+Without an `executor:` block in `configuration.yaml`, the add-on runs read-only: it pushes readings and acknowledges commands as "unsupported". This is the safe default and matches v0.1.0 behavior.
+
+To enable actual inverter control, add an `executor:` block alongside the top-level `svitgrid:` config:
+
+```yaml
+svitgrid:
+  # ...existing fields...
+  executor:
+    type: "smg_ii"                   # or "read_only" (default)
+    modbus_hub: "my_modbus_hub"      # the name: field from your modbus: block
+    modbus_slave: 1                  # Modbus unit ID (usually 1 for SMG-II)
+    battery_nominal_voltage: 48      # in volts; used for power→current conversion
+```
+
+### SMG-II executor (experimental — unverified on real hardware)
+
+Covers EASUN SMG-II, ISolar SMG-II, POW-HVM, Anenji 4kW/6kW, and other SMG-II clones.
+
+Currently handles one command: `set_battery_charge` (chargePowerLimitW field). Writes to Modbus register 233 (inverter-side charging current, 0.1 A units). Conversion: `register_value = round(chargePowerLimitW / battery_nominal_voltage / 0.1)`.
+
+**⚠️ Experimental — not yet validated on real hardware.** The register map comes from community references (`syssi/esphome-smg-ii`) and has passed all unit + integration tests against Svitgrid's staging server, but no one has confirmed that writing to register 233 on real SMG-II hardware produces the expected effect. If you try it and something looks wrong, remove the `executor:` block and nothing further happens; the add-on reverts to read-only. Please [open an issue](https://github.com/svitgrid/home-assistant-svitgrid/issues) with what you observed — your feedback is how we validate this.
+
+Future releases will add Deye, Growatt, and more SMG-II commands (sell-power cap, charge window, working mode).
+
 ## Troubleshooting
 
 | Log line | Meaning | Fix |
@@ -64,7 +90,8 @@ Within 30 seconds, readings will show up in the Svitgrid mobile app.
 | `Svitgrid bootstrap failed` | The mobile app didn't open a bootstrap window for this `device_id`, or it expired | Re-open the bootstrap window in the mobile app, restart HA |
 | `signingKeyId is already registered with a different public key` | You changed `signing_key_id` but the server still has the old key registered | Pick a new `signing_key_id` — don't reuse IDs across rotations |
 | `Too many bootstrap attempts` | 3 failed bootstraps in a row for this deviceId | Re-open the window in the mobile app |
-| `B1 bootstrap mode: trusted-keys cache empty; sending signed ACK WITHOUT verifying admin signature` | Expected in v0.1.0 — the add-on doesn't yet fetch admin public keys. v0.2.0 fixes this. | Ignore |
+| `Skipping command — signingKeyId X not in trusted keys` | Admin key hasn't propagated yet. In v0.2.0 this usually means your HA installed BEFORE the admin key was registered in the household; re-bootstrap to pull the current trusted keys. | Restart HA, or re-add the integration via the mobile app |
+| `Command X (set_battery_charge) dispatchable but no executor configured` | The add-on received a signed command from the Svitgrid app but you haven't added an `executor:` block to `configuration.yaml` | Add the executor block (see above) or leave it out to stay read-only |
 
 ## License
 
