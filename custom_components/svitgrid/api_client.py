@@ -101,8 +101,12 @@ class SvitgridApiClient:
 
 
 async def _err(resp: aiohttp.ClientResponse) -> str:
+    """Render a server error for logs. Includes the full JSON body so
+    Zod's `details[]` (which names the offending fields) is visible — the
+    previous `body.get("error", body)` form hid that array and forced
+    every validation regression into a print-statement debug session."""
     try:
         body = await resp.json()
-        return str(body.get("error", body))
+        return str(body)
     except Exception:  # noqa: BLE001
         return "<non-JSON body>"
