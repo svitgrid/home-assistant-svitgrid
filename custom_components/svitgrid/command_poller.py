@@ -46,7 +46,7 @@ async def process_command(
     our_private_key: ec.EllipticCurvePrivateKey,
     our_signing_key_id: str,
     executor_version: str,
-    keystore: SvitgridKeystore,
+    keystore: SvitgridKeystore | None,
     executor: BaseExecutor | None,
 ) -> None:
     """Process one polled command. Three dispatch arms:
@@ -75,7 +75,8 @@ async def process_command(
             _LOGGER.warning("Skipping malformed add_trusted_key %s: %s", cmd_id, payload)
             return
         trusted_public_keys_hex[key_id] = public_key_hex
-        await keystore.update_trusted_keys_hex(dict(trusted_public_keys_hex))
+        if keystore is not None:
+            await keystore.update_trusted_keys_hex(dict(trusted_public_keys_hex))
         _LOGGER.info(
             "Added trusted key %s to cache (now %d keys)",
             key_id,
@@ -100,7 +101,8 @@ async def process_command(
             _LOGGER.warning("Skipping malformed revoke_trusted_key %s: %s", cmd_id, payload)
             return
         trusted_public_keys_hex.pop(key_id, None)
-        await keystore.update_trusted_keys_hex(dict(trusted_public_keys_hex))
+        if keystore is not None:
+            await keystore.update_trusted_keys_hex(dict(trusted_public_keys_hex))
         _LOGGER.info(
             "Revoked trusted key %s (now %d keys)",
             key_id,
@@ -252,24 +254,58 @@ async def run_loop(
     *,
     hass: HomeAssistant,
     api_client: SvitgridApiClient,
-    keystore: SvitgridKeystore,
-    trusted_public_keys_hex: dict[str, str],
-    executor_version: str,
-    executor: BaseExecutor | None,
+    keystore: SvitgridKeystore | None,
+    trusted_public_keys_hex: dict[str, str] | None = None,
+    executor_version: str = "0.2.0",
+    executor: BaseExecutor | None = None,
     interval_s: int = COMMAND_POLL_INTERVAL_S,
+    entry_data: dict | None = None,
 ) -> None:
     """Polling coroutine. Exits when hass.is_stopping becomes True.
 
     `trusted_public_keys_hex` is a dict signingKeyId → publicKeyHex. Initially
     populated from the bootstrap response; mutated live when add_trusted_key /
-    revoke_trusted_key commands arrive (persisted via keystore)."""
+    revoke_trusted_key commands arrive (persisted via keystore).
+
+    When called from the config-entry path, `keystore` is None and `entry_data`
+    carries the key material from ConfigEntry.data. In that case a transient
+    KeystoreState is built on each iteration from entry_data (no persistence
+    write-back; trust mutations are not persisted in Phase 1)."""
     _LOGGER.info("Command poller started (interval=%ss)", interval_s)
+    # Mutable cache — shared across iterations so add/revoke live-mutations work.
+    # In the config-entry path (keystore=None) we seed from entry_data once.
+    if trusted_public_keys_hex is None:
+        trusted_public_keys_hex = {}
+        if entry_data:
+            for item in entry_data.get("trusted_keys", []):
+                if isinstance(item, dict):
+                    kid = item.get("signingKeyId") or item.get("key_id")
+                    pub = item.get("publicKeyHex") or item.get("public_key_hex")
+                    if kid and pub:
+                        trusted_public_keys_hex[kid] = pub
+
     while not hass.is_stopping:
         try:
-            state = await keystore.load()
-            if state is None:
-                _LOGGER.error("Command poller: keystore empty; stopping loop")
-                return
+            if keystore is not None:
+                state = await keystore.load()
+                if state is None:
+                    _LOGGER.error("Command poller: keystore empty; stopping loop")
+                    return
+            else:
+                # Config-entry path: build a transient state from entry_data.
+                if not entry_data:
+                    _LOGGER.error("Command poller: no keystore and no entry_data; stopping loop")
+                    return
+                from .keystore import KeystoreState  # local import to avoid circular at module level
+
+                state = KeystoreState(
+                    api_key=entry_data["api_key"],
+                    public_key_hex=entry_data["public_key_hex"],
+                    private_key_pem=entry_data["private_key_pem"],
+                    signing_key_id=entry_data["signing_key_id"],
+                    trusted_key_ids=list(trusted_public_keys_hex.keys()),
+                    trusted_public_keys_hex=dict(trusted_public_keys_hex),
+                )
             resp = await api_client.poll_commands(api_key=state.api_key)
             for command in resp.get("commands", []):
                 await process_command(
@@ -280,7 +316,7 @@ async def run_loop(
                     our_private_key=state.load_private_key(),
                     our_signing_key_id=state.signing_key_id,
                     executor_version=executor_version,
-                    keystore=keystore,
+                    keystore=keystore,  # type: ignore[arg-type]
                     executor=executor,
                 )
         except Exception:  # noqa: BLE001

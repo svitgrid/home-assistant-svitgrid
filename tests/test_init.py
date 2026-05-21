@@ -288,3 +288,117 @@ async def test_setup_loads_trusted_keys_from_keystore_state(hass, enable_custom_
 
         # The cache dict is stored alongside the executor in hass.data
         assert hass.data[DOMAIN]["trusted_public_keys_hex"] == stored_keys
+
+
+# ---------------------------------------------------------------------------
+# Config-entry path (Tasks 10-14)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_async_setup_entry_starts_publisher_and_poller(hass, enable_custom_integrations):
+    """Setting up from a config entry boots both background loops."""
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+    from unittest.mock import AsyncMock, patch
+
+    from custom_components.svitgrid import async_setup_entry
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Svitgrid (h-abc)",
+        data={
+            "api_base": "https://api.example.com",
+            "api_key": "test-key",
+            "edge_device_id": "ed-1",
+            "hardware_id": "ha-xyz",
+            "household_id": "h-abc",
+            "signing_key_id": "ha-home-01",
+            "private_key_pem": (
+                "-----BEGIN PRIVATE KEY-----\nFAKE\n-----END PRIVATE KEY-----\n"
+            ),
+            "public_key_hex": "04" + "a" * 128,
+            "trusted_keys": [],
+            "preset_id": None,
+        },
+        entry_id="test-entry-id",
+    )
+    entry.add_to_hass(hass)
+
+    with (
+        patch(
+            "custom_components.svitgrid.run_readings_loop", new_callable=AsyncMock
+        ) as rp,
+        patch(
+            "custom_components.svitgrid.run_command_loop", new_callable=AsyncMock
+        ) as cp,
+    ):
+        ok = await async_setup_entry(hass, entry)
+        await hass.async_block_till_done()
+
+    assert ok is True
+
+    entry_state = hass.data[DOMAIN][entry.entry_id]
+    assert entry_state.get("readings_task") is not None
+    assert entry_state.get("command_task") is not None
+
+    # run_loop coroutines were scheduled (called once each to get the coroutine)
+    assert rp.call_count == 1
+    assert cp.call_count == 1
+
+    # readings loop received the right api_key and inverter_id
+    rp_kwargs = rp.call_args.kwargs
+    assert rp_kwargs["api_key"] == "test-key"
+    assert rp_kwargs["inverter_id"] == "ha-xyz"
+
+    # command loop received keystore=None and entry_data with the key material
+    cp_kwargs = cp.call_args.kwargs
+    assert cp_kwargs["keystore"] is None
+    assert cp_kwargs["entry_data"]["signing_key_id"] == "ha-home-01"
+
+
+@pytest.mark.asyncio
+async def test_async_unload_entry_cancels_tasks(hass, enable_custom_integrations):
+    """async_unload_entry cancels the running background tasks."""
+    import asyncio
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+    from unittest.mock import AsyncMock, patch
+
+    from custom_components.svitgrid import async_setup_entry, async_unload_entry
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Svitgrid (h-abc)",
+        data={
+            "api_base": "https://api.example.com",
+            "api_key": "test-key",
+            "edge_device_id": "ed-1",
+            "hardware_id": "ha-xyz",
+            "household_id": "h-abc",
+            "signing_key_id": "ha-home-01",
+            "private_key_pem": (
+                "-----BEGIN PRIVATE KEY-----\nFAKE\n-----END PRIVATE KEY-----\n"
+            ),
+            "public_key_hex": "04" + "a" * 128,
+            "trusted_keys": [],
+            "preset_id": None,
+        },
+        entry_id="test-entry-id-2",
+    )
+    entry.add_to_hass(hass)
+
+    with (
+        patch(
+            "custom_components.svitgrid.run_readings_loop", new_callable=AsyncMock
+        ),
+        patch(
+            "custom_components.svitgrid.run_command_loop", new_callable=AsyncMock
+        ),
+    ):
+        await async_setup_entry(hass, entry)
+        await hass.async_block_till_done()
+
+    assert entry.entry_id in hass.data[DOMAIN]
+
+    ok = await async_unload_entry(hass, entry)
+    assert ok is True
+    assert entry.entry_id not in hass.data[DOMAIN]

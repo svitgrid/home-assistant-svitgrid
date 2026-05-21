@@ -14,6 +14,7 @@ import asyncio
 import logging
 
 import voluptuous as vol
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import Event, HomeAssistant
 from homeassistant.helpers import aiohttp_client
@@ -166,4 +167,74 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         "poller_task": poller_task,
     }
     _LOGGER.info("Svitgrid integration started (device_id=%s)", device_id)
+    return True
+
+
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Set up the Svitgrid integration from a config entry (Tasks 10-14).
+
+    `entry.data` contains the keys written by the config flow:
+      api_base, api_key, edge_device_id, hardware_id, household_id,
+      signing_key_id, private_key_pem, public_key_hex, trusted_keys, preset_id.
+    """
+    data = entry.data
+    session = aiohttp_client.async_get_clientsession(hass)
+    api_client = SvitgridApiClient(session, api_base=data["api_base"])
+
+    # entity_map: in Phase 1 this may live in YAML as a legacy override.
+    # In Phase 2, preset YAML will populate it.  Warn if absent.
+    entity_map: dict[str, str] = dict(data.get("entity_map") or {})
+    if not entity_map:
+        _LOGGER.warning(
+            "No entity_map configured for config entry %s. "
+            "Add `svitgrid: entity_map: …` to configuration.yaml as a "
+            "temporary v0.2.0-style override until Phase 2 ships preset support.",
+            entry.entry_id,
+        )
+
+    readings_task = hass.async_create_background_task(
+        run_readings_loop(
+            hass=hass,
+            api_client=api_client,
+            api_key=data["api_key"],
+            inverter_id=data["hardware_id"],
+            entity_map=entity_map,
+        ),
+        name="svitgrid_readings_publisher",
+    )
+
+    command_task = hass.async_create_background_task(
+        run_command_loop(
+            hass=hass,
+            api_client=api_client,
+            keystore=None,
+            entry_data=dict(data),
+        ),
+        name="svitgrid_command_poller",
+    )
+
+    hass.data.setdefault(DOMAIN, {})
+    hass.data[DOMAIN][entry.entry_id] = {
+        "api_client": api_client,
+        "readings_task": readings_task,
+        "command_task": command_task,
+        "entity_map": entity_map,
+    }
+    _LOGGER.info(
+        "Svitgrid integration started from config entry (entry_id=%s, hardware_id=%s)",
+        entry.entry_id,
+        data.get("hardware_id"),
+    )
+    return True
+
+
+async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Cancel background tasks when the user removes the integration."""
+    state = hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
+    if state is None:
+        return True
+    for key in ("readings_task", "command_task"):
+        task = state.get(key)
+        if task and not task.done():
+            task.cancel()
     return True
