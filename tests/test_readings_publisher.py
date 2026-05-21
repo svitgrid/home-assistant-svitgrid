@@ -23,7 +23,7 @@ def test_build_payload_includes_mapped_entities(hass):
     assert payload["batterySoc"] == 85.0
     assert payload["batteryPower"] == -1500.0
     assert "timestamp" in payload
-    assert payload["source"] == "edge-device"
+    assert payload["source"] == "edge"
 
 
 def test_build_payload_omits_unavailable_entities(hass):
