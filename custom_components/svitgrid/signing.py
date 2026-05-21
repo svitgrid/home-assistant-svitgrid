@@ -120,3 +120,27 @@ def verify_payload(payload: object, signature_b64: str, public_key_hex: str) -> 
         return True
     except (InvalidSignature, ValueError):
         return False
+
+
+def serialize_private_key(private_key: ec.EllipticCurvePrivateKey) -> str:
+    """PEM-encode an ECDSA P-256 private key for storage in a config entry.
+
+    Mirrors the format keystore.py used in v0.2.0 so existing decode paths
+    keep working.
+    """
+    from cryptography.hazmat.primitives import serialization
+    pem = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+    return pem.decode("ascii")
+
+
+def deserialize_private_key(pem: str) -> ec.EllipticCurvePrivateKey:
+    """Inverse of serialize_private_key. Used at integration boot to
+    reconstruct the signer from the config entry."""
+    from cryptography.hazmat.primitives import serialization
+    return serialization.load_pem_private_key(
+        pem.encode("ascii"), password=None
+    )  # type: ignore[return-value]
