@@ -1,0 +1,27 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect Svitgrid",
+        "description": "How would you like to connect to Svitgrid?",
+        "menu_options": {
+          "pair": "Pair with the Svitgrid mobile app (recommended)",
+          "manual": "Configure manually (advanced — read-only)"
+        }
+      },
+      "pair_waiting": {
+        "title": "Waiting for the mobile app",
+        "description": "Open Svitgrid on your phone and enter this code:\n\n**{code}**\n\nThis code expires in 5 minutes."
+      }
+    },
+    "abort": {
+      "manual_branch_not_implemented": "Manual configuration is coming in a later release.",
+      "not_implemented_yet": "Not yet implemented.",
+      "pairing_expired": "The pairing code expired. Try again.",
+      "pairing_failed": "Pairing failed. Check Home Assistant logs."
+    },
+    "error": {
+      "cannot_connect": "Cannot reach the Svitgrid cloud. Check your internet."
+    }
+  }
+}
