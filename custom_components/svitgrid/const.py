@@ -35,9 +35,13 @@ ALL_FIELDS = REQUIRED_FIELDS | frozenset(
     }
 )
 
-# Source tag on pushed readings (accepted by Plan A's readings endpoint).
-# The integrationType field on the device doc distinguishes HA from ESP32 already.
-READING_SOURCE = "edge-device"
+# Source tag on pushed readings. Must match a value in Plan A's reading
+# `source` enum, currently {android-foreground, android-background,
+# ios-foreground, ios-background, edge}. `edge` is the closest fit;
+# `integrationType: home_assistant` on the device doc is what distinguishes
+# the HA add-on from the ESP32 edge connector in analytics. (Server-side
+# follow-up: add a dedicated `home_assistant` enum value.)
+READING_SOURCE = "edge"
 
 # Internal commands the add-on handles itself (never dispatched to an executor).
 ADD_TRUSTED_KEY_COMMAND = "add_trusted_key"

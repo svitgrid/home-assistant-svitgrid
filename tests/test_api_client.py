@@ -114,7 +114,7 @@ class TestReadingsPush:
                 "pvPower": 2500,
                 "gridPower": -500,
                 "loadPower": 3000,
-                "source": "edge-device",
+                "source": "edge",
             },
         )
         call_args = session.post.call_args
@@ -122,7 +122,7 @@ class TestReadingsPush:
         assert call_args.kwargs["headers"]["x-api-key"] == "secret-key"
         body = call_args.kwargs["json"]
         assert body["inverterId"] == "inv-1"
-        assert body["source"] == "edge-device"
+        assert body["source"] == "edge"
 
 
 @pytest.mark.asyncio
