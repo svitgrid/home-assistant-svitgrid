@@ -10,12 +10,11 @@
         }
       },
       "pair": {
-        "title": "Waiting for the mobile app",
-        "description": "Open Svitgrid on your phone and enter this code:\n\n**{code}**\n\nThis code expires in 5 minutes."
+        "title": "Waiting for the mobile app"
       }
     },
     "progress": {
-      "waiting_for_mobile": "Waiting for the Svitgrid mobile app to claim this code…"
+      "waiting_for_mobile": "Open Svitgrid on your phone and enter this code:\n\n# {code}\n\nThis code expires in 5 minutes."
     },
     "abort": {
       "manual_branch_not_implemented": "Manual configuration is coming in a later release.",
