@@ -46,3 +46,8 @@ INTERNAL_COMMANDS = frozenset({ADD_TRUSTED_KEY_COMMAND, REVOKE_TRUSTED_KEY_COMMA
 
 # Inverter-control commands dispatched to the configured executor.
 DISPATCHABLE_COMMANDS = frozenset({"set_battery_charge"})
+
+# Pairing flow
+PAIRING_POLL_INTERVAL_S = 2          # HA polls /status this often
+PAIRING_MAX_POLL_DURATION_S = 300    # Stop polling after this; matches server TTL
+DEFAULT_API_BASE = "https://api-334146986852.us-central1.run.app"
