@@ -1,0 +1,33 @@
+name: Preset YAML validation
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'presets/**'
+      - '.github/workflows/preset-validation.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'presets/**'
+
+# Catches malformed preset YAMLs BEFORE merge so the seeder doesn't
+# accept a doc that the API will later reject at /finalize read time
+# (which fails silently from the user's POV — the integration appears
+# inert with no error).
+#
+# Mirrors the validator in services/api scripts/seed-from-yaml.cjs.
+# Keep the two in sync — every shape rule here should also be enforced
+# server-side, and vice versa.
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install js-yaml
+        run: npm install --no-save js-yaml@4
+      - name: Validate presets
+        run: node .github/scripts/validate-presets.cjs presets
