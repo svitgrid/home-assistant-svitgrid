@@ -110,8 +110,12 @@ class SvitgridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if self._final_payload is None:
             return self.async_abort(reason="pairing_failed")
 
+        # Phase 2: persist preset metadata returned by /finalize so
+        # async_setup_entry can boot the readings publisher with a working
+        # entityMap without any extra round-trip. Translate the API's
+        # camelCase to HA's snake_case convention.
         return self.async_create_entry(
-            title=f"Svitgrid ({self._final_payload['householdId']})",
+            title=self._entry_title(),
             data={
                 "api_base": DEFAULT_API_BASE,
                 "api_key": self._final_payload["apiKey"],
@@ -123,8 +127,23 @@ class SvitgridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 "public_key_hex": self._public_key_hex,
                 "trusted_keys": self._final_payload["trustedKeys"],
                 "preset_id": self._final_payload.get("presetId"),
+                # Phase 2 fields (None when /finalize had no preset).
+                "entity_map": self._final_payload.get("entityMap") or {},
+                "brand": self._final_payload.get("brand"),
+                "model": self._final_payload.get("model"),
+                "phases": self._final_payload.get("phases"),
+                "has_battery": self._final_payload.get("hasBattery"),
+                "pv_strings": self._final_payload.get("pvStrings"),
             },
         )
+
+    def _entry_title(self) -> str:
+        """Brand+model when known; falls back to householdId for bare pairings."""
+        brand = self._final_payload.get("brand")
+        model = self._final_payload.get("model")
+        if brand and model:
+            return f"Svitgrid — {brand} {model}"
+        return f"Svitgrid ({self._final_payload['householdId']})"
 
     async def _poll_for_claim(self, client: PairingClient) -> None:
         """Background task — polls /status until claimed, then calls /finalize."""
