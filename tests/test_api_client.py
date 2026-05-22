@@ -206,3 +206,53 @@ class TestAckCommand:
                 command_id="c1",
                 body={"success": False, "signature": "bad", "signingKeyId": "k"},
             )
+
+
+# ── Phase 2 T10c: MQTT command-wake token mint ────────────────────────
+
+@pytest.mark.asyncio
+class TestGetMqttToken:
+    async def test_returns_parsed_response(self):
+        session, _ = _mock_session_with_response(
+            200,
+            {
+                "token": "eyJhbGc...jwt",
+                "expiresAt": "2026-05-23T12:00:00Z",
+                "broker": {
+                    "host": "mqtt.svitgrid.app",
+                    "port": 8883,
+                    "topic": "devices/abc123/wake",
+                },
+            },
+        )
+        client = SvitgridApiClient(session, api_base="https://api.example")
+        result = await client.get_mqtt_token(api_key="secret-key")
+        assert result["token"].startswith("eyJ")
+        assert result["broker"]["topic"] == "devices/abc123/wake"
+        assert result["broker"]["port"] == 8883
+
+    async def test_includes_api_key_header(self):
+        session, _ = _mock_session_with_response(200, {
+            "token": "t", "expiresAt": "x",
+            "broker": {"host": "h", "port": 8883, "topic": "devices/x/wake"},
+        })
+        client = SvitgridApiClient(session, api_base="https://api.example")
+        await client.get_mqtt_token(api_key="secret-key")
+        call_args = session.post.call_args
+        assert call_args.kwargs["headers"]["x-api-key"] == "secret-key"
+        assert "/api/v3/edge-devices/" in call_args.args[0]
+        assert call_args.args[0].endswith("/mqtt-token")
+
+    async def test_503_when_broker_unconfigured_raises(self):
+        from custom_components.svitgrid.api_client import SvitgridApiError
+        session, _ = _mock_session_with_response(503, {"error": "mqtt_broker_not_configured"})
+        client = SvitgridApiClient(session, api_base="https://api.example")
+        with pytest.raises(SvitgridApiError):
+            await client.get_mqtt_token(api_key="secret-key")
+
+    async def test_401_raises(self):
+        from custom_components.svitgrid.api_client import SvitgridApiError
+        session, _ = _mock_session_with_response(401, {"error": "Unauthorized"})
+        client = SvitgridApiClient(session, api_base="https://api.example")
+        with pytest.raises(SvitgridApiError):
+            await client.get_mqtt_token(api_key="bad-key")

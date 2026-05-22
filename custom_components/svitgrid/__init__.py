@@ -24,6 +24,7 @@ from homeassistant.helpers.typing import ConfigType
 from .api_client import SvitgridApiClient
 from .bootstrap import run_first_time
 from .command_poller import run_loop as run_command_loop
+from .mqtt_wake import run_loop as run_mqtt_wake_loop
 from .const import (
     COMMAND_POLL_INTERVAL_S,
     DOMAIN,
@@ -218,14 +219,30 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         name="svitgrid_readings_publisher",
     )
 
+    # T10c: shared wake_event lets MQTT wake-bell short-circuit the
+    # command_poller's sleep for sub-second command latency. If MQTT is
+    # unavailable, the poller's interval-based fallback still works.
+    wake_event = asyncio.Event()
+
     command_task = hass.async_create_background_task(
         run_command_loop(
             hass=hass,
             api_client=api_client,
             keystore=None,
             entry_data=dict(data),
+            wake_event=wake_event,
         ),
         name="svitgrid_command_poller",
+    )
+
+    mqtt_wake_task = hass.async_create_background_task(
+        run_mqtt_wake_loop(
+            hass=hass,
+            api_client=api_client,
+            api_key=data["api_key"],
+            wake_event=wake_event,
+        ),
+        name="svitgrid_mqtt_wake",
     )
 
     hass.data.setdefault(DOMAIN, {})
@@ -233,6 +250,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "api_client": api_client,
         "readings_task": readings_task,
         "command_task": command_task,
+        "mqtt_wake_task": mqtt_wake_task,
         "entity_map": entity_map,
     }
     _LOGGER.info(
@@ -248,7 +266,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     state = hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
     if state is None:
         return True
-    for key in ("readings_task", "command_task"):
+    for key in ("readings_task", "command_task", "mqtt_wake_task"):
         task = state.get(key)
         if task and not task.done():
             task.cancel()

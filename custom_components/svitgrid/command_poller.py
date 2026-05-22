@@ -260,6 +260,7 @@ async def run_loop(
     executor: BaseExecutor | None = None,
     interval_s: int = COMMAND_POLL_INTERVAL_S,
     entry_data: dict | None = None,
+    wake_event: asyncio.Event | None = None,
 ) -> None:
     """Polling coroutine. Exits when hass.is_stopping becomes True.
 
@@ -321,5 +322,16 @@ async def run_loop(
                 )
         except Exception:  # noqa: BLE001
             _LOGGER.exception("Command poll iteration failed; retrying next tick")
-        await asyncio.sleep(interval_s)
+        # T10c: when a wake_event is provided (MQTT wake-bell active),
+        # exit the sleep early as soon as it fires. The next iteration
+        # immediately polls for the new command. If no wake fires, the
+        # interval timeout still kicks the loop normally.
+        if wake_event is not None:
+            try:
+                await asyncio.wait_for(wake_event.wait(), timeout=interval_s)
+                wake_event.clear()
+            except asyncio.TimeoutError:
+                pass  # normal interval elapse — proceed to poll
+        else:
+            await asyncio.sleep(interval_s)
     _LOGGER.info("Command poller stopped")

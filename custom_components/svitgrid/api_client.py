@@ -110,6 +110,28 @@ class SvitgridApiClient:
                     cmd["commandId"] = cmd["id"]
             return data
 
+    async def get_mqtt_token(self, api_key: str) -> dict[str, Any]:
+        """Mint a short-lived JWT for the MQTT wake-bell broker. Returns
+        `{token, expiresAt, broker: {host, port, topic}}`.
+
+        The :id path parameter is informational — identity comes from the
+        x-api-key header. The bridge maps the api-key to the Firestore
+        edgeDevices doc id, which is what the wake topic keys on.
+
+        Used by mqtt_wake.run_loop; called on initial connect and again
+        on every reconnect (JWTs are short-lived and re-minted)."""
+        # Path param value doesn't matter — server identifies the device
+        # from x-api-key. Use a placeholder so the route matches.
+        url = f"{self._base}/api/v3/edge-devices/_/mqtt-token"
+        async with self._session.post(
+            url, headers={"x-api-key": api_key}, json={},
+        ) as resp:
+            if resp.status >= 400:
+                raise SvitgridApiError(
+                    f"mqtt-token failed: HTTP {resp.status}: {await _err(resp)}"
+                )
+            return await resp.json()
+
     async def ack_command(self, api_key: str, command_id: str, body: dict[str, Any]) -> None:
         url = f"{self._base}/api/v3/executors/commands/{command_id}/ack"
         async with self._session.post(url, headers={"x-api-key": api_key}, json=body) as resp:

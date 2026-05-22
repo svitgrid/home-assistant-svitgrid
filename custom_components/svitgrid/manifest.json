@@ -7,7 +7,7 @@
   "codeowners": ["@svitgrid"],
   "iot_class": "cloud_push",
   "integration_type": "service",
-  "requirements": ["aiohttp>=3.9", "cryptography>=42.0"],
+  "requirements": ["aiohttp>=3.9", "cryptography>=42.0", "paho-mqtt>=1.6"],
   "dependencies": [],
   "config_flow": true
 }
