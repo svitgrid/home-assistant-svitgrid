@@ -181,15 +181,30 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     session = aiohttp_client.async_get_clientsession(hass)
     api_client = SvitgridApiClient(session, api_base=data["api_base"])
 
-    # entity_map: in Phase 1 this may live in YAML as a legacy override.
-    # In Phase 2, preset YAML will populate it.  Warn if absent.
+    # entity_map: populated from the preset returned by /finalize (Phase 2).
+    # When the pairing didn't carry a presetId — or the preset wasn't found
+    # at finalize time — the map is empty and the readings publisher will
+    # post payloads that the API rejects with 400 until the user re-pairs
+    # against a known brand. We start the publisher anyway so the WARNING
+    # fires every push cycle and the operator can diagnose.
     entity_map: dict[str, str] = dict(data.get("entity_map") or {})
     if not entity_map:
         _LOGGER.warning(
-            "No entity_map configured for config entry %s. "
-            "Add `svitgrid: entity_map: …` to configuration.yaml as a "
-            "temporary v0.2.0-style override until Phase 2 ships preset support.",
+            "No entity_map configured for config entry %s "
+            "(brand=%s, model=%s, preset_id=%s). Pairing landed without a "
+            "preset — re-pair from mobile and pick a brand to populate the "
+            "mapping, or this integration will not publish readings.",
             entry.entry_id,
+            data.get("brand"),
+            data.get("model"),
+            data.get("preset_id"),
+        )
+    else:
+        _LOGGER.info(
+            "Svitgrid entity_map loaded for %s %s (%d entities mapped)",
+            data.get("brand") or "?",
+            data.get("model") or "?",
+            len(entity_map),
         )
 
     readings_task = hass.async_create_background_task(

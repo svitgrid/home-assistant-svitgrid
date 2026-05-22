@@ -402,3 +402,64 @@ async def test_async_unload_entry_cancels_tasks(hass, enable_custom_integrations
     ok = await async_unload_entry(hass, entry)
     assert ok is True
     assert entry.entry_id not in hass.data[DOMAIN]
+
+
+@pytest.mark.asyncio
+async def test_async_setup_entry_passes_preset_entity_map_to_publisher(hass, enable_custom_integrations):
+    """Phase 2: when the config entry has an entity_map (from a preset
+    that was carried through /finalize), the readings publisher must be
+    called with that map. Otherwise readings would post empty payloads
+    and the API would 400 them all."""
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+    from unittest.mock import AsyncMock, patch
+
+    from custom_components.svitgrid import async_setup_entry
+
+    preset_map = {
+        "batterySoc": "sensor.inverter_battery",
+        "loadPower": "sensor.inverter_load_power",
+    }
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Svitgrid — Deye SG04LP3",
+        data={
+            "api_base": "https://api.example.com",
+            "api_key": "test-key",
+            "edge_device_id": "ed-1",
+            "hardware_id": "ha-deye-001",
+            "household_id": "h-deye",
+            "signing_key_id": "ha-home-01",
+            "private_key_pem": "-----BEGIN PRIVATE KEY-----\nFAKE\n-----END PRIVATE KEY-----\n",
+            "public_key_hex": "04" + "a" * 128,
+            "trusted_keys": [],
+            "preset_id": "deye-sg04lp3-solarman-v1",
+            # Phase 2 fields:
+            "entity_map": preset_map,
+            "brand": "Deye",
+            "model": "SG04LP3",
+            "phases": 3,
+            "has_battery": True,
+            "pv_strings": 2,
+        },
+        entry_id="entry-with-preset",
+    )
+    entry.add_to_hass(hass)
+
+    with (
+        patch(
+            "custom_components.svitgrid.run_readings_loop", new_callable=AsyncMock
+        ) as rp,
+        patch(
+            "custom_components.svitgrid.run_command_loop", new_callable=AsyncMock
+        ),
+    ):
+        ok = await async_setup_entry(hass, entry)
+        await hass.async_block_till_done()
+
+    assert ok is True
+
+    # The publisher must have been called with the preset's entity_map verbatim.
+    assert rp.call_count == 1
+    assert rp.call_args.kwargs["entity_map"] == preset_map
+    assert rp.call_args.kwargs["inverter_id"] == "ha-deye-001"
