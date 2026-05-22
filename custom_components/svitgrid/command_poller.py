@@ -261,6 +261,7 @@ async def run_loop(
     interval_s: int = COMMAND_POLL_INTERVAL_S,
     entry_data: dict | None = None,
     wake_event: asyncio.Event | None = None,
+    activity: Any = None,  # ActivityTracker; None acceptable
 ) -> None:
     """Polling coroutine. Exits when hass.is_stopping becomes True.
 
@@ -309,6 +310,19 @@ async def run_loop(
                 )
             resp = await api_client.poll_commands(api_key=state.api_key)
             for command in resp.get("commands", []):
+                if activity is not None:
+                    # Record at receive time. process_command doesn't currently
+                    # return a dispatch outcome — adding that is a future
+                    # refactor; for now the user sees "we received command X
+                    # at time Y" in the device-page sensors, which is the
+                    # bulk of the value. Success/failure can be inferred from
+                    # the ack visible in API logs.
+                    activity.record_command(
+                        kind=str(command.get("command") or "unknown"),
+                        payload=command.get("payload") or {},
+                        result=None,
+                        success=True,  # received-and-attempting; outcome TBD
+                    )
                 await process_command(
                     command=command,
                     api_client=api_client,

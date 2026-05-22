@@ -21,6 +21,7 @@ from homeassistant.helpers import aiohttp_client
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.typing import ConfigType
 
+from .activity import ActivityTracker
 from .api_client import SvitgridApiClient
 from .bootstrap import run_first_time
 from .command_poller import run_loop as run_command_loop
@@ -208,6 +209,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             len(entity_map),
         )
 
+    # P2A C1: shared ActivityTracker — publisher + poller call record_*
+    # methods; sensor.py reads counters + recent-event buffers for the
+    # device-page entities.
+    activity = ActivityTracker()
+
     readings_task = hass.async_create_background_task(
         run_readings_loop(
             hass=hass,
@@ -215,6 +221,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             api_key=data["api_key"],
             inverter_id=data["hardware_id"],
             entity_map=entity_map,
+            activity=activity,
         ),
         name="svitgrid_readings_publisher",
     )
@@ -231,6 +238,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             keystore=None,
             entry_data=dict(data),
             wake_event=wake_event,
+            activity=activity,
         ),
         name="svitgrid_command_poller",
     )
@@ -252,7 +260,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "command_task": command_task,
         "mqtt_wake_task": mqtt_wake_task,
         "entity_map": entity_map,
+        "activity": activity,
+        "entry_data": dict(data),
     }
+    # Forward sensor platform so the device page shows the status entities.
+    await hass.config_entries.async_forward_entry_setups(entry, ["sensor"])
     _LOGGER.info(
         "Svitgrid integration started from config entry (entry_id=%s, hardware_id=%s)",
         entry.entry_id,
@@ -263,6 +275,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Cancel background tasks when the user removes the integration."""
+    await hass.config_entries.async_unload_platforms(entry, ["sensor"])
     state = hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
     if state is None:
         return True

@@ -140,6 +140,15 @@ def _next_interval_s(response: dict[str, Any] | None) -> float:
     return seconds
 
 
+_SUMMARY_FIELDS = ("pvPower", "loadPower", "batterySoc", "gridPower", "batteryPower")
+
+
+def _summary_of(payload: dict[str, Any]) -> dict[str, Any]:
+    """Pick the 5 headline fields for the ActivityTracker recent-events buffer.
+    Avoids storing the whole payload (mostly numeric noise on the device page)."""
+    return {k: payload[k] for k in _SUMMARY_FIELDS if k in payload}
+
+
 async def run_loop(
     *,
     hass: HomeAssistant,
@@ -150,6 +159,7 @@ async def run_loop(
     # interval_s kept for backwards-compat with callers; ignored once the
     # server returns ingestIntervalMs.
     interval_s: int = READINGS_INTERVAL_S,
+    activity: Any = None,  # ActivityTracker; None acceptable for older callers
 ) -> None:
     """Long-running coroutine.
 
@@ -192,6 +202,17 @@ async def run_loop(
                         api_key=api_key, reading=aggregated,
                     )
                     next_sleep_s = _next_interval_s(response)
+                    if activity is not None:
+                        if response is not None:
+                            activity.record_ingest_success(
+                                sample_count=len(samples),
+                                period_sec=elapsed,
+                                summary=_summary_of(aggregated),
+                            )
+                        else:
+                            activity.record_ingest_failure(
+                                reason="push_reading returned no response",
+                            )
             else:
                 # T10a: active path — single snapshot, then sleep.
                 payload = build_reading_payload(
@@ -201,9 +222,22 @@ async def run_loop(
                     api_key=api_key, reading=payload,
                 )
                 next_sleep_s = _next_interval_s(response)
+                if activity is not None:
+                    if response is not None:
+                        activity.record_ingest_success(
+                            sample_count=1,
+                            period_sec=int(next_sleep_s),
+                            summary=_summary_of(payload),
+                        )
+                    else:
+                        activity.record_ingest_failure(
+                            reason="push_reading returned no response",
+                        )
                 await asyncio.sleep(next_sleep_s)
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
             _LOGGER.exception("Readings publish failed; will retry next tick")
+            if activity is not None:
+                activity.record_ingest_failure(reason=str(exc) or type(exc).__name__)
             # On error, fall back to default cadence to avoid tight retry
             # loops or hour-long parks.
             next_sleep_s = float(_DEFAULT_INTERVAL_S)
