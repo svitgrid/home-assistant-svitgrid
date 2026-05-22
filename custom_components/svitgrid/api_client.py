@@ -68,13 +68,30 @@ class SvitgridApiClient:
                 raise RateLimited(await _err(resp))
             raise BootstrapFailed(f"HTTP {resp.status}: {await _err(resp)}")
 
-    async def push_reading(self, api_key: str, reading: dict[str, Any]) -> None:
+    async def push_reading(
+        self, api_key: str, reading: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """POST one reading. Returns the parsed response body on 2xx, else None.
+        The caller (readings_publisher) uses `ingestIntervalMs` from the body
+        to drive its adaptive sleep cadence."""
         url = f"{self._base}/api/v1/ingest/reading"
-        async with self._session.post(url, headers={"x-api-key": api_key}, json=reading) as resp:
+        async with self._session.post(
+            url, headers={"x-api-key": api_key}, json=reading
+        ) as resp:
             if resp.status >= 400:
                 _LOGGER.warning(
-                    "push_reading failed: status=%s body=%s", resp.status, await _err(resp)
+                    "push_reading failed: status=%s body=%s",
+                    resp.status,
+                    await _err(resp),
                 )
+                return None
+            try:
+                return await resp.json()
+            except Exception:  # noqa: BLE001
+                # 2xx with non-JSON body — log and treat as success with no
+                # cadence hint (caller falls back to default).
+                _LOGGER.debug("push_reading: 2xx with non-JSON body")
+                return {}
 
     async def poll_commands(self, api_key: str) -> dict[str, Any]:
         url = f"{self._base}/api/v3/executors/commands"
