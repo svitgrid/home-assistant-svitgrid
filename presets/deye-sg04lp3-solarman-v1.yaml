@@ -1,0 +1,86 @@
+# Svitgrid HA Preset — Deye SG04LP3 (3-phase hybrid) via Solarman integration.
+#
+# Source of truth for the deye-sg04lp3-solarman-v1 entry in Firestore
+# collection haPresets. Seeded via scripts/seed-from-yaml.cjs in the
+# svitgrid monorepo.
+#
+# Register references: 3-Phase Hybrid table in CLAUDE.md (kbialek/deye-inverter-mqtt).
+# Register scale notes:
+#   - reg 152 (slot 1 charge current limit): 0.1 A units
+#   - reg 142 (work mode): enum 0=Selling-First, 1=Zero-Export, 2=Self-Use
+#   - reg 145 (solar sell enable): bool
+#   - reg 143 (grid charge enable): bool
+
+id: deye-sg04lp3-solarman-v1
+version: "2"           # bumped from v1 — adds commands[] for write commands
+brand: Deye
+model: SG04LP3
+phases: 3
+hasBattery: true
+pvStrings: 2
+protocolId: home_assistant_solarman
+
+# Mirror of the entity_id set the HA Solarman integration creates for a
+# Deye SG04LP3 hybrid (verified live on 192.168.1.133 by ivanon2@gmail.com,
+# 2026-05-22).
+entityMap:
+  batterySoc: sensor.inverter_battery
+  batteryPower: sensor.inverter_battery_power
+  batteryVoltage: sensor.inverter_battery_voltage
+  pv1Power: sensor.inverter_pv1_power
+  pv2Power: sensor.inverter_pv2_power
+  gridPower: sensor.inverter_grid_power
+  loadPower: sensor.inverter_load_power
+  dailyPvEnergy: sensor.inverter_today_production
+  gridVoltageL1: sensor.inverter_grid_l1_voltage
+
+# Write commands — Phase 2-advanced. Each entry is one recipe the
+# YamlDispatcher in the HA add-on (custom_components/svitgrid/executors/
+# yaml_dispatcher.py) executes when the API enqueues a matching command.
+#
+# `args` values run through the safe DSL (custom_components/svitgrid/dsl.py).
+# Refs allowed: payload.<field>, config.<key>. See dsl.py for the full
+# grammar.
+#
+# `config` keys come from the preset config the user picks during pairing
+# (battery_voltage, hub_name, slave_id). For now we hardcode sensible
+# defaults; later a config-flow step asks the user to confirm/override.
+commands:
+  # Force-charge at N watts (calendar event, "Force Charge" button, etc.).
+  # Maps to TOU slot 1 charge current — driven by chargePowerLimitW in
+  # the payload. Other payload fields (slotStart/slotEnd/chargeVoltage)
+  # are ignored for now; later recipes can target additional registers.
+  - id: set_battery_charge
+    service: modbus.write_register
+    args:
+      hub: config.hub_name
+      slave: config.slave_id
+      address: 152
+      value: "round(payload.chargePowerLimitW / config.battery_voltage / 0.1)"
+
+  # Work-mode switch: 0=Selling First, 1=Zero Export to Load, 2=Self Use.
+  - id: set_work_mode
+    service: modbus.write_register
+    args:
+      hub: config.hub_name
+      slave: config.slave_id
+      address: 142
+      value: "int(payload.workMode)"
+
+  # Solar-sell enable bit (whether surplus PV exports to grid).
+  - id: set_solar_sell
+    service: modbus.write_register
+    args:
+      hub: config.hub_name
+      slave: config.slave_id
+      address: 145
+      value: "int(payload.enabled)"
+
+  # Grid-charge enable bit (whether grid can charge battery).
+  - id: set_grid_charge_toggle
+    service: modbus.write_register
+    args:
+      hub: config.hub_name
+      slave: config.slave_id
+      address: 143
+      value: "int(payload.enabled)"

@@ -49,7 +49,17 @@ REVOKE_TRUSTED_KEY_COMMAND = "revoke_trusted_key"
 INTERNAL_COMMANDS = frozenset({ADD_TRUSTED_KEY_COMMAND, REVOKE_TRUSTED_KEY_COMMAND})
 
 # Inverter-control commands dispatched to the configured executor.
-DISPATCHABLE_COMMANDS = frozenset({"set_battery_charge"})
+# P2A A5: expanded from {set_battery_charge} to cover all 4 commands the
+# API sends. YamlDispatcher routes each to a recipe-defined HA service.
+# If the preset has no recipe for one, dispatcher raises UnsupportedCommandError
+# and the poller ACKs as 'unsupported' (same outcome as before, but with
+# a clearer error message).
+DISPATCHABLE_COMMANDS = frozenset({
+    "set_battery_charge",
+    "set_work_mode",
+    "set_solar_sell",
+    "set_grid_charge_toggle",
+})
 
 # Pairing flow
 PAIRING_POLL_INTERVAL_S = 2          # HA polls /status this often

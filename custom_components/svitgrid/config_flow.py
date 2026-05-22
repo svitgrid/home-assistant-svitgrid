@@ -134,6 +134,8 @@ class SvitgridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 "phases": self._final_payload.get("phases"),
                 "has_battery": self._final_payload.get("hasBattery"),
                 "pv_strings": self._final_payload.get("pvStrings"),
+                # Phase 2-advanced: write-command recipes for YamlDispatcher.
+                "commands": self._final_payload.get("commands") or [],
             },
         )
 

@@ -165,7 +165,28 @@ async def process_command(
             return
 
         try:
-            result = await executor.set_battery_charge(command.get("payload") or {})
+            # P2A A5: generic dispatch instead of hardcoded
+            # set_battery_charge. BaseExecutor.dispatch routes unknown
+            # command names to NotImplementedError so SmgIiExecutor (which
+            # only knows set_battery_charge) keeps working unchanged;
+            # YamlDispatcher overrides dispatch to handle all 4 commands.
+            result = await executor.dispatch(cmd_type, command.get("payload") or {})
+        except NotImplementedError as err:
+            _LOGGER.info(
+                "Executor doesn't support %s — ACKing as unsupported", cmd_type,
+            )
+            await _send_signed_ack(
+                api_client=api_client,
+                api_key=api_key,
+                command_id=cmd_id,
+                success=False,
+                rejected=True,
+                reason=f"unsupported: {err}",
+                our_private_key=our_private_key,
+                our_signing_key_id=our_signing_key_id,
+                executor_version=executor_version,
+            )
+            return
         except Exception as err:  # noqa: BLE001
             _LOGGER.exception("Executor failed on command %s", cmd_id)
             await _send_signed_ack(

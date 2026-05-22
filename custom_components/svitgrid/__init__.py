@@ -25,6 +25,7 @@ from .activity import ActivityTracker
 from .api_client import SvitgridApiClient
 from .bootstrap import run_first_time
 from .command_poller import run_loop as run_command_loop
+from .executors.yaml_dispatcher import YamlDispatcher
 from .mqtt_wake import run_loop as run_mqtt_wake_loop
 from .const import (
     COMMAND_POLL_INTERVAL_S,
@@ -231,6 +232,33 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # unavailable, the poller's interval-based fallback still works.
     wake_event = asyncio.Event()
 
+    # Phase 2-advanced (P2A A5): if the preset shipped commands[], spin up
+    # the YamlDispatcher executor so write commands dispatched by the API
+    # (set_battery_charge / set_work_mode / set_solar_sell /
+    # set_grid_charge_toggle) actually hit modbus.write_register. Without
+    # this the poller logs every write command as "no_executor_configured"
+    # and ACKs it as rejected.
+    executor = None
+    preset_commands = data.get("commands") or []
+    if preset_commands:
+        # Sensible defaults for the preset config — these match the values
+        # the user's Solarman HA integration uses by default. A future
+        # config-flow step can let the user override per-install.
+        preset_config = {
+            "hub_name": "solarman",
+            "slave_id": 1,
+            "battery_voltage": 52.8,  # 16S LFP nominal
+        }
+        executor = YamlDispatcher(
+            hass=hass, commands=preset_commands, config=preset_config,
+        )
+        _LOGGER.info(
+            "YamlDispatcher armed with %d command recipe(s) for %s %s",
+            len(preset_commands),
+            data.get("brand") or "?",
+            data.get("model") or "?",
+        )
+
     command_task = hass.async_create_background_task(
         run_command_loop(
             hass=hass,
@@ -239,6 +267,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             entry_data=dict(data),
             wake_event=wake_event,
             activity=activity,
+            executor=executor,
         ),
         name="svitgrid_command_poller",
     )
