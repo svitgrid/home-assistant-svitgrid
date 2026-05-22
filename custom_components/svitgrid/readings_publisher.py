@@ -29,6 +29,17 @@ _INTERVAL_CEILING_S = 30 * 60
 # slower than idle.
 _DEFAULT_INTERVAL_S = 60
 
+# Aggregation kicks in when the server-requested interval is at least this
+# long. Below this, single-snapshot pushes (T10a behavior) — the round-trip
+# cost outweighs the data-quality benefit at fast cadences.
+_AGGREGATION_THRESHOLD_S = 120
+# Inside the aggregation branch, samples are collected this often.
+_SAMPLE_TICK_S = 60
+
+# Fields that are identity / metadata rather than numeric measurements.
+# Aggregator takes the LAST sample's value for these instead of averaging.
+_NON_NUMERIC_FIELDS = frozenset({"inverterId", "timestamp", "source"})
+
 _LOGGER = logging.getLogger(__name__)
 
 # States that mean "no usable value" and the field should be omitted entirely.
@@ -71,6 +82,47 @@ def build_reading_payload(
     return payload
 
 
+def _aggregate_samples(
+    samples: list[dict[str, Any]], period_s: int
+) -> dict[str, Any]:
+    """Combine N reading payloads into one aggregated payload.
+
+    Numeric fields are averaged across the samples that contain them
+    (missing values don't dilute the mean — each field is averaged over
+    its own count). Identity fields (inverterId, timestamp, source) are
+    taken from the LAST sample. sampleCount + periodSec are added so
+    the server can interpret this as an aggregate window."""
+    if not samples:
+        # Defensive — caller should never pass empty. Return minimal stub.
+        return {"sampleCount": 0, "periodSec": period_s}
+
+    # Collect per-field sums + counts.
+    field_sums: dict[str, float] = {}
+    field_counts: dict[str, int] = {}
+    for sample in samples:
+        for key, value in sample.items():
+            if key in _NON_NUMERIC_FIELDS:
+                continue
+            if isinstance(value, (int, float)):
+                field_sums[key] = field_sums.get(key, 0.0) + float(value)
+                field_counts[key] = field_counts.get(key, 0) + 1
+
+    agg: dict[str, Any] = {}
+    # Identity fields from the most recent sample.
+    last = samples[-1]
+    for key in _NON_NUMERIC_FIELDS:
+        if key in last:
+            agg[key] = last[key]
+
+    # Numeric fields averaged.
+    for key, total in field_sums.items():
+        agg[key] = total / field_counts[key]
+
+    agg["sampleCount"] = len(samples)
+    agg["periodSec"] = period_s
+    return agg
+
+
 def _next_interval_s(response: dict[str, Any] | None) -> float:
     """Pick the next sleep duration based on the server's ingestIntervalMs.
     Falls back to default on missing field / null response; clamps to
@@ -96,28 +148,64 @@ async def run_loop(
     inverter_id: str,
     entity_map: dict[str, str],
     # interval_s kept for backwards-compat with callers; ignored once the
-    # server returns ingestIntervalMs. Used only as the very first sleep
-    # before any response is in hand (which never actually happens since we
-    # sleep AFTER pushing, not before — kept here so existing call sites
-    # don't have to change).
+    # server returns ingestIntervalMs.
     interval_s: int = READINGS_INTERVAL_S,
 ) -> None:
-    """Long-running coroutine. Pushes a reading, then sleeps for the
-    server-driven `ingestIntervalMs` (clamped 10s–30min). Exits when
-    `hass.is_stopping` becomes True."""
+    """Long-running coroutine.
+
+    Two cadence modes, decided after each push by the server's
+    ingestIntervalMs response:
+
+    - Fast (<120s): push a single snapshot, then sleep the full interval.
+      Matches active sessions / pending commands.
+    - Idle (>=120s): sample every 60s for the duration, then push ONE
+      aggregated payload with sampleCount + periodSec. Same Firestore
+      write count as the fast path's per-snapshot approach, but with
+      better data (true period averages, not single-moment snapshots).
+
+    Exits when `hass.is_stopping` becomes True."""
     _LOGGER.info(
-        "Readings publisher started (cadence adaptive; default=%ss, floor=%ss, ceiling=%ss)",
+        "Readings publisher started (adaptive cadence; "
+        "default=%ss, floor=%ss, ceiling=%ss, aggregation>=%ss)",
         _DEFAULT_INTERVAL_S, _INTERVAL_FLOOR_S, _INTERVAL_CEILING_S,
+        _AGGREGATION_THRESHOLD_S,
     )
+    # Cadence carries across iterations. Initial value = default until
+    # we receive the first response.
+    next_sleep_s = float(_DEFAULT_INTERVAL_S)
+
     while not hass.is_stopping:
-        next_sleep_s = float(_DEFAULT_INTERVAL_S)
         try:
-            payload = build_reading_payload(
-                hass=hass, inverter_id=inverter_id, entity_map=entity_map
-            )
-            response = await api_client.push_reading(api_key=api_key, reading=payload)
-            next_sleep_s = _next_interval_s(response)
+            if next_sleep_s >= _AGGREGATION_THRESHOLD_S:
+                # T10b: idle path — collect N samples then push aggregated.
+                samples: list[dict[str, Any]] = []
+                elapsed = 0
+                while elapsed < next_sleep_s and not hass.is_stopping:
+                    samples.append(build_reading_payload(
+                        hass=hass, inverter_id=inverter_id, entity_map=entity_map,
+                    ))
+                    await asyncio.sleep(_SAMPLE_TICK_S)
+                    elapsed += _SAMPLE_TICK_S
+                if samples:
+                    aggregated = _aggregate_samples(samples, period_s=elapsed)
+                    response = await api_client.push_reading(
+                        api_key=api_key, reading=aggregated,
+                    )
+                    next_sleep_s = _next_interval_s(response)
+            else:
+                # T10a: active path — single snapshot, then sleep.
+                payload = build_reading_payload(
+                    hass=hass, inverter_id=inverter_id, entity_map=entity_map,
+                )
+                response = await api_client.push_reading(
+                    api_key=api_key, reading=payload,
+                )
+                next_sleep_s = _next_interval_s(response)
+                await asyncio.sleep(next_sleep_s)
         except Exception:  # noqa: BLE001
             _LOGGER.exception("Readings publish failed; will retry next tick")
-        await asyncio.sleep(next_sleep_s)
+            # On error, fall back to default cadence to avoid tight retry
+            # loops or hour-long parks.
+            next_sleep_s = float(_DEFAULT_INTERVAL_S)
+            await asyncio.sleep(next_sleep_s)
     _LOGGER.info("Readings publisher stopped")

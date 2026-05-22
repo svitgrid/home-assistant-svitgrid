@@ -213,3 +213,107 @@ async def test_publisher_clamps_negative_or_tiny_intervals(monkeypatch):
     )
     sleeps = await _run_with_sleep_capture(monkeypatch, _mock_hass_one_iter(), api)
     assert sleeps == [10.0]  # 10s floor
+
+
+# ── Phase 2 T10b: sample aggregation for idle (>=120s intervals) ──────
+#
+# When the server's ingestIntervalMs >= 120s, instead of sleeping the
+# whole interval and pushing one instantaneous snapshot, the publisher
+# collects samples every 60s during the period and sends ONE averaged
+# payload with sampleCount + periodSec. Mirrors the edge connector's
+# aggregator behavior. Gives the server better data for charts +
+# forecasting without changing the Firestore write count.
+
+from custom_components.svitgrid.readings_publisher import _aggregate_samples
+
+
+def test_aggregate_averages_numeric_fields():
+    samples = [
+        {"inverterId": "inv-1", "timestamp": "t1", "source": "edge",
+         "batteryPower": -200.0, "loadPower": 500.0},
+        {"inverterId": "inv-1", "timestamp": "t2", "source": "edge",
+         "batteryPower": -100.0, "loadPower": 600.0},
+        {"inverterId": "inv-1", "timestamp": "t3", "source": "edge",
+         "batteryPower": -300.0, "loadPower": 550.0},
+    ]
+    agg = _aggregate_samples(samples, period_s=180)
+    # Numeric fields averaged
+    assert agg["batteryPower"] == pytest.approx(-200.0)
+    assert agg["loadPower"] == pytest.approx(550.0)
+    # Identity fields from last sample
+    assert agg["inverterId"] == "inv-1"
+    assert agg["timestamp"] == "t3"
+    assert agg["source"] == "edge"
+    # Aggregation metadata
+    assert agg["sampleCount"] == 3
+    assert agg["periodSec"] == 180
+
+
+def test_aggregate_drops_fields_missing_from_all_samples():
+    samples = [
+        {"inverterId": "inv-1", "timestamp": "t1", "source": "edge",
+         "batteryPower": -200.0},
+        {"inverterId": "inv-1", "timestamp": "t2", "source": "edge",
+         "loadPower": 500.0},
+    ]
+    agg = _aggregate_samples(samples, period_s=60)
+    # Each field averaged across samples that have it (not zero-filled).
+    assert agg["batteryPower"] == pytest.approx(-200.0)
+    assert agg["loadPower"] == pytest.approx(500.0)
+
+
+def test_aggregate_single_sample_returns_it_unchanged_plus_metadata():
+    samples = [{"inverterId": "inv-1", "timestamp": "t1", "source": "edge",
+                "batteryPower": -200.0}]
+    agg = _aggregate_samples(samples, period_s=60)
+    assert agg["batteryPower"] == -200.0
+    assert agg["sampleCount"] == 1
+    assert agg["periodSec"] == 60
+
+
+@pytest.mark.asyncio
+async def test_publisher_aggregates_when_interval_idle(monkeypatch):
+    """ingestIntervalMs=300_000 → next iteration collects 5 samples 60s
+    apart and pushes ONE aggregated payload with sampleCount=5,
+    periodSec=300."""
+    hass = _mock_hass_one_iter()
+    # Need two iterations: first to receive the idle hint, second to
+    # actually aggregate. Override is_stopping to allow two full passes.
+    call_count = {"n": 0}
+
+    def _is_stopping(_self):
+        call_count["n"] += 1
+        # After 2 full pushes (each may have many sleep ticks), stop.
+        # Count is incremented on every is_stopping read — including
+        # within the aggregation sub-loop. Allow ~8 reads to cover
+        # iter1 (1 read) + iter2's 5 sub-sleeps + iter2's final push.
+        return call_count["n"] > 8
+
+    type(hass).is_stopping = property(_is_stopping)
+
+    api = MagicMock()
+    api.push_reading = AsyncMock(side_effect=[
+        # 1st push: snapshot, response signals idle
+        {"success": True, "ingestIntervalMs": 300_000},
+        # 2nd push: aggregated, response again idle (loop stops before 3rd)
+        {"success": True, "ingestIntervalMs": 300_000},
+    ])
+
+    sleeps: list[float] = []
+
+    async def _record_sleep(delay):
+        sleeps.append(delay)
+
+    monkeypatch.setattr(asyncio, "sleep", _record_sleep)
+    await run_loop(hass=hass, api_client=api, **_RUN_KWARGS)
+
+    # 2 pushes total: 1 snapshot + 1 aggregated
+    assert api.push_reading.await_count == 2
+    second_call = api.push_reading.await_args_list[1]
+    payload = second_call.kwargs["reading"]
+    assert payload["sampleCount"] == 5
+    assert payload["periodSec"] == 300
+    # Sleep cadence: first iter sleeps 300s after pushing.
+    # Second iter (aggregation) sleeps 60s x 5 sub-sleeps during sampling.
+    assert sleeps[0] == 300.0
+    assert sleeps[1:6] == [60.0, 60.0, 60.0, 60.0, 60.0]
