@@ -1,0 +1,26 @@
+# Svitgrid HA Preset — Deye String (3-phase grid-tie, no battery).
+#
+# Solarman HACS profile: deye_string.yaml.
+# No battery → no set_battery_charge / set_grid_charge_toggle commands.
+# Grid-tie inverters always sell; no work_mode toggle is meaningful here.
+
+id: deye-string-solarman-v1
+version: "1"
+brand: Deye
+model: String (3-phase grid-tie)
+phases: 3
+hasBattery: false
+pvStrings: 2
+protocolId: home_assistant_solarman
+
+entityMap:
+  pv1Power: sensor.inverter_pv1_power
+  pv2Power: sensor.inverter_pv2_power
+  gridPower: sensor.inverter_grid_power
+  loadPower: sensor.inverter_load_power
+  dailyPvEnergy: sensor.inverter_today_production
+  gridVoltageL1: sensor.inverter_grid_l1_voltage
+  gridVoltageL2: sensor.inverter_grid_l2_voltage
+  gridVoltageL3: sensor.inverter_grid_l3_voltage
+
+commands: []

@@ -1,0 +1,56 @@
+# Svitgrid HA Preset — Deye SG02LP1 (1-phase hybrid, 3 PV strings).
+#
+# Solarman HACS profile: deye_hybrid.yaml.
+# Same write registers as 1-phase family; pvStrings=3 distinguishes from
+# SG01LP1.
+
+id: deye-sg02lp1-solarman-v1
+version: "1"
+brand: Deye
+model: SG02LP1
+phases: 1
+hasBattery: true
+pvStrings: 3
+protocolId: home_assistant_solarman
+
+entityMap:
+  batterySoc: sensor.inverter_battery
+  batteryPower: sensor.inverter_battery_power
+  batteryVoltage: sensor.inverter_battery_voltage
+  pv1Power: sensor.inverter_pv1_power
+  pv2Power: sensor.inverter_pv2_power
+  pv3Power: sensor.inverter_pv3_power
+  gridPower: sensor.inverter_grid_power
+  loadPower: sensor.inverter_load_power
+  dailyPvEnergy: sensor.inverter_today_production
+  gridVoltageL1: sensor.inverter_grid_voltage
+
+commands:
+  - id: set_battery_charge
+    service: modbus.write_register
+    args:
+      hub: config.hub_name
+      slave: config.slave_id
+      address: 256
+      value: "int(payload.chargePowerLimitW)"
+  - id: set_work_mode
+    service: modbus.write_register
+    args:
+      hub: config.hub_name
+      slave: config.slave_id
+      address: 244
+      value: "int(payload.workMode)"
+  - id: set_solar_sell
+    service: modbus.write_register
+    args:
+      hub: config.hub_name
+      slave: config.slave_id
+      address: 247
+      value: "int(payload.solarSell)"
+  - id: set_grid_charge_toggle
+    service: modbus.write_register
+    args:
+      hub: config.hub_name
+      slave: config.slave_id
+      address: 248
+      value: "int(payload.enabled)"

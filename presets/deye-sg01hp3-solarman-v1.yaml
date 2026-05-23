@@ -1,0 +1,33 @@
+# Svitgrid HA Preset — Deye SG01HP3 (3-phase HV commercial hybrid).
+#
+# Solarman HACS profile: deye_p3.yaml (commercial HV map).
+# Write registers: same family as SG04LP3 per write_family.dart, but power
+# scaling differs on HP3 (raw value × 10 = watts) — for safety we ship
+# READ-ONLY in v1. Add commands[] after live verification on real HP3.
+#
+# CLAUDE.md "Pending Verification" status: only read path has been observed.
+
+id: deye-sg01hp3-solarman-v1
+version: "1"
+brand: Deye
+model: SG01HP3
+phases: 3
+hasBattery: true
+pvStrings: 2
+protocolId: home_assistant_solarman
+
+entityMap:
+  batterySoc: sensor.inverter_battery
+  batteryPower: sensor.inverter_battery_power
+  batteryVoltage: sensor.inverter_battery_voltage
+  pv1Power: sensor.inverter_pv1_power
+  pv2Power: sensor.inverter_pv2_power
+  gridPower: sensor.inverter_grid_power
+  loadPower: sensor.inverter_load_power
+  dailyPvEnergy: sensor.inverter_today_production
+  gridVoltageL1: sensor.inverter_grid_l1_voltage
+  gridVoltageL2: sensor.inverter_grid_l2_voltage
+  gridVoltageL3: sensor.inverter_grid_l3_voltage
+
+# Write commands deferred — HP3 power scaling unverified live.
+commands: []

@@ -1,0 +1,27 @@
+# Svitgrid HA Preset — Deye Microinverter (1-phase, multi-PV, no battery).
+#
+# Solarman HACS profile: deye_micro.yaml. Microinverters report per-channel
+# PV (up to 4 strings); no battery; the grid-tie aggregate goes through
+# the sensor.inverter_total_production family.
+#
+# No commands — microinverters don't expose write registers for SOC or
+# work-mode control.
+
+id: deye-micro-solarman-v1
+version: "1"
+brand: Deye
+model: Microinverter
+phases: 1
+hasBattery: false
+pvStrings: 4
+protocolId: home_assistant_solarman
+
+entityMap:
+  pv1Power: sensor.inverter_pv1_power
+  pv2Power: sensor.inverter_pv2_power
+  pv3Power: sensor.inverter_pv3_power
+  pv4Power: sensor.inverter_pv4_power
+  dailyPvEnergy: sensor.inverter_today_production
+  gridVoltageL1: sensor.inverter_grid_voltage
+
+commands: []
