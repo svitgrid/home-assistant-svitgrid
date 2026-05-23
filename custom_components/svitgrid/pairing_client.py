@@ -76,19 +76,30 @@ class PairingClient:
             raise PairingError(f"unknown status: {body['status']}")
 
     async def finalize(
-        self, *, secret: str, public_key_hex: str, signing_key_id: str
+        self,
+        *,
+        secret: str,
+        public_key_hex: str,
+        signing_key_id: str,
+        inverter: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """POST /api/v1/ha-pairing/:secret/finalize — finalize. Returns
-        {edgeDeviceId, hardwareId, apiKey, householdId, presetId, trustedKeys}."""
+        {edgeDeviceId, hardwareId, apiKey, householdId, presetId, trustedKeys,
+        entityMap, brand, model, phases, hasBattery, pvStrings, commands}.
+
+        `inverter` is set in manual-pair mode and carries the user-collected
+        brand/model/phases/entityMap (matches HaPairingInverterSchema on the
+        API side). Omitted in preset mode — the API looks up the preset
+        server-side from pairing.presetId."""
         url = f"{self._base}/api/v1/ha-pairing/{secret}/finalize"
-        async with self._session.post(
-            url,
-            json={
-                "secret": secret,
-                "publicKeyHex": public_key_hex,
-                "signingKeyId": signing_key_id,
-            },
-        ) as resp:
+        body: dict[str, Any] = {
+            "secret": secret,
+            "publicKeyHex": public_key_hex,
+            "signingKeyId": signing_key_id,
+        }
+        if inverter is not None:
+            body["inverter"] = inverter
+        async with self._session.post(url, json=body) as resp:
             if resp.status == 404:
                 raise PairingNotFound("pairing not found")
             if resp.status == 410:

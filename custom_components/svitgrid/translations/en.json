@@ -9,6 +9,36 @@
           "manual": "Configure manually (advanced — read-only)"
         }
       },
+      "manual_meta": {
+        "title": "Inverter details",
+        "description": "Tell Svitgrid about your inverter. The brand and model are shown on the dashboard; phases / battery / PV-strings drive which sensors the next step asks for.",
+        "data": {
+          "brand": "Brand",
+          "model": "Model",
+          "phases": "Phase count (1 / 2 / 3)",
+          "has_battery": "Has a battery",
+          "pv_strings": "Number of PV strings (1–8)"
+        }
+      },
+      "manual_entities": {
+        "title": "Map Home Assistant entities",
+        "description": "For each field Svitgrid tracks, pick the matching Home Assistant sensor entity. At least one must be set. Skip any field you don't have (e.g. battery sensors on a grid-tie inverter, PV2 if you only have one string).",
+        "data": {
+          "batterySoc": "Battery state of charge (%)",
+          "batteryPower": "Battery power (W — positive = charging)",
+          "batteryVoltage": "Battery voltage (V)",
+          "pv1Power": "PV string 1 power (W)",
+          "pv2Power": "PV string 2 power (W)",
+          "pv3Power": "PV string 3 power (W)",
+          "pv4Power": "PV string 4 power (W)",
+          "gridPower": "Grid power (W — positive = import)",
+          "loadPower": "Load power (W)",
+          "dailyPvEnergy": "Daily PV production (kWh)",
+          "gridVoltageL1": "Grid voltage L1 (V)",
+          "gridVoltageL2": "Grid voltage L2 (V)",
+          "gridVoltageL3": "Grid voltage L3 (V)"
+        }
+      },
       "pair": {
         "title": "Waiting for the mobile app"
       }
@@ -17,14 +47,14 @@
       "waiting_for_mobile": "Open Svitgrid on your phone and enter this code:\n\n# {code}\n\nThis code expires in 5 minutes."
     },
     "abort": {
-      "manual_branch_not_implemented": "Manual configuration is coming in a later release.",
       "not_implemented_yet": "Not yet implemented.",
       "pairing_expired": "The pairing code expired. Try again.",
       "pairing_failed": "Pairing failed. Check Home Assistant logs.",
       "cannot_connect": "Could not reach the Svitgrid cloud. Check your internet."
     },
     "error": {
-      "cannot_connect": "Cannot reach the Svitgrid cloud. Check your internet."
+      "cannot_connect": "Cannot reach the Svitgrid cloud. Check your internet.",
+      "no_entities_selected": "Pick at least one sensor — otherwise the dashboard has nothing to show."
     }
   }
 }

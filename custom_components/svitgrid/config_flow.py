@@ -1,6 +1,13 @@
 """Svitgrid config flow.
 
-Phase 1: Pair branch only. Manual branch ships in Phase 4.
+Two top-level branches:
+  - "pair"   — preset-driven path (mobile picks brand from haPresets);
+               same as Phase 1+2.
+  - "manual" — user picks "I don't see my inverter" on mobile and
+               collects brand/model/phases + per-field HA entities here.
+               Manual flow always ends in the same pair step (show code →
+               poll → finalize), with the collected metadata submitted
+               in the /finalize body's `inverter:` field.
 """
 from __future__ import annotations
 
@@ -9,9 +16,22 @@ import logging
 from secrets import token_hex
 from typing import Any
 
+import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers import aiohttp_client
+from homeassistant.helpers.selector import (
+    BooleanSelector,
+    EntitySelector,
+    EntitySelectorConfig,
+    NumberSelector,
+    NumberSelectorConfig,
+    NumberSelectorMode,
+    SelectSelector,
+    SelectSelectorConfig,
+    TextSelector,
+    TextSelectorConfig,
+)
 
 from .const import (
     DEFAULT_API_BASE,
@@ -30,6 +50,25 @@ from .signing import generate_keypair, serialize_private_key
 
 _LOGGER = logging.getLogger(__name__)
 
+# Every Svitgrid reading field the publisher knows about. Manual mode
+# offers an EntitySelector per field; user can leave them blank.
+# Required: at least one must be set (validated at form submit).
+_MANUAL_FIELDS = (
+    ("batterySoc", "Battery state of charge (%)"),
+    ("batteryPower", "Battery power (W, signed: positive=charging)"),
+    ("batteryVoltage", "Battery voltage (V)"),
+    ("pv1Power", "PV string 1 power (W)"),
+    ("pv2Power", "PV string 2 power (W)"),
+    ("pv3Power", "PV string 3 power (W)"),
+    ("pv4Power", "PV string 4 power (W)"),
+    ("gridPower", "Grid power (W, signed: positive=import)"),
+    ("loadPower", "Load power (W)"),
+    ("dailyPvEnergy", "Daily PV production (kWh)"),
+    ("gridVoltageL1", "Grid voltage L1 (V)"),
+    ("gridVoltageL2", "Grid voltage L2 (V)"),
+    ("gridVoltageL3", "Grid voltage L3 (V)"),
+)
+
 
 class SvitgridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Svitgrid setup."""
@@ -44,6 +83,10 @@ class SvitgridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._signing_key_id: str | None = None
         self._pair_task: asyncio.Task | None = None
         self._final_payload: dict[str, Any] | None = None
+        # Manual-mode state. Stays None in preset (pair) mode; populated
+        # by async_step_manual_meta → async_step_manual_entities and
+        # submitted in /finalize's body when the pair completes.
+        self._manual_inverter: dict[str, Any] | None = None
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """First step — present Pair vs Manual."""
@@ -52,9 +95,78 @@ class SvitgridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             menu_options=["pair", "manual"],
         )
 
+    # ─── Manual branch (Phase 2A M3–M7) ──────────────────────────────────
+
     async def async_step_manual(self, user_input: dict[str, Any] | None = None) -> FlowResult:
-        """Manual entity-mapping branch — Phase 4."""
-        return self.async_abort(reason="manual_branch_not_implemented")
+        """Manual entry point: collect inverter metadata first."""
+        return await self.async_step_manual_meta()
+
+    async def async_step_manual_meta(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Manual step 1 of 2: brand / model / phases / battery / pv-strings."""
+        if user_input is not None:
+            self._manual_inverter = {
+                "brand": user_input["brand"].strip(),
+                "model": user_input["model"].strip(),
+                "phases": int(user_input["phases"]),
+                "hasBattery": bool(user_input["has_battery"]),
+                "pvStrings": int(user_input["pv_strings"]),
+                "entityMap": {},   # filled in next step
+                "commands": [],    # read-only in manual mode
+            }
+            return await self.async_step_manual_entities()
+
+        schema = vol.Schema({
+            vol.Required("brand"): TextSelector(TextSelectorConfig()),
+            vol.Required("model"): TextSelector(TextSelectorConfig()),
+            vol.Required("phases", default=3): SelectSelector(
+                SelectSelectorConfig(options=["1", "2", "3"]),
+            ),
+            vol.Required("has_battery", default=True): BooleanSelector(),
+            vol.Required("pv_strings", default=2): NumberSelector(
+                NumberSelectorConfig(
+                    min=1, max=8, step=1, mode=NumberSelectorMode.BOX,
+                ),
+            ),
+        })
+        return self.async_show_form(step_id="manual_meta", data_schema=schema)
+
+    async def async_step_manual_entities(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Manual step 2 of 2: pick HA entity per Svitgrid field.
+
+        At least one entity must be chosen — otherwise the publisher has
+        nothing to send and the dashboard is permanently empty."""
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            entity_map = {
+                field: eid for field, eid in user_input.items() if eid
+            }
+            if not entity_map:
+                errors["base"] = "no_entities_selected"
+            else:
+                assert self._manual_inverter is not None
+                self._manual_inverter["entityMap"] = entity_map
+                # Hand off to the existing pair flow — same code-display +
+                # poll-for-claim path as the preset branch.
+                return await self.async_step_pair()
+
+        # Build the form: one EntitySelector per supported Svitgrid field.
+        # Defaults: empty (no entity selected).
+        schema_dict: dict[Any, Any] = {}
+        for field, _label in _MANUAL_FIELDS:
+            schema_dict[vol.Optional(field)] = EntitySelector(
+                EntitySelectorConfig(domain="sensor"),
+            )
+        return self.async_show_form(
+            step_id="manual_entities",
+            data_schema=vol.Schema(schema_dict),
+            errors=errors,
+        )
+
+    # ─── Pair branch (preset OR continuation of manual) ────────────────
 
     async def async_step_pair(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """Kick off pairing: generate keypair, /start, then show waiting + poll.
@@ -166,6 +278,11 @@ class SvitgridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     secret=self._secret,
                     public_key_hex=self._public_key_hex,
                     signing_key_id=self._signing_key_id,
+                    # Manual-mode: hand the user-collected inverter spec to
+                    # the API so it creates inverters/{hwid} with the right
+                    # brand / entityMap. Preset-mode: None — API looks up
+                    # the preset server-side.
+                    inverter=self._manual_inverter,
                 )
                 return
         raise PairingExpired("pairing window expired during polling")
