@@ -39,6 +39,12 @@ class CommandAckFailed(SvitgridApiError):
     """POST /commands/:id/ack returned non-2xx."""
 
 
+class DeviceEvicted(SvitgridApiError):
+    """Server returned 410 Gone on an authenticated poll — the device key was
+    revoked (owning household deleted). Authoritative: callers must STOP
+    polling, not retry."""
+
+
 class SvitgridApiClient:
     """Thin wrapper around a shared aiohttp session."""
 
@@ -96,6 +102,8 @@ class SvitgridApiClient:
     async def poll_commands(self, api_key: str) -> dict[str, Any]:
         url = f"{self._base}/api/v3/executors/commands"
         async with self._session.get(url, headers={"x-api-key": api_key}) as resp:
+            if resp.status == 410:
+                raise DeviceEvicted(await _err(resp))
             if resp.status >= 400:
                 _LOGGER.warning(
                     "poll_commands failed: status=%s body=%s", resp.status, await _err(resp)

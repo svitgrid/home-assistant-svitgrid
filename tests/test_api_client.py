@@ -11,6 +11,7 @@ from custom_components.svitgrid.api_client import (
     BootstrapFailed,
     BootstrapWindowExpired,
     CommandAckFailed,
+    DeviceEvicted,
     DeviceNotFound,
     PublicKeyMismatch,
     RateLimited,
@@ -172,6 +173,27 @@ class TestPollCommands:
         assert resp["commands"][0]["commandId"] == "cmd-abc"
         # Original `id` still preserved for anyone who needs the raw wire form.
         assert resp["commands"][0]["id"] == "cmd-abc"
+
+    @pytest.mark.asyncio
+    async def test_410_raises_device_evicted(self):
+        session, _ = _mock_session_with_response(410, {"error": "Device key revoked"})
+        client = SvitgridApiClient(session, "https://api.example")
+        with pytest.raises(DeviceEvicted):
+            await client.poll_commands(api_key="revoked-key")
+
+    @pytest.mark.asyncio
+    async def test_401_returns_empty_not_evicted(self):
+        session, _ = _mock_session_with_response(401, {"error": "Invalid API key"})
+        client = SvitgridApiClient(session, "https://api.example")
+        resp = await client.poll_commands(api_key="maybe-stale")
+        assert resp == {"commands": [], "serverTime": None}
+
+    @pytest.mark.asyncio
+    async def test_500_returns_empty_not_evicted(self):
+        session, _ = _mock_session_with_response(500, {"error": "oops"})
+        client = SvitgridApiClient(session, "https://api.example")
+        resp = await client.poll_commands(api_key="k")
+        assert resp == {"commands": [], "serverTime": None}
 
 
 @pytest.mark.asyncio
