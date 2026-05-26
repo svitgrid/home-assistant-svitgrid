@@ -5,6 +5,11 @@ DOMAIN = "svitgrid"
 # Timing (seconds)
 READINGS_INTERVAL_S = 10
 COMMAND_POLL_INTERVAL_S = 5
+# Upper bound for the server-driven command-poll cadence (10 min). MQTT-wake
+# delivers commands instantly; the HTTP poll is the slow fallback, so the
+# server can park us up to this long. Matches the edge firmware / mobile
+# clamp ceiling (600_000 ms).
+COMMAND_POLL_CEILING_S = 600
 
 # HA Store
 STORAGE_KEY = "svitgrid"

@@ -20,6 +20,7 @@ from homeassistant.core import HomeAssistant
 from .api_client import CommandAckFailed, SvitgridApiClient
 from .const import (
     ADD_TRUSTED_KEY_COMMAND,
+    COMMAND_POLL_CEILING_S,
     COMMAND_POLL_INTERVAL_S,
     DISPATCHABLE_COMMANDS,
     REVOKE_TRUSTED_KEY_COMMAND,
@@ -31,6 +32,28 @@ if TYPE_CHECKING:
     from .executors.base import BaseExecutor
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _next_poll_interval_s(response: dict | None, floor_s: float) -> float:
+    """Pick the next command-poll sleep from the server's pollIntervalMs.
+
+    Mirrors readings_publisher._next_interval_s. The server returns
+    pollIntervalMs on every 2xx poll (5_000 when a command is pending,
+    up to 600_000 when idle). We clamp to [floor_s, COMMAND_POLL_CEILING_S]:
+    the floor is the user-configured command_poll_interval_seconds (so a
+    fast cadence is honored but never tighter than the user asked), and the
+    ceiling caps how long a misbehaving server can park us. When the field
+    is missing (old server, or the error-path empty response), fall back to
+    the floor — preserving the legacy fixed-cadence behavior."""
+    raw_ms = response.get("pollIntervalMs") if response else None
+    if not isinstance(raw_ms, (int, float)):
+        return float(floor_s)
+    seconds = raw_ms / 1000.0
+    if seconds < floor_s:
+        return float(floor_s)
+    if seconds > COMMAND_POLL_CEILING_S:
+        return float(COMMAND_POLL_CEILING_S)
+    return float(seconds)
 
 
 def _now_iso() -> str:

@@ -8,7 +8,10 @@ from unittest.mock import AsyncMock
 import pytest
 from cryptography.hazmat.primitives import serialization
 
-from custom_components.svitgrid.command_poller import process_command
+from custom_components.svitgrid.command_poller import (
+    _next_poll_interval_s,
+    process_command,
+)
 from custom_components.svitgrid.keystore import KeystoreState
 from custom_components.svitgrid.signing import (
     generate_keypair,
@@ -271,3 +274,27 @@ async def test_empty_cache_rejects_write_command_no_fallback():
 
     # No ACK sent — command is skipped, let server expiry handle it.
     api_client.ack_command.assert_not_called()
+
+
+class TestNextPollInterval:
+    def test_honors_idle_server_value(self):
+        assert _next_poll_interval_s({"pollIntervalMs": 600_000}, floor_s=5) == 600.0
+
+    def test_honors_fast_server_value_down_to_floor(self):
+        assert _next_poll_interval_s({"pollIntervalMs": 5_000}, floor_s=5) == 5.0
+
+    def test_defaults_to_floor_when_field_missing(self):
+        assert _next_poll_interval_s({"commands": []}, floor_s=5) == 5.0
+
+    def test_defaults_to_floor_when_response_none(self):
+        assert _next_poll_interval_s(None, floor_s=5) == 5.0
+
+    def test_clamps_to_ceiling(self):
+        assert _next_poll_interval_s({"pollIntervalMs": 999_999_999}, floor_s=5) == 600.0
+
+    def test_clamps_up_to_floor(self):
+        assert _next_poll_interval_s({"pollIntervalMs": 200}, floor_s=5) == 5.0
+        assert _next_poll_interval_s({"pollIntervalMs": -10}, floor_s=5) == 5.0
+
+    def test_non_numeric_pollintervalms_falls_back_to_floor(self):
+        assert _next_poll_interval_s({"pollIntervalMs": "soon"}, floor_s=30) == 30.0
