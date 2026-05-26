@@ -1,4 +1,4 @@
-"""Command poller loop: every 5s, GETs /executors/commands, and for each
+"""Command poller loop: GETs /executors/commands on a server-driven cadence (pollIntervalMs, 5s–10min), short-circuited by the MQTT wake-bell. For each
 command either (1) handles it internally (trust-cache management), (2)
 dispatches it to the configured executor after verifying the admin
 signature, or (3) ACKs it as unsupported.
@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any
 from cryptography.hazmat.primitives.asymmetric import ec
 from homeassistant.core import HomeAssistant
 
-from .api_client import CommandAckFailed, SvitgridApiClient
+from .api_client import CommandAckFailed, DeviceEvicted, SvitgridApiClient
 from .const import (
     ADD_TRUSTED_KEY_COMMAND,
     COMMAND_POLL_CEILING_S,
@@ -331,6 +331,7 @@ async def run_loop(
                         trusted_public_keys_hex[kid] = pub
 
     while not hass.is_stopping:
+        next_interval_s = float(interval_s)  # floor; updated from each poll response
         try:
             if keystore is not None:
                 state = await keystore.load()
@@ -338,11 +339,10 @@ async def run_loop(
                     _LOGGER.error("Command poller: keystore empty; stopping loop")
                     return
             else:
-                # Config-entry path: build a transient state from entry_data.
                 if not entry_data:
                     _LOGGER.error("Command poller: no keystore and no entry_data; stopping loop")
                     return
-                from .keystore import KeystoreState  # local import to avoid circular at module level
+                from .keystore import KeystoreState  # local import avoids circular dep
 
                 state = KeystoreState(
                     api_key=entry_data["api_key"],
@@ -353,19 +353,14 @@ async def run_loop(
                     trusted_public_keys_hex=dict(trusted_public_keys_hex),
                 )
             resp = await api_client.poll_commands(api_key=state.api_key)
+            next_interval_s = _next_poll_interval_s(resp, interval_s)
             for command in resp.get("commands", []):
                 if activity is not None:
-                    # Record at receive time. process_command doesn't currently
-                    # return a dispatch outcome — adding that is a future
-                    # refactor; for now the user sees "we received command X
-                    # at time Y" in the device-page sensors, which is the
-                    # bulk of the value. Success/failure can be inferred from
-                    # the ack visible in API logs.
                     activity.record_command(
                         kind=str(command.get("command") or "unknown"),
                         payload=command.get("payload") or {},
                         result=None,
-                        success=True,  # received-and-attempting; outcome TBD
+                        success=True,
                     )
                 await process_command(
                     command=command,
@@ -378,18 +373,24 @@ async def run_loop(
                     keystore=keystore,  # type: ignore[arg-type]
                     executor=executor,
                 )
+        except DeviceEvicted:
+            # 410 Gone — owning household deleted. Authoritative eviction:
+            # stop all command polling (matches ESP32 firmware behavior).
+            _LOGGER.error(
+                "Command poller: device key revoked (410); stopping. "
+                "Re-pair the integration to resume."
+            )
+            return
         except Exception:  # noqa: BLE001
             _LOGGER.exception("Command poll iteration failed; retrying next tick")
-        # T10c: when a wake_event is provided (MQTT wake-bell active),
-        # exit the sleep early as soon as it fires. The next iteration
-        # immediately polls for the new command. If no wake fires, the
-        # interval timeout still kicks the loop normally.
+        # Sleep until the server-driven interval OR an MQTT wake-bell, whichever
+        # comes first. next_interval_s reflects the latest poll's pollIntervalMs.
         if wake_event is not None:
             try:
-                await asyncio.wait_for(wake_event.wait(), timeout=interval_s)
+                await asyncio.wait_for(wake_event.wait(), timeout=next_interval_s)
                 wake_event.clear()
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pass  # normal interval elapse — proceed to poll
         else:
-            await asyncio.sleep(interval_s)
+            await asyncio.sleep(next_interval_s)
     _LOGGER.info("Command poller stopped")

@@ -3,15 +3,21 @@ against the local trusted-keys cache, then signs + POSTs a rejection ACK."""
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
+import asyncio
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from cryptography.hazmat.primitives import serialization
 
+from custom_components.svitgrid.api_client import DeviceEvicted
 from custom_components.svitgrid.command_poller import (
     _next_poll_interval_s,
     process_command,
 )
+from custom_components.svitgrid.command_poller import (
+    run_loop as poller_run_loop,
+)
+from custom_components.svitgrid.const import COMMAND_POLL_INTERVAL_S
 from custom_components.svitgrid.keystore import KeystoreState
 from custom_components.svitgrid.signing import (
     generate_keypair,
@@ -298,3 +304,86 @@ class TestNextPollInterval:
 
     def test_non_numeric_pollintervalms_falls_back_to_floor(self):
         assert _next_poll_interval_s({"pollIntervalMs": "soon"}, floor_s=30) == 30.0
+
+
+# ---------------------------------------------------------------------------
+# run_loop tests (Task 3: server-driven cadence + 410 eviction stop)
+# ---------------------------------------------------------------------------
+
+
+def _hass_one_iter() -> MagicMock:
+    hass = MagicMock()
+    n = {"i": 0}
+
+    def _is_stopping(_self):
+        n["i"] += 1
+        return n["i"] > 1
+
+    type(hass).is_stopping = property(_is_stopping)
+    return hass
+
+
+def _entry_data():
+    priv, pub_hex = generate_keypair()
+    pem = priv.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode("ascii")
+    return {
+        "api_key": "k",
+        "public_key_hex": pub_hex,
+        "private_key_pem": pem,
+        "signing_key_id": "our-key",
+        "trusted_keys": [],
+    }
+
+
+async def _run_poller_capture_sleep(monkeypatch, hass, api, *, interval_s=None):
+    sleeps: list[float] = []
+
+    async def _record_sleep(delay):
+        sleeps.append(delay)
+
+    monkeypatch.setattr(asyncio, "sleep", _record_sleep)
+    kwargs = dict(hass=hass, api_client=api, keystore=None, entry_data=_entry_data(), wake_event=None)
+    if interval_s is not None:
+        kwargs["interval_s"] = interval_s
+    await poller_run_loop(**kwargs)
+    return sleeps
+
+
+@pytest.mark.asyncio
+async def test_loop_honors_idle_poll_interval(monkeypatch):
+    api = MagicMock()
+    api.poll_commands = AsyncMock(return_value={"commands": [], "pollIntervalMs": 600_000})
+    sleeps = await _run_poller_capture_sleep(monkeypatch, _hass_one_iter(), api)
+    api.poll_commands.assert_awaited_once()
+    assert sleeps == [600.0]
+
+
+@pytest.mark.asyncio
+async def test_loop_defaults_to_floor_when_no_interval(monkeypatch):
+    api = MagicMock()
+    api.poll_commands = AsyncMock(return_value={"commands": []})
+    sleeps = await _run_poller_capture_sleep(monkeypatch, _hass_one_iter(), api)
+    assert sleeps == [float(COMMAND_POLL_INTERVAL_S)]
+
+
+@pytest.mark.asyncio
+async def test_loop_stops_on_device_evicted(monkeypatch):
+    api = MagicMock()
+    api.poll_commands = AsyncMock(side_effect=DeviceEvicted("revoked"))
+    hass = MagicMock()
+    type(hass).is_stopping = property(lambda _self: False)  # would loop forever if not for the stop
+    sleeps = await _run_poller_capture_sleep(monkeypatch, hass, api)
+    api.poll_commands.assert_awaited_once()
+    assert sleeps == []
+
+
+@pytest.mark.asyncio
+async def test_loop_floors_fast_value_to_configured_interval(monkeypatch):
+    api = MagicMock()
+    api.poll_commands = AsyncMock(return_value={"commands": [], "pollIntervalMs": 1_000})
+    sleeps = await _run_poller_capture_sleep(monkeypatch, _hass_one_iter(), api, interval_s=30)
+    assert sleeps == [30.0]
