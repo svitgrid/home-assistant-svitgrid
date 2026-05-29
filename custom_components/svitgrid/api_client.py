@@ -45,6 +45,19 @@ class DeviceEvicted(SvitgridApiError):
     polling, not retry."""
 
 
+class DeviceStopped(SvitgridApiError):
+    """Server responded 200 with body `{stopped: true, stoppedReason: "..."}` on
+    an authenticated request. An operator flipped `disabled: true` on this
+    integration's edge-device doc — typically to evict a runaway/zombie poller.
+    Callers should treat this as a graceful, soft eviction: stop polling/pushing
+    and exit the loop. Recovery: operator clears the flag and the user reloads
+    the integration."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
 class SvitgridApiClient:
     """Thin wrapper around a shared aiohttp session."""
 
@@ -92,12 +105,15 @@ class SvitgridApiClient:
                 )
                 return None
             try:
-                return await resp.json()
+                body = await resp.json()
             except Exception:  # noqa: BLE001
                 # 2xx with non-JSON body — log and treat as success with no
                 # cadence hint (caller falls back to default).
                 _LOGGER.debug("push_reading: 2xx with non-JSON body")
                 return {}
+            if isinstance(body, dict) and body.get("stopped") is True:
+                raise DeviceStopped(str(body.get("stoppedReason") or "unknown"))
+            return body
 
     async def poll_commands(self, api_key: str) -> dict[str, Any]:
         url = f"{self._base}/api/v3/executors/commands"
@@ -116,6 +132,8 @@ class SvitgridApiClient:
             for cmd in data.get("commands", []):
                 if "id" in cmd and "commandId" not in cmd:
                     cmd["commandId"] = cmd["id"]
+            if data.get("stopped") is True:
+                raise DeviceStopped(str(data.get("stoppedReason") or "unknown"))
             return data
 
     async def get_mqtt_token(self, api_key: str) -> dict[str, Any]:

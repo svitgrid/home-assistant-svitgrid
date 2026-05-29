@@ -16,7 +16,7 @@ from typing import Any
 
 from homeassistant.core import HomeAssistant
 
-from .api_client import SvitgridApiClient
+from .api_client import DeviceStopped, SvitgridApiClient
 from .const import READING_SOURCE, READINGS_INTERVAL_S
 
 # Sane bounds for the server-driven cadence. Floor prevents a misbehaving
@@ -234,6 +234,14 @@ async def run_loop(
                             reason="push_reading returned no response",
                         )
                 await asyncio.sleep(next_sleep_s)
+        except DeviceStopped as e:
+            _LOGGER.warning(
+                "Readings publisher: server signaled stop (%s); stopping loop. "
+                "Operator can re-enable the device and you can reload the "
+                "integration to resume.",
+                e.reason,
+            )
+            return
         except Exception as exc:  # noqa: BLE001
             _LOGGER.exception("Readings publish failed; will retry next tick")
             if activity is not None:

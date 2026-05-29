@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from cryptography.hazmat.primitives import serialization
 
-from custom_components.svitgrid.api_client import DeviceEvicted
+from custom_components.svitgrid.api_client import DeviceEvicted, DeviceStopped
 from custom_components.svitgrid.command_poller import (
     _next_poll_interval_s,
     process_command,
@@ -387,3 +387,15 @@ async def test_loop_floors_fast_value_to_configured_interval(monkeypatch):
     api.poll_commands = AsyncMock(return_value={"commands": [], "pollIntervalMs": 1_000})
     sleeps = await _run_poller_capture_sleep(monkeypatch, _hass_one_iter(), api, interval_s=30)
     assert sleeps == [30.0]
+
+
+@pytest.mark.asyncio
+async def test_loop_stops_on_device_stopped(monkeypatch):
+    """DeviceStopped raised by poll_commands → loop exits immediately (no sleep)."""
+    api = MagicMock()
+    api.poll_commands = AsyncMock(side_effect=DeviceStopped("manual eviction"))
+    hass = MagicMock()
+    type(hass).is_stopping = property(lambda _self: False)  # would loop forever if not for the stop
+    sleeps = await _run_poller_capture_sleep(monkeypatch, hass, api)
+    api.poll_commands.assert_awaited_once()
+    assert sleeps == []

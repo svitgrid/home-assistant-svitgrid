@@ -13,6 +13,7 @@ from custom_components.svitgrid.api_client import (
     CommandAckFailed,
     DeviceEvicted,
     DeviceNotFound,
+    DeviceStopped,
     PublicKeyMismatch,
     RateLimited,
     SvitgridApiClient,
@@ -278,3 +279,40 @@ class TestGetMqttToken:
         client = SvitgridApiClient(session, api_base="https://api.example")
         with pytest.raises(SvitgridApiError):
             await client.get_mqtt_token(api_key="bad-key")
+
+
+# ── Graceful stop signal: stopped:true in response body ───────────────────
+
+@pytest.mark.asyncio
+class TestDeviceStopped:
+    async def test_poll_commands_raises_device_stopped_on_signal(self):
+        """`poll_commands` raises DeviceStopped when server body has stopped: true."""
+        session, _ = _mock_session_with_response(
+            200,
+            {
+                "commands": [],
+                "stopped": True,
+                "stoppedReason": "manual eviction",
+            },
+        )
+        client = SvitgridApiClient(session, api_base="https://api.example")
+        with pytest.raises(DeviceStopped) as exc_info:
+            await client.poll_commands(api_key="secret")
+        assert exc_info.value.reason == "manual eviction"
+
+    async def test_push_reading_raises_device_stopped_on_signal(self):
+        """`push_reading` raises DeviceStopped when server body has stopped: true."""
+        session, _ = _mock_session_with_response(
+            200,
+            {
+                "stopped": True,
+                "stoppedReason": "zombie poll cost",
+            },
+        )
+        client = SvitgridApiClient(session, api_base="https://api.example")
+        with pytest.raises(DeviceStopped) as exc_info:
+            await client.push_reading(
+                api_key="secret",
+                reading={"inverterId": "inv-1", "timestamp": "t", "source": "edge"},
+            )
+        assert exc_info.value.reason == "zombie poll cost"

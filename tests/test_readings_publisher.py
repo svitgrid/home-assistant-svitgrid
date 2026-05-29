@@ -103,6 +103,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from custom_components.svitgrid.api_client import DeviceStopped
 from custom_components.svitgrid.readings_publisher import run_loop
 
 
@@ -317,3 +318,31 @@ async def test_publisher_aggregates_when_interval_idle(monkeypatch):
     # Second iter (aggregation) sleeps 60s x 5 sub-sleeps during sampling.
     assert sleeps[0] == 300.0
     assert sleeps[1:6] == [60.0, 60.0, 60.0, 60.0, 60.0]
+
+
+# ── Graceful stop signal in readings publisher ────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_publisher_stops_on_device_stopped(monkeypatch):
+    """When push_reading raises DeviceStopped, the loop exits without any
+    further push calls."""
+    hass = MagicMock()
+    hass.states.get = lambda eid: MagicMock(state="80")
+    type(hass).is_stopping = property(lambda _self: False)  # would loop forever without the stop
+
+    api = MagicMock()
+    api.push_reading = AsyncMock(side_effect=DeviceStopped("zombie poll cost"))
+
+    sleeps: list[float] = []
+
+    async def _record_sleep(delay):
+        sleeps.append(delay)
+
+    monkeypatch.setattr(asyncio, "sleep", _record_sleep)
+    await run_loop(hass=hass, api_client=api, **_RUN_KWARGS)
+
+    # Called exactly once — raised on first push and loop exited.
+    api.push_reading.assert_awaited_once()
+    # No sleeps: loop returned before reaching the post-push sleep.
+    assert sleeps == []

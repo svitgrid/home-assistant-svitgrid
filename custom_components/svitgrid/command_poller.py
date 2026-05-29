@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any
 from cryptography.hazmat.primitives.asymmetric import ec
 from homeassistant.core import HomeAssistant
 
-from .api_client import CommandAckFailed, DeviceEvicted, SvitgridApiClient
+from .api_client import CommandAckFailed, DeviceEvicted, DeviceStopped, SvitgridApiClient
 from .const import (
     ADD_TRUSTED_KEY_COMMAND,
     COMMAND_POLL_CEILING_S,
@@ -379,6 +379,14 @@ async def run_loop(
             _LOGGER.error(
                 "Command poller: device key revoked (410); stopping. "
                 "Re-pair the integration to resume."
+            )
+            return
+        except DeviceStopped as e:
+            _LOGGER.warning(
+                "Command poller: server signaled stop (%s); stopping loop. "
+                "Operator can re-enable the device and you can reload the "
+                "integration to resume.",
+                e.reason,
             )
             return
         except Exception:  # noqa: BLE001
