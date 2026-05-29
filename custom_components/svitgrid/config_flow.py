@@ -301,19 +301,24 @@ class SvitgridOptionsFlow(config_entries.OptionsFlow):
         self._entry = config_entry
 
     def _current_map(self) -> dict[str, str]:
-        """Current mapping, options taking precedence over the pairing-time data."""
-        return dict(
-            self._entry.options.get("entity_map")
-            or self._entry.data.get("entity_map")
-            or {}
-        )
+        """Current mapping, options taking precedence over the pairing-time data.
+
+        An explicitly-empty options map is honored (returns {}) rather than
+        falling back to the pairing-time data — only an ABSENT options key
+        falls through.
+        """
+        entity_map = self._entry.options.get("entity_map")
+        if entity_map is None:
+            entity_map = self._entry.data.get("entity_map") or {}
+        return dict(entity_map)
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         """Single step: per-field EntitySelector, pre-filled with the current map.
 
-        Clearing a field unmaps it. At least one entity must remain set."""
+        Clearing a field unmaps it. At least one entity must remain set.
+        """
         errors: dict[str, str] = {}
         if user_input is not None:
             cleaned = {field: eid for field, eid in user_input.items() if eid}

@@ -270,3 +270,17 @@ async def test_options_flow_shows_init_form(hass: HomeAssistant, enable_custom_i
     result = await hass.config_entries.options.async_init(entry.entry_id)
     assert result["type"] == FlowResultType.FORM
     assert result["step_id"] == "init"
+
+
+def test_current_map_empty_options_does_not_fall_back():
+    """An explicitly-empty options map is honored, not masked by data."""
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+    from custom_components.svitgrid.config_flow import SvitgridOptionsFlow
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={"entity_map": {"batterySoc": "sensor.from_data"}},
+        options={"entity_map": {}},
+    )
+    flow = SvitgridOptionsFlow(entry)
+    assert flow._current_map() == {}
