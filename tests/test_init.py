@@ -463,3 +463,88 @@ async def test_async_setup_entry_passes_preset_entity_map_to_publisher(hass, ena
     assert rp.call_count == 1
     assert rp.call_args.kwargs["entity_map"] == preset_map
     assert rp.call_args.kwargs["inverter_id"] == "ha-deye-001"
+
+
+@pytest.mark.asyncio
+async def test_setup_prefers_options_entity_map(hass, enable_custom_integrations):
+    """async_setup_entry uses entry.options['entity_map'] over entry.data's."""
+    from unittest.mock import AsyncMock, patch
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+    from custom_components.svitgrid import async_setup_entry
+
+    entry = MockConfigEntry(
+        domain="svitgrid",
+        data={
+            "api_base": "https://example.test",
+            "api_key": "k",
+            "edge_device_id": "dev1",
+            "hardware_id": "hw1",
+            "household_id": "hh1",
+            "signing_key_id": "sk1",
+            "private_key_pem": "pem",
+            "public_key_hex": "ff",
+            "trusted_keys": [],
+            "preset_id": None,
+            "entity_map": {"batterySoc": "sensor.from_data"},
+        },
+        options={"entity_map": {"batterySoc": "sensor.from_options"}},
+    )
+    entry.add_to_hass(hass)
+
+    captured = {}
+
+    async def _fake_loop(**kwargs):
+        captured["entity_map"] = kwargs.get("entity_map")
+
+    with patch("custom_components.svitgrid.run_readings_loop", _fake_loop), \
+         patch("custom_components.svitgrid.run_command_loop", AsyncMock()), \
+         patch("custom_components.svitgrid.run_mqtt_wake_loop", AsyncMock()), \
+         patch.object(hass.config_entries, "async_forward_entry_setups", AsyncMock()):
+        ok = await async_setup_entry(hass, entry)
+        await hass.async_block_till_done()
+
+    assert ok is True
+    assert captured["entity_map"] == {"batterySoc": "sensor.from_options"}
+
+
+@pytest.mark.asyncio
+async def test_options_change_reloads_entry(hass, enable_custom_integrations):
+    """Updating entry.options fires the update listener, reloading the entry."""
+    from unittest.mock import AsyncMock, patch
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+    from custom_components.svitgrid import async_setup_entry
+
+    entry = MockConfigEntry(
+        domain="svitgrid",
+        data={
+            "api_base": "https://example.test",
+            "api_key": "k",
+            "edge_device_id": "dev1",
+            "hardware_id": "hw1",
+            "household_id": "hh1",
+            "signing_key_id": "sk1",
+            "private_key_pem": "pem",
+            "public_key_hex": "ff",
+            "trusted_keys": [],
+            "preset_id": None,
+            "entity_map": {"batterySoc": "sensor.soc"},
+        },
+    )
+    entry.add_to_hass(hass)
+
+    with patch("custom_components.svitgrid.run_readings_loop", AsyncMock()), \
+         patch("custom_components.svitgrid.run_command_loop", AsyncMock()), \
+         patch("custom_components.svitgrid.run_mqtt_wake_loop", AsyncMock()), \
+         patch.object(hass.config_entries, "async_forward_entry_setups", AsyncMock()):
+        await async_setup_entry(hass, entry)
+        await hass.async_block_till_done()
+
+        with patch.object(
+            hass.config_entries, "async_reload", AsyncMock()
+        ) as mock_reload:
+            hass.config_entries.async_update_entry(
+                entry, options={"entity_map": {"batterySoc": "sensor.new"}}
+            )
+            await hass.async_block_till_done()
+
+    mock_reload.assert_called_once_with(entry.entry_id)

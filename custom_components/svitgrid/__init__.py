@@ -47,6 +47,11 @@ def _validate_entity_map(value: dict) -> dict:
     return value
 
 
+async def _async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Update listener: reload the entry so a new entity_map takes effect."""
+    await hass.config_entries.async_reload(entry.entry_id)
+
+
 CONFIG_SCHEMA = vol.Schema(
     {
         DOMAIN: vol.Schema(
@@ -190,7 +195,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # post payloads that the API rejects with 400 until the user re-pairs
     # against a known brand. We start the publisher anyway so the WARNING
     # fires every push cycle and the operator can diagnose.
-    entity_map: dict[str, str] = dict(data.get("entity_map") or {})
+    # Options (set by the edit/options flow) win over the pairing-time data,
+    # so a user's edited mapping takes effect on the next reload.
+    entity_map: dict[str, str] = dict(
+        entry.options.get("entity_map") or data.get("entity_map") or {}
+    )
     if not entity_map:
         _LOGGER.warning(
             "No entity_map configured for config entry %s "
@@ -299,6 +308,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         entry.entry_id,
         data.get("hardware_id"),
     )
+    # Reload the entry whenever options change (e.g. the user edits the sensor
+    # mappings) so the readings publisher restarts with the new entity_map.
+    entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
     return True
 
 
