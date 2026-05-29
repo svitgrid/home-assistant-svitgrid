@@ -316,3 +316,19 @@ class TestDeviceStopped:
                 reading={"inverterId": "inv-1", "timestamp": "t", "source": "edge"},
             )
         assert exc_info.value.reason == "zombie poll cost"
+
+    async def test_poll_commands_does_not_stop_when_stopped_falsey(self):
+        """`stopped` must be exactly `True` — `false`/missing/truthy do not stop.
+
+        Locks in the `is True` semantics so a future refactor to a truthy
+        check (`if data.get("stopped")`) is caught by tests.
+        """
+        for stopped_value in (False, 0, 1, "true", None):
+            body = {"commands": [], "serverTime": None}
+            if stopped_value is not None:
+                body["stopped"] = stopped_value
+            session, _ = _mock_session_with_response(200, body)
+            client = SvitgridApiClient(session, api_base="https://api.example")
+            # Must NOT raise; returns the normal body.
+            data = await client.poll_commands(api_key="secret")
+            assert data["commands"] == []
