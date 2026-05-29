@@ -284,3 +284,67 @@ def test_current_map_empty_options_does_not_fall_back():
     )
     flow = SvitgridOptionsFlow(entry)
     assert flow._current_map() == {}
+
+
+@pytest.mark.asyncio
+async def test_options_flow_saves_and_drops_blanks(hass: HomeAssistant, enable_custom_integrations) -> None:
+    """Submitting writes the cleaned map (blank selectors dropped) to options.
+
+    HA's EntitySelector rejects literal "" at schema-validation time, so we
+    omit the field entirely rather than passing "" — that is exactly how HA
+    delivers cleared optional selectors in real usage.
+    """
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={"entity_map": {"batterySoc": "sensor.old_soc"}},
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    # loadPower is omitted (not passed at all) to simulate a cleared optional
+    # selector — EntitySelector rejects "" so HA omits cleared fields instead.
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        user_input={
+            "batterySoc": "sensor.new_soc",
+            "gridPower": "sensor.grid",
+            # loadPower absent → dropped by cleaned = {k: v for k, v in … if v}
+        },
+    )
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert entry.options["entity_map"] == {
+        "batterySoc": "sensor.new_soc",
+        "gridPower": "sensor.grid",
+    }
+
+
+@pytest.mark.asyncio
+async def test_options_flow_rejects_empty_map(hass: HomeAssistant, enable_custom_integrations) -> None:
+    """Submitting with nothing selected re-shows the form with an error and
+    leaves options untouched.
+
+    We submit an empty dict rather than passing "" values because HA's
+    EntitySelector rejects blank strings at schema-validation time; an empty
+    user_input dict is what HA delivers when every optional selector is cleared.
+    """
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={"entity_map": {"batterySoc": "sensor.soc"}},
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    # Empty dict = no fields submitted (all optional selectors cleared).
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        user_input={},
+    )
+
+    assert result["type"] == FlowResultType.FORM
+    assert result["errors"] == {"base": "no_entities_selected"}
+    assert entry.options == {}
