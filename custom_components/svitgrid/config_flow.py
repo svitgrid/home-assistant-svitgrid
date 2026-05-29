@@ -36,6 +36,7 @@ from homeassistant.helpers.selector import (
 from .const import (
     DEFAULT_API_BASE,
     DOMAIN,
+    MAPPABLE_FIELDS,
     PAIRING_MAX_POLL_DURATION_S,
     PAIRING_POLL_INTERVAL_S,
 )
@@ -50,24 +51,12 @@ from .signing import generate_keypair, serialize_private_key
 
 _LOGGER = logging.getLogger(__name__)
 
-# Every Svitgrid reading field the publisher knows about. Manual mode
-# offers an EntitySelector per field; user can leave them blank.
-# Required: at least one must be set (validated at form submit).
-_MANUAL_FIELDS = (
-    ("batterySoc", "Battery state of charge (%)"),
-    ("batteryPower", "Battery power (W, signed: positive=charging)"),
-    ("batteryVoltage", "Battery voltage (V)"),
-    ("pv1Power", "PV string 1 power (W)"),
-    ("pv2Power", "PV string 2 power (W)"),
-    ("pv3Power", "PV string 3 power (W)"),
-    ("pv4Power", "PV string 4 power (W)"),
-    ("gridPower", "Grid power (W, signed: positive=import)"),
-    ("loadPower", "Load power (W)"),
-    ("dailyPvEnergy", "Daily PV production (kWh)"),
-    ("gridVoltageL1", "Grid voltage L1 (V)"),
-    ("gridVoltageL2", "Grid voltage L2 (V)"),
-    ("gridVoltageL3", "Grid voltage L3 (V)"),
-)
+# Every Svitgrid reading field the publisher knows about, sourced from the
+# single canonical list in const.py so the manual pairing form and the options
+# (edit) form share one definition. Manual mode offers an EntitySelector per
+# field; the user may leave any blank. At least one must be set (validated at
+# form submit in async_step_manual_entities).
+_MANUAL_FIELDS = tuple(MAPPABLE_FIELDS)
 
 
 class SvitgridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):

@@ -218,3 +218,12 @@ async def test_pair_finalize_phase_1_compat_when_no_preset(hass: HomeAssistant, 
         assert data["entity_map"] == {}  # empty dict, not None — easier for async_setup_entry
         assert data["brand"] is None
         assert data["preset_id"] is None
+
+
+def test_manual_fields_derive_from_mappable_source():
+    """The manual pairing field list must be exactly MAPPABLE_FIELDS — no
+    separate hardcoded copy that can drift."""
+    from custom_components.svitgrid.config_flow import _MANUAL_FIELDS
+    from custom_components.svitgrid.const import MAPPABLE_FIELDS
+
+    assert list(_MANUAL_FIELDS) == list(MAPPABLE_FIELDS)
