@@ -13,5 +13,8 @@ def test_mappable_fields_cover_all_fields_exactly():
 
 
 def test_mappable_fields_have_nonempty_labels():
+    """Every mappable field has a human-readable, non-empty label."""
     for field, label in MAPPABLE_FIELDS:
         assert isinstance(label, str) and label.strip(), f"empty label for {field}"
+    labels = [label for _field, label in MAPPABLE_FIELDS]
+    assert len(labels) == len(set(labels)), "duplicate label in MAPPABLE_FIELDS"

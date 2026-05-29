@@ -44,7 +44,7 @@ ALL_FIELDS = REQUIRED_FIELDS | frozenset(
 # canonical fields can be mapped to a Home Assistant sensor and what we call
 # them in the UI. Both the manual pairing step (config flow) and the options
 # (edit) flow derive their forms from this list, so the two can never drift.
-# Grouped: battery → PV strings → grid → load → daily energy → temps/frequency.
+# Grouped: battery → PV strings → grid → load → daily energy → temps.
 # The key set MUST equal ALL_FIELDS (locked by tests/test_const.py).
 MAPPABLE_FIELDS: list[tuple[str, str]] = [
     ("batterySoc", "Battery state of charge (%)"),
