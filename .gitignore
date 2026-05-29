@@ -10,3 +10,6 @@ venv/
 .idea/
 dist/
 release.zip
+
+# git worktrees
+.worktrees/
