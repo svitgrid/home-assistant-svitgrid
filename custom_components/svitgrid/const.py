@@ -40,6 +40,35 @@ ALL_FIELDS = REQUIRED_FIELDS | frozenset(
     }
 )
 
+# Ordered (field, human label) list — the single source of truth for which
+# canonical fields can be mapped to a Home Assistant sensor and what we call
+# them in the UI. Both the manual pairing step (config flow) and the options
+# (edit) flow derive their forms from this list, so the two can never drift.
+# Grouped: battery → PV strings → grid → load → daily energy → temps/frequency.
+# The key set MUST equal ALL_FIELDS (locked by tests/test_const.py).
+MAPPABLE_FIELDS: list[tuple[str, str]] = [
+    ("batterySoc", "Battery state of charge (%)"),
+    ("batteryPower", "Battery power (W — positive = charging)"),
+    ("batteryVoltage", "Battery voltage (V)"),
+    ("batteryCurrent", "Battery current (A — positive = charging)"),
+    ("batteryTemperature", "Battery temperature (°C)"),
+    ("pv1Power", "PV string 1 power (W)"),
+    ("pv2Power", "PV string 2 power (W)"),
+    ("pv3Power", "PV string 3 power (W)"),
+    ("pv4Power", "PV string 4 power (W)"),
+    ("gridPower", "Grid power (W — positive = import)"),
+    ("gridVoltageL1", "Grid voltage L1 (V)"),
+    ("gridVoltageL2", "Grid voltage L2 (V)"),
+    ("gridVoltageL3", "Grid voltage L3 (V)"),
+    ("gridFrequency", "Grid frequency (Hz)"),
+    ("loadPower", "Load power (W)"),
+    ("dailyPvEnergy", "Daily PV production (kWh)"),
+    ("dailyGridImportEnergy", "Daily grid import (kWh)"),
+    ("dailyGridExportEnergy", "Daily grid export (kWh)"),
+    ("dailyLoadEnergy", "Daily load energy (kWh)"),
+    ("inverterTemperature", "Inverter temperature (°C)"),
+]
+
 # Source tag on pushed readings. Must match a value in Plan A's reading
 # `source` enum, currently {android-foreground, android-background,
 # ios-foreground, ios-background, edge}. `edge` is the closest fit;
