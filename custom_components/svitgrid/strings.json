@@ -63,5 +63,38 @@
       "cannot_connect": "Cannot reach the Svitgrid cloud. Check your internet.",
       "no_entities_selected": "Pick at least one sensor — otherwise the dashboard has nothing to show."
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Edit sensor mappings",
+        "description": "Change which Home Assistant sensor feeds each Svitgrid field. Clear a field to stop sending it. At least one must be set. Saving reloads the integration so changes take effect immediately.",
+        "data": {
+          "batterySoc": "Battery state of charge (%)",
+          "batteryPower": "Battery power (W — positive = charging)",
+          "batteryVoltage": "Battery voltage (V)",
+          "batteryCurrent": "Battery current (A — positive = charging)",
+          "batteryTemperature": "Battery temperature (°C)",
+          "pv1Power": "PV string 1 power (W)",
+          "pv2Power": "PV string 2 power (W)",
+          "pv3Power": "PV string 3 power (W)",
+          "pv4Power": "PV string 4 power (W)",
+          "gridPower": "Grid power (W — positive = import)",
+          "gridVoltageL1": "Grid voltage L1 (V)",
+          "gridVoltageL2": "Grid voltage L2 (V)",
+          "gridVoltageL3": "Grid voltage L3 (V)",
+          "gridFrequency": "Grid frequency (Hz)",
+          "loadPower": "Load power (W)",
+          "dailyPvEnergy": "Daily PV production (kWh)",
+          "dailyGridImportEnergy": "Daily grid import (kWh)",
+          "dailyGridExportEnergy": "Daily grid export (kWh)",
+          "dailyLoadEnergy": "Daily load energy (kWh)",
+          "inverterTemperature": "Inverter temperature (°C)"
+        }
+      }
+    },
+    "error": {
+      "no_entities_selected": "Pick at least one sensor — otherwise the dashboard has nothing to show."
+    }
   }
 }

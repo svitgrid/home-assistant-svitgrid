@@ -18,6 +18,7 @@ from typing import Any
 
 import voluptuous as vol
 from homeassistant import config_entries
+from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers import aiohttp_client
 from homeassistant.helpers.selector import (
@@ -63,6 +64,14 @@ class SvitgridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Svitgrid setup."""
 
     VERSION = 1
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(
+        config_entry: config_entries.ConfigEntry,
+    ) -> "SvitgridOptionsFlow":
+        """Expose the 'Configure' button so users can edit sensor mappings."""
+        return SvitgridOptionsFlow(config_entry)
 
     def __init__(self) -> None:
         self._secret: str | None = None
@@ -275,3 +284,59 @@ class SvitgridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 )
                 return
         raise PairingExpired("pairing window expired during polling")
+
+
+class SvitgridOptionsFlow(config_entries.OptionsFlow):
+    """Edit the entity_map (Svitgrid field → HA sensor) after pairing.
+
+    Local only: the edited map is written to entry.options["entity_map"]; the
+    update listener in __init__.py reloads the entry so the readings publisher
+    restarts with the new mapping. The server is never told (it only ever
+    seeded the map at pairing).
+    """
+
+    def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
+        # Store privately rather than assigning self.config_entry (which newer
+        # HA provides automatically and warns about reassigning).
+        self._entry = config_entry
+
+    def _current_map(self) -> dict[str, str]:
+        """Current mapping, options taking precedence over the pairing-time data."""
+        return dict(
+            self._entry.options.get("entity_map")
+            or self._entry.data.get("entity_map")
+            or {}
+        )
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Single step: per-field EntitySelector, pre-filled with the current map.
+
+        Clearing a field unmaps it. At least one entity must remain set."""
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            cleaned = {field: eid for field, eid in user_input.items() if eid}
+            if not cleaned:
+                errors["base"] = "no_entities_selected"
+            else:
+                return self.async_create_entry(
+                    title="", data={"entity_map": cleaned}
+                )
+
+        # Build one optional EntitySelector per mappable field. Pre-fill via
+        # add_suggested_values_to_schema (NOT vol.Optional defaults) so that a
+        # cleared field stays cleared instead of snapping back to its old value.
+        schema = vol.Schema({
+            vol.Optional(field): EntitySelector(
+                EntitySelectorConfig(domain="sensor"),
+            )
+            for field, _label in _MANUAL_FIELDS
+        })
+        return self.async_show_form(
+            step_id="init",
+            data_schema=self.add_suggested_values_to_schema(
+                schema, self._current_map()
+            ),
+            errors=errors,
+        )
