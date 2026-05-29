@@ -196,10 +196,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # against a known brand. We start the publisher anyway so the WARNING
     # fires every push cycle and the operator can diagnose.
     # Options (set by the edit/options flow) win over the pairing-time data,
-    # so a user's edited mapping takes effect on the next reload.
-    entity_map: dict[str, str] = dict(
-        entry.options.get("entity_map") or data.get("entity_map") or {}
-    )
+    # so a user's edited mapping takes effect on the next reload. Use an
+    # explicit None check (not `or`) so an explicitly-empty options map is
+    # honored rather than silently falling back to the pairing-time data —
+    # matching config_flow.SvitgridOptionsFlow._current_map.
+    _options_map = entry.options.get("entity_map")
+    if _options_map is None:
+        _options_map = data.get("entity_map") or {}
+    entity_map: dict[str, str] = dict(_options_map)
     if not entity_map:
         _LOGGER.warning(
             "No entity_map configured for config entry %s "
