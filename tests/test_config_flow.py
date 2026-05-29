@@ -319,6 +319,7 @@ async def test_options_flow_saves_and_drops_blanks(hass: HomeAssistant, enable_c
         "batterySoc": "sensor.new_soc",
         "gridPower": "sensor.grid",
     }
+    assert "loadPower" not in entry.options["entity_map"]
 
 
 @pytest.mark.asyncio
@@ -346,5 +347,6 @@ async def test_options_flow_rejects_empty_map(hass: HomeAssistant, enable_custom
     )
 
     assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "init"
     assert result["errors"] == {"base": "no_entities_selected"}
     assert entry.options == {}
