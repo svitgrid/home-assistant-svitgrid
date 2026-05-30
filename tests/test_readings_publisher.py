@@ -74,9 +74,17 @@ def test_build_payload_aggregates_pv_power(hass):
             "pv2Power": "sensor.pv2",
         },
     )
-    assert payload["pv1Power"] == 1500.0
-    assert payload["pv2Power"] == 2000.0
+    # Per-string fields are emitted under the server's canonical names
+    # (pvPower1..pvPower4) — matching the mobile harvester (upload_payload.dart)
+    # and edge firmware (cloud_uploader.c). The entity_map keys stay
+    # pv1Power..pv4Power (the UI labels in MAPPABLE_FIELDS), but the outbound
+    # payload uses pvPowerN so the API ingest schema doesn't strip them.
+    assert payload["pvPower1"] == 1500.0
+    assert payload["pvPower2"] == 2000.0
     assert payload["pvPower"] == 3500.0
+    # The non-canonical aliases must NOT leak into the payload.
+    assert "pv1Power" not in payload
+    assert "pv2Power" not in payload
 
 
 def test_build_payload_single_mppt_aggregates_to_pv1_total(hass):
@@ -87,6 +95,8 @@ def test_build_payload_single_mppt_aggregates_to_pv1_total(hass):
         entity_map={"pv1Power": "sensor.pv1"},
     )
     assert payload["pvPower"] == 1500.0
+    assert payload["pvPower1"] == 1500.0
+    assert "pv1Power" not in payload
 
 
 # ── Phase 2 T10a: adaptive ingest cadence ─────────────────────────────

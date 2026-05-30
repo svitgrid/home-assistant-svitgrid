@@ -45,6 +45,17 @@ _LOGGER = logging.getLogger(__name__)
 # States that mean "no usable value" and the field should be omitted entirely.
 _UNAVAILABLE_STATES = {"unavailable", "unknown", "none", None}
 
+# The entity_map / UI use pv1Power..pv4Power (MAPPABLE_FIELDS labels), but the
+# Svitgrid API ingest schema's canonical per-string keys are pvPower1..pvPower4
+# (same names the mobile harvester + edge firmware send). Translate on the way
+# out so the server stores the per-string breakdown instead of stripping it.
+_PV_STRING_API_NAMES = {
+    "pv1Power": "pvPower1",
+    "pv2Power": "pvPower2",
+    "pv3Power": "pvPower3",
+    "pv4Power": "pvPower4",
+}
+
 
 def build_reading_payload(
     *, hass: HomeAssistant, inverter_id: str, entity_map: dict[str, str]
@@ -69,8 +80,7 @@ def build_reading_payload(
         except (TypeError, ValueError):
             continue
     # Aggregate pvPower from the per-MPPT values the server requires.
-    # (Server schema requires `pvPower` as a top-level scalar; we keep
-    # the pvN fields alongside for diagnostic purposes.)
+    # (Server schema requires `pvPower` as a top-level scalar.)
     pv_total = 0.0
     has_any_pv = False
     for pv_field in ("pv1Power", "pv2Power", "pv3Power", "pv4Power"):
@@ -79,6 +89,16 @@ def build_reading_payload(
             has_any_pv = True
     if has_any_pv:
         payload["pvPower"] = pv_total
+    # Emit the per-string fields under the server's canonical names
+    # (pvPower1..pvPower4), matching the mobile harvester
+    # (apps/mobile/.../upload_payload.dart) and edge firmware
+    # (devices/.../cloud_uploader.c). The entity_map / UI keep the
+    # pv1Power..pv4Power keys (MAPPABLE_FIELDS labels), but the API ingest
+    # schema only recognizes pvPowerN — sending pvN silently strips the
+    # per-string breakdown (total survives, strings show 0 in the app).
+    for internal, api_name in _PV_STRING_API_NAMES.items():
+        if internal in payload:
+            payload[api_name] = payload.pop(internal)
     return payload
 
 
