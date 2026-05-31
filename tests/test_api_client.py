@@ -17,6 +17,7 @@ from custom_components.svitgrid.api_client import (
     PublicKeyMismatch,
     RateLimited,
     SvitgridApiClient,
+    SvitgridApiError,
 )
 
 
@@ -332,3 +333,54 @@ class TestDeviceStopped:
             # Must NOT raise; returns the normal body.
             data = await client.poll_commands(api_key="secret")
             assert data["commands"] == []
+
+
+# ── Multi-inverter: add_inverter() ───────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_add_inverter_posts_spec_and_returns_body(aioclient_mock):
+    aioclient_mock.post(
+        "https://api.example.test/api/v1/ha/inverters",
+        json={"inverterId": "ha-abc123", "brand": "Deye", "entityMap": {"batterySoc": "sensor.soc"}, "commands": []},
+    )
+    import asyncio
+    import aiohttp
+    session = aiohttp.ClientSession()
+    object.__setattr__(session, "_request", aioclient_mock.match_request)
+    try:
+        client = SvitgridApiClient(session, api_base="https://api.example.test")
+        body = await client.add_inverter(api_key="k", preset_id="deye-sg04lp3")
+    finally:
+        await session.close()
+    assert body["inverterId"] == "ha-abc123"
+    sent = aioclient_mock.mock_calls[0][2]
+    assert sent == {"presetId": "deye-sg04lp3"}
+
+
+@pytest.mark.asyncio
+async def test_add_inverter_sends_manual_spec(aioclient_mock):
+    aioclient_mock.post("https://api.example.test/api/v1/ha/inverters", json={"inverterId": "ha-x"})
+    import aiohttp
+    spec = {"brand": "Foo", "model": "Bar", "phases": 1, "hasBattery": False, "pvStrings": 1, "entityMap": {"pv1Power": "sensor.pv"}, "commands": []}
+    session = aiohttp.ClientSession()
+    object.__setattr__(session, "_request", aioclient_mock.match_request)
+    try:
+        client = SvitgridApiClient(session, api_base="https://api.example.test")
+        await client.add_inverter(api_key="k", inverter=spec)
+    finally:
+        await session.close()
+    assert aioclient_mock.mock_calls[0][2] == {"inverter": spec}
+
+
+@pytest.mark.asyncio
+async def test_add_inverter_raises_on_error(aioclient_mock):
+    aioclient_mock.post("https://api.example.test/api/v1/ha/inverters", status=409, json={"error": "cap"})
+    import aiohttp
+    session = aiohttp.ClientSession()
+    object.__setattr__(session, "_request", aioclient_mock.match_request)
+    try:
+        client = SvitgridApiClient(session, api_base="https://api.example.test")
+        with pytest.raises(SvitgridApiError):
+            await client.add_inverter(api_key="k", preset_id="p")
+    finally:
+        await session.close()

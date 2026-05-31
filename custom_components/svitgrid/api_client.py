@@ -164,6 +164,26 @@ class SvitgridApiClient:
             if resp.status >= 400:
                 raise CommandAckFailed(f"HTTP {resp.status}: {await _err(resp)}")
 
+    async def add_inverter(
+        self,
+        *,
+        api_key: str,
+        preset_id: str | None = None,
+        inverter: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """POST /api/v1/ha/inverters — register an additional inverter under
+        this add-on's edge device. Exactly one of preset_id / inverter.
+        Returns {inverterId, entityMap, brand, model, phases, hasBattery,
+        pvStrings, commands, presetId}."""
+        if bool(preset_id) == bool(inverter):
+            raise SvitgridApiError("add_inverter requires exactly one of preset_id or inverter")
+        body: dict[str, Any] = {"presetId": preset_id} if preset_id else {"inverter": inverter}
+        url = f"{self._base}/api/v1/ha/inverters"
+        async with self._session.post(url, headers={"x-api-key": api_key}, json=body) as resp:
+            if resp.status >= 400:
+                raise SvitgridApiError(f"add_inverter failed: HTTP {resp.status}: {await _err(resp)}")
+            return await resp.json()
+
 
 async def _err(resp: aiohttp.ClientResponse) -> str:
     """Render a server error for logs. Includes the full JSON body so
