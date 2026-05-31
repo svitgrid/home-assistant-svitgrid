@@ -406,10 +406,10 @@ async def test_async_unload_entry_cancels_tasks(hass, enable_custom_integrations
 
 @pytest.mark.asyncio
 async def test_async_setup_entry_passes_preset_entity_map_to_publisher(hass, enable_custom_integrations):
-    """Phase 2: when the config entry has an entity_map (from a preset
-    that was carried through /finalize), the readings publisher must be
-    called with that map. Otherwise readings would post empty payloads
-    and the API would 400 them all."""
+    """Phase 2 / v2 shape: when the config entry has an inverters list with an
+    entity_map (from a preset carried through /finalize), the readings publisher
+    must be called with that map and the correct inverter_id. Otherwise readings
+    would post empty payloads and the API would 400 them all."""
     from pytest_homeassistant_custom_component.common import MockConfigEntry
     from unittest.mock import AsyncMock, patch
 
@@ -422,25 +422,31 @@ async def test_async_setup_entry_passes_preset_entity_map_to_publisher(hass, ena
 
     entry = MockConfigEntry(
         domain=DOMAIN,
+        version=2,
         title="Svitgrid — Deye SG04LP3",
         data={
             "api_base": "https://api.example.com",
             "api_key": "test-key",
             "edge_device_id": "ed-1",
-            "hardware_id": "ha-deye-001",
             "household_id": "h-deye",
             "signing_key_id": "ha-home-01",
             "private_key_pem": "-----BEGIN PRIVATE KEY-----\nFAKE\n-----END PRIVATE KEY-----\n",
             "public_key_hex": "04" + "a" * 128,
             "trusted_keys": [],
-            "preset_id": "deye-sg04lp3-solarman-v1",
-            # Phase 2 fields:
-            "entity_map": preset_map,
-            "brand": "Deye",
-            "model": "SG04LP3",
-            "phases": 3,
-            "has_battery": True,
-            "pv_strings": 2,
+            "inverters": [
+                {
+                    "inverter_id": "ha-deye-001",
+                    "entity_map": preset_map,
+                    "command_recipes": [],
+                    "command_config": {},
+                    "brand": "Deye",
+                    "model": "SG04LP3",
+                    "phases": 3,
+                    "has_battery": True,
+                    "pv_strings": 2,
+                    "preset_id": "deye-sg04lp3-solarman-v1",
+                }
+            ],
         },
         entry_id="entry-with-preset",
     )
@@ -453,6 +459,10 @@ async def test_async_setup_entry_passes_preset_entity_map_to_publisher(hass, ena
         patch(
             "custom_components.svitgrid.run_command_loop", new_callable=AsyncMock
         ),
+        patch(
+            "custom_components.svitgrid.run_mqtt_wake_loop", new_callable=AsyncMock
+        ),
+        patch.object(hass.config_entries, "async_forward_entry_setups", AsyncMock(return_value=True)),
     ):
         ok = await async_setup_entry(hass, entry)
         await hass.async_block_till_done()
@@ -467,25 +477,39 @@ async def test_async_setup_entry_passes_preset_entity_map_to_publisher(hass, ena
 
 @pytest.mark.asyncio
 async def test_setup_prefers_options_entity_map(hass, enable_custom_integrations):
-    """async_setup_entry uses entry.options['entity_map'] over entry.data's."""
+    """async_setup_entry uses entry.options['entity_map'] over the pairing-time
+    entity_map stored in inverters[0]['entity_map'] (legacy options override
+    via _inverters_from_entry back-compat path)."""
     from unittest.mock import AsyncMock, patch
     from pytest_homeassistant_custom_component.common import MockConfigEntry
     from custom_components.svitgrid import async_setup_entry
 
     entry = MockConfigEntry(
         domain="svitgrid",
+        version=2,
         data={
             "api_base": "https://example.test",
             "api_key": "k",
             "edge_device_id": "dev1",
-            "hardware_id": "hw1",
             "household_id": "hh1",
             "signing_key_id": "sk1",
             "private_key_pem": "pem",
             "public_key_hex": "ff",
             "trusted_keys": [],
-            "preset_id": None,
-            "entity_map": {"batterySoc": "sensor.from_data"},
+            "inverters": [
+                {
+                    "inverter_id": "hw1",
+                    "entity_map": {"batterySoc": "sensor.from_data"},
+                    "command_recipes": [],
+                    "command_config": {},
+                    "brand": None,
+                    "model": None,
+                    "phases": None,
+                    "has_battery": None,
+                    "pv_strings": None,
+                    "preset_id": None,
+                }
+            ],
         },
         options={"entity_map": {"batterySoc": "sensor.from_options"}},
     )
