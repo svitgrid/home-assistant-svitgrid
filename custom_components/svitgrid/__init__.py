@@ -231,99 +231,56 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Set up the Svitgrid integration from a config entry (Tasks 10-14).
+    """Set up the Svitgrid integration from a config entry.
 
-    `entry.data` contains the keys written by the config flow:
-      api_base, api_key, edge_device_id, hardware_id, household_id,
-      signing_key_id, private_key_pem, public_key_hex, trusted_keys, preset_id.
+    Iterates the per-inverter list from `_inverters_from_entry`, spawning one
+    readings loop and (when recipes are present) one YamlDispatcher per inverter.
+    A single command poller and MQTT wake loop are shared across all inverters.
     """
     data = entry.data
     session = aiohttp_client.async_get_clientsession(hass)
     api_client = SvitgridApiClient(session, api_base=data["api_base"])
-
-    # entity_map: populated from the preset returned by /finalize (Phase 2).
-    # When the pairing didn't carry a presetId — or the preset wasn't found
-    # at finalize time — the map is empty and the readings publisher will
-    # post payloads that the API rejects with 400 until the user re-pairs
-    # against a known brand. We start the publisher anyway so the WARNING
-    # fires every push cycle and the operator can diagnose.
-    # Options (set by the edit/options flow) win over the pairing-time data,
-    # so a user's edited mapping takes effect on the next reload. Use an
-    # explicit None check (not `or`) so an explicitly-empty options map is
-    # honored rather than silently falling back to the pairing-time data —
-    # matching config_flow.SvitgridOptionsFlow._current_map.
-    _options_map = entry.options.get("entity_map")
-    if _options_map is None:
-        _options_map = data.get("entity_map") or {}
-    entity_map: dict[str, str] = dict(_options_map)
-    if not entity_map:
-        _LOGGER.warning(
-            "No entity_map configured for config entry %s "
-            "(brand=%s, model=%s, preset_id=%s). Pairing landed without a "
-            "preset — re-pair from mobile and pick a brand to populate the "
-            "mapping, or this integration will not publish readings.",
-            entry.entry_id,
-            data.get("brand"),
-            data.get("model"),
-            data.get("preset_id"),
-        )
-    else:
-        _LOGGER.info(
-            "Svitgrid entity_map loaded for %s %s (%d entities mapped)",
-            data.get("brand") or "?",
-            data.get("model") or "?",
-            len(entity_map),
-        )
-
-    # P2A C1: shared ActivityTracker — publisher + poller call record_*
-    # methods; sensor.py reads counters + recent-event buffers for the
-    # device-page entities.
+    api_key = data["api_key"]
     activity = ActivityTracker()
+    inverters = _inverters_from_entry(entry)
 
-    readings_task = hass.async_create_background_task(
-        run_readings_loop(
-            hass=hass,
-            api_client=api_client,
-            api_key=data["api_key"],
-            inverter_id=data["hardware_id"],
-            entity_map=entity_map,
-            activity=activity,
-        ),
-        name="svitgrid_readings_publisher",
-    )
+    if not inverters:
+        _LOGGER.warning(
+            "Config entry %s has no inverters configured; nothing to publish.",
+            entry.entry_id,
+        )
 
-    # T10c: shared wake_event lets MQTT wake-bell short-circuit the
-    # command_poller's sleep for sub-second command latency. If MQTT is
-    # unavailable, the poller's interval-based fallback still works.
+    readings_tasks: dict = {}
+    executors_by_inverter: dict = {}
+
+    for inv in inverters:
+        inverter_id = inv["inverter_id"]
+        entity_map = dict(inv.get("entity_map") or {})
+        if not entity_map:
+            _LOGGER.warning(
+                "Inverter %s has an empty entity_map — it will not publish readings.",
+                inverter_id,
+            )
+        readings_tasks[inverter_id] = hass.async_create_background_task(
+            run_readings_loop(
+                hass=hass,
+                api_client=api_client,
+                api_key=api_key,
+                inverter_id=inverter_id,
+                entity_map=entity_map,
+                activity=activity,
+            ),
+            name=f"svitgrid_readings_{inverter_id}",
+        )
+        recipes = inv.get("command_recipes") or []
+        if recipes:
+            executors_by_inverter[inverter_id] = YamlDispatcher(
+                hass=hass,
+                commands=recipes,
+                config=dict(inv.get("command_config") or {}),
+            )
+
     wake_event = asyncio.Event()
-
-    # Phase 2-advanced (P2A A5): if the preset shipped commands[], spin up
-    # the YamlDispatcher executor so write commands dispatched by the API
-    # (set_battery_charge / set_work_mode / set_solar_sell /
-    # set_grid_charge_toggle) actually hit modbus.write_register. Without
-    # this the poller logs every write command as "no_executor_configured"
-    # and ACKs it as rejected.
-    executor = None
-    preset_commands = data.get("commands") or []
-    if preset_commands:
-        # Sensible defaults for the preset config — these match the values
-        # the user's Solarman HA integration uses by default. A future
-        # config-flow step can let the user override per-install.
-        preset_config = {
-            "hub_name": "solarman",
-            "slave_id": 1,
-            "battery_voltage": 52.8,  # 16S LFP nominal
-        }
-        executor = YamlDispatcher(
-            hass=hass, commands=preset_commands, config=preset_config,
-        )
-        _LOGGER.info(
-            "YamlDispatcher armed with %d command recipe(s) for %s %s",
-            len(preset_commands),
-            data.get("brand") or "?",
-            data.get("model") or "?",
-        )
-
     command_task = hass.async_create_background_task(
         run_command_loop(
             hass=hass,
@@ -332,17 +289,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             entry_data=dict(data),
             wake_event=wake_event,
             activity=activity,
-            executor=executor,
+            executors_by_inverter=executors_by_inverter,
         ),
         name="svitgrid_command_poller",
     )
 
     mqtt_wake_task = hass.async_create_background_task(
         run_mqtt_wake_loop(
-            hass=hass,
-            api_client=api_client,
-            api_key=data["api_key"],
-            wake_event=wake_event,
+            hass=hass, api_client=api_client, api_key=api_key, wake_event=wake_event,
         ),
         name="svitgrid_mqtt_wake",
     )
@@ -350,22 +304,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = {
         "api_client": api_client,
-        "readings_task": readings_task,
+        "readings_tasks": readings_tasks,
         "command_task": command_task,
         "mqtt_wake_task": mqtt_wake_task,
-        "entity_map": entity_map,
+        "executors_by_inverter": executors_by_inverter,
         "activity": activity,
         "entry_data": dict(data),
     }
-    # Forward sensor platform so the device page shows the status entities.
     await hass.config_entries.async_forward_entry_setups(entry, ["sensor"])
     _LOGGER.info(
-        "Svitgrid integration started from config entry (entry_id=%s, hardware_id=%s)",
-        entry.entry_id,
-        data.get("hardware_id"),
+        "Svitgrid started from config entry %s with %d inverter(s)",
+        entry.entry_id, len(inverters),
     )
-    # Reload the entry whenever options change (e.g. the user edits the sensor
-    # mappings) so the readings publisher restarts with the new entity_map.
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
     return True
 
@@ -376,7 +326,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     state = hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
     if state is None:
         return True
-    for key in ("readings_task", "command_task", "mqtt_wake_task"):
+    for task in (state.get("readings_tasks") or {}).values():
+        if task and not task.done():
+            task.cancel()
+    for key in ("command_task", "mqtt_wake_task"):
         task = state.get(key)
         if task and not task.done():
             task.cancel()
