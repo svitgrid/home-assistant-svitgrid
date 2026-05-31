@@ -70,7 +70,7 @@ async def process_command(
     our_signing_key_id: str,
     executor_version: str,
     keystore: SvitgridKeystore | None,
-    executor: BaseExecutor | None,
+    executors_by_inverter: dict[str, "BaseExecutor"] | None = None,
 ) -> None:
     """Process one polled command. Three dispatch arms:
       1. Internal trust commands (add_trusted_key, revoke_trusted_key) —
@@ -168,11 +168,15 @@ async def process_command(
 
     # === Arm 2: Dispatchable commands ===
     if cmd_type in DISPATCHABLE_COMMANDS:
+        payload = command.get("payload") or {}
+        inverter_id = payload.get("inverterId")
+        executor = (executors_by_inverter or {}).get(inverter_id)
         if executor is None:
             _LOGGER.warning(
-                "Command %s (%s) dispatchable but no executor configured; rejecting as unsupported",
+                "Command %s (%s) for inverter %s has no executor; rejecting",
                 cmd_id,
                 cmd_type,
+                inverter_id,
             )
             await _send_signed_ack(
                 api_client=api_client,
@@ -193,7 +197,7 @@ async def process_command(
             # command names to NotImplementedError so SmgIiExecutor (which
             # only knows set_battery_charge) keeps working unchanged;
             # YamlDispatcher overrides dispatch to handle all 4 commands.
-            result = await executor.dispatch(cmd_type, command.get("payload") or {})
+            result = await executor.dispatch(cmd_type, payload)
         except NotImplementedError as err:
             _LOGGER.info(
                 "Executor doesn't support %s — ACKing as unsupported", cmd_type,
@@ -301,7 +305,7 @@ async def run_loop(
     keystore: SvitgridKeystore | None,
     trusted_public_keys_hex: dict[str, str] | None = None,
     executor_version: str = "0.2.0",
-    executor: BaseExecutor | None = None,
+    executors_by_inverter: dict[str, "BaseExecutor"] | None = None,
     interval_s: int = COMMAND_POLL_INTERVAL_S,
     entry_data: dict | None = None,
     wake_event: asyncio.Event | None = None,
@@ -371,7 +375,7 @@ async def run_loop(
                     our_signing_key_id=state.signing_key_id,
                     executor_version=executor_version,
                     keystore=keystore,  # type: ignore[arg-type]
-                    executor=executor,
+                    executors_by_inverter=executors_by_inverter,
                 )
         except DeviceEvicted:
             # 410 Gone — owning household deleted. Authoritative eviction:

@@ -74,7 +74,7 @@ async def test_rejects_with_signed_ack_when_signature_valid():
         our_signing_key_id=state.signing_key_id,
         executor_version="0.1.0",
         keystore=AsyncMock(),
-        executor=None,
+        executors_by_inverter=None,
     )
 
     api_client.ack_command.assert_called_once()
@@ -122,7 +122,7 @@ async def test_skips_command_with_invalid_signature():
         our_signing_key_id="us",
         executor_version="0.1.0",
         keystore=AsyncMock(),
-        executor=None,
+        executors_by_inverter=None,
     )
 
     # Invalid signature → skip, don't ACK (server's retry / expiry handles it).
@@ -157,7 +157,7 @@ async def test_skips_command_with_unknown_signing_key_when_cache_is_populated():
         our_signing_key_id="us",
         executor_version="0.1.0",
         keystore=AsyncMock(),
-        executor=None,
+        executors_by_inverter=None,
     )
     api_client.ack_command.assert_not_called()
 
@@ -196,7 +196,7 @@ async def test_add_trusted_key_command_updates_cache_and_acks_success():
         our_signing_key_id="us",
         executor_version="0.2.0",
         keystore=keystore,
-        executor=None,
+        executors_by_inverter=None,
     )
 
     # In-memory cache mutated
@@ -239,7 +239,7 @@ async def test_revoke_trusted_key_command_removes_from_cache():
         our_signing_key_id="us",
         executor_version="0.2.0",
         keystore=keystore,
-        executor=None,
+        executors_by_inverter=None,
     )
 
     assert trusted_cache == {"admin-a": "04" + "aa" * 64}
@@ -275,7 +275,7 @@ async def test_empty_cache_rejects_write_command_no_fallback():
         our_signing_key_id="us",
         executor_version="0.2.0",
         keystore=AsyncMock(),
-        executor=None,
+        executors_by_inverter=None,
     )
 
     # No ACK sent — command is skipped, let server expiry handle it.

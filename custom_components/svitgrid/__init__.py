@@ -204,7 +204,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             keystore=keystore,
             trusted_public_keys_hex=trusted_public_keys_hex,
             executor_version="0.2.0",
-            executor=executor,
+            executors_by_inverter=({inverter_id: executor} if executor else {}),
             interval_s=command_interval,
         ),
         name="svitgrid_command_poller",
@@ -250,8 +250,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             entry.entry_id,
         )
 
-    readings_tasks: dict = {}
-    executors_by_inverter: dict = {}
+    readings_tasks: dict[str, asyncio.Task] = {}
+    executors_by_inverter: dict[str, YamlDispatcher] = {}
 
     for inv in inverters:
         inverter_id = inv["inverter_id"]
