@@ -59,3 +59,14 @@ async def test_remove_inverter_drops_from_list(hass):
     res = await flow.async_step_remove_inverter({"inverter_id": "ha-aaa"})
     assert res["type"] == "create_entry"
     assert [i["inverter_id"] for i in entry.data["inverters"]] == ["ha-bbb"]
+
+
+@pytest.mark.asyncio
+async def test_remove_last_inverter_is_blocked(hass):
+    entry = _entry(hass)  # single inverter
+    flow = SvitgridOptionsFlow(entry)
+    flow.hass = hass
+    res = await flow.async_step_remove_inverter({"inverter_id": "ha-aaa"})
+    assert res["type"] == "abort"
+    assert res["reason"] == "cannot_remove_last_inverter"
+    assert len(entry.data["inverters"]) == 1

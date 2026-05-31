@@ -154,7 +154,8 @@
     },
     "abort": {
       "cannot_connect": "Could not reach the Svitgrid cloud while adding the inverter. Check your internet and try again.",
-      "inverter_not_found": "The selected inverter no longer exists in the config entry."
+      "inverter_not_found": "The selected inverter no longer exists in the config entry.",
+      "cannot_remove_last_inverter": "You cannot remove the last inverter. Delete the integration instead."
     }
   }
 }

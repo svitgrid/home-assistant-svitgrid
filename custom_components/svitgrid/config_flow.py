@@ -296,17 +296,6 @@ class SvitgridOptionsFlow(config_entries.OptionsFlow):
         self._add_meta: dict[str, Any] | None = None
         self._edit_inverter_id: str | None = None
 
-    def _current_map(self) -> dict[str, str]:
-        """Current mapping for the first inverter (legacy v1 compat helper).
-
-        Options take precedence over pairing-time data. An explicitly-empty
-        options map is honored (returns {}) rather than falling back to data.
-        """
-        entity_map = self._entry.options.get("entity_map")
-        if entity_map is None:
-            entity_map = self._entry.data.get("entity_map") or {}
-        return dict(entity_map)
-
     # ── menu ────────────────────────────────────────────────────────────
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         return self.async_show_menu(
@@ -346,16 +335,17 @@ class SvitgridOptionsFlow(config_entries.OptionsFlow):
     async def async_step_add_inverter_entities(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         errors: dict[str, str] = {}
         if user_input is not None:
-            hub_name = user_input.pop("hub_name", "solarman")
-            slave_id = int(user_input.pop("slave_id", 1))
-            entity_map = {f: eid for f, eid in user_input.items() if eid}
+            hub_name = user_input.get("hub_name", "solarman")
+            slave_id = int(user_input.get("slave_id", 1))
+            entity_map = {f: eid for f, eid in user_input.items() if eid and f not in ("hub_name", "slave_id")}
             if not entity_map:
                 errors["base"] = "no_entities_selected"
             else:
+                if self._add_meta is None:
+                    return self.async_abort(reason="inverter_not_found")
                 session = aiohttp_client.async_get_clientsession(self.hass)
                 client = SvitgridApiClient(session, api_base=self._entry.data["api_base"])
                 try:
-                    assert self._add_meta is not None
                     resp = await client.add_inverter(
                         api_key=self._entry.data["api_key"],
                         inverter={**self._add_meta, "entityMap": entity_map, "commands": []},
@@ -368,13 +358,18 @@ class SvitgridOptionsFlow(config_entries.OptionsFlow):
                     "inverter_id": resp["inverterId"],
                     "entity_map": entity_map,
                     "command_recipes": resp.get("commands") or [],
+                    # TODO: battery_voltage is hardcoded to a 48V nominal; make
+                    # configurable for 24V/12V systems (matches migration default).
                     "command_config": {"hub_name": hub_name, "slave_id": slave_id, "battery_voltage": 52.8},
                     "brand": resp.get("brand"), "model": resp.get("model"),
                     "phases": resp.get("phases"), "has_battery": resp.get("hasBattery"),
                     "pv_strings": resp.get("pvStrings"), "preset_id": resp.get("presetId"),
                 })
                 self._persist_inverters(inverters)
-                return self.async_create_entry(title="", data={})
+                # The data write in _persist_inverters already triggers the reload
+                # listener; return options unchanged so we don't reload twice or wipe
+                # existing options.
+                return self.async_create_entry(title="", data=dict(self._entry.options))
 
         schema_dict: dict[Any, Any] = {}
         for field, _label in _MANUAL_FIELDS:
@@ -392,7 +387,7 @@ class SvitgridOptionsFlow(config_entries.OptionsFlow):
             self._edit_inverter_id = user_input["inverter_id"]
             return await self.async_step_edit_inverter()
         if self._edit_inverter_id is None:
-            options = [{"value": i["inverter_id"], "label": f'{i.get("brand")} {i.get("model")} ({i["inverter_id"]})'} for i in inverters]
+            options = [{"value": i["inverter_id"], "label": f'{i.get("brand") or "?"} {i.get("model") or "?"} ({i["inverter_id"]})'} for i in inverters]
             return self.async_show_form(
                 step_id="edit_inverter",
                 data_schema=vol.Schema({vol.Required("inverter_id"): SelectSelector(SelectSelectorConfig(options=options))}))
@@ -405,7 +400,10 @@ class SvitgridOptionsFlow(config_entries.OptionsFlow):
             if cleaned:
                 target["entity_map"] = cleaned
                 self._persist_inverters([target if i["inverter_id"] == self._edit_inverter_id else i for i in inverters])
-                return self.async_create_entry(title="", data={})
+                # The data write in _persist_inverters already triggers the reload
+                # listener; return options unchanged so we don't reload twice or wipe
+                # existing options.
+                return self.async_create_entry(title="", data=dict(self._entry.options))
             errors["base"] = "no_entities_selected"
         schema = vol.Schema({vol.Optional(field): EntitySelector(EntitySelectorConfig(domain="sensor")) for field, _ in _MANUAL_FIELDS})
         return self.async_show_form(
@@ -419,9 +417,14 @@ class SvitgridOptionsFlow(config_entries.OptionsFlow):
         inverters = self._inverters()
         if user_input is not None:
             remaining = [i for i in inverters if i["inverter_id"] != user_input["inverter_id"]]
+            if not remaining:
+                return self.async_abort(reason="cannot_remove_last_inverter")
             self._persist_inverters(remaining)
-            return self.async_create_entry(title="", data={})
-        options = [{"value": i["inverter_id"], "label": f'{i.get("brand")} {i.get("model")} ({i["inverter_id"]})'} for i in inverters]
+            # The data write in _persist_inverters already triggers the reload
+            # listener; return options unchanged so we don't reload twice or wipe
+            # existing options.
+            return self.async_create_entry(title="", data=dict(self._entry.options))
+        options = [{"value": i["inverter_id"], "label": f'{i.get("brand") or "?"} {i.get("model") or "?"} ({i["inverter_id"]})'} for i in inverters]
         return self.async_show_form(
             step_id="remove_inverter",
             data_schema=vol.Schema({vol.Required("inverter_id"): SelectSelector(SelectSelectorConfig(options=options))}))
