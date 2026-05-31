@@ -51,21 +51,25 @@ async def async_setup_entry(
         )
         return
     activity: ActivityTracker = state["activity"]
-    hardware_id = state.get("entry_data", {}).get("hardware_id") or entry.entry_id
-    label = entry.title or "Svitgrid"
+    from . import _inverters_from_entry  # local import avoids a circular import
 
-    async_add_entities([
-        StatusSensor(activity, entry.entry_id, hardware_id, label),
-        LastIngestAtSensor(activity, entry.entry_id, hardware_id, label),
-        Ingests24hSensor(activity, entry.entry_id, hardware_id, label),
-        LastCommandAtSensor(activity, entry.entry_id, hardware_id, label),
-        Commands24hSensor(activity, entry.entry_id, hardware_id, label),
-    ])
+    entities: list[SensorEntity] = []
+    for inv in _inverters_from_entry(entry):
+        inverter_id = inv["inverter_id"]
+        label = f'{inv.get("brand") or "Svitgrid"} {inv.get("model") or ""}'.strip()
+        entities.extend([
+            StatusSensor(activity, entry.entry_id, inverter_id, label),
+            LastIngestAtSensor(activity, entry.entry_id, inverter_id, label),
+            Ingests24hSensor(activity, entry.entry_id, inverter_id, label),
+            LastCommandAtSensor(activity, entry.entry_id, inverter_id, label),
+            Commands24hSensor(activity, entry.entry_id, inverter_id, label),
+        ])
+    async_add_entities(entities)
 
 
 class _SvitgridSensorBase(SensorEntity):
-    """Shared device-info + polling cadence. One device per integration entry
-    so all five sensors group under one card on the device page."""
+    """Shared device-info + polling cadence. One HA device per inverter so all
+    five sensors for a given inverter group under one card on the device page."""
 
     _attr_should_poll = True
     _attr_has_entity_name = True
@@ -74,13 +78,14 @@ class _SvitgridSensorBase(SensorEntity):
         self,
         activity: ActivityTracker,
         entry_id: str,
-        hardware_id: str,
+        inverter_id: str,
         label: str,
     ) -> None:
         self._activity = activity
         self._entry_id = entry_id
+        self._inverter_id = inverter_id
         self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, hardware_id)},
+            identifiers={(DOMAIN, inverter_id)},
             name=label,
             manufacturer="Svitgrid",
             model="HA Add-on",
@@ -97,9 +102,9 @@ class StatusSensor(_SvitgridSensorBase):
     _attr_translation_key = "status"
     _attr_icon = "mdi:cloud-check"
 
-    def __init__(self, activity, entry_id, hardware_id, label):
-        super().__init__(activity, entry_id, hardware_id, label)
-        self._attr_unique_id = f"{entry_id}_status"
+    def __init__(self, activity, entry_id, inverter_id, label):
+        super().__init__(activity, entry_id, inverter_id, label)
+        self._attr_unique_id = f"{entry_id}_{inverter_id}_status"
         self._attr_name = "Status"
 
     @property
@@ -112,9 +117,9 @@ class LastIngestAtSensor(_SvitgridSensorBase):
     _attr_device_class = SensorDeviceClass.TIMESTAMP
     _attr_icon = "mdi:cloud-upload"
 
-    def __init__(self, activity, entry_id, hardware_id, label):
-        super().__init__(activity, entry_id, hardware_id, label)
-        self._attr_unique_id = f"{entry_id}_last_ingest_at"
+    def __init__(self, activity, entry_id, inverter_id, label):
+        super().__init__(activity, entry_id, inverter_id, label)
+        self._attr_unique_id = f"{entry_id}_{inverter_id}_last_ingest_at"
         self._attr_name = "Last ingest"
 
     @property
@@ -128,9 +133,9 @@ class Ingests24hSensor(_SvitgridSensorBase):
     _attr_icon = "mdi:counter"
     _attr_native_unit_of_measurement = "ingests"
 
-    def __init__(self, activity, entry_id, hardware_id, label):
-        super().__init__(activity, entry_id, hardware_id, label)
-        self._attr_unique_id = f"{entry_id}_ingests_24h"
+    def __init__(self, activity, entry_id, inverter_id, label):
+        super().__init__(activity, entry_id, inverter_id, label)
+        self._attr_unique_id = f"{entry_id}_{inverter_id}_ingests_24h"
         self._attr_name = "Ingests (24h)"
 
     @property
@@ -150,9 +155,9 @@ class LastCommandAtSensor(_SvitgridSensorBase):
     _attr_device_class = SensorDeviceClass.TIMESTAMP
     _attr_icon = "mdi:console-line"
 
-    def __init__(self, activity, entry_id, hardware_id, label):
-        super().__init__(activity, entry_id, hardware_id, label)
-        self._attr_unique_id = f"{entry_id}_last_command_at"
+    def __init__(self, activity, entry_id, inverter_id, label):
+        super().__init__(activity, entry_id, inverter_id, label)
+        self._attr_unique_id = f"{entry_id}_{inverter_id}_last_command_at"
         self._attr_name = "Last command"
 
     @property
@@ -170,9 +175,9 @@ class Commands24hSensor(_SvitgridSensorBase):
     _attr_icon = "mdi:flash"
     _attr_native_unit_of_measurement = "commands"
 
-    def __init__(self, activity, entry_id, hardware_id, label):
-        super().__init__(activity, entry_id, hardware_id, label)
-        self._attr_unique_id = f"{entry_id}_commands_24h"
+    def __init__(self, activity, entry_id, inverter_id, label):
+        super().__init__(activity, entry_id, inverter_id, label)
+        self._attr_unique_id = f"{entry_id}_{inverter_id}_commands_24h"
         self._attr_name = "Commands (24h)"
 
     @property
