@@ -170,6 +170,8 @@ async def process_command(
     if cmd_type in DISPATCHABLE_COMMANDS:
         payload = command.get("payload") or {}
         inverter_id = payload.get("inverterId")
+        # None inverter_id (missing from payload) also falls through to the
+        # no-executor rejection below — .get(None) misses on a str-keyed dict.
         executor = (executors_by_inverter or {}).get(inverter_id)
         if executor is None:
             _LOGGER.warning(

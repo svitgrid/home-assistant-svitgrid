@@ -11,28 +11,10 @@ _send_signed_ack can produce a valid signature.
 from __future__ import annotations
 
 import pytest
-from cryptography.hazmat.primitives import serialization
 from unittest.mock import AsyncMock
 
 from custom_components.svitgrid.command_poller import process_command
-from custom_components.svitgrid.keystore import KeystoreState
 from custom_components.svitgrid.signing import generate_keypair, sign_payload
-
-
-def _make_state(priv, pub_hex, trusted_hex_by_id):
-    pem = priv.private_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PrivateFormat.PKCS8,
-        encryption_algorithm=serialization.NoEncryption(),
-    ).decode("ascii")
-    return KeystoreState(
-        api_key="our-api-key",
-        public_key_hex=pub_hex,
-        private_key_pem=pem,
-        signing_key_id="our-key",
-        trusted_key_ids=list(trusted_hex_by_id.keys()),
-        trusted_public_keys_hex=dict(trusted_hex_by_id),
-    )
 
 
 def _signed_cmd(inverter_id: str, admin_priv, admin_key_id: str = "admin-key-id") -> dict:
@@ -110,4 +92,5 @@ async def test_rejects_command_for_unknown_inverter(hass):
     api_client.ack_command.assert_called_once()
     body = api_client.ack_command.call_args.kwargs["body"]
     assert body["rejected"] is True
+    assert body["success"] is False
     assert "no_executor" in body["reason"]
