@@ -40,3 +40,15 @@ def test_inverters_from_entry_prefers_new_list():
     ]})
     out = _inverters_from_entry(e2)
     assert len(out) == 1 and out[0]["inverter_id"] == "ha-aaa"
+
+
+def test_inverters_from_entry_options_entity_map_overrides_first_inverter():
+    e = MockConfigEntry(
+        domain=DOMAIN, version=2,
+        data={"inverters": [
+            {"inverter_id": "ha-aaa", "entity_map": {"batterySoc": "sensor.old"}, "command_recipes": [], "command_config": {}, "brand": "Deye", "model": "X", "phases": 3, "has_battery": True, "pv_strings": 2, "preset_id": None},
+        ]},
+        options={"entity_map": {"batterySoc": "sensor.new"}},
+    )
+    out = _inverters_from_entry(e)
+    assert out[0]["entity_map"] == {"batterySoc": "sensor.new"}

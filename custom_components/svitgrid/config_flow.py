@@ -64,6 +64,7 @@ class SvitgridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Svitgrid setup."""
 
     VERSION = 2
+    MINOR_VERSION = 1
 
     @staticmethod
     @callback

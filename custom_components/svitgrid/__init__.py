@@ -100,7 +100,7 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         return True
     new_data = _migrate_v1_to_v2(dict(entry.data))
     hass.config_entries.async_update_entry(entry, data=new_data, version=2)
-    _LOGGER.info("Migrated Svitgrid entry %s to v2 (%d inverter)", entry.entry_id, len(new_data["inverters"]))
+    _LOGGER.info("Migrated Svitgrid entry %s to v2 (%d inverter(s))", entry.entry_id, len(new_data["inverters"]))
     return True
 
 
