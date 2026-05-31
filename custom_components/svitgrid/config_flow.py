@@ -63,7 +63,7 @@ _MANUAL_FIELDS = tuple(MAPPABLE_FIELDS)
 class SvitgridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Svitgrid setup."""
 
-    VERSION = 1
+    VERSION = 2
 
     @staticmethod
     @callback

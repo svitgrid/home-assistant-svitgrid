@@ -52,6 +52,58 @@ async def _async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     await hass.config_entries.async_reload(entry.entry_id)
 
 
+def _inverters_from_entry(entry: ConfigEntry) -> list[dict]:
+    """Return the per-inverter config list. v2+ entries store `inverters`;
+    options may override a single inverter's entity_map (legacy edit flow).
+    Always returns a list of dicts with keys: inverter_id, entity_map,
+    command_recipes, command_config, brand, model, phases, has_battery,
+    pv_strings, preset_id."""
+    invs = entry.data.get("inverters")
+    if invs:
+        result = [dict(i) for i in invs]
+        # Legacy options.entity_map applied to the FIRST inverter only (the
+        # pre-multi edit flow wrote a flat entity_map). New per-inverter edits
+        # write entry.data directly (Task 9), so this is back-compat only.
+        opt_map = entry.options.get("entity_map")
+        if opt_map is not None and result:
+            result[0]["entity_map"] = dict(opt_map)
+        return result
+    return []
+
+
+def _migrate_v1_to_v2(data: dict) -> dict:
+    """Wrap legacy scalar fields into a single-element inverters list."""
+    new = {
+        k: data[k]
+        for k in ("api_base", "api_key", "edge_device_id", "household_id",
+                  "signing_key_id", "private_key_pem", "public_key_hex", "trusted_keys")
+        if k in data
+    }
+    new["inverters"] = [{
+        "inverter_id": data.get("hardware_id"),
+        "entity_map": data.get("entity_map") or {},
+        "command_recipes": data.get("commands") or [],
+        "command_config": {"hub_name": "solarman", "slave_id": 1, "battery_voltage": 52.8},
+        "brand": data.get("brand"),
+        "model": data.get("model"),
+        "phases": data.get("phases"),
+        "has_battery": data.get("has_battery"),
+        "pv_strings": data.get("pv_strings"),
+        "preset_id": data.get("preset_id"),
+    }]
+    return new
+
+
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Migrate v1 (scalar single-inverter) entries to v2 (inverters list)."""
+    if entry.version >= 2:
+        return True
+    new_data = _migrate_v1_to_v2(dict(entry.data))
+    hass.config_entries.async_update_entry(entry, data=new_data, version=2)
+    _LOGGER.info("Migrated Svitgrid entry %s to v2 (%d inverter)", entry.entry_id, len(new_data["inverters"]))
+    return True
+
+
 CONFIG_SCHEMA = vol.Schema(
     {
         DOMAIN: vol.Schema(
