@@ -297,7 +297,7 @@ async def test_setup_loads_trusted_keys_from_keystore_state(hass, enable_custom_
 
 @pytest.mark.asyncio
 async def test_async_setup_entry_starts_publisher_and_poller(hass, enable_custom_integrations):
-    """Setting up from a config entry boots both background loops."""
+    """Setting up from a config entry boots both background loops (v2 multi-inverter)."""
     from pytest_homeassistant_custom_component.common import MockConfigEntry
     from unittest.mock import AsyncMock, patch
 
@@ -305,12 +305,12 @@ async def test_async_setup_entry_starts_publisher_and_poller(hass, enable_custom
 
     entry = MockConfigEntry(
         domain=DOMAIN,
+        version=2,
         title="Svitgrid (h-abc)",
         data={
             "api_base": "https://api.example.com",
             "api_key": "test-key",
             "edge_device_id": "ed-1",
-            "hardware_id": "ha-xyz",
             "household_id": "h-abc",
             "signing_key_id": "ha-home-01",
             "private_key_pem": (
@@ -318,7 +318,20 @@ async def test_async_setup_entry_starts_publisher_and_poller(hass, enable_custom
             ),
             "public_key_hex": "04" + "a" * 128,
             "trusted_keys": [],
-            "preset_id": None,
+            "inverters": [
+                {
+                    "inverter_id": "ha-xyz",
+                    "entity_map": {"batterySoc": "sensor.soc"},
+                    "command_recipes": [],
+                    "command_config": {},
+                    "brand": "Deye",
+                    "model": "SG04LP3",
+                    "phases": 3,
+                    "has_battery": True,
+                    "pv_strings": 2,
+                    "preset_id": None,
+                }
+            ],
         },
         entry_id="test-entry-id",
     )
@@ -331,6 +344,10 @@ async def test_async_setup_entry_starts_publisher_and_poller(hass, enable_custom
         patch(
             "custom_components.svitgrid.run_command_loop", new_callable=AsyncMock
         ) as cp,
+        patch(
+            "custom_components.svitgrid.run_mqtt_wake_loop", new_callable=AsyncMock
+        ),
+        patch.object(hass.config_entries, "async_forward_entry_setups", AsyncMock(return_value=True)),
     ):
         ok = await async_setup_entry(hass, entry)
         await hass.async_block_till_done()
@@ -338,8 +355,12 @@ async def test_async_setup_entry_starts_publisher_and_poller(hass, enable_custom
     assert ok is True
 
     entry_state = hass.data[DOMAIN][entry.entry_id]
-    assert entry_state.get("readings_task") is not None
+    # v2: readings are a dict keyed by inverter_id, not a single task
+    assert "readings_tasks" in entry_state
+    assert "ha-xyz" in entry_state["readings_tasks"]
+    assert entry_state["readings_tasks"]["ha-xyz"] is not None
     assert entry_state.get("command_task") is not None
+    assert entry_state.get("mqtt_wake_task") is not None
 
     # run_loop coroutines were scheduled (called once each to get the coroutine)
     assert rp.call_count == 1
@@ -358,7 +379,7 @@ async def test_async_setup_entry_starts_publisher_and_poller(hass, enable_custom
 
 @pytest.mark.asyncio
 async def test_async_unload_entry_cancels_tasks(hass, enable_custom_integrations):
-    """async_unload_entry cancels the running background tasks."""
+    """async_unload_entry cancels all running background tasks (v2 multi-inverter)."""
     import asyncio
     from pytest_homeassistant_custom_component.common import MockConfigEntry
     from unittest.mock import AsyncMock, patch
@@ -367,12 +388,12 @@ async def test_async_unload_entry_cancels_tasks(hass, enable_custom_integrations
 
     entry = MockConfigEntry(
         domain=DOMAIN,
+        version=2,
         title="Svitgrid (h-abc)",
         data={
             "api_base": "https://api.example.com",
             "api_key": "test-key",
             "edge_device_id": "ed-1",
-            "hardware_id": "ha-xyz",
             "household_id": "h-abc",
             "signing_key_id": "ha-home-01",
             "private_key_pem": (
@@ -380,28 +401,65 @@ async def test_async_unload_entry_cancels_tasks(hass, enable_custom_integrations
             ),
             "public_key_hex": "04" + "a" * 128,
             "trusted_keys": [],
-            "preset_id": None,
+            "inverters": [
+                {
+                    "inverter_id": "ha-xyz",
+                    "entity_map": {"batterySoc": "sensor.soc"},
+                    "command_recipes": [],
+                    "command_config": {},
+                    "brand": "Deye",
+                    "model": "SG04LP3",
+                    "phases": 3,
+                    "has_battery": True,
+                    "pv_strings": 2,
+                    "preset_id": None,
+                }
+            ],
         },
         entry_id="test-entry-id-2",
     )
     entry.add_to_hass(hass)
 
+    async def _never_return(**kwargs):
+        await asyncio.Event().wait()  # blocks until cancelled
+
     with (
         patch(
-            "custom_components.svitgrid.run_readings_loop", new_callable=AsyncMock
+            "custom_components.svitgrid.run_readings_loop", side_effect=_never_return
         ),
         patch(
-            "custom_components.svitgrid.run_command_loop", new_callable=AsyncMock
+            "custom_components.svitgrid.run_command_loop", side_effect=_never_return
         ),
+        patch(
+            "custom_components.svitgrid.run_mqtt_wake_loop", side_effect=_never_return
+        ),
+        patch.object(hass.config_entries, "async_forward_entry_setups", AsyncMock(return_value=True)),
+        patch.object(hass.config_entries, "async_unload_platforms", AsyncMock(return_value=True)),
     ):
         await async_setup_entry(hass, entry)
         await hass.async_block_till_done()
 
-    assert entry.entry_id in hass.data[DOMAIN]
+        assert entry.entry_id in hass.data[DOMAIN]
 
-    ok = await async_unload_entry(hass, entry)
+        # Capture the tasks before unload so we can assert they were cancelled
+        state_before = hass.data[DOMAIN][entry.entry_id]
+        readings_tasks = list(state_before["readings_tasks"].values())
+        command_task = state_before["command_task"]
+        mqtt_wake_task = state_before["mqtt_wake_task"]
+
+        ok = await async_unload_entry(hass, entry)
+        # Let the event loop process the CancelledError injections
+        await hass.async_block_till_done()
+
     assert ok is True
+    # entry is removed from hass.data after unload
     assert entry.entry_id not in hass.data[DOMAIN]
+    # all per-inverter readings tasks were cancelled
+    for task in readings_tasks:
+        assert task.cancelled()
+    # shared command and mqtt-wake tasks were cancelled
+    assert command_task.cancelled()
+    assert mqtt_wake_task.cancelled()
 
 
 @pytest.mark.asyncio
