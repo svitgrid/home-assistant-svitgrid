@@ -34,6 +34,7 @@ from homeassistant.helpers.selector import (
     TextSelectorConfig,
 )
 
+from .api_client import SvitgridApiClient
 from .const import (
     DEFAULT_API_BASE,
     DOMAIN,
@@ -288,61 +289,139 @@ class SvitgridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 
 class SvitgridOptionsFlow(config_entries.OptionsFlow):
-    """Edit the entity_map (Svitgrid field → HA sensor) after pairing.
-
-    Local only: the edited map is written to entry.options["entity_map"]; the
-    update listener in __init__.py reloads the entry so the readings publisher
-    restarts with the new mapping. The server is never told (it only ever
-    seeded the map at pairing).
-    """
+    """Add / edit / remove inverters on an already-paired add-on."""
 
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
-        # Store privately rather than assigning self.config_entry (which newer
-        # HA provides automatically and warns about reassigning).
         self._entry = config_entry
+        self._add_meta: dict[str, Any] | None = None
+        self._edit_inverter_id: str | None = None
 
     def _current_map(self) -> dict[str, str]:
-        """Current mapping, options taking precedence over the pairing-time data.
+        """Current mapping for the first inverter (legacy v1 compat helper).
 
-        An explicitly-empty options map is honored (returns {}) rather than
-        falling back to the pairing-time data — only an ABSENT options key
-        falls through.
+        Options take precedence over pairing-time data. An explicitly-empty
+        options map is honored (returns {}) rather than falling back to data.
         """
         entity_map = self._entry.options.get("entity_map")
         if entity_map is None:
             entity_map = self._entry.data.get("entity_map") or {}
         return dict(entity_map)
 
-    async def async_step_init(
-        self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
-        """Single step: per-field EntitySelector, pre-filled with the current map.
+    # ── menu ────────────────────────────────────────────────────────────
+    async def async_step_init(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+        return self.async_show_menu(
+            step_id="init",
+            menu_options=["add_inverter", "edit_inverter", "remove_inverter"],
+        )
 
-        Clearing a field unmaps it. At least one entity must remain set.
-        """
+    def _inverters(self) -> list[dict[str, Any]]:
+        return [dict(i) for i in (self._entry.data.get("inverters") or [])]
+
+    def _persist_inverters(self, inverters: list[dict[str, Any]]) -> None:
+        new_data = {**self._entry.data, "inverters": inverters}
+        self.hass.config_entries.async_update_entry(self._entry, data=new_data)
+
+    # ── add: step 1 (brand/model metadata) ──────────────────────────────
+    async def async_step_add_inverter(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+        if user_input is not None:
+            self._add_meta = {
+                "brand": user_input["brand"].strip(),
+                "model": user_input["model"].strip(),
+                "phases": int(user_input["phases"]),
+                "hasBattery": bool(user_input["has_battery"]),
+                "pvStrings": int(user_input["pv_strings"]),
+            }
+            return await self.async_step_add_inverter_entities()
+        schema = vol.Schema({
+            vol.Required("brand"): TextSelector(TextSelectorConfig()),
+            vol.Required("model"): TextSelector(TextSelectorConfig()),
+            vol.Required("phases", default="3"): SelectSelector(SelectSelectorConfig(options=["1", "2", "3"])),
+            vol.Required("has_battery", default=True): BooleanSelector(),
+            vol.Required("pv_strings", default=2): NumberSelector(
+                NumberSelectorConfig(min=1, max=8, step=1, mode=NumberSelectorMode.BOX)),
+        })
+        return self.async_show_form(step_id="add_inverter", data_schema=schema)
+
+    # ── add: step 2 (map sensors + write targets, call API, append) ──────
+    async def async_step_add_inverter_entities(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         errors: dict[str, str] = {}
         if user_input is not None:
-            cleaned = {field: eid for field, eid in user_input.items() if eid}
-            if not cleaned:
+            hub_name = user_input.pop("hub_name", "solarman")
+            slave_id = int(user_input.pop("slave_id", 1))
+            entity_map = {f: eid for f, eid in user_input.items() if eid}
+            if not entity_map:
                 errors["base"] = "no_entities_selected"
             else:
-                return self.async_create_entry(
-                    title="", data={"entity_map": cleaned}
-                )
+                session = aiohttp_client.async_get_clientsession(self.hass)
+                client = SvitgridApiClient(session, api_base=self._entry.data["api_base"])
+                try:
+                    assert self._add_meta is not None
+                    resp = await client.add_inverter(
+                        api_key=self._entry.data["api_key"],
+                        inverter={**self._add_meta, "entityMap": entity_map, "commands": []},
+                    )
+                except Exception:  # noqa: BLE001
+                    _LOGGER.exception("add_inverter API call failed")
+                    return self.async_abort(reason="cannot_connect")
+                inverters = self._inverters()
+                inverters.append({
+                    "inverter_id": resp["inverterId"],
+                    "entity_map": entity_map,
+                    "command_recipes": resp.get("commands") or [],
+                    "command_config": {"hub_name": hub_name, "slave_id": slave_id, "battery_voltage": 52.8},
+                    "brand": resp.get("brand"), "model": resp.get("model"),
+                    "phases": resp.get("phases"), "has_battery": resp.get("hasBattery"),
+                    "pv_strings": resp.get("pvStrings"), "preset_id": resp.get("presetId"),
+                })
+                self._persist_inverters(inverters)
+                return self.async_create_entry(title="", data={})
 
-        # Build one optional EntitySelector per mappable field. Pre-fill via
-        # add_suggested_values_to_schema (NOT vol.Optional defaults) so that a
-        # cleared field stays cleared instead of snapping back to its old value.
-        schema = vol.Schema({
-            vol.Optional(field): EntitySelector(
-                EntitySelectorConfig(domain="sensor"),
-            )
-            for field, _label in _MANUAL_FIELDS
-        })
+        schema_dict: dict[Any, Any] = {}
+        for field, _label in _MANUAL_FIELDS:
+            schema_dict[vol.Optional(field)] = EntitySelector(EntitySelectorConfig(domain="sensor"))
+        schema_dict[vol.Optional("hub_name", default="solarman")] = TextSelector(TextSelectorConfig())
+        schema_dict[vol.Optional("slave_id", default=1)] = NumberSelector(
+            NumberSelectorConfig(min=1, max=247, step=1, mode=NumberSelectorMode.BOX))
         return self.async_show_form(
-            step_id="init",
-            data_schema=self.add_suggested_values_to_schema(
-                schema, self._current_map()
-            ),
+            step_id="add_inverter_entities", data_schema=vol.Schema(schema_dict), errors=errors)
+
+    # ── edit: pick inverter, then re-map (scoped to the selection) ───────
+    async def async_step_edit_inverter(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+        inverters = self._inverters()
+        if user_input is not None and "inverter_id" in user_input and self._edit_inverter_id is None:
+            self._edit_inverter_id = user_input["inverter_id"]
+            return await self.async_step_edit_inverter()
+        if self._edit_inverter_id is None:
+            options = [{"value": i["inverter_id"], "label": f'{i.get("brand")} {i.get("model")} ({i["inverter_id"]})'} for i in inverters]
+            return self.async_show_form(
+                step_id="edit_inverter",
+                data_schema=vol.Schema({vol.Required("inverter_id"): SelectSelector(SelectSelectorConfig(options=options))}))
+        target = next((i for i in inverters if i["inverter_id"] == self._edit_inverter_id), None)
+        if target is None:
+            return self.async_abort(reason="inverter_not_found")
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            cleaned = {f: eid for f, eid in user_input.items() if eid}
+            if cleaned:
+                target["entity_map"] = cleaned
+                self._persist_inverters([target if i["inverter_id"] == self._edit_inverter_id else i for i in inverters])
+                return self.async_create_entry(title="", data={})
+            errors["base"] = "no_entities_selected"
+        schema = vol.Schema({vol.Optional(field): EntitySelector(EntitySelectorConfig(domain="sensor")) for field, _ in _MANUAL_FIELDS})
+        return self.async_show_form(
+            step_id="edit_inverter",
+            data_schema=self.add_suggested_values_to_schema(schema, target.get("entity_map") or {}),
             errors=errors,
         )
+
+    # ── remove: pick inverter, drop from list (local only) ───────────────
+    async def async_step_remove_inverter(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+        inverters = self._inverters()
+        if user_input is not None:
+            remaining = [i for i in inverters if i["inverter_id"] != user_input["inverter_id"]]
+            self._persist_inverters(remaining)
+            return self.async_create_entry(title="", data={})
+        options = [{"value": i["inverter_id"], "label": f'{i.get("brand")} {i.get("model")} ({i["inverter_id"]})'} for i in inverters]
+        return self.async_show_form(
+            step_id="remove_inverter",
+            data_schema=vol.Schema({vol.Required("inverter_id"): SelectSelector(SelectSelectorConfig(options=options))}))

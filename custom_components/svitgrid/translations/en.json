@@ -67,9 +67,58 @@
   "options": {
     "step": {
       "init": {
-        "title": "Edit sensor mappings",
-        "description": "Change which Home Assistant sensor feeds each Svitgrid field. Clear a field to stop sending it. At least one must be set. Saving reloads the integration so changes take effect immediately.",
+        "title": "Manage inverters",
+        "description": "Add a new inverter, edit sensor mappings for an existing inverter, or remove one.",
+        "menu_options": {
+          "add_inverter": "Add another inverter",
+          "edit_inverter": "Edit sensor mappings",
+          "remove_inverter": "Remove an inverter"
+        }
+      },
+      "add_inverter": {
+        "title": "Add inverter — details",
+        "description": "Enter the brand, model, and hardware details for the new inverter.",
         "data": {
+          "brand": "Brand",
+          "model": "Model",
+          "phases": "Phase count (1 / 2 / 3)",
+          "has_battery": "Has a battery",
+          "pv_strings": "Number of PV strings (1–8)"
+        }
+      },
+      "add_inverter_entities": {
+        "title": "Add inverter — map sensors",
+        "description": "For each field Svitgrid tracks, pick the matching Home Assistant sensor entity. At least one must be set.",
+        "data": {
+          "batterySoc": "Battery state of charge (%)",
+          "batteryPower": "Battery power (W — positive = charging)",
+          "batteryVoltage": "Battery voltage (V)",
+          "batteryCurrent": "Battery current (A — positive = charging)",
+          "batteryTemperature": "Battery temperature (°C)",
+          "pv1Power": "PV string 1 power (W)",
+          "pv2Power": "PV string 2 power (W)",
+          "pv3Power": "PV string 3 power (W)",
+          "pv4Power": "PV string 4 power (W)",
+          "gridPower": "Grid power (W — positive = import)",
+          "gridVoltageL1": "Grid voltage L1 (V)",
+          "gridVoltageL2": "Grid voltage L2 (V)",
+          "gridVoltageL3": "Grid voltage L3 (V)",
+          "gridFrequency": "Grid frequency (Hz)",
+          "loadPower": "Load power (W)",
+          "dailyPvEnergy": "Daily PV production (kWh)",
+          "dailyGridImportEnergy": "Daily grid import (kWh)",
+          "dailyGridExportEnergy": "Daily grid export (kWh)",
+          "dailyLoadEnergy": "Daily load energy (kWh)",
+          "inverterTemperature": "Inverter temperature (°C)",
+          "hub_name": "Solarman hub name",
+          "slave_id": "Modbus slave ID"
+        }
+      },
+      "edit_inverter": {
+        "title": "Edit sensor mappings",
+        "description": "Select the inverter to edit, then re-map its Home Assistant sensors. Clear a field to stop sending it. At least one must be set.",
+        "data": {
+          "inverter_id": "Inverter",
           "batterySoc": "Battery state of charge (%)",
           "batteryPower": "Battery power (W — positive = charging)",
           "batteryVoltage": "Battery voltage (V)",
@@ -91,10 +140,21 @@
           "dailyLoadEnergy": "Daily load energy (kWh)",
           "inverterTemperature": "Inverter temperature (°C)"
         }
+      },
+      "remove_inverter": {
+        "title": "Remove inverter",
+        "description": "Select the inverter to remove. This only removes it from Home Assistant — the inverter remains in your Svitgrid account.",
+        "data": {
+          "inverter_id": "Inverter to remove"
+        }
       }
     },
     "error": {
       "no_entities_selected": "Pick at least one sensor — otherwise the dashboard has nothing to show."
+    },
+    "abort": {
+      "cannot_connect": "Could not reach the Svitgrid cloud while adding the inverter. Check your internet and try again.",
+      "inverter_not_found": "The selected inverter no longer exists in the config entry."
     }
   }
 }

@@ -258,7 +258,7 @@ def test_current_map_falls_back_to_data():
 
 @pytest.mark.asyncio
 async def test_options_flow_shows_init_form(hass: HomeAssistant, enable_custom_integrations) -> None:
-    """Clicking Configure renders the init form."""
+    """Clicking Configure now renders the add/edit/remove menu (not a flat form)."""
     from pytest_homeassistant_custom_component.common import MockConfigEntry
 
     entry = MockConfigEntry(
@@ -268,8 +268,8 @@ async def test_options_flow_shows_init_form(hass: HomeAssistant, enable_custom_i
     entry.add_to_hass(hass)
 
     result = await hass.config_entries.options.async_init(entry.entry_id)
-    assert result["type"] == FlowResultType.FORM
-    assert result["step_id"] == "init"
+    assert result["type"] == FlowResultType.MENU
+    assert set(result["menu_options"]) >= {"add_inverter", "edit_inverter", "remove_inverter"}
 
 
 def test_current_map_empty_options_does_not_fall_back():
@@ -288,65 +288,99 @@ def test_current_map_empty_options_does_not_fall_back():
 
 @pytest.mark.asyncio
 async def test_options_flow_saves_and_drops_blanks(hass: HomeAssistant, enable_custom_integrations) -> None:
-    """Submitting writes the cleaned map (blank selectors dropped) to options.
+    """edit_inverter step writes the cleaned entity_map (blank selectors dropped)
+    directly into entry.data["inverters"] for the selected inverter.
 
     HA's EntitySelector rejects literal "" at schema-validation time, so we
     omit the field entirely rather than passing "" — that is exactly how HA
     delivers cleared optional selectors in real usage.
     """
     from pytest_homeassistant_custom_component.common import MockConfigEntry
+    from custom_components.svitgrid.config_flow import SvitgridOptionsFlow
 
+    inv_id = "ha-aaa"
     entry = MockConfigEntry(
         domain=DOMAIN,
-        data={"entity_map": {"batterySoc": "sensor.old_soc"}},
+        version=2,
+        data={
+            "api_base": "https://api.test", "api_key": "k", "edge_device_id": "e1",
+            "household_id": "hh1", "signing_key_id": "sk", "private_key_pem": "pem",
+            "public_key_hex": "pub", "trusted_keys": [],
+            "inverters": [{"inverter_id": inv_id, "entity_map": {"batterySoc": "sensor.old_soc"},
+                           "command_recipes": [], "command_config": {}, "brand": "Deye",
+                           "model": "X", "phases": 3, "has_battery": True, "pv_strings": 2, "preset_id": None}],
+        },
     )
     entry.add_to_hass(hass)
 
-    result = await hass.config_entries.options.async_init(entry.entry_id)
-    # loadPower is omitted (not passed at all) to simulate a cleared optional
-    # selector — EntitySelector rejects "" so HA omits cleared fields instead.
-    result = await hass.config_entries.options.async_configure(
-        result["flow_id"],
-        user_input={
-            "batterySoc": "sensor.new_soc",
-            "gridPower": "sensor.grid",
-            # loadPower absent → dropped by cleaned = {k: v for k, v in … if v}
-        },
-    )
+    # Go through: init (menu) → edit_inverter (pick inverter) → edit_inverter (remap)
+    flow = SvitgridOptionsFlow(entry)
+    flow.hass = hass
+    result = await flow.async_step_init()
+    assert result["type"] == "menu"
+
+    # Step 1: pick inverter
+    result = await flow.async_step_edit_inverter({"inverter_id": inv_id})
+    assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "edit_inverter"
+
+    # Step 2: submit remapped sensors (loadPower absent → dropped)
+    result = await flow.async_step_edit_inverter({
+        "batterySoc": "sensor.new_soc",
+        "gridPower": "sensor.grid",
+        # loadPower absent → dropped by cleaned = {k: v for k, v in … if v}
+    })
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
-    assert entry.options["entity_map"] == {
+    updated_inv = next(i for i in entry.data["inverters"] if i["inverter_id"] == inv_id)
+    assert updated_inv["entity_map"] == {
         "batterySoc": "sensor.new_soc",
         "gridPower": "sensor.grid",
     }
-    assert "loadPower" not in entry.options["entity_map"]
+    assert "loadPower" not in updated_inv["entity_map"]
 
 
 @pytest.mark.asyncio
 async def test_options_flow_rejects_empty_map(hass: HomeAssistant, enable_custom_integrations) -> None:
-    """Submitting with nothing selected re-shows the form with an error and
-    leaves options untouched.
+    """edit_inverter re-shows the form with an error when no entities are selected
+    and leaves the inverter's entity_map untouched.
 
     We submit an empty dict rather than passing "" values because HA's
     EntitySelector rejects blank strings at schema-validation time; an empty
     user_input dict is what HA delivers when every optional selector is cleared.
     """
     from pytest_homeassistant_custom_component.common import MockConfigEntry
+    from custom_components.svitgrid.config_flow import SvitgridOptionsFlow
 
+    inv_id = "ha-aaa"
+    original_map = {"batterySoc": "sensor.soc"}
     entry = MockConfigEntry(
         domain=DOMAIN,
-        data={"entity_map": {"batterySoc": "sensor.soc"}},
+        version=2,
+        data={
+            "api_base": "https://api.test", "api_key": "k", "edge_device_id": "e1",
+            "household_id": "hh1", "signing_key_id": "sk", "private_key_pem": "pem",
+            "public_key_hex": "pub", "trusted_keys": [],
+            "inverters": [{"inverter_id": inv_id, "entity_map": original_map,
+                           "command_recipes": [], "command_config": {}, "brand": "Deye",
+                           "model": "X", "phases": 3, "has_battery": True, "pv_strings": 2, "preset_id": None}],
+        },
     )
     entry.add_to_hass(hass)
 
-    result = await hass.config_entries.options.async_init(entry.entry_id)
+    flow = SvitgridOptionsFlow(entry)
+    flow.hass = hass
+
+    # Navigate: menu → edit_inverter picker → edit_inverter remap (pick inverter first)
+    await flow.async_step_init()
+    await flow.async_step_edit_inverter({"inverter_id": inv_id})
+
     # Empty dict = no fields submitted (all optional selectors cleared).
-    result = await hass.config_entries.options.async_configure(
-        result["flow_id"],
-        user_input={},
-    )
+    result = await flow.async_step_edit_inverter({})
 
     assert result["type"] == FlowResultType.FORM
-    assert result["step_id"] == "init"
+    assert result["step_id"] == "edit_inverter"
     assert result["errors"] == {"base": "no_entities_selected"}
-    assert entry.options == {}
+    # entity_map is unchanged
+    updated_inv = next(i for i in entry.data["inverters"] if i["inverter_id"] == inv_id)
+    assert updated_inv["entity_map"] == original_map
