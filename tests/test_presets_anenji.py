@@ -31,6 +31,8 @@ def test_preset_shape_is_valid(preset_id):
         assert field in p, f"{preset_id}: missing {field}"
     assert p["id"] == preset_id
     assert p["brand"] == "Anenji"
+    # version is a numeric string per HaPresetSchema (/^\d+$/).
+    assert isinstance(p["version"], str) and p["version"].isdigit()
     assert p["phases"] in (1, 2, 3)
     assert p["protocolId"] in ALLOWED_PROTOCOLS
     # Anenji uses a raw HA poller (Modbus/ESPHome/MQTT), never Solarman.
