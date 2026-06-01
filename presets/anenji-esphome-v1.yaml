@@ -1,0 +1,35 @@
+# Svitgrid HA Preset — Anenji LV hybrid via the ESPHome dongle-replacement.
+#
+# Source integration: native ESPHome Modbus RTU on an ESP32 that replaces the
+# stock WiFi stick (community project: PreK/esphome-anenji-11kw-native-modbus).
+# Default entity_ids below are derived from that config's sensor `name:` fields
+# with the device prefix `anenji` (e.g. "anenji battery state of charge" ->
+# sensor.anenji_battery_state_of_charge).
+#
+# UNVERIFIED: authored without hardware. Entity names follow the public ESPHome
+# config; a user on a different ESPHome build remaps fields in HA's config flow.
+# Wrong defaults are low-risk — readings only, nothing is written to the inverter.
+#
+# Control deferred: commands[] intentionally empty until a real Anenji verifies
+# the EG4/SRNE-style write registers. See the spec's "Control" section.
+
+id: anenji-esphome-v1
+version: "1"
+brand: Anenji
+model: Hybrid (ESPHome)
+phases: 1
+hasBattery: true
+pvStrings: 2
+protocolId: home_assistant
+
+entityMap:
+  batterySoc: sensor.anenji_battery_state_of_charge
+  batteryVoltage: sensor.anenji_battery_average_voltage
+  batteryPower: sensor.anenji_battery_power
+  pv1Power: sensor.anenji_pv1_average_power
+  pv2Power: sensor.anenji_pv2_average_power
+  gridPower: sensor.anenji_average_mains_power
+  loadPower: sensor.anenji_house_load_power
+  dailyPvEnergy: sensor.anenji_energy_day
+
+commands: []

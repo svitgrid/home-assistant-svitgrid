@@ -1,0 +1,30 @@
+# Svitgrid HA Preset — Anenji LV hybrid, generic / any source integration.
+#
+# Catch-all for Anenji setups that are NOT the ESPHome dongle-swap: e.g.
+# Solar2MQTT, or a NAT-bridge that re-exposes the dongle as Modbus TCP feeding
+# HA's Modbus integration. Those produce user-defined entity_ids, so the map
+# below is a representative starting point — the user is expected to remap each
+# field to their actual sensors in HA's config flow (EntitySelector step).
+#
+# UNVERIFIED placeholders. Readings only — control deferred (commands[] empty).
+
+id: anenji-generic-v1
+version: "1"
+brand: Anenji
+model: Hybrid (other source)
+phases: 1
+hasBattery: true
+pvStrings: 2
+protocolId: home_assistant
+
+entityMap:
+  batterySoc: sensor.anenji_battery_soc
+  batteryVoltage: sensor.anenji_battery_voltage
+  batteryPower: sensor.anenji_battery_power
+  pv1Power: sensor.anenji_pv1_power
+  pv2Power: sensor.anenji_pv2_power
+  gridPower: sensor.anenji_grid_power
+  loadPower: sensor.anenji_load_power
+  dailyPvEnergy: sensor.anenji_pv_energy_today
+
+commands: []
