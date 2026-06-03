@@ -226,6 +226,26 @@ class SvitgridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         # async_setup_entry can boot the readings publisher with a working
         # entityMap without any extra round-trip. Translate the API's
         # camelCase to HA's snake_case convention.
+        #
+        # The entry is created at VERSION 2, so async_migrate_entry (which wraps
+        # a legacy flat entity_map into `inverters`) never runs for a fresh
+        # pairing. We MUST write the v2 `inverters` list here — otherwise
+        # `_inverters_from_entry` returns [] and the readings publisher never
+        # starts ("no inverters configured; nothing to publish"). The flat
+        # fields below are kept for back-compat; the inverters list is
+        # authoritative.
+        inverter = {
+            "inverter_id": self._final_payload["hardwareId"],
+            "entity_map": self._final_payload.get("entityMap") or {},
+            "command_recipes": self._final_payload.get("commands") or [],
+            "command_config": {"hub_name": "solarman", "slave_id": 1, "battery_voltage": 52.8},
+            "brand": self._final_payload.get("brand"),
+            "model": self._final_payload.get("model"),
+            "phases": self._final_payload.get("phases"),
+            "has_battery": self._final_payload.get("hasBattery"),
+            "pv_strings": self._final_payload.get("pvStrings"),
+            "preset_id": self._final_payload.get("presetId"),
+        }
         return self.async_create_entry(
             title=self._entry_title(),
             data={
@@ -239,7 +259,10 @@ class SvitgridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 "public_key_hex": self._public_key_hex,
                 "trusted_keys": self._final_payload["trustedKeys"],
                 "preset_id": self._final_payload.get("presetId"),
-                # Phase 2 fields (None when /finalize had no preset).
+                # Canonical v2 shape read by _inverters_from_entry.
+                "inverters": [inverter],
+                # Phase 2 flat fields (None when /finalize had no preset) — kept
+                # for back-compat; the inverters list above is authoritative.
                 "entity_map": self._final_payload.get("entityMap") or {},
                 "brand": self._final_payload.get("brand"),
                 "model": self._final_payload.get("model"),

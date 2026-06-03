@@ -168,6 +168,87 @@ async def test_pair_finalize_persists_preset_fields(hass: HomeAssistant, enable_
         assert data["pv_strings"] == 2
 
 
+async def test_pair_finalize_populates_inverters_list(hass: HomeAssistant, enable_custom_integrations) -> None:
+    """Regression: a finalized pairing MUST produce an entry whose
+    `inverters` list is non-empty, so the readings publisher actually starts.
+
+    The entry is born at VERSION 2, so the v1->v2 migration never runs; if
+    finalize only writes the flat entity_map, `_inverters_from_entry` returns
+    [] and async_setup_entry logs "no inverters configured; nothing to publish"
+    (the cause of forslim@gmail.com's stuck onboarding, 2026-06-03)."""
+    from custom_components.svitgrid import _inverters_from_entry
+    from custom_components.svitgrid.pairing_client import PairingClaimed
+    from cryptography.hazmat.primitives.asymmetric import ec
+
+    fake_priv = ec.generate_private_key(ec.SECP256R1())
+
+    async def _instant_sleep(_: float) -> None:
+        pass
+
+    with patch(
+        "custom_components.svitgrid.config_flow.PairingClient",
+    ) as mock_client_cls, patch(
+        "custom_components.svitgrid.config_flow.generate_keypair",
+        return_value=(fake_priv, "04" + "a" * 128),
+    ), patch(
+        "custom_components.svitgrid.config_flow.asyncio.sleep",
+        side_effect=_instant_sleep,
+    ), patch(
+        # We assert the created entry's shape, not its runtime; skip the real
+        # setup so background tasks (command poller / mqtt wake) don't fire.
+        "custom_components.svitgrid.async_setup_entry",
+        AsyncMock(return_value=True),
+    ):
+        mock_client = mock_client_cls.return_value
+        mock_client.start = AsyncMock(return_value={
+            "secret": "secret-inv", "code": "INVLST", "expiresIn": 300,
+        })
+        mock_client.get_status = AsyncMock(return_value=PairingClaimed(
+            household_id="h-deye", preset_id="deye-sg03lp1-solarman-v1",
+        ))
+        mock_client.finalize = AsyncMock(return_value={
+            "edgeDeviceId": "ed-9", "hardwareId": "ha-9f99",
+            "apiKey": "k9", "householdId": "h-deye",
+            "presetId": "deye-sg03lp1-solarman-v1",
+            "trustedKeys": [{"keyId": "ha-home-01", "publicKeyHex": "04" + "a" * 128}],
+            "entityMap": {
+                "batterySoc": "sensor.inverter_battery",
+                "loadPower": "sensor.inverter_load_power",
+            },
+            "brand": "Deye", "model": "SG03LP1", "phases": 1,
+            "hasBattery": True, "pvStrings": 2,
+            "commands": [],
+        })
+
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": config_entries.SOURCE_USER}
+        )
+        await hass.config_entries.flow.async_configure(
+            result["flow_id"], user_input={"next_step_id": "pair"}
+        )
+        await hass.async_block_till_done()
+
+        entries = hass.config_entries.async_entries(DOMAIN)
+        assert len(entries) == 1
+        entry = entries[0]
+
+        # The canonical inverters list must exist with the paired inverter.
+        invs = entry.data.get("inverters")
+        assert invs, "pairing finalize must populate entry.data['inverters']"
+        assert len(invs) == 1
+        assert invs[0]["inverter_id"] == "ha-9f99"
+        assert invs[0]["entity_map"] == {
+            "batterySoc": "sensor.inverter_battery",
+            "loadPower": "sensor.inverter_load_power",
+        }
+
+        # And the helper async_setup_entry uses must see that inverter, so the
+        # readings publisher will start (the actual bug being fixed).
+        resolved = _inverters_from_entry(entry)
+        assert len(resolved) == 1
+        assert resolved[0]["inverter_id"] == "ha-9f99"
+
+
 async def test_pair_finalize_phase_1_compat_when_no_preset(hass: HomeAssistant, enable_custom_integrations) -> None:
     """When /finalize returns no preset fields (Phase 1 add-on or unknown
     presetId), the entry's new fields default to None/empty so
