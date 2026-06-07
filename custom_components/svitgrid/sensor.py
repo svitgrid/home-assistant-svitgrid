@@ -1,14 +1,15 @@
 """Svitgrid status sensors — surfaced on the integration's device page.
 
-Five entities so the user can see at a glance whether the integration
+Six entities so the user can see at a glance whether the integration
 is healthy without leaving HA:
 - sensor.svitgrid_status         — "ok" | "error" | "idle"
 - sensor.svitgrid_last_ingest_at — timestamp of most recent ingest
 - sensor.svitgrid_ingests_24h    — rolling count, last 24h
 - sensor.svitgrid_last_command_at — timestamp of most recent command
 - sensor.svitgrid_commands_24h   — rolling count, last 24h
+- sensor.svitgrid_diagnostics    — status line + recent ingest log (incl. skips)
 
-The last two sensors also carry attribute dicts (`recent`) with the
+The last three sensors also carry attribute dicts (`recent`) with the
 last 10 events each — that's where the user sees the rolling history.
 """
 from __future__ import annotations
