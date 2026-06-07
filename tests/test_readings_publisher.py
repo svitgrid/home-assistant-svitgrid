@@ -174,6 +174,7 @@ _RUN_KWARGS = dict(
         "batterySoc": "sensor.inverter_battery",
         "pv1Power": "sensor.inverter_pv1_power",
         "batteryPower": "sensor.inverter_battery_power",
+        "batteryVoltage": "sensor.inverter_battery_voltage",
         "gridPower": "sensor.inverter_grid_power",
         "loadPower": "sensor.inverter_load_power",
     },
@@ -384,3 +385,99 @@ async def test_publisher_stops_on_device_stopped(monkeypatch):
     api.push_reading.assert_awaited_once()
     # No sleeps: loop returned before reaching the post-push sleep.
     assert sleeps == []
+
+
+# ── Task 4: gate_payload wired into run_loop — skip ingest on missing core ──
+
+
+def _mock_hass_incomplete_one_iter() -> MagicMock:
+    """hass mock where the battery SOC entity is unavailable → core field
+    missing → reading must be skipped (not POSTed)."""
+    hass = MagicMock()
+
+    def _get(eid):
+        if "battery_power" in eid:
+            return MagicMock(state="-200")
+        if "grid" in eid:
+            return MagicMock(state="100")
+        if "load" in eid:
+            return MagicMock(state="500")
+        if "battery" in eid:           # batterySoc entity → unavailable
+            return MagicMock(state="unavailable")
+        return None                     # pv, batteryVoltage unmapped/missing
+
+    hass.states.get = _get
+    call_count = {"n": 0}
+
+    def _is_stopping(_self):
+        call_count["n"] += 1
+        return call_count["n"] > 1
+
+    type(hass).is_stopping = property(_is_stopping)
+    return hass
+
+
+@pytest.mark.asyncio
+async def test_publisher_skips_post_when_core_field_missing(monkeypatch):
+    api = MagicMock()
+    api.push_reading = AsyncMock(return_value={"success": True})
+    activity = MagicMock()
+    kwargs = dict(_RUN_KWARGS, activity=activity)
+
+    sleeps = []
+    async def _record_sleep(delay):
+        sleeps.append(delay)
+    monkeypatch.setattr(asyncio, "sleep", _record_sleep)
+
+    await run_loop(hass=_mock_hass_incomplete_one_iter(), api_client=api, **kwargs)
+
+    api.push_reading.assert_not_awaited()        # never POSTed junk
+    activity.record_ingest_skipped.assert_called_once()
+    _, ckwargs = activity.record_ingest_skipped.call_args
+    assert "batterySoc" in ckwargs["missing_fields"]
+    assert sleeps == [60.0]                       # still slept the default cadence
+
+
+@pytest.mark.asyncio
+async def test_publisher_posts_when_no_solar_but_core_present(monkeypatch):
+    """Battery-only system (no PV entity) must still POST — pvPower defaults to 0."""
+    hass = MagicMock()
+
+    def _get(eid):
+        if "battery_power" in eid:
+            return MagicMock(state="-200")
+        if "battery_voltage" in eid:
+            return MagicMock(state="52")
+        if "battery" in eid:
+            return MagicMock(state="80")          # batterySoc
+        if "grid" in eid:
+            return MagicMock(state="100")
+        if "load" in eid:
+            return MagicMock(state="500")
+        return None                               # no pv entity
+
+    hass.states.get = _get
+    cc = {"n": 0}
+    def _is_stopping(_self):
+        cc["n"] += 1
+        return cc["n"] > 1
+    type(hass).is_stopping = property(_is_stopping)
+
+    api = MagicMock()
+    api.push_reading = AsyncMock(return_value={"success": True})
+    kwargs = dict(
+        _RUN_KWARGS,
+        entity_map={
+            "batterySoc": "sensor.inverter_battery",
+            "batteryPower": "sensor.inverter_battery_power",
+            "batteryVoltage": "sensor.inverter_battery_voltage",
+            "gridPower": "sensor.inverter_grid_power",
+            "loadPower": "sensor.inverter_load_power",
+        },
+    )
+    monkeypatch.setattr(asyncio, "sleep", AsyncMock())
+    await run_loop(hass=hass, api_client=api, **kwargs)
+
+    api.push_reading.assert_awaited_once()
+    sent = api.push_reading.await_args.kwargs["reading"]
+    assert sent["pvPower"] == 0.0

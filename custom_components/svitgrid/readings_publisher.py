@@ -234,6 +234,19 @@ async def run_loop(
                     elapsed += _SAMPLE_TICK_S
                 if samples:
                     aggregated = _aggregate_samples(samples, period_s=elapsed)
+                    aggregated, missing = gate_payload(aggregated)
+                    if missing:
+                        _LOGGER.warning(
+                            "Skipping aggregated ingest — incomplete reading; "
+                            "missing %s. Check these sensors in HA.",
+                            missing,
+                        )
+                        if activity is not None:
+                            activity.record_ingest_skipped(
+                                missing_fields=missing,
+                                entities={f: entity_map.get(f) for f in missing},
+                            )
+                        continue
                     response = await api_client.push_reading(
                         api_key=api_key, reading=aggregated,
                     )
@@ -250,10 +263,24 @@ async def run_loop(
                                 reason="push_reading returned no response",
                             )
             else:
-                # T10a: active path — single snapshot, then sleep.
+                # Active path — single snapshot, gate, then sleep.
                 payload = build_reading_payload(
                     hass=hass, inverter_id=inverter_id, entity_map=entity_map,
                 )
+                payload, missing = gate_payload(payload)
+                if missing:
+                    _LOGGER.warning(
+                        "Skipping ingest — incomplete reading; missing %s. "
+                        "Check these sensors exist and are available in HA.",
+                        missing,
+                    )
+                    if activity is not None:
+                        activity.record_ingest_skipped(
+                            missing_fields=missing,
+                            entities={f: entity_map.get(f) for f in missing},
+                        )
+                    await asyncio.sleep(next_sleep_s)
+                    continue
                 response = await api_client.push_reading(
                     api_key=api_key, reading=payload,
                 )
