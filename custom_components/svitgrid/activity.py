@@ -90,6 +90,28 @@ class ActivityTracker:
             "reason": reason,
         })
 
+    def record_ingest_skipped(
+        self,
+        *,
+        missing_fields: list[str],
+        entities: dict[str, str | None],
+    ) -> None:
+        """Called by readings_publisher when a reading is NOT sent because
+        required fields are missing/unavailable. Distinct from a network
+        failure — no POST was attempted, so it does not touch the 24h counter.
+        `entities` maps each missing field to its mapped entity id (or None
+        when the field was never mapped) so the user can find the culprit."""
+        now = self.now()
+        self.status = "waiting"
+        self.last_ingest_at = now
+        self.last_ingest_status = "skipped"
+        self._recent_ingests.append({
+            "at": now.isoformat(),
+            "status": "skipped",
+            "missing_fields": list(missing_fields),
+            "entities": dict(entities),
+        })
+
     @property
     def ingest_count_24h(self) -> int:
         self._prune_window(self._ingest_times, self.now())
@@ -97,6 +119,21 @@ class ActivityTracker:
 
     def recent_ingests(self) -> Iterable[dict[str, Any]]:
         return iter(self._recent_ingests)
+
+    def diagnostics_line(self) -> str:
+        """A short (<=255 char) human status for the diagnostics sensor state."""
+        if self.last_ingest_status == "skipped":
+            recent = self._recent_ingests
+            missing = recent[-1].get("missing_fields", []) if recent else []
+            line = f"waiting — incomplete reading; missing: {', '.join(missing)}"
+            return line[:255]
+        if self.last_ingest_status == "ok":
+            return "ok"
+        if self.last_ingest_status == "error":
+            recent = self._recent_ingests
+            reason = recent[-1].get("reason", "") if recent else ""
+            return f"error: {reason}"[:255]
+        return "idle"
 
     # ── command path ───────────────────────────────────────────────────
 

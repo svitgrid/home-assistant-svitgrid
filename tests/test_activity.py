@@ -114,3 +114,43 @@ def test_status_reflects_most_recent_outcome():
     # Subsequent success recovers status.
     t.record_ingest_success(sample_count=1, period_sec=60, summary={})
     assert t.status == "ok"
+
+
+def test_record_ingest_skipped_sets_waiting_status_and_event():
+    t = ActivityTracker(now=_now)
+    t.record_ingest_skipped(
+        missing_fields=["batterySoc", "gridPower"],
+        entities={"batterySoc": "sensor.soc", "gridPower": None},
+    )
+    assert t.status == "waiting"
+    assert t.last_ingest_status == "skipped"
+    recent = list(t.recent_ingests())
+    assert recent[-1]["status"] == "skipped"
+    assert recent[-1]["missing_fields"] == ["batterySoc", "gridPower"]
+    assert recent[-1]["entities"] == {"batterySoc": "sensor.soc", "gridPower": None}
+
+
+def test_skip_does_not_count_toward_ingest_24h():
+    t = ActivityTracker(now=_now)
+    t.record_ingest_skipped(missing_fields=["batterySoc"], entities={})
+    # A skip is not a network ingest — counters track real attempts only.
+    assert t.ingest_count_24h == 0
+
+
+def test_diagnostics_line_waiting_names_missing_fields():
+    t = ActivityTracker(now=_now)
+    t.record_ingest_skipped(missing_fields=["batterySoc", "gridPower"], entities={})
+    line = t.diagnostics_line()
+    assert "waiting" in line.lower()
+    assert "batterySoc" in line and "gridPower" in line
+    assert len(line) <= 255
+
+
+def test_diagnostics_line_ok_after_success():
+    t = ActivityTracker(now=_now)
+    t.record_ingest_success(sample_count=1, period_sec=60, summary={"pvPower": 0.0})
+    assert t.diagnostics_line() == "ok"
+
+
+def test_diagnostics_line_idle_initially():
+    assert ActivityTracker().diagnostics_line() == "idle"
