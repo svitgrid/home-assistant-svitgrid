@@ -63,6 +63,7 @@ async def async_setup_entry(
             Ingests24hSensor(activity, entry.entry_id, inverter_id, label),
             LastCommandAtSensor(activity, entry.entry_id, inverter_id, label),
             Commands24hSensor(activity, entry.entry_id, inverter_id, label),
+            DiagnosticsSensor(activity, entry.entry_id, inverter_id, label),
         ])
     async_add_entities(entities)
 
@@ -187,3 +188,29 @@ class Commands24hSensor(_SvitgridSensorBase):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         return {"recent": list(self._activity.recent_commands())}
+
+
+class DiagnosticsSensor(_SvitgridSensorBase):
+    """Human-readable status line + recent ingest log for copy-paste support.
+    State shows e.g. "waiting — incomplete reading; missing: batterySoc";
+    the `recent` attribute carries the last 10 ingest outcomes (incl. skips
+    with their missing fields and culprit entities)."""
+
+    _attr_translation_key = "diagnostics"
+    _attr_icon = "mdi:text-box-search"
+
+    def __init__(self, activity, entry_id, inverter_id, label):
+        super().__init__(activity, entry_id, inverter_id, label)
+        self._attr_unique_id = f"{entry_id}_{inverter_id}_diagnostics"
+        self._attr_name = "Diagnostics"
+
+    @property
+    def native_value(self) -> str:
+        return self._activity.diagnostics_line()
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {
+            "recent": list(self._activity.recent_ingests()),
+            "ingests_24h": self._activity.ingest_count_24h,
+        }

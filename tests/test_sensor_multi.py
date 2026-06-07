@@ -27,8 +27,8 @@ async def test_one_device_per_inverter(hass):
     from custom_components.svitgrid import sensor as sensor_mod
     await sensor_mod.async_setup_entry(hass, entry, _capture)
 
-    # 5 sensors per inverter, 2 inverters = 10
-    assert len(added) == 10
+    # 6 sensors per inverter, 2 inverters = 12
+    assert len(added) == 12
     # device identifiers reference each inverter id
     idents = set()
     for e in added:
@@ -38,3 +38,21 @@ async def test_one_device_per_inverter(hass):
     # unique_ids are distinct (no collisions across inverters)
     uids = [e.unique_id for e in added]
     assert len(uids) == len(set(uids))
+
+
+def test_diagnostics_sensor_reflects_skip_state():
+    from custom_components.svitgrid.activity import ActivityTracker
+    from custom_components.svitgrid.sensor import DiagnosticsSensor
+
+    activity = ActivityTracker()
+    activity.record_ingest_skipped(
+        missing_fields=["batterySoc"], entities={"batterySoc": "sensor.soc"},
+    )
+    s = DiagnosticsSensor(activity, "entry-1", "inv-1", "Deye SG01LP1")
+
+    assert "waiting" in s.native_value.lower()
+    assert "batterySoc" in s.native_value
+    recent = s.extra_state_attributes["recent"]
+    assert recent[-1]["status"] == "skipped"
+    assert recent[-1]["missing_fields"] == ["batterySoc"]
+    assert s.unique_id == "entry-1_inv-1_diagnostics"
