@@ -18,3 +18,14 @@ def test_mappable_fields_have_nonempty_labels():
         assert isinstance(label, str) and label.strip(), f"empty label for {field}"
     labels = [label for _field, label in MAPPABLE_FIELDS]
     assert len(labels) == len(set(labels)), "duplicate label in MAPPABLE_FIELDS"
+
+
+def test_core_payload_fields_are_the_five_non_pv_required():
+    from custom_components.svitgrid.const import CORE_PAYLOAD_FIELDS
+
+    assert CORE_PAYLOAD_FIELDS == frozenset(
+        {"batterySoc", "batteryPower", "batteryVoltage", "gridPower", "loadPower"}
+    )
+    # pvPower is NOT in the set — the gate defaults it to 0 for no-solar systems.
+    assert "pvPower" not in CORE_PAYLOAD_FIELDS
+    assert "pv1Power" not in CORE_PAYLOAD_FIELDS

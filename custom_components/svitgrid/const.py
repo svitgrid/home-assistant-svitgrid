@@ -20,6 +20,14 @@ REQUIRED_FIELDS = frozenset(
     {"batterySoc", "batteryPower", "batteryVoltage", "pv1Power", "gridPower", "loadPower"}
 )
 
+# The subset of API-required reading fields that MUST be sourced from a mapped
+# HA entity before we POST. `pvPower` is API-required too, but the readings
+# publisher defaults it to 0 for battery-only / no-solar systems (see
+# readings_publisher.gate_payload), so it is intentionally NOT listed here.
+CORE_PAYLOAD_FIELDS = frozenset(
+    {"batterySoc", "batteryPower", "batteryVoltage", "gridPower", "loadPower"}
+)
+
 # All recognized canonical fields (required + optional)
 ALL_FIELDS = REQUIRED_FIELDS | frozenset(
     {
