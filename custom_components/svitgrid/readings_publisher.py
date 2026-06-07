@@ -17,7 +17,7 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 
 from .api_client import DeviceStopped, SvitgridApiClient
-from .const import READING_SOURCE, READINGS_INTERVAL_S
+from .const import CORE_PAYLOAD_FIELDS, READING_SOURCE, READINGS_INTERVAL_S
 
 # Sane bounds for the server-driven cadence. Floor prevents a misbehaving
 # server from spinning us in a 1ms tight loop; ceiling prevents the same
@@ -100,6 +100,22 @@ def build_reading_payload(
         if internal in payload:
             payload[api_name] = payload.pop(internal)
     return payload
+
+
+def gate_payload(payload: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """Finalize a built payload and report whether it's safe to POST.
+
+    1. Default `pvPower` to 0.0 when no PV-string value produced one, so
+       battery-only / no-solar systems satisfy the API's required `pvPower`
+       instead of being rejected forever.
+    2. Return the sorted list of CORE_PAYLOAD_FIELDS still missing. An empty
+       list means the payload is complete enough to send.
+
+    Mutates and returns `payload` (caller passes a fresh dict per tick)."""
+    if "pvPower" not in payload:
+        payload["pvPower"] = 0.0
+    missing = sorted(f for f in CORE_PAYLOAD_FIELDS if f not in payload)
+    return payload, missing
 
 
 def _aggregate_samples(

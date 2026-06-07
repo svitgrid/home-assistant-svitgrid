@@ -3,7 +3,7 @@ unavailable/non-numeric fields, flushes every 10s to /ingest/reading."""
 
 from __future__ import annotations
 
-from custom_components.svitgrid.readings_publisher import build_reading_payload
+from custom_components.svitgrid.readings_publisher import build_reading_payload, gate_payload
 
 
 def test_build_payload_includes_mapped_entities(hass):
@@ -97,6 +97,34 @@ def test_build_payload_single_mppt_aggregates_to_pv1_total(hass):
     assert payload["pvPower"] == 1500.0
     assert payload["pvPower1"] == 1500.0
     assert "pv1Power" not in payload
+
+
+def test_gate_payload_defaults_pv_power_when_absent():
+    payload = {
+        "inverterId": "inv-1", "timestamp": "t", "source": "edge",
+        "batterySoc": 80.0, "batteryPower": -200.0, "batteryVoltage": 52.0,
+        "gridPower": 100.0, "loadPower": 500.0,
+    }
+    finalized, missing = gate_payload(payload)
+    assert finalized["pvPower"] == 0.0   # no-solar system is allowed through
+    assert missing == []
+
+
+def test_gate_payload_keeps_existing_pv_power():
+    payload = {"pvPower": 1200.0, "batterySoc": 80.0, "batteryPower": -200.0,
+               "batteryVoltage": 52.0, "gridPower": 100.0, "loadPower": 500.0}
+    finalized, missing = gate_payload(payload)
+    assert finalized["pvPower"] == 1200.0
+    assert missing == []
+
+
+def test_gate_payload_reports_missing_core_fields_sorted():
+    payload = {"inverterId": "inv-1", "timestamp": "t", "source": "edge"}
+    finalized, missing = gate_payload(payload)
+    # pvPower defaulted, but the five core fields are absent.
+    assert finalized["pvPower"] == 0.0
+    assert missing == ["batteryPower", "batterySoc", "batteryVoltage",
+                       "gridPower", "loadPower"]
 
 
 # ── Phase 2 T10a: adaptive ingest cadence ─────────────────────────────
