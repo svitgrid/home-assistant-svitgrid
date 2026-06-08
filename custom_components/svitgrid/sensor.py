@@ -71,7 +71,7 @@ async def async_setup_entry(
 
 class _SvitgridSensorBase(SensorEntity):
     """Shared device-info + polling cadence. One HA device per inverter so all
-    five sensors for a given inverter group under one card on the device page."""
+    six sensors for a given inverter group under one card on the device page."""
 
     _attr_should_poll = True
     _attr_has_entity_name = True

@@ -481,3 +481,65 @@ async def test_publisher_posts_when_no_solar_but_core_present(monkeypatch):
     api.push_reading.assert_awaited_once()
     sent = api.push_reading.await_args.kwargs["reading"]
     assert sent["pvPower"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_publisher_skips_aggregated_post_when_core_field_missing(monkeypatch):
+    """Idle path: after a complete snapshot bumps cadence to idle, the next
+    iteration's aggregated samples are incomplete (batterySoc goes
+    unavailable) → the aggregated POST is skipped, not sent as junk."""
+    # batterySoc is healthy until the first push lands, then goes unavailable
+    # so every idle-path sample omits it → aggregated reading is incomplete.
+    state = {"complete": True}
+
+    def _get(eid):
+        if "battery_power" in eid:
+            return MagicMock(state="-200")
+        if "battery_voltage" in eid:
+            return MagicMock(state="52")
+        if "battery" in eid:  # batterySoc
+            return MagicMock(state="80" if state["complete"] else "unavailable")
+        if "grid" in eid:
+            return MagicMock(state="100")
+        if "load" in eid:
+            return MagicMock(state="500")
+        return None  # no pv entity → pvPower defaults to 0
+
+    hass = MagicMock()
+    hass.states.get = _get
+    call_count = {"n": 0}
+
+    def _is_stopping(_self):
+        call_count["n"] += 1
+        # iter1 top read (#1) + iter2 top read (#2) + iter2's 5 sampling
+        # sub-loop reads (#3-#7); stop on the read that would start iter3.
+        return call_count["n"] > 7
+
+    type(hass).is_stopping = property(_is_stopping)
+
+    def _push(**_kw):
+        # First (snapshot) push succeeds and signals idle cadence; thereafter
+        # the soc entity drops out so the aggregated reading is incomplete.
+        state["complete"] = False
+        return {"success": True, "ingestIntervalMs": 300_000}
+
+    api = MagicMock()
+    api.push_reading = AsyncMock(side_effect=_push)
+    activity = MagicMock()
+    kwargs = dict(_RUN_KWARGS, activity=activity)
+
+    sleeps: list[float] = []
+
+    async def _record_sleep(delay):
+        sleeps.append(delay)
+
+    monkeypatch.setattr(asyncio, "sleep", _record_sleep)
+    await run_loop(hass=hass, api_client=api, **kwargs)
+
+    # Only the first (snapshot) push happened; the aggregated one was skipped.
+    api.push_reading.assert_awaited_once()
+    activity.record_ingest_skipped.assert_called_once()
+    _, ckwargs = activity.record_ingest_skipped.call_args
+    assert "batterySoc" in ckwargs["missing_fields"]
+    # 300s post-snapshot sleep + 5×60s sampling ticks; idle skip adds no sleep.
+    assert sleeps == [300.0, 60.0, 60.0, 60.0, 60.0, 60.0]
