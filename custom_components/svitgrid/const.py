@@ -39,7 +39,13 @@ ALL_FIELDS = REQUIRED_FIELDS | frozenset(
         "gridVoltageL1",
         "gridVoltageL2",
         "gridVoltageL3",
+        "gridPowerL1",
+        "gridPowerL2",
+        "gridPowerL3",
         "gridFrequency",
+        "loadPowerL1",
+        "loadPowerL2",
+        "loadPowerL3",
         "dailyPvEnergy",
         "dailyGridImportEnergy",
         "dailyGridExportEnergy",
@@ -68,8 +74,18 @@ MAPPABLE_FIELDS: list[tuple[str, str]] = [
     ("gridVoltageL1", "Grid voltage L1 (V)"),
     ("gridVoltageL2", "Grid voltage L2 (V)"),
     ("gridVoltageL3", "Grid voltage L3 (V)"),
+    # Per-phase powers (L1..L3): the API folds these scalars into its
+    # canonical phaseGridPowers / phaseLoads arrays at ingest — same path as
+    # gridVoltageL1..L3 → phaseVoltages. L1 must be mapped for the fold to
+    # apply (a gap would shift phases); L2/L3 optional.
+    ("gridPowerL1", "Grid power L1 (W — positive = import)"),
+    ("gridPowerL2", "Grid power L2 (W — positive = import)"),
+    ("gridPowerL3", "Grid power L3 (W — positive = import)"),
     ("gridFrequency", "Grid frequency (Hz)"),
     ("loadPower", "Load power (W)"),
+    ("loadPowerL1", "Load power L1 (W)"),
+    ("loadPowerL2", "Load power L2 (W)"),
+    ("loadPowerL3", "Load power L3 (W)"),
     ("dailyPvEnergy", "Daily PV production (kWh)"),
     ("dailyGridImportEnergy", "Daily grid import (kWh)"),
     ("dailyGridExportEnergy", "Daily grid export (kWh)"),

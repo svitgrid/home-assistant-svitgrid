@@ -15,9 +15,14 @@
 #     direct watts.
 #   - FIX: set_grid_charge_toggle was 143; correct is 146.
 #   - Added gridVoltageL2/L3 to entityMap.
+#
+# v4 (2026-06-10):
+#   - Added per-phase powers gridPowerL1-3 / loadPowerL1-3 (Solarman deye_p3
+#     profile "Grid Lx Power" regs 622-624, "Load Lx Power" regs 633-635).
+#     The API folds them into phaseGridPowers / phaseLoads at ingest.
 
 id: deye-sg04lp3-solarman-v1
-version: "3"
+version: "4"
 brand: Deye
 model: SG04LP3
 phases: 3
@@ -37,6 +42,15 @@ entityMap:
   gridVoltageL1: sensor.inverter_grid_l1_voltage
   gridVoltageL2: sensor.inverter_grid_l2_voltage
   gridVoltageL3: sensor.inverter_grid_l3_voltage
+  # Per-phase powers (Solarman deye_p3 profile: "Grid Lx Power" regs 622-624,
+  # "Load Lx Power" regs 633-635). The API folds these scalars into its
+  # canonical phaseGridPowers / phaseLoads arrays at ingest.
+  gridPowerL1: sensor.inverter_grid_l1_power
+  gridPowerL2: sensor.inverter_grid_l2_power
+  gridPowerL3: sensor.inverter_grid_l3_power
+  loadPowerL1: sensor.inverter_load_l1_power
+  loadPowerL2: sensor.inverter_load_l2_power
+  loadPowerL3: sensor.inverter_load_l3_power
 
 commands:
   # Force-charge: write the slot-1 charge power limit (watts, no scaling).

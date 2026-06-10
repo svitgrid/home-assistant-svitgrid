@@ -29,3 +29,21 @@ def test_core_payload_fields_are_the_five_non_pv_required():
     # pvPower is NOT in the set — the gate defaults it to 0 for no-solar systems.
     assert "pvPower" not in CORE_PAYLOAD_FIELDS
     assert "pv1Power" not in CORE_PAYLOAD_FIELDS
+
+
+def test_per_phase_power_fields_are_mappable():
+    """Per-phase load and grid power (L1..L3) must be mappable so 3-phase
+    households get per-phase data in the app. The API folds these scalars
+    into its canonical phaseLoads / phaseGridPowers arrays at ingest (the
+    same path as the existing gridVoltageL1..L3 → phaseVoltages fold)."""
+    keys = {field for field, _label in MAPPABLE_FIELDS}
+    for field in (
+        "loadPowerL1",
+        "loadPowerL2",
+        "loadPowerL3",
+        "gridPowerL1",
+        "gridPowerL2",
+        "gridPowerL3",
+    ):
+        assert field in keys, f"{field} missing from MAPPABLE_FIELDS"
+        assert field in ALL_FIELDS, f"{field} missing from ALL_FIELDS"

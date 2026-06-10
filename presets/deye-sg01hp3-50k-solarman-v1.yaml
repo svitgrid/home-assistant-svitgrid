@@ -4,7 +4,7 @@
 # on live BM4 hardware; commands[] will land after a verified live test).
 
 id: deye-sg01hp3-50k-solarman-v1
-version: "1"
+version: "2"
 brand: Deye
 model: SG01HP3 50K
 phases: 3
@@ -24,5 +24,14 @@ entityMap:
   gridVoltageL1: sensor.inverter_grid_l1_voltage
   gridVoltageL2: sensor.inverter_grid_l2_voltage
   gridVoltageL3: sensor.inverter_grid_l3_voltage
+  # Per-phase powers (Solarman deye_p3 profile: "Grid Lx Power" regs 622-624,
+  # "Load Lx Power" regs 633-635). The API folds these scalars into its
+  # canonical phaseGridPowers / phaseLoads arrays at ingest.
+  gridPowerL1: sensor.inverter_grid_l1_power
+  gridPowerL2: sensor.inverter_grid_l2_power
+  gridPowerL3: sensor.inverter_grid_l3_power
+  loadPowerL1: sensor.inverter_load_l1_power
+  loadPowerL2: sensor.inverter_load_l2_power
+  loadPowerL3: sensor.inverter_load_l3_power
 
 commands: []
