@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.8.0
+- **Full inverter fleet in the pairing picker.** Added 19 preset profiles so the "Марка та модель інвертора" dropdown covers every model the app supports — Deye SG04LP1 / **SG05LP1-EU** / SG01LP1 16K / SG05LP3 (with battery/work-mode control), Deye GB-S20K and SUN-60K-G03 (read-only), all 8 Victron MultiPlus-II / Quattro-II, the 3 Huawei SUN2000 commercial strings, and both Solplanet ASW-LT. Deye low-voltage hybrids ship the force-charge / work-mode / solar-sell / grid-charge commands; HV (GB-S20K), grid-tie, Victron, Huawei and Solplanet ship read-only until their registers/entities are hardware-verified (their entity maps are best-guess starting points the user remaps in the config flow). A coverage test now fails CI if a supported model is missing a preset.
+
 ## 0.7.0
 - **Per-phase grid and load power on 3-phase systems.** New mappable fields `gridPowerL1..L3` and `loadPowerL1..L3` (alongside the existing `gridVoltageL1..L3`); the API folds them into its canonical `phaseVoltages` / `phaseGridPowers` / `phaseLoads` arrays at ingest, lighting up the per-phase grid card and load split in the app. 3-phase Deye Solarman presets (SG04LP3 v4, SG01HP3 v2, SG01HP3-50K v2) now map them from the Solarman `deye_p3` profile sensors (`Grid Lx Power`, `Load Lx Power`). Existing installs: open **Configure → Edit inverter** and map the new fields (or re-apply the preset). Requires API with per-phase scalar folding (2026-06-10) — on older APIs the new fields are stripped server-side (harmless).
 

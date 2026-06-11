@@ -1,0 +1,25 @@
+# Svitgrid HA Preset — Solplanet ASW100K-LT (3-phase commercial string).
+#
+# protocolId: home_assistant. Solplanet/AISWEI is read in HA via a generic
+# Modbus / MQTT bridge off the Ai-logger (no first-party HA integration), so the
+# entity_ids are user-defined — the map below is a representative starting point.
+# The user remaps each field in HA's config flow.
+#
+# Commercial string inverter: no battery. UNVERIFIED placeholders. Readings
+# only — commands[] stays empty (CLAUDE.md Pending Verification).
+
+id: solplanet-asw100k-lt-v1
+version: "1"
+brand: Solplanet
+model: ASW100K-LT
+phases: 3
+hasBattery: false
+pvStrings: 2
+protocolId: home_assistant
+
+entityMap:
+  pv1Power: sensor.solplanet_pv_power
+  gridPower: sensor.solplanet_grid_power
+  dailyPvEnergy: sensor.solplanet_today_yield
+
+commands: []

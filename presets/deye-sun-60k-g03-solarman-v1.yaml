@@ -1,0 +1,31 @@
+# Svitgrid HA Preset — Deye SUN-60K-G03 (3-phase grid-tie string, no battery).
+#
+# Solarman HACS profile: deye_string.yaml.
+# Grid-tie string inverter: no battery, always sells, no work_mode toggle —
+# read-only (commands: []), same posture as deye-string.
+#
+# UNVERIFIED: the SUN-60K-G03 Solarman register/profile mapping is not yet
+# confirmed on hardware (CLAUDE.md Pending Verification — possible PV/daily
+# address divergence). Treat the sensor set below as a starting point; the user
+# remaps in HA's config flow if their string profile differs.
+
+id: deye-sun-60k-g03-solarman-v1
+version: "1"
+brand: Deye
+model: SUN-60K-G03
+phases: 3
+hasBattery: false
+pvStrings: 2
+protocolId: home_assistant_solarman
+
+entityMap:
+  pv1Power: sensor.inverter_pv1_power
+  pv2Power: sensor.inverter_pv2_power
+  gridPower: sensor.inverter_grid_power
+  loadPower: sensor.inverter_load_power
+  dailyPvEnergy: sensor.inverter_today_production
+  gridVoltageL1: sensor.inverter_grid_l1_voltage
+  gridVoltageL2: sensor.inverter_grid_l2_voltage
+  gridVoltageL3: sensor.inverter_grid_l3_voltage
+
+commands: []

@@ -1,0 +1,25 @@
+# Svitgrid HA Preset — Huawei SUN2000 30KTL-M3 (3-phase commercial string).
+#
+# protocolId: home_assistant. Read in HA via the huawei_solar integration
+# (wlcrs/huawei_solar). Its entity_ids depend on the user's device name; the
+# map below uses the integration's default names as a starting point — the user
+# remaps each field in HA's config flow if theirs differ.
+#
+# Commercial string inverter: no battery. UNVERIFIED placeholders. Readings
+# only — commands[] stays empty (CLAUDE.md Pending Verification).
+
+id: huawei-sun2000-30ktl-m3-v1
+version: "1"
+brand: Huawei
+model: SUN2000 30KTL-M3
+phases: 3
+hasBattery: false
+pvStrings: 2
+protocolId: home_assistant
+
+entityMap:
+  pv1Power: sensor.inverter_input_power
+  gridPower: sensor.power_meter_active_power
+  dailyPvEnergy: sensor.inverter_daily_yield
+
+commands: []

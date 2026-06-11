@@ -23,6 +23,8 @@ THREE_PHASE_HYBRID_IDS = [
     "deye-sg04lp3-solarman-v1",
     "deye-sg01hp3-solarman-v1",
     "deye-sg01hp3-50k-solarman-v1",
+    "deye-sg05lp3-solarman-v1",
+    "deye-gb-s20k-solarman-v1",
 ]
 
 PER_PHASE_FIELDS = [

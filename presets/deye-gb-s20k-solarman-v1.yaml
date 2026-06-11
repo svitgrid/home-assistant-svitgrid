@@ -1,0 +1,43 @@
+# Svitgrid HA Preset — Deye GB-S20K (3-phase HV all-in-one hybrid).
+#
+# Solarman HACS profile: deye_p3.yaml (commercial HV map).
+# Reuses the SG01HP3 HV register family (raw value × 10 = watts). Like the
+# sibling HV presets (deye-sg01hp3 / deye-sg01hp3-50k) we ship READ-ONLY in v1:
+# the HV power scaling is unverified on live hardware, and shipping LV-scaled
+# write registers to an HV unit would mis-command it. Add commands[] after a
+# verified live register dump on real GB-S20K hardware (CLAUDE.md Pending
+# Verification).
+#
+# Per-phase powers (Solarman deye_p3 "Grid Lx Power" 622-624, "Load Lx Power"
+# 633-635) — the API folds them into phaseGridPowers / phaseLoads at ingest.
+
+id: deye-gb-s20k-solarman-v1
+version: "1"
+brand: Deye
+model: GB-S20K
+phases: 3
+hasBattery: true
+pvStrings: 2
+protocolId: home_assistant_solarman
+
+entityMap:
+  batterySoc: sensor.inverter_battery
+  batteryPower: sensor.inverter_battery_power
+  batteryVoltage: sensor.inverter_battery_voltage
+  pv1Power: sensor.inverter_pv1_power
+  pv2Power: sensor.inverter_pv2_power
+  gridPower: sensor.inverter_grid_power
+  loadPower: sensor.inverter_load_power
+  dailyPvEnergy: sensor.inverter_today_production
+  gridVoltageL1: sensor.inverter_grid_l1_voltage
+  gridVoltageL2: sensor.inverter_grid_l2_voltage
+  gridVoltageL3: sensor.inverter_grid_l3_voltage
+  gridPowerL1: sensor.inverter_grid_l1_power
+  gridPowerL2: sensor.inverter_grid_l2_power
+  gridPowerL3: sensor.inverter_grid_l3_power
+  loadPowerL1: sensor.inverter_load_l1_power
+  loadPowerL2: sensor.inverter_load_l2_power
+  loadPowerL3: sensor.inverter_load_l3_power
+
+# Write commands deferred — HV power scaling unverified live (see header).
+commands: []

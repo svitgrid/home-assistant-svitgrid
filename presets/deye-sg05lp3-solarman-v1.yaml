@@ -1,0 +1,67 @@
+# Svitgrid HA Preset — Deye SG05LP3 (3-phase low-voltage hybrid) via Solarman.
+#
+# Solarman HACS profile: deye_p3.yaml.
+# Same LV register family as SG04LP3 (DeyeSG04LP3Registers, direct-watt write
+# scaling) per write_family.dart — so it ships the same write commands:
+# charge 154, work_mode 142, solar_sell 145, grid_charge_toggle 146.
+#
+# Per-phase powers (Solarman deye_p3 "Grid Lx Power" 622-624, "Load Lx Power"
+# 633-635) — the API folds them into phaseGridPowers / phaseLoads at ingest.
+
+id: deye-sg05lp3-solarman-v1
+version: "1"
+brand: Deye
+model: SG05LP3
+phases: 3
+hasBattery: true
+pvStrings: 2
+protocolId: home_assistant_solarman
+
+entityMap:
+  batterySoc: sensor.inverter_battery
+  batteryPower: sensor.inverter_battery_power
+  batteryVoltage: sensor.inverter_battery_voltage
+  pv1Power: sensor.inverter_pv1_power
+  pv2Power: sensor.inverter_pv2_power
+  gridPower: sensor.inverter_grid_power
+  loadPower: sensor.inverter_load_power
+  dailyPvEnergy: sensor.inverter_today_production
+  gridVoltageL1: sensor.inverter_grid_l1_voltage
+  gridVoltageL2: sensor.inverter_grid_l2_voltage
+  gridVoltageL3: sensor.inverter_grid_l3_voltage
+  gridPowerL1: sensor.inverter_grid_l1_power
+  gridPowerL2: sensor.inverter_grid_l2_power
+  gridPowerL3: sensor.inverter_grid_l3_power
+  loadPowerL1: sensor.inverter_load_l1_power
+  loadPowerL2: sensor.inverter_load_l2_power
+  loadPowerL3: sensor.inverter_load_l3_power
+
+commands:
+  - id: set_battery_charge
+    service: modbus.write_register
+    args:
+      hub: config.hub_name
+      slave: config.slave_id
+      address: 154
+      value: "int(payload.chargePowerLimitW)"
+  - id: set_work_mode
+    service: modbus.write_register
+    args:
+      hub: config.hub_name
+      slave: config.slave_id
+      address: 142
+      value: "int(payload.workMode)"
+  - id: set_solar_sell
+    service: modbus.write_register
+    args:
+      hub: config.hub_name
+      slave: config.slave_id
+      address: 145
+      value: "int(payload.solarSell)"
+  - id: set_grid_charge_toggle
+    service: modbus.write_register
+    args:
+      hub: config.hub_name
+      slave: config.slave_id
+      address: 146
+      value: "int(payload.enabled)"
