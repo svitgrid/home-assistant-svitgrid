@@ -45,6 +45,21 @@ class DeviceEvicted(SvitgridApiError):
     polling, not retry."""
 
 
+class ReadingRejected(SvitgridApiError):
+    """`push_reading` got a 4xx (client error) on `/ingest/reading`.
+
+    The payload is structurally wrong, incomplete, or unauthorized — retrying
+    at the normal cadence just hammers the server with requests it will keep
+    rejecting (each one still costs a Cloud Run request + auth read). Callers
+    should back off HARD until the underlying config/firmware changes; the
+    readings_publisher parks at its ceiling interval. Distinct from a 5xx /
+    network blip, which is transient and returns None (normal-cadence retry)."""
+
+    def __init__(self, status: int, body: str) -> None:
+        super().__init__(f"HTTP {status}: {body}")
+        self.status = status
+
+
 class DeviceStopped(SvitgridApiError):
     """Server responded 200 with body `{stopped: true, stoppedReason: "..."}` on
     an authenticated request. An operator flipped `disabled: true` on this
@@ -97,13 +112,24 @@ class SvitgridApiClient:
         async with self._session.post(
             url, headers={"x-api-key": api_key}, json=reading
         ) as resp:
-            if resp.status >= 400:
+            if resp.status >= 500:
+                # Transient (server outage / overload) — caller retries at the
+                # normal cadence.
                 _LOGGER.warning(
-                    "push_reading failed: status=%s body=%s",
+                    "push_reading failed (transient): status=%s body=%s",
                     resp.status,
                     await _err(resp),
                 )
                 return None
+            if resp.status >= 400:
+                # Hard client error (validation, auth, gone). Re-POSTing the
+                # same payload won't help — raise so the caller backs off hard
+                # instead of hammering once per cadence tick.
+                body = await _err(resp)
+                _LOGGER.warning(
+                    "push_reading rejected: status=%s body=%s", resp.status, body
+                )
+                raise ReadingRejected(resp.status, body)
             try:
                 body = await resp.json()
             except Exception:  # noqa: BLE001

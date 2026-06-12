@@ -224,12 +224,27 @@ async def test_publisher_defaults_to_60s_when_field_missing(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_publisher_defaults_to_60s_when_push_returns_none(monkeypatch):
-    """API call failed (4xx/5xx → push_reading returns None) → 60s default
-    so we don't get stuck in a 10s-retry tight loop on a server outage."""
+    """Transient failure (5xx / network → push_reading returns None) → 60s
+    default so we don't get stuck in a 10s-retry tight loop on a server
+    outage. (A 4xx raises ReadingRejected instead — see the backoff test.)"""
     api = MagicMock()
     api.push_reading = AsyncMock(return_value=None)
     sleeps = await _run_with_sleep_capture(monkeypatch, _mock_hass_one_iter(), api)
     assert sleeps == [60.0]
+
+
+@pytest.mark.asyncio
+async def test_publisher_backs_off_to_ceiling_on_reading_rejected(monkeypatch):
+    """A 4xx rejection (ReadingRejected) means the payload itself is wrong —
+    re-POSTing every 60s just burns requests the server keeps rejecting. The
+    loop must park at the ceiling interval (30 min) and keep running, not exit
+    or hammer at the default cadence."""
+    from custom_components.svitgrid.api_client import ReadingRejected
+
+    api = MagicMock()
+    api.push_reading = AsyncMock(side_effect=ReadingRejected(400, "Validation error"))
+    sleeps = await _run_with_sleep_capture(monkeypatch, _mock_hass_one_iter(), api)
+    assert sleeps == [1800.0]  # _INTERVAL_CEILING_S
 
 
 @pytest.mark.asyncio

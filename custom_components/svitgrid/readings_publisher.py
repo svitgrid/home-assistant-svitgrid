@@ -16,7 +16,7 @@ from typing import Any
 
 from homeassistant.core import HomeAssistant
 
-from .api_client import DeviceStopped, SvitgridApiClient
+from .api_client import DeviceStopped, ReadingRejected, SvitgridApiClient
 from .const import CORE_PAYLOAD_FIELDS, READING_SOURCE, READINGS_INTERVAL_S
 
 # Sane bounds for the server-driven cadence. Floor prevents a misbehaving
@@ -305,6 +305,24 @@ async def run_loop(
                 e.reason,
             )
             return
+        except ReadingRejected as exc:
+            # The server rejected the payload itself (4xx) — usually missing /
+            # invalid sensors that local gating didn't catch, or a schema the
+            # add-on hasn't caught up to. Re-POSTing the same payload every
+            # 60s just burns requests it keeps rejecting, so park at the
+            # ceiling interval until config changes. The loop keeps running so
+            # it recovers automatically once the underlying issue is fixed.
+            _LOGGER.warning(
+                "Readings publisher: server rejected the payload (%s). "
+                "Backing off to %ss — fix the missing/invalid sensors in HA; "
+                "the integration will keep retrying slowly.",
+                exc,
+                _INTERVAL_CEILING_S,
+            )
+            if activity is not None:
+                activity.record_ingest_failure(reason=f"rejected: HTTP {exc.status}")
+            next_sleep_s = float(_INTERVAL_CEILING_S)
+            await asyncio.sleep(next_sleep_s)
         except Exception as exc:  # noqa: BLE001
             _LOGGER.exception("Readings publish failed; will retry next tick")
             if activity is not None:

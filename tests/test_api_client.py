@@ -16,6 +16,7 @@ from custom_components.svitgrid.api_client import (
     DeviceStopped,
     PublicKeyMismatch,
     RateLimited,
+    ReadingRejected,
     SvitgridApiClient,
     SvitgridApiError,
 )
@@ -126,6 +127,26 @@ class TestReadingsPush:
         body = call_args.kwargs["json"]
         assert body["inverterId"] == "inv-1"
         assert body["source"] == "edge"
+
+    async def test_4xx_raises_reading_rejected_with_status(self):
+        """A 400 (e.g. validation error — missing required sensors) is a hard
+        client error: raise ReadingRejected so the caller backs off instead of
+        re-POSTing the same bad payload every cadence tick."""
+        session, _ = _mock_session_with_response(
+            400, {"error": "Validation error", "details": []}
+        )
+        client = SvitgridApiClient(session, api_base="https://api.example")
+        with pytest.raises(ReadingRejected) as exc_info:
+            await client.push_reading(api_key="k", reading={"inverterId": "i"})
+        assert exc_info.value.status == 400
+
+    async def test_5xx_returns_none_for_normal_cadence_retry(self):
+        """A 5xx is transient — return None (caller retries at normal cadence),
+        NOT ReadingRejected (which would park the publisher at its ceiling)."""
+        session, _ = _mock_session_with_response(503, {"error": "unavailable"})
+        client = SvitgridApiClient(session, api_base="https://api.example")
+        result = await client.push_reading(api_key="k", reading={"inverterId": "i"})
+        assert result is None
 
 
 @pytest.mark.asyncio

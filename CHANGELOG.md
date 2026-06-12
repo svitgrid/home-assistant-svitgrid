@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.8.1
+- **Back off when the server rejects a reading.** If `/ingest/reading` returns a 4xx (e.g. the inverter is missing required sensors, so the payload is incomplete), the publisher now parks at the 30-minute ceiling interval instead of re-POSTing the same rejected payload every 60 seconds. It keeps retrying slowly and recovers automatically once the missing sensors are mapped — but stops hammering the API (and your network) with requests it will keep refusing. Transient 5xx / network errors still retry at the normal cadence. Most installs already skip incomplete payloads via local gating; this is the safety net for older configs and any future schema divergence.
+
 ## 0.8.0
 - **Full inverter fleet in the pairing picker.** Added 19 preset profiles so the "Марка та модель інвертора" dropdown covers every model the app supports — Deye SG04LP1 / **SG05LP1-EU** / SG01LP1 16K / SG05LP3 (with battery/work-mode control), Deye GB-S20K and SUN-60K-G03 (read-only), all 8 Victron MultiPlus-II / Quattro-II, the 3 Huawei SUN2000 commercial strings, and both Solplanet ASW-LT. Deye low-voltage hybrids ship the force-charge / work-mode / solar-sell / grid-charge commands; HV (GB-S20K), grid-tie, Victron, Huawei and Solplanet ship read-only until their registers/entities are hardware-verified (their entity maps are best-guess starting points the user remaps in the config flow). A coverage test now fails CI if a supported model is missing a preset.
 
