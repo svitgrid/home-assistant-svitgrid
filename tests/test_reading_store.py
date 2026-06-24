@@ -87,3 +87,23 @@ def test_skip_aged_moves_old_unsent_to_skipped(tmp_path):
     skipped = store._skip_aged_sync(now, cap_s=48 * 3600)
     assert skipped == 1
     assert store._count_by_state_sync() == {"pending": 1, "skipped": 1}
+
+
+def test_live_snapshot_returns_latest_per_inverter(tmp_path):
+    store = _store(tmp_path)
+    store._append_sync({"inverterId": "inv-1", "timestamp": "2026-06-24T10:00:00Z", "pvPower": 1.0})
+    store._append_sync({"inverterId": "inv-1", "timestamp": "2026-06-24T10:00:05Z", "pvPower": 2.0})
+    store._append_sync({"inverterId": "inv-2", "timestamp": "2026-06-24T10:00:01Z", "pvPower": 9.0})
+    snap = {s["inverterId"]: s for s in store._live_snapshot_sync()}
+    assert snap["inv-1"]["payload"]["pvPower"] == 2.0
+    assert snap["inv-2"]["payload"]["pvPower"] == 9.0
+
+
+def test_sync_status_counts_and_last_sent(tmp_path):
+    store = _store(tmp_path)
+    store._append_sync({"inverterId": "inv-1", "timestamp": "2026-06-24T10:00:00Z"})
+    store._append_sync({"inverterId": "inv-1", "timestamp": "2026-06-24T10:00:05Z"})
+    store._mark_sent_sync([("inv-1", "2026-06-24T10:00:00Z")])
+    status = store._sync_status_sync()
+    assert status["counts"] == {"sent": 1, "pending": 1}
+    assert status["last_sent_ts"] == "2026-06-24T10:00:00Z"

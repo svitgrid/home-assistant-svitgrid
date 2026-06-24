@@ -244,6 +244,72 @@ class ReadingStore:
         finally:
             conn.close()
 
+    def _live_snapshot_sync(self) -> list[dict]:
+        conn = _connect(self._db_path)
+        try:
+            cur = conn.execute(
+                "SELECT r.inverter_id, r.ts, r.payload FROM readings_raw r "
+                "JOIN (SELECT inverter_id, MAX(ts) mts FROM readings_raw GROUP BY inverter_id) m "
+                "ON r.inverter_id = m.inverter_id AND r.ts = m.mts")
+            return [{"inverterId": r["inverter_id"], "ts": r["ts"],
+                     "payload": json.loads(r["payload"])} for r in cur.fetchall()]
+        finally:
+            conn.close()
+
+    def _today_summary_sync(self, day: str) -> list[dict]:
+        conn = _connect(self._db_path)
+        try:
+            cur = conn.execute(
+                "SELECT inverter_id, sample_count, peaks, energy FROM readings_daily "
+                "WHERE day = ?", (day,))
+            rows = [{"inverterId": r["inverter_id"], "sample_count": r["sample_count"],
+                     "peaks": json.loads(r["peaks"]), "energy": json.loads(r["energy"])}
+                    for r in cur.fetchall()]
+            if rows:
+                return rows
+            # Fallback: aggregate today's raw (daily row not rolled up yet).
+            from . import rollup as _r
+            cur = conn.execute(
+                "SELECT inverter_id, payload FROM readings_raw WHERE ts >= ? AND ts < ?",
+                (day + "T00:00:00Z", day + "T23:59:59Z"))
+            buckets: dict[str, list[dict]] = {}
+            for r in cur.fetchall():
+                buckets.setdefault(r["inverter_id"], []).append(
+                    {"payload": json.loads(r["payload"])})
+            out = []
+            for inv, rws in buckets.items():
+                agg = _r.aggregate(rws)
+                out.append({"inverterId": inv, "sample_count": agg["sample_count"],
+                            "peaks": agg["peaks"], "energy": agg["energy"]})
+            return out
+        finally:
+            conn.close()
+
+    def _history_range_sync(self, inverter_id: str, start_day: str,
+                            end_day: str) -> list[dict]:
+        conn = _connect(self._db_path)
+        try:
+            cur = conn.execute(
+                "SELECT day, sample_count, avgs, peaks, energy FROM readings_daily "
+                "WHERE inverter_id = ? AND day >= ? AND day <= ? ORDER BY day",
+                (inverter_id, start_day, end_day))
+            return [{"day": r["day"], "sample_count": r["sample_count"],
+                     "avgs": json.loads(r["avgs"]), "peaks": json.loads(r["peaks"]),
+                     "energy": json.loads(r["energy"])} for r in cur.fetchall()]
+        finally:
+            conn.close()
+
+    def _sync_status_sync(self) -> dict:
+        conn = _connect(self._db_path)
+        try:
+            counts = {r["sync_state"]: r["c"] for r in conn.execute(
+                "SELECT sync_state, COUNT(*) c FROM readings_raw GROUP BY sync_state")}
+            row = conn.execute(
+                "SELECT MAX(ts) m FROM readings_raw WHERE sync_state='sent'").fetchone()
+            return {"counts": counts, "last_sent_ts": row["m"] if row else None}
+        finally:
+            conn.close()
+
     def _connect_for_test(self) -> sqlite3.Connection:
         return _connect(self._db_path)
 
@@ -279,6 +345,20 @@ class ReadingStore:
 
     async def count_by_state(self) -> dict[str, int]:
         return await self._hass.async_add_executor_job(self._count_by_state_sync)
+
+    async def live_snapshot(self) -> list[dict]:
+        return await self._hass.async_add_executor_job(self._live_snapshot_sync)
+
+    async def today_summary(self, day: str) -> list[dict]:
+        return await self._hass.async_add_executor_job(self._today_summary_sync, day)
+
+    async def history_range(self, inverter_id: str, start_day: str,
+                            end_day: str) -> list[dict]:
+        return await self._hass.async_add_executor_job(
+            self._history_range_sync, inverter_id, start_day, end_day)
+
+    async def sync_status(self) -> dict:
+        return await self._hass.async_add_executor_job(self._sync_status_sync)
 
 
 def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
