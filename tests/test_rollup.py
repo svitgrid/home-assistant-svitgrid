@@ -37,13 +37,29 @@ def test_store_rollup_aggregates_completed_hour(tmp_path):
                         "pvPower": 3000.0, "dailyPvEnergy": 8.0, "batterySoc": 90.0})
     counts = store._rollup_sync("2026-06-24T12:00:00Z")
     assert counts["hours"] == 1
-    rows = store._connect_for_test().execute(
-        "SELECT inverter_id, hour_start, sample_count, avgs, peaks, energy "
-        "FROM readings_hourly").fetchall()
-    assert len(rows) == 1
-    import json
-    assert json.loads(rows[0]["avgs"])["pvPower"] == 2000.0
-    assert json.loads(rows[0]["energy"])["dailyPvEnergy"] == 8.0
+    conn = store._connect_for_test()
+    try:
+        rows = conn.execute(
+            "SELECT inverter_id, hour_start, sample_count, avgs, peaks, energy "
+            "FROM readings_hourly").fetchall()
+        assert len(rows) == 1
+        import json
+        assert json.loads(rows[0]["avgs"])["pvPower"] == 2000.0
+        assert json.loads(rows[0]["energy"])["dailyPvEnergy"] == 8.0
+    finally:
+        conn.close()
+
+
+def test_merge_hourly_field_present_in_one_hour():
+    h1 = {"sample_count": 2, "avgs": {"pvPower": 1000.0}, "peaks": {}, "energy": {}}
+    h2 = {"sample_count": 6, "avgs": {"batterySoc": 50.0}, "peaks": {}, "energy": {}}
+    daily = rollup.merge_hourly([h1, h2])
+    # pvPower only in h1 → weighted only by h1's 2 samples → 1000.0 (NOT 1000*2/8=250)
+    assert daily["avgs"]["pvPower"] == 1000.0
+    # batterySoc only in h2 → 50.0
+    assert daily["avgs"]["batterySoc"] == 50.0
+    # overall sample_count is the raw sum
+    assert daily["sample_count"] == 8
 
 
 def test_prune_drops_old_raw_keeps_daily(tmp_path):

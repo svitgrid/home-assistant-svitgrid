@@ -27,7 +27,6 @@ def aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def merge_hourly(hourly: list[dict[str, Any]]) -> dict[str, Any]:
-    total = sum(h["sample_count"] for h in hourly) or 1
     avgs: dict[str, float] = {}
     fields = {f for h in hourly for f in h["avgs"]}
     for f in fields:
