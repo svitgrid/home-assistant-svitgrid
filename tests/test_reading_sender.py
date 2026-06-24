@@ -120,3 +120,22 @@ async def test_drain_partial_results_marks_each_row(tmp_path):
 
     assert sent == 1
     assert store._count_by_state_sync() == {"sent": 1, "failed": 1}
+
+
+@pytest.mark.asyncio
+async def test_drain_stopped_device_leaves_rows_pending(tmp_path):
+    """HTTP 200 with {stopped: true} must leave rows pending (not mark them sent)
+    so they are retried once the device is re-enabled by the operator."""
+    store = _store(tmp_path)
+    now = "2026-06-24T12:00:00Z"
+    store._append_sync({"inverterId": "inv-1", "timestamp": "2026-06-24T10:00:00Z"})
+    store._append_sync({"inverterId": "inv-1", "timestamp": "2026-06-24T10:00:05Z"})
+    client = _FakeClient({"stopped": True, "stoppedReason": "evicted"})
+    cadence = Cadence(interval_s=10)
+
+    sent = await drain_once(store=store, api_client=client, api_key="k",
+                            now_iso=now, cadence=cadence)
+
+    assert sent == 0
+    assert store._count_by_state_sync() == {"pending": 2}
+    assert cadence.interval_s == 10  # cadence unchanged

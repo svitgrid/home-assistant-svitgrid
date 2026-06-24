@@ -50,6 +50,12 @@ async def drain_once(
         await _maybe(store.mark_failed(keys, now_iso))
         return 0
 
+    if isinstance(body, dict) and body.get("stopped"):
+        _LOGGER.warning(
+            "cloud reports device stopped (%s); leaving %d row(s) pending",
+            body.get("stoppedReason"), len(keys))
+        return 0
+
     # Map per-item results back to rows (results are returned in input order).
     results = body.get("results") if isinstance(body, dict) else None
     sent_keys: list[tuple[str, str]] = []

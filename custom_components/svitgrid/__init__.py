@@ -318,12 +318,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             entry.entry_id,
         )
 
-    store, cadence, sender_task, cancel_rollup = await _start_local_store(
-        hass, api_client, api_key
-    )
-
     readings_tasks: dict[str, asyncio.Task] = {}
     executors_by_inverter: dict[str, YamlDispatcher] = {}
+    store = None
+    sender_task = None
+    cancel_rollup = None
+
+    if inverters:
+        store, cadence, sender_task, cancel_rollup = await _start_local_store(
+            hass, api_client, api_key
+        )
 
     for inv in inverters:
         inverter_id = inv["inverter_id"]

@@ -295,6 +295,11 @@ def test_aggregate_single_sample_returns_it_unchanged_plus_metadata():
     assert agg["batteryPower"] == -200.0
     assert agg["sampleCount"] == 1
     assert agg["periodSec"] == 60
+    # Identity fields must be present so store._append_sync can key on them
+    # without a KeyError being silently swallowed by the publisher loop.
+    assert agg["inverterId"] == "inv-1"
+    assert agg["timestamp"] == "t1"
+    assert agg["source"] == "edge"
 
 
 @pytest.mark.asyncio

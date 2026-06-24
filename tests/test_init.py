@@ -486,6 +486,12 @@ async def test_async_unload_entry_cancels_tasks(hass, enable_custom_integrations
         mqtt_wake_task = state_before["mqtt_wake_task"]
         sender_task = state_before["sender_task"]
 
+        # Replace the cancel_rollup callback with a MagicMock so we can
+        # assert it was called during unload.
+        from unittest.mock import MagicMock
+        cancel_rollup_mock = MagicMock()
+        hass.data[DOMAIN][entry.entry_id]["cancel_rollup"] = cancel_rollup_mock
+
         ok = await async_unload_entry(hass, entry)
         # Let the event loop process the CancelledError injections
         await hass.async_block_till_done()
@@ -501,6 +507,8 @@ async def test_async_unload_entry_cancels_tasks(hass, enable_custom_integrations
     assert mqtt_wake_task.cancelled()
     # the local-store sender task was also cancelled
     assert sender_task.cancelled()
+    # the rollup timer was cancelled via its cancel callback
+    cancel_rollup_mock.assert_called_once()
 
 
 @pytest.mark.asyncio
