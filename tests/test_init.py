@@ -15,9 +15,13 @@ def _stub_local_store_side_effects():
     """The local-store wiring (Task 9) starts a real sender loop and registers
     HTTP views during setup. The YAML-path `hass` fixture has no `hass.http`,
     and a live sender against a mock client is noise — stub both. Tests that
-    care assert on their OWN explicit patches (nested patch wins in-scope)."""
+    care assert on their OWN explicit patches (nested patch wins in-scope).
+    Also stubs register_panel/remove_panel (SP2 Task 2) since the YAML-path
+    hass fixture has no hass.http and panel_custom is a real HA subsystem."""
     with patch("custom_components.svitgrid.run_sender_loop", new_callable=AsyncMock), \
-         patch("custom_components.svitgrid.register_views"):
+         patch("custom_components.svitgrid.register_views"), \
+         patch("custom_components.svitgrid.register_panel", new_callable=AsyncMock), \
+         patch("custom_components.svitgrid.remove_panel"):
         yield
 
 
@@ -362,6 +366,8 @@ async def test_async_setup_entry_starts_publisher_and_poller(hass, enable_custom
             "custom_components.svitgrid.run_sender_loop", new_callable=AsyncMock
         ) as sender,
         patch("custom_components.svitgrid.register_views") as reg_views,
+        patch("custom_components.svitgrid.register_panel", new_callable=AsyncMock),
+        patch("custom_components.svitgrid.remove_panel"),
         patch.object(hass.config_entries, "async_forward_entry_setups", AsyncMock(return_value=True)),
     ):
         ok = await async_setup_entry(hass, entry)
@@ -471,6 +477,8 @@ async def test_async_unload_entry_cancels_tasks(hass, enable_custom_integrations
             "custom_components.svitgrid.run_sender_loop", side_effect=_never_return
         ),
         patch("custom_components.svitgrid.register_views"),
+        patch("custom_components.svitgrid.register_panel", new_callable=AsyncMock),
+        patch("custom_components.svitgrid.remove_panel"),
         patch.object(hass.config_entries, "async_forward_entry_setups", AsyncMock(return_value=True)),
         patch.object(hass.config_entries, "async_unload_platforms", AsyncMock(return_value=True)),
     ):
@@ -571,6 +579,8 @@ async def test_async_setup_entry_passes_preset_entity_map_to_publisher(hass, ena
         ),
         patch("custom_components.svitgrid.run_sender_loop", new_callable=AsyncMock),
         patch("custom_components.svitgrid.register_views"),
+        patch("custom_components.svitgrid.register_panel", new_callable=AsyncMock),
+        patch("custom_components.svitgrid.remove_panel"),
         patch.object(hass.config_entries, "async_forward_entry_setups", AsyncMock(return_value=True)),
     ):
         ok = await async_setup_entry(hass, entry)
@@ -634,6 +644,8 @@ async def test_setup_prefers_options_entity_map(hass, enable_custom_integrations
          patch("custom_components.svitgrid.run_mqtt_wake_loop", AsyncMock()), \
          patch("custom_components.svitgrid.run_sender_loop", AsyncMock()), \
          patch("custom_components.svitgrid.register_views"), \
+         patch("custom_components.svitgrid.register_panel", new_callable=AsyncMock), \
+         patch("custom_components.svitgrid.remove_panel"), \
          patch.object(hass.config_entries, "async_forward_entry_setups", AsyncMock()):
         ok = await async_setup_entry(hass, entry)
         await hass.async_block_till_done()
@@ -672,6 +684,8 @@ async def test_options_change_reloads_entry(hass, enable_custom_integrations):
          patch("custom_components.svitgrid.run_mqtt_wake_loop", AsyncMock()), \
          patch("custom_components.svitgrid.run_sender_loop", AsyncMock()), \
          patch("custom_components.svitgrid.register_views"), \
+         patch("custom_components.svitgrid.register_panel", new_callable=AsyncMock), \
+         patch("custom_components.svitgrid.remove_panel"), \
          patch.object(hass.config_entries, "async_forward_entry_setups", AsyncMock()):
         await async_setup_entry(hass, entry)
         await hass.async_block_till_done()
@@ -685,3 +699,127 @@ async def test_options_change_reloads_entry(hass, enable_custom_integrations):
             await hass.async_block_till_done()
 
     mock_reload.assert_called_once_with(entry.entry_id)
+
+
+# ---------------------------------------------------------------------------
+# Panel wiring assertions (Task 2 / Sub-project 2)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_async_setup_entry_calls_register_panel(hass, enable_custom_integrations):
+    """register_panel must be awaited exactly once during async_setup_entry
+    (after the store stack starts, guarded by panel.py's idempotency flag)."""
+    from unittest.mock import AsyncMock, patch
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+    from custom_components.svitgrid import async_setup_entry
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        version=2,
+        title="Svitgrid (h-panel-test)",
+        data={
+            "api_base": "https://api.example.com",
+            "api_key": "test-key",
+            "edge_device_id": "ed-1",
+            "household_id": "h-panel",
+            "signing_key_id": "ha-home-01",
+            "private_key_pem": "-----BEGIN PRIVATE KEY-----\nFAKE\n-----END PRIVATE KEY-----\n",
+            "public_key_hex": "04" + "a" * 128,
+            "trusted_keys": [],
+            "inverters": [
+                {
+                    "inverter_id": "ha-panel-inv",
+                    "entity_map": {"batterySoc": "sensor.soc"},
+                    "command_recipes": [],
+                    "command_config": {},
+                    "brand": "Deye",
+                    "model": "SG04LP3",
+                    "phases": 3,
+                    "has_battery": True,
+                    "pv_strings": 2,
+                    "preset_id": None,
+                }
+            ],
+        },
+        entry_id="entry-panel-wiring",
+    )
+    entry.add_to_hass(hass)
+
+    with (
+        patch("custom_components.svitgrid.run_readings_loop", new_callable=AsyncMock),
+        patch("custom_components.svitgrid.run_command_loop", new_callable=AsyncMock),
+        patch("custom_components.svitgrid.run_mqtt_wake_loop", new_callable=AsyncMock),
+        patch("custom_components.svitgrid.run_sender_loop", new_callable=AsyncMock),
+        patch("custom_components.svitgrid.register_views"),
+        patch("custom_components.svitgrid.register_panel", new_callable=AsyncMock) as mock_register_panel,
+        patch.object(hass.config_entries, "async_forward_entry_setups", AsyncMock(return_value=True)),
+    ):
+        ok = await async_setup_entry(hass, entry)
+        await hass.async_block_till_done()
+
+    assert ok is True
+    mock_register_panel.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_async_unload_entry_calls_remove_panel(hass, enable_custom_integrations):
+    """remove_panel must be called once during async_unload_entry."""
+    import asyncio
+    from unittest.mock import AsyncMock, patch
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+    from custom_components.svitgrid import async_setup_entry, async_unload_entry
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        version=2,
+        title="Svitgrid (h-unload-panel)",
+        data={
+            "api_base": "https://api.example.com",
+            "api_key": "test-key",
+            "edge_device_id": "ed-1",
+            "household_id": "h-unload",
+            "signing_key_id": "ha-home-01",
+            "private_key_pem": "-----BEGIN PRIVATE KEY-----\nFAKE\n-----END PRIVATE KEY-----\n",
+            "public_key_hex": "04" + "a" * 128,
+            "trusted_keys": [],
+            "inverters": [
+                {
+                    "inverter_id": "ha-unload-inv",
+                    "entity_map": {"batterySoc": "sensor.soc"},
+                    "command_recipes": [],
+                    "command_config": {},
+                    "brand": "Deye",
+                    "model": "SG04LP3",
+                    "phases": 3,
+                    "has_battery": True,
+                    "pv_strings": 2,
+                    "preset_id": None,
+                }
+            ],
+        },
+        entry_id="entry-panel-unload",
+    )
+    entry.add_to_hass(hass)
+
+    async def _never_return(**kwargs):
+        await asyncio.Event().wait()
+
+    with (
+        patch("custom_components.svitgrid.run_readings_loop", side_effect=_never_return),
+        patch("custom_components.svitgrid.run_command_loop", side_effect=_never_return),
+        patch("custom_components.svitgrid.run_mqtt_wake_loop", side_effect=_never_return),
+        patch("custom_components.svitgrid.run_sender_loop", side_effect=_never_return),
+        patch("custom_components.svitgrid.register_views"),
+        patch("custom_components.svitgrid.register_panel", new_callable=AsyncMock),
+        patch("custom_components.svitgrid.remove_panel") as mock_remove_panel,
+        patch.object(hass.config_entries, "async_forward_entry_setups", AsyncMock(return_value=True)),
+        patch.object(hass.config_entries, "async_unload_platforms", AsyncMock(return_value=True)),
+    ):
+        await async_setup_entry(hass, entry)
+        await hass.async_block_till_done()
+        ok = await async_unload_entry(hass, entry)
+        await hass.async_block_till_done()
+
+    assert ok is True
+    mock_remove_panel.assert_called_once()

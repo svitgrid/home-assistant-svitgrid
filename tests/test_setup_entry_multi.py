@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 from custom_components.svitgrid import async_setup_entry, async_migrate_entry
 from custom_components.svitgrid.const import DOMAIN
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -32,6 +32,8 @@ async def test_setup_spawns_one_readings_loop_per_inverter(hass):
          patch("custom_components.svitgrid.run_mqtt_wake_loop", return_value=None), \
          patch("custom_components.svitgrid.run_sender_loop", return_value=None), \
          patch("custom_components.svitgrid.register_views"), \
+         patch("custom_components.svitgrid.register_panel", new_callable=AsyncMock), \
+         patch("custom_components.svitgrid.remove_panel"), \
          patch.object(hass.config_entries, "async_forward_entry_setups", return_value=True):
         await async_setup_entry(hass, entry)
         await hass.async_block_till_done()
@@ -65,6 +67,8 @@ async def test_migrated_v1_entry_sets_up_without_error(hass):
          patch("custom_components.svitgrid.run_mqtt_wake_loop", return_value=None), \
          patch("custom_components.svitgrid.run_sender_loop", return_value=None), \
          patch("custom_components.svitgrid.register_views"), \
+         patch("custom_components.svitgrid.register_panel", new_callable=AsyncMock), \
+         patch("custom_components.svitgrid.remove_panel"), \
          patch.object(hass.config_entries, "async_forward_entry_setups", return_value=True):
         ok = await async_setup_entry(hass, v1)
         await hass.async_block_till_done()

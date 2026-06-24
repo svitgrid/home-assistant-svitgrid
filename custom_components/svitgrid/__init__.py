@@ -40,6 +40,7 @@ from .executors import create_executor
 from .executors.yaml_dispatcher import YamlDispatcher
 from .http_views import register_views
 from .keystore import SvitgridKeystore
+from .panel import register_panel, remove_panel
 from .mqtt_wake import run_loop as run_mqtt_wake_loop
 from .reading_sender import Cadence, run_sender_loop
 from .reading_store import ReadingStore
@@ -246,6 +247,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     store, cadence, sender_task, cancel_rollup = await _start_local_store(
         hass, api_client, state.api_key
     )
+    await register_panel(hass)
 
     readings_task = hass.async_create_background_task(
         run_readings_loop(
@@ -328,6 +330,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         store, cadence, sender_task, cancel_rollup = await _start_local_store(
             hass, api_client, api_key
         )
+        await register_panel(hass)
 
     for inv in inverters:
         inverter_id = inv["inverter_id"]
@@ -402,6 +405,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Cancel background tasks when the user removes the integration."""
     await hass.config_entries.async_unload_platforms(entry, ["sensor"])
+    remove_panel(hass)
     state = hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
     if state is None:
         return True
