@@ -10,6 +10,17 @@ from homeassistant.setup import async_setup_component
 from custom_components.svitgrid.const import DOMAIN
 
 
+@pytest.fixture(autouse=True)
+def _stub_local_store_side_effects():
+    """The local-store wiring (Task 9) starts a real sender loop and registers
+    HTTP views during setup. The YAML-path `hass` fixture has no `hass.http`,
+    and a live sender against a mock client is noise — stub both. Tests that
+    care assert on their OWN explicit patches (nested patch wins in-scope)."""
+    with patch("custom_components.svitgrid.run_sender_loop", new_callable=AsyncMock), \
+         patch("custom_components.svitgrid.register_views"):
+        yield
+
+
 @pytest.mark.asyncio
 async def test_setup_with_no_saved_state_runs_bootstrap(hass, enable_custom_integrations):
     config = {
@@ -347,6 +358,10 @@ async def test_async_setup_entry_starts_publisher_and_poller(hass, enable_custom
         patch(
             "custom_components.svitgrid.run_mqtt_wake_loop", new_callable=AsyncMock
         ),
+        patch(
+            "custom_components.svitgrid.run_sender_loop", new_callable=AsyncMock
+        ) as sender,
+        patch("custom_components.svitgrid.register_views") as reg_views,
         patch.object(hass.config_entries, "async_forward_entry_setups", AsyncMock(return_value=True)),
     ):
         ok = await async_setup_entry(hass, entry)
@@ -362,14 +377,33 @@ async def test_async_setup_entry_starts_publisher_and_poller(hass, enable_custom
     assert entry_state.get("command_task") is not None
     assert entry_state.get("mqtt_wake_task") is not None
 
+    # local store wiring: store created, sender loop + rollup timer started,
+    # read views registered.
+    from custom_components.svitgrid.reading_store import ReadingStore
+
+    assert isinstance(entry_state.get("store"), ReadingStore)
+    assert entry_state.get("sender_task") is not None
+    assert callable(entry_state.get("cancel_rollup"))
+    assert sender.call_count == 1
+    assert reg_views.call_count == 1
+
     # run_loop coroutines were scheduled (called once each to get the coroutine)
     assert rp.call_count == 1
     assert cp.call_count == 1
 
-    # readings loop received the right api_key and inverter_id
+    # readings loop received the right inverter_id, store, and cadence
+    # (api_key/api_client moved to the sender; the publisher no longer
+    # talks to the cloud).
     rp_kwargs = rp.call_args.kwargs
-    assert rp_kwargs["api_key"] == "test-key"
     assert rp_kwargs["inverter_id"] == "ha-xyz"
+    assert "api_key" not in rp_kwargs
+    assert "api_client" not in rp_kwargs
+    assert rp_kwargs["store"] is entry_state["store"]
+    assert "cadence" in rp_kwargs
+
+    # the sender received the api_key + api_client instead
+    sender_kwargs = sender.call_args.kwargs
+    assert sender_kwargs["api_key"] == "test-key"
 
     # command loop received keystore=None and entry_data with the key material
     cp_kwargs = cp.call_args.kwargs
@@ -433,6 +467,10 @@ async def test_async_unload_entry_cancels_tasks(hass, enable_custom_integrations
         patch(
             "custom_components.svitgrid.run_mqtt_wake_loop", side_effect=_never_return
         ),
+        patch(
+            "custom_components.svitgrid.run_sender_loop", side_effect=_never_return
+        ),
+        patch("custom_components.svitgrid.register_views"),
         patch.object(hass.config_entries, "async_forward_entry_setups", AsyncMock(return_value=True)),
         patch.object(hass.config_entries, "async_unload_platforms", AsyncMock(return_value=True)),
     ):
@@ -446,6 +484,7 @@ async def test_async_unload_entry_cancels_tasks(hass, enable_custom_integrations
         readings_tasks = list(state_before["readings_tasks"].values())
         command_task = state_before["command_task"]
         mqtt_wake_task = state_before["mqtt_wake_task"]
+        sender_task = state_before["sender_task"]
 
         ok = await async_unload_entry(hass, entry)
         # Let the event loop process the CancelledError injections
@@ -460,6 +499,8 @@ async def test_async_unload_entry_cancels_tasks(hass, enable_custom_integrations
     # shared command and mqtt-wake tasks were cancelled
     assert command_task.cancelled()
     assert mqtt_wake_task.cancelled()
+    # the local-store sender task was also cancelled
+    assert sender_task.cancelled()
 
 
 @pytest.mark.asyncio
@@ -520,6 +561,8 @@ async def test_async_setup_entry_passes_preset_entity_map_to_publisher(hass, ena
         patch(
             "custom_components.svitgrid.run_mqtt_wake_loop", new_callable=AsyncMock
         ),
+        patch("custom_components.svitgrid.run_sender_loop", new_callable=AsyncMock),
+        patch("custom_components.svitgrid.register_views"),
         patch.object(hass.config_entries, "async_forward_entry_setups", AsyncMock(return_value=True)),
     ):
         ok = await async_setup_entry(hass, entry)
@@ -581,6 +624,8 @@ async def test_setup_prefers_options_entity_map(hass, enable_custom_integrations
     with patch("custom_components.svitgrid.run_readings_loop", _fake_loop), \
          patch("custom_components.svitgrid.run_command_loop", AsyncMock()), \
          patch("custom_components.svitgrid.run_mqtt_wake_loop", AsyncMock()), \
+         patch("custom_components.svitgrid.run_sender_loop", AsyncMock()), \
+         patch("custom_components.svitgrid.register_views"), \
          patch.object(hass.config_entries, "async_forward_entry_setups", AsyncMock()):
         ok = await async_setup_entry(hass, entry)
         await hass.async_block_till_done()
@@ -617,6 +662,8 @@ async def test_options_change_reloads_entry(hass, enable_custom_integrations):
     with patch("custom_components.svitgrid.run_readings_loop", AsyncMock()), \
          patch("custom_components.svitgrid.run_command_loop", AsyncMock()), \
          patch("custom_components.svitgrid.run_mqtt_wake_loop", AsyncMock()), \
+         patch("custom_components.svitgrid.run_sender_loop", AsyncMock()), \
+         patch("custom_components.svitgrid.register_views"), \
          patch.object(hass.config_entries, "async_forward_entry_setups", AsyncMock()):
         await async_setup_entry(hass, entry)
         await hass.async_block_till_done()

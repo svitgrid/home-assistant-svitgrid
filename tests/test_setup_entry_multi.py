@@ -30,6 +30,8 @@ async def test_setup_spawns_one_readings_loop_per_inverter(hass):
     with patch("custom_components.svitgrid.run_readings_loop", side_effect=_fake_readings_loop), \
          patch("custom_components.svitgrid.run_command_loop", return_value=None), \
          patch("custom_components.svitgrid.run_mqtt_wake_loop", return_value=None), \
+         patch("custom_components.svitgrid.run_sender_loop", return_value=None), \
+         patch("custom_components.svitgrid.register_views"), \
          patch.object(hass.config_entries, "async_forward_entry_setups", return_value=True):
         await async_setup_entry(hass, entry)
         await hass.async_block_till_done()
@@ -61,6 +63,8 @@ async def test_migrated_v1_entry_sets_up_without_error(hass):
     with patch("custom_components.svitgrid.run_readings_loop", return_value=None), \
          patch("custom_components.svitgrid.run_command_loop", return_value=None), \
          patch("custom_components.svitgrid.run_mqtt_wake_loop", return_value=None), \
+         patch("custom_components.svitgrid.run_sender_loop", return_value=None), \
+         patch("custom_components.svitgrid.register_views"), \
          patch.object(hass.config_entries, "async_forward_entry_setups", return_value=True):
         ok = await async_setup_entry(hass, v1)
         await hass.async_block_till_done()

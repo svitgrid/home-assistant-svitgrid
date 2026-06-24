@@ -25,19 +25,76 @@ from .activity import ActivityTracker
 from .api_client import SvitgridApiClient
 from .bootstrap import run_first_time
 from .command_poller import run_loop as run_command_loop
-from .executors.yaml_dispatcher import YamlDispatcher
-from .mqtt_wake import run_loop as run_mqtt_wake_loop
 from .const import (
     COMMAND_POLL_INTERVAL_S,
     DOMAIN,
+    HOURLY_RETENTION_S,
+    RAW_RETENTION_S,
+    READINGS_DB_FILE,
+    READINGS_DB_SUBDIR,
     READINGS_INTERVAL_S,
     REQUIRED_FIELDS,
+    ROLLUP_INTERVAL_S,
 )
 from .executors import create_executor
+from .executors.yaml_dispatcher import YamlDispatcher
+from .http_views import register_views
 from .keystore import SvitgridKeystore
+from .mqtt_wake import run_loop as run_mqtt_wake_loop
+from .reading_sender import Cadence, run_sender_loop
+from .reading_store import ReadingStore
 from .readings_publisher import run_loop as run_readings_loop
 
 _LOGGER = logging.getLogger(__name__)
+
+
+async def _start_local_store(hass: HomeAssistant, api_client, api_key: str):
+    """Create the per-entry local store, start the sender + rollup timer, and
+    register the read views once. Returns (store, cadence, sender_task,
+    cancel_rollup)."""
+    import os
+    from datetime import UTC, datetime, timedelta
+
+    from homeassistant.helpers.event import async_track_time_interval
+
+    db_dir = hass.config.path(READINGS_DB_SUBDIR)
+    # os.makedirs's 2nd positional arg is `mode`, not `exist_ok`; bind exist_ok
+    # as a keyword via partial so a pre-existing dir doesn't raise.
+    from functools import partial
+
+    await hass.async_add_executor_job(partial(os.makedirs, db_dir, exist_ok=True))
+    store = ReadingStore(hass, os.path.join(db_dir, READINGS_DB_FILE))
+    cadence = Cadence()
+
+    # Register the read HTTP views once per hass. A second config entry would
+    # otherwise crash on duplicate view registration. SP1 limitation: the panel
+    # serves the FIRST entry's store.
+    hass.data.setdefault(DOMAIN, {})
+    if not hass.data[DOMAIN].get("_views_registered"):
+        register_views(hass, store)
+        hass.data[DOMAIN]["_views_registered"] = True
+
+    sender_task = hass.async_create_background_task(
+        run_sender_loop(
+            hass=hass, store=store, api_client=api_client,
+            api_key=api_key, cadence=cadence,
+        ),
+        name="svitgrid_reading_sender",
+    )
+
+    async def _rollup_tick(_now=None):
+        now_iso = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+        try:
+            await store.rollup(now_iso)
+            await store.prune(now_iso, RAW_RETENTION_S, HOURLY_RETENTION_S)
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception("rollup/prune failed")
+
+    cancel_rollup = async_track_time_interval(
+        hass, _rollup_tick, timedelta(seconds=ROLLUP_INTERVAL_S)
+    )
+
+    return store, cadence, sender_task, cancel_rollup
 
 
 def _validate_entity_map(value: dict) -> dict:
@@ -149,7 +206,8 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     device_id = conf["device_id"]
     signing_key_id = conf["signing_key_id"]
     entity_map = conf["entity_map"]
-    readings_interval = conf["readings_interval_seconds"]
+    # readings_interval_seconds is now governed by the shared Cadence holder
+    # (sender-driven) rather than a static config value.
     command_interval = conf["command_poll_interval_seconds"]
 
     session = aiohttp_client.async_get_clientsession(hass)
@@ -185,14 +243,17 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     # resolves the real inverter ID from the bootstrap response.
     inverter_id = device_id
 
+    store, cadence, sender_task, cancel_rollup = await _start_local_store(
+        hass, api_client, state.api_key
+    )
+
     readings_task = hass.async_create_background_task(
         run_readings_loop(
             hass=hass,
-            api_client=api_client,
-            api_key=state.api_key,
+            store=store,
+            cadence=cadence,
             inverter_id=inverter_id,
             entity_map=entity_map,
-            interval_s=readings_interval,
         ),
         name="svitgrid_readings_publisher",
     )
@@ -211,13 +272,17 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     )
 
     async def _on_stop(_event: Event) -> None:
-        for task in (readings_task, poller_task):
+        cancel_rollup()
+        for task in (readings_task, poller_task, sender_task):
             task.cancel()
-        await asyncio.gather(readings_task, poller_task, return_exceptions=True)
+        await asyncio.gather(
+            readings_task, poller_task, sender_task, return_exceptions=True
+        )
 
     hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _on_stop)
 
-    hass.data[DOMAIN] = {
+    hass.data.setdefault(DOMAIN, {})
+    hass.data[DOMAIN].update({
         "session": session,
         "api_client": api_client,
         "keystore": keystore,
@@ -225,7 +290,10 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         "trusted_public_keys_hex": trusted_public_keys_hex,
         "readings_task": readings_task,
         "poller_task": poller_task,
-    }
+        "store": store,
+        "sender_task": sender_task,
+        "cancel_rollup": cancel_rollup,
+    })
     _LOGGER.info("Svitgrid integration started (device_id=%s)", device_id)
     return True
 
@@ -250,6 +318,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             entry.entry_id,
         )
 
+    store, cadence, sender_task, cancel_rollup = await _start_local_store(
+        hass, api_client, api_key
+    )
+
     readings_tasks: dict[str, asyncio.Task] = {}
     executors_by_inverter: dict[str, YamlDispatcher] = {}
 
@@ -264,8 +336,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         readings_tasks[inverter_id] = hass.async_create_background_task(
             run_readings_loop(
                 hass=hass,
-                api_client=api_client,
-                api_key=api_key,
+                store=store,
+                cadence=cadence,
                 inverter_id=inverter_id,
                 entity_map=entity_map,
                 activity=activity,
@@ -310,6 +382,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "executors_by_inverter": executors_by_inverter,
         "activity": activity,
         "entry_data": dict(data),
+        "store": store,
+        "sender_task": sender_task,
+        "cancel_rollup": cancel_rollup,
     }
     await hass.config_entries.async_forward_entry_setups(entry, ["sensor"])
     _LOGGER.info(
@@ -329,8 +404,11 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     for task in (state.get("readings_tasks") or {}).values():
         if task and not task.done():
             task.cancel()
-    for key in ("command_task", "mqtt_wake_task"):
+    for key in ("command_task", "mqtt_wake_task", "sender_task"):
         task = state.get(key)
         if task and not task.done():
             task.cancel()
+    cancel_rollup = state.get("cancel_rollup")
+    if cancel_rollup:
+        cancel_rollup()
     return True
