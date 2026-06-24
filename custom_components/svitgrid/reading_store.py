@@ -171,7 +171,91 @@ class ReadingStore:
         finally:
             conn.close()
 
+    def _hour_of(self, ts: str) -> str:
+        return ts[:13] + ":00:00Z"   # "2026-06-24T10:..." → "2026-06-24T10:00:00Z"
+
+    def _day_of(self, ts: str) -> str:
+        return ts[:10]               # "2026-06-24"
+
+    def _rollup_sync(self, now_iso: str) -> dict[str, int]:
+        from . import rollup as _r
+        cur_hour = self._hour_of(now_iso)
+        cur_day = self._day_of(now_iso)
+        conn = _connect(self._db_path)
+        hours = days = 0
+        try:
+            # COMPLETED hours: group raw rows whose hour < current hour
+            cur = conn.execute(
+                "SELECT inverter_id, ts, payload FROM readings_raw ORDER BY inverter_id, ts")
+            buckets: dict[tuple[str, str], list[dict]] = {}
+            for r in cur.fetchall():
+                hour = self._hour_of(r["ts"])
+                if hour >= cur_hour:
+                    continue
+                buckets.setdefault((r["inverter_id"], hour), []).append(
+                    {"payload": json.loads(r["payload"])})
+            for (inv, hour), rows in buckets.items():
+                agg = _r.aggregate(rows)
+                conn.execute(
+                    "INSERT OR REPLACE INTO readings_hourly "
+                    "(inverter_id, hour_start, sample_count, avgs, peaks, energy) "
+                    "VALUES (?,?,?,?,?,?)",
+                    (inv, hour, agg["sample_count"], json.dumps(agg["avgs"]),
+                     json.dumps(agg["peaks"]), json.dumps(agg["energy"])))
+                hours += 1
+            # COMPLETED days: group hourly rows whose day < current day
+            cur = conn.execute(
+                "SELECT inverter_id, hour_start, sample_count, avgs, peaks, energy "
+                "FROM readings_hourly")
+            dbuckets: dict[tuple[str, str], list[dict]] = {}
+            for r in cur.fetchall():
+                day = self._day_of(r["hour_start"])
+                if day >= cur_day:
+                    continue
+                dbuckets.setdefault((r["inverter_id"], day), []).append({
+                    "sample_count": r["sample_count"],
+                    "avgs": json.loads(r["avgs"]), "peaks": json.loads(r["peaks"]),
+                    "energy": json.loads(r["energy"])})
+            for (inv, day), hrows in dbuckets.items():
+                agg = _r.merge_hourly(hrows)
+                conn.execute(
+                    "INSERT OR REPLACE INTO readings_daily "
+                    "(inverter_id, day, sample_count, avgs, peaks, energy) "
+                    "VALUES (?,?,?,?,?,?)",
+                    (inv, day, agg["sample_count"], json.dumps(agg["avgs"]),
+                     json.dumps(agg["peaks"]), json.dumps(agg["energy"])))
+                days += 1
+            conn.commit()
+            return {"hours": hours, "days": days}
+        finally:
+            conn.close()
+
+    def _prune_sync(self, now_iso: str, raw_retention_s: int,
+                    hourly_retention_s: int) -> dict[str, int]:
+        raw_floor = self._cap_boundary(now_iso, raw_retention_s)
+        hourly_floor = self._cap_boundary(now_iso, hourly_retention_s)
+        conn = _connect(self._db_path)
+        try:
+            c1 = conn.execute("DELETE FROM readings_raw WHERE ts < ?", (raw_floor,))
+            c2 = conn.execute("DELETE FROM readings_hourly WHERE hour_start < ?",
+                              (hourly_floor,))
+            conn.commit()
+            return {"raw": c1.rowcount, "hourly": c2.rowcount}
+        finally:
+            conn.close()
+
+    def _connect_for_test(self) -> sqlite3.Connection:
+        return _connect(self._db_path)
+
     # ── async wrappers ────────────────────────────────────────────────
+    async def rollup(self, now_iso: str) -> dict[str, int]:
+        return await self._hass.async_add_executor_job(self._rollup_sync, now_iso)
+
+    async def prune(self, now_iso: str, raw_retention_s: int,
+                    hourly_retention_s: int) -> dict[str, int]:
+        return await self._hass.async_add_executor_job(
+            self._prune_sync, now_iso, raw_retention_s, hourly_retention_s)
+
     async def get_sendable(self, now_iso: str, cap_s: int, limit: int) -> list[dict]:
         return await self._hass.async_add_executor_job(
             self._get_sendable_sync, now_iso, cap_s, limit)
