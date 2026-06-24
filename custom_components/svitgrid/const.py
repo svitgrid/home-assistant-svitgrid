@@ -123,3 +123,27 @@ DISPATCHABLE_COMMANDS = frozenset({
 PAIRING_POLL_INTERVAL_S = 2          # HA polls /status this often
 PAIRING_MAX_POLL_DURATION_S = 300    # Stop polling after this; matches server TTL
 DEFAULT_API_BASE = "https://api-334146986852.us-central1.run.app"
+
+# ── Local readings store (Sub-project 1) ──────────────────────────────
+READINGS_DB_SUBDIR = "svitgrid"
+READINGS_DB_FILE = "readings.db"
+
+BACKFILL_CAP_S = 48 * 3600          # don't backfill readings older than this
+RAW_RETENTION_S = 14 * 86400        # prune raw rows older than 14 days
+HOURLY_RETENTION_S = 2 * 365 * 86400  # prune hourly rows older than ~2 years
+SENDER_TICK_S = 5                   # sender wake interval when caught up
+ROLLUP_INTERVAL_S = 3600            # roll-up + prune cadence
+INGEST_BATCH_MAX = 50              # cloud batch endpoint cap
+
+# Fields aggregated into long-term roll-ups. Raw rows keep the FULL payload
+# (every field) for RAW_RETENTION_S; only these are summarized for the long tail.
+INSTANTANEOUS_FIELDS = frozenset({
+    "batterySoc", "batteryPower", "batteryVoltage", "batteryCurrent",
+    "batteryTemperature", "gridPower", "gridFrequency", "loadPower",
+    "pvPower", "inverterTemperature",
+})
+DAILY_COUNTER_FIELDS = frozenset({
+    "dailyPvEnergy", "dailyGridImportEnergy", "dailyGridExportEnergy",
+    "dailyLoadEnergy",
+})
+PEAK_FIELDS = frozenset({"pvPower", "loadPower"})
