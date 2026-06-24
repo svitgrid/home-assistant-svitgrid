@@ -7,13 +7,20 @@ from typing import Any
 
 from homeassistant.core import HomeAssistant
 
+# Tracks db_paths whose schema has already been created in this process so that
+# _create_schema (DDL) is not executed on every connection open.
+_INITIALIZED: set[str] = set()
+
 
 def _connect(db_path: str) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path, timeout=30)
     conn.row_factory = sqlite3.Row
+    # PRAGMAs are connection-scoped; always apply them.
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
-    _create_schema(conn)
+    if db_path not in _INITIALIZED:
+        _create_schema(conn)
+        _INITIALIZED.add(db_path)
     return conn
 
 
@@ -72,6 +79,10 @@ class ReadingStore:
         inverter_id = reading["inverterId"]
         conn = _connect(self._db_path)
         try:
+            # INSERT OR REPLACE resets sync_state='pending' and attempts=0 on
+            # collision. This is intentional: the publisher emits each
+            # (inverter_id, ts) exactly once, so a replace means a fresh
+            # capture — not a re-queue of partially-synced state.
             conn.execute(
                 "INSERT OR REPLACE INTO readings_raw "
                 "(inverter_id, ts, payload, sync_state, attempts) "

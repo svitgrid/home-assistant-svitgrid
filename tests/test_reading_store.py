@@ -1,5 +1,3 @@
-import json
-
 from custom_components.svitgrid.reading_store import ReadingStore
 
 
