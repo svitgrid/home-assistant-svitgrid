@@ -268,10 +268,12 @@ class ReadingStore:
             if rows:
                 return rows
             # Fallback: aggregate today's raw (daily row not rolled up yet).
+            from datetime import datetime, timedelta
             from . import rollup as _r
+            next_day = (datetime.strptime(day, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
             cur = conn.execute(
                 "SELECT inverter_id, payload FROM readings_raw WHERE ts >= ? AND ts < ?",
-                (day + "T00:00:00Z", day + "T23:59:59Z"))
+                (day + "T00:00:00Z", next_day + "T00:00:00Z"))
             buckets: dict[str, list[dict]] = {}
             for r in cur.fetchall():
                 buckets.setdefault(r["inverter_id"], []).append(

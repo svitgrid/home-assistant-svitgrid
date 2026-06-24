@@ -107,3 +107,88 @@ def test_sync_status_counts_and_last_sent(tmp_path):
     status = store._sync_status_sync()
     assert status["counts"] == {"sent": 1, "pending": 1}
     assert status["last_sent_ts"] == "2026-06-24T10:00:00Z"
+
+
+def test_today_summary_returns_daily_row_when_present(tmp_path):
+    store = _store(tmp_path)
+    import json
+    conn = store._connect_for_test()
+    try:
+        conn.execute(
+            "INSERT INTO readings_daily (inverter_id, day, sample_count, avgs, peaks, energy) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                "inv-1",
+                "2026-06-24",
+                42,
+                json.dumps({}),
+                json.dumps({"pvPower": 3000.0}),
+                json.dumps({"dailyPvEnergy": 8.0}),
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = store._today_summary_sync("2026-06-24")
+    assert len(result) == 1
+    row = result[0]
+    assert row["inverterId"] == "inv-1"
+    assert row["sample_count"] == 42
+    assert row["peaks"]["pvPower"] == 3000.0
+    assert row["energy"]["dailyPvEnergy"] == 8.0
+
+
+def test_today_summary_falls_back_to_raw_aggregate(tmp_path):
+    store = _store(tmp_path)
+    # No daily row — only raw readings (including one at 23:59:59 to verify Fix 1).
+    store._append_sync({
+        "inverterId": "inv-1",
+        "timestamp": "2026-06-24T10:00:00Z",
+        "pvPower": 1000.0,
+        "dailyPvEnergy": 5.0,
+    })
+    store._append_sync({
+        "inverterId": "inv-1",
+        "timestamp": "2026-06-24T23:59:59Z",
+        "pvPower": 3000.0,
+        "dailyPvEnergy": 8.0,
+    })
+
+    result = store._today_summary_sync("2026-06-24")
+    assert len(result) == 1
+    row = result[0]
+    assert row["inverterId"] == "inv-1"
+    assert row["sample_count"] == 2
+    assert row["peaks"]["pvPower"] == 3000.0
+    assert row["energy"]["dailyPvEnergy"] == 8.0
+
+
+def test_history_range_orders_and_bounds(tmp_path):
+    store = _store(tmp_path)
+    import json
+    conn = store._connect_for_test()
+    try:
+        rows_to_insert = [
+            ("inv-1", "2026-06-22"),
+            ("inv-1", "2026-06-23"),
+            ("inv-1", "2026-06-24"),
+            ("inv-1", "2026-06-20"),   # out of range
+            ("inv-2", "2026-06-23"),   # different inverter
+        ]
+        for inv_id, day in rows_to_insert:
+            conn.execute(
+                "INSERT INTO readings_daily (inverter_id, day, sample_count, avgs, peaks, energy) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (inv_id, day, 10, json.dumps({}), json.dumps({}), json.dumps({})),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = store._history_range_sync("inv-1", "2026-06-22", "2026-06-24")
+    assert len(result) == 3
+    days_returned = [r["day"] for r in result]
+    assert days_returned == ["2026-06-22", "2026-06-23", "2026-06-24"]
+    # Out-of-range day and other inverter must not appear.
+    assert "2026-06-20" not in days_returned
