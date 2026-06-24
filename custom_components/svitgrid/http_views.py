@@ -55,7 +55,7 @@ class SvitgridHistoryView(_BaseView):
 
 class SvitgridSyncStatusView(_BaseView):
     url = "/api/svitgrid/sync-status"
-    name = "api:svitgrid:sync_status"
+    name = "api:svitgrid:sync-status"
 
     async def get(self, request):
         return self.json(await self._store.sync_status())
