@@ -190,6 +190,34 @@ class SvitgridApiClient:
             if resp.status >= 400:
                 raise CommandAckFailed(f"HTTP {resp.status}: {await _err(resp)}")
 
+    async def push_readings_batch(
+        self, api_key: str, readings: list[dict[str, Any]]
+    ) -> dict[str, Any] | None:
+        """POST a batch of readings. Returns parsed body on 2xx, None on 5xx
+        (transient), raises ReadingRejected on 4xx (permanent)."""
+        url = f"{self._base}/api/v1/ingest/readings"
+        async with self._session.post(
+            url, headers={"x-api-key": api_key}, json={"readings": readings}
+        ) as resp:
+            if resp.status >= 500:
+                _LOGGER.warning(
+                    "push_readings_batch failed (transient): status=%s body=%s",
+                    resp.status,
+                    await _err(resp),
+                )
+                return None
+            if resp.status >= 400:
+                body = await _err(resp)
+                _LOGGER.warning(
+                    "push_readings_batch rejected: status=%s body=%s", resp.status, body
+                )
+                raise ReadingRejected(resp.status, body)
+            try:
+                return await resp.json()
+            except Exception:  # noqa: BLE001
+                _LOGGER.debug("push_readings_batch: 2xx with non-JSON body")
+                return {}
+
     async def add_inverter(
         self,
         *,

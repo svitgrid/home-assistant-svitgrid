@@ -416,3 +416,33 @@ class TestAddInverter:
                 inverter={"brand": "Foo"},
             )
         session.post.assert_not_called()
+
+
+@pytest.mark.asyncio
+class TestPushReadingsBatch:
+    async def test_posts_readings_array_and_returns_body(self):
+        session, _ = _mock_session_with_response(
+            200, {"results": [{"ok": True, "inverterId": "inv-1"}], "ingestIntervalMs": 60000}
+        )
+        client = SvitgridApiClient(session, api_base="https://api.example")
+        body = await client.push_readings_batch(
+            api_key="k" * 64,
+            readings=[{"inverterId": "inv-1", "timestamp": "2026-06-24T10:00:00Z"}],
+        )
+        assert body["ingestIntervalMs"] == 60000
+        call = session.post.call_args
+        assert call.args[0].endswith("/api/v1/ingest/readings")
+        assert call.kwargs["json"] == {
+            "readings": [{"inverterId": "inv-1", "timestamp": "2026-06-24T10:00:00Z"}]
+        }
+
+    async def test_5xx_returns_none(self):
+        session, _ = _mock_session_with_response(503, {})
+        client = SvitgridApiClient(session, api_base="https://api.example")
+        assert await client.push_readings_batch(api_key="k" * 64, readings=[]) is None
+
+    async def test_4xx_raises_reading_rejected(self):
+        session, _ = _mock_session_with_response(400, {"error": "bad"})
+        client = SvitgridApiClient(session, api_base="https://api.example")
+        with pytest.raises(ReadingRejected):
+            await client.push_readings_batch(api_key="k" * 64, readings=[{"x": 1}])
