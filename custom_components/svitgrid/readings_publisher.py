@@ -1,8 +1,10 @@
 """Readings publisher loop: builds a payload from current HA entity states
-and POSTs it to /api/v1/ingest/reading. Sleep cadence is adaptive — the
-server response carries `ingestIntervalMs` which the publisher uses to
-size the next sleep. Matches the edge connector + mobile harvester:
-60s during active sessions, 300s during idle.
+and CAPTURES it into the local SQLite store (capture-then-drain). A separate
+sender (reading_sender.py) drains the store to the cloud and owns the adaptive
+cadence via a shared `Cadence` holder. The publisher reads its produce
+interval from `cadence.interval_s` (clamped) — it no longer talks to the cloud.
+Matches the edge connector + mobile harvester: 60s during active sessions,
+300s during idle.
 
 We read state on-demand rather than maintaining a state_changed
 subscription — simpler and sufficient at these cadences."""
@@ -12,12 +14,15 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.core import HomeAssistant
 
-from .api_client import DeviceStopped, ReadingRejected, SvitgridApiClient
-from .const import CORE_PAYLOAD_FIELDS, READING_SOURCE, READINGS_INTERVAL_S
+from .const import CORE_PAYLOAD_FIELDS, READING_SOURCE
+
+if TYPE_CHECKING:
+    from .reading_sender import Cadence
+    from .reading_store import ReadingStore
 
 # Sane bounds for the server-driven cadence. Floor prevents a misbehaving
 # server from spinning us in a 1ms tight loop; ceiling prevents the same
@@ -159,21 +164,15 @@ def _aggregate_samples(
     return agg
 
 
-def _next_interval_s(response: dict[str, Any] | None) -> float:
-    """Pick the next sleep duration based on the server's ingestIntervalMs.
-    Falls back to default on missing field / null response; clamps to
-    [floor, ceiling] to absorb pathological server values."""
-    if response is None:
-        return float(_DEFAULT_INTERVAL_S)
-    raw_ms = response.get("ingestIntervalMs")
-    if not isinstance(raw_ms, (int, float)):
-        return float(_DEFAULT_INTERVAL_S)
-    seconds = raw_ms / 1000.0
+def _clamp_interval(seconds: float) -> float:
+    """Clamp a produce interval to [floor, ceiling]. The cadence value comes
+    from the shared `Cadence` holder (updated by the sender); clamping here
+    keeps a misbehaving cadence value from freezing or tight-looping us."""
     if seconds < _INTERVAL_FLOOR_S:
         return float(_INTERVAL_FLOOR_S)
     if seconds > _INTERVAL_CEILING_S:
         return float(_INTERVAL_CEILING_S)
-    return seconds
+    return float(seconds)
 
 
 _SUMMARY_FIELDS = ("pvPower", "loadPower", "batterySoc", "gridPower", "batteryPower")
@@ -188,37 +187,35 @@ def _summary_of(payload: dict[str, Any]) -> dict[str, Any]:
 async def run_loop(
     *,
     hass: HomeAssistant,
-    api_client: SvitgridApiClient,
-    api_key: str,
+    store: "ReadingStore",
+    cadence: "Cadence",
     inverter_id: str,
     entity_map: dict[str, str],
-    # interval_s kept for backwards-compat with callers; ignored once the
-    # server returns ingestIntervalMs.
-    interval_s: int = READINGS_INTERVAL_S,
     activity: Any = None,  # ActivityTracker; None acceptable for older callers
 ) -> None:
-    """Long-running coroutine.
+    """Long-running coroutine — capture-then-drain producer.
 
-    Two cadence modes, decided after each push by the server's
-    ingestIntervalMs response:
+    Each produced reading is appended to the local `store`; the separate
+    sender drains it to the cloud. The produce interval comes from the shared
+    `cadence.interval_s` (clamped), which the sender updates from the server's
+    ingestIntervalMs.
 
-    - Fast (<120s): push a single snapshot, then sleep the full interval.
+    Two cadence modes, decided by the (clamped) cadence value:
+
+    - Fast (<120s): capture a single snapshot, then sleep the full interval.
       Matches active sessions / pending commands.
-    - Idle (>=120s): sample every 60s for the duration, then push ONE
-      aggregated payload with sampleCount + periodSec. Same Firestore
-      write count as the fast path's per-snapshot approach, but with
-      better data (true period averages, not single-moment snapshots).
+    - Idle (>=120s): sample every 60s for the duration, then capture ONE
+      aggregated payload with sampleCount + periodSec. Better data (true
+      period averages, not single-moment snapshots).
 
     Exits when `hass.is_stopping` becomes True."""
     _LOGGER.info(
-        "Readings publisher started (adaptive cadence; "
-        "default=%ss, floor=%ss, ceiling=%ss, aggregation>=%ss)",
-        _DEFAULT_INTERVAL_S, _INTERVAL_FLOOR_S, _INTERVAL_CEILING_S,
-        _AGGREGATION_THRESHOLD_S,
+        "Readings publisher started (capture-then-drain; "
+        "floor=%ss, ceiling=%ss, aggregation>=%ss)",
+        _INTERVAL_FLOOR_S, _INTERVAL_CEILING_S, _AGGREGATION_THRESHOLD_S,
     )
-    # Cadence carries across iterations. Initial value = default until
-    # we receive the first response.
-    next_sleep_s = float(_DEFAULT_INTERVAL_S)
+    # Cadence carries across iterations. Initial value = clamped holder value.
+    next_sleep_s = _clamp_interval(float(cadence.interval_s))
 
     while not hass.is_stopping:
         try:
@@ -247,21 +244,14 @@ async def run_loop(
                                 entities={f: entity_map.get(f) for f in missing},
                             )
                         continue
-                    response = await api_client.push_reading(
-                        api_key=api_key, reading=aggregated,
-                    )
-                    next_sleep_s = _next_interval_s(response)
+                    await store.append(aggregated)
+                    next_sleep_s = _clamp_interval(float(cadence.interval_s))
                     if activity is not None:
-                        if response is not None:
-                            activity.record_ingest_success(
-                                sample_count=len(samples),
-                                period_sec=elapsed,
-                                summary=_summary_of(aggregated),
-                            )
-                        else:
-                            activity.record_ingest_failure(
-                                reason="push_reading returned no response",
-                            )
+                        activity.record_ingest_success(
+                            sample_count=len(samples),
+                            period_sec=elapsed,
+                            summary=_summary_of(aggregated),
+                        )
             else:
                 # Active path — single snapshot, gate, then sleep.
                 payload = build_reading_payload(
@@ -281,48 +271,15 @@ async def run_loop(
                         )
                     await asyncio.sleep(next_sleep_s)
                     continue
-                response = await api_client.push_reading(
-                    api_key=api_key, reading=payload,
-                )
-                next_sleep_s = _next_interval_s(response)
+                await store.append(payload)
+                next_sleep_s = _clamp_interval(float(cadence.interval_s))
                 if activity is not None:
-                    if response is not None:
-                        activity.record_ingest_success(
-                            sample_count=1,
-                            period_sec=int(next_sleep_s),
-                            summary=_summary_of(payload),
-                        )
-                    else:
-                        activity.record_ingest_failure(
-                            reason="push_reading returned no response",
-                        )
+                    activity.record_ingest_success(
+                        sample_count=1,
+                        period_sec=int(next_sleep_s),
+                        summary=_summary_of(payload),
+                    )
                 await asyncio.sleep(next_sleep_s)
-        except DeviceStopped as e:
-            _LOGGER.warning(
-                "Readings publisher: server signaled stop (%s); stopping loop. "
-                "Operator can re-enable the device and you can reload the "
-                "integration to resume.",
-                e.reason,
-            )
-            return
-        except ReadingRejected as exc:
-            # The server rejected the payload itself (4xx) — usually missing /
-            # invalid sensors that local gating didn't catch, or a schema the
-            # add-on hasn't caught up to. Re-POSTing the same payload every
-            # 60s just burns requests it keeps rejecting, so park at the
-            # ceiling interval until config changes. The loop keeps running so
-            # it recovers automatically once the underlying issue is fixed.
-            _LOGGER.warning(
-                "Readings publisher: server rejected the payload (%s). "
-                "Backing off to %ss — fix the missing/invalid sensors in HA; "
-                "the integration will keep retrying slowly.",
-                exc,
-                _INTERVAL_CEILING_S,
-            )
-            if activity is not None:
-                activity.record_ingest_failure(reason=f"rejected: HTTP {exc.status}")
-            next_sleep_s = float(_INTERVAL_CEILING_S)
-            await asyncio.sleep(next_sleep_s)
         except Exception as exc:  # noqa: BLE001
             _LOGGER.exception("Readings publish failed; will retry next tick")
             if activity is not None:

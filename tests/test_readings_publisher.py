@@ -141,8 +141,18 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from custom_components.svitgrid.api_client import DeviceStopped
+from custom_components.svitgrid.reading_sender import Cadence
 from custom_components.svitgrid.readings_publisher import run_loop
+
+
+class _RecordingStore:
+    """Minimal store double — records every reading the publisher captures."""
+
+    def __init__(self):
+        self.appended = []
+
+    async def append(self, reading):
+        self.appended.append(reading)
 
 
 def _mock_hass_one_iter() -> MagicMock:
@@ -168,7 +178,6 @@ def _mock_hass_one_iter() -> MagicMock:
 
 
 _RUN_KWARGS = dict(
-    api_key="k",
     inverter_id="inv-1",
     entity_map={
         "batterySoc": "sensor.inverter_battery",
@@ -181,92 +190,54 @@ _RUN_KWARGS = dict(
 )
 
 
-async def _run_with_sleep_capture(monkeypatch, hass, api):
+async def _run_with_sleep_capture(monkeypatch, hass, store, cadence):
     sleeps: list[float] = []
 
     async def _record_sleep(delay):
         sleeps.append(delay)
 
     monkeypatch.setattr(asyncio, "sleep", _record_sleep)
-    await run_loop(hass=hass, api_client=api, **_RUN_KWARGS)
+    await run_loop(hass=hass, store=store, cadence=cadence, **_RUN_KWARGS)
     return sleeps
 
 
 @pytest.mark.asyncio
-async def test_publisher_honors_active_ingest_interval(monkeypatch):
-    api = MagicMock()
-    api.push_reading = AsyncMock(
-        return_value={"success": True, "ingestIntervalMs": 60_000}
-    )
-    sleeps = await _run_with_sleep_capture(monkeypatch, _mock_hass_one_iter(), api)
-    api.push_reading.assert_awaited_once()
-    assert sleeps == [60.0]
-
-
-@pytest.mark.asyncio
-async def test_publisher_honors_idle_ingest_interval(monkeypatch):
-    api = MagicMock()
-    api.push_reading = AsyncMock(
-        return_value={"success": True, "ingestIntervalMs": 300_000}
-    )
-    sleeps = await _run_with_sleep_capture(monkeypatch, _mock_hass_one_iter(), api)
-    assert sleeps == [300.0]
-
-
-@pytest.mark.asyncio
-async def test_publisher_defaults_to_60s_when_field_missing(monkeypatch):
-    """Older server / unexpected shape → safe 60s default (active-cadence)."""
-    api = MagicMock()
-    api.push_reading = AsyncMock(return_value={"success": True})  # no ingestIntervalMs
-    sleeps = await _run_with_sleep_capture(monkeypatch, _mock_hass_one_iter(), api)
-    assert sleeps == [60.0]
-
-
-@pytest.mark.asyncio
-async def test_publisher_defaults_to_60s_when_push_returns_none(monkeypatch):
-    """Transient failure (5xx / network → push_reading returns None) → 60s
-    default so we don't get stuck in a 10s-retry tight loop on a server
-    outage. (A 4xx raises ReadingRejected instead — see the backoff test.)"""
-    api = MagicMock()
-    api.push_reading = AsyncMock(return_value=None)
-    sleeps = await _run_with_sleep_capture(monkeypatch, _mock_hass_one_iter(), api)
-    assert sleeps == [60.0]
-
-
-@pytest.mark.asyncio
-async def test_publisher_backs_off_to_ceiling_on_reading_rejected(monkeypatch):
-    """A 4xx rejection (ReadingRejected) means the payload itself is wrong —
-    re-POSTing every 60s just burns requests the server keeps rejecting. The
-    loop must park at the ceiling interval (30 min) and keep running, not exit
-    or hammer at the default cadence."""
-    from custom_components.svitgrid.api_client import ReadingRejected
-
-    api = MagicMock()
-    api.push_reading = AsyncMock(side_effect=ReadingRejected(400, "Validation error"))
-    sleeps = await _run_with_sleep_capture(monkeypatch, _mock_hass_one_iter(), api)
-    assert sleeps == [1800.0]  # _INTERVAL_CEILING_S
-
-
-@pytest.mark.asyncio
 async def test_publisher_clamps_extreme_intervals(monkeypatch):
-    """Misbehaving server with ingestIntervalMs=999_999_999 (or negative)
-    gets clamped: prevents both 'silent freeze for hours' and 'tight 1-ms
-    loop' as failure modes."""
-    api = MagicMock()
-    api.push_reading = AsyncMock(
-        return_value={"success": True, "ingestIntervalMs": 999_999_999}
+    """A misbehaving cadence value (999_999_999) must NEVER produce a sleep
+    larger than the 30-min ceiling. interval >= 120 → idle branch, which
+    samples every 60s and does NOT add a final sleep — so the invariant we
+    prove is: every captured sleep is <= 1800.0 (no hour-long freeze)."""
+    hass = _mock_hass_one_iter()
+    # Let the idle sampling sub-loop run a few ticks before stopping so we can
+    # observe the sub-sleeps. (The default mock stops after one read, which
+    # would skip the sub-loop entirely.)
+    call_count = {"n": 0}
+
+    def _is_stopping(_self):
+        call_count["n"] += 1
+        return call_count["n"] > 4  # top read + 3 sampling sub-loop reads
+
+    type(hass).is_stopping = property(_is_stopping)
+
+    cadence = Cadence(interval_s=999_999_999)
+    sleeps = await _run_with_sleep_capture(
+        monkeypatch, hass, _RecordingStore(), cadence
     )
-    sleeps = await _run_with_sleep_capture(monkeypatch, _mock_hass_one_iter(), api)
-    assert sleeps == [1800.0]  # 30 min cap
+    assert sleeps, "expected the idle-branch sampling sub-loop to sleep"
+    # Idle path: sampling sub-sleeps are 60s; nothing freezes us at the
+    # un-clamped 999_999_999s. Ceiling clamp keeps every sleep <= 1800.
+    assert all(s <= 1800.0 for s in sleeps)
+    assert sleeps[0] == 60.0
 
 
 @pytest.mark.asyncio
 async def test_publisher_clamps_negative_or_tiny_intervals(monkeypatch):
-    api = MagicMock()
-    api.push_reading = AsyncMock(
-        return_value={"success": True, "ingestIntervalMs": -5}
+    """A negative cadence (-5) is < 120 → active branch; the post-append sleep
+    must be clamped UP to the 10s floor (never a tight sub-second loop)."""
+    cadence = Cadence(interval_s=-5)
+    sleeps = await _run_with_sleep_capture(
+        monkeypatch, _mock_hass_one_iter(), _RecordingStore(), cadence
     )
-    sleeps = await _run_with_sleep_capture(monkeypatch, _mock_hass_one_iter(), api)
     assert sleeps == [10.0]  # 10s floor
 
 
@@ -328,31 +299,23 @@ def test_aggregate_single_sample_returns_it_unchanged_plus_metadata():
 
 @pytest.mark.asyncio
 async def test_publisher_aggregates_when_interval_idle(monkeypatch):
-    """ingestIntervalMs=300_000 → next iteration collects 5 samples 60s
-    apart and pushes ONE aggregated payload with sampleCount=5,
-    periodSec=300."""
+    """cadence.interval_s=300 (>=120) → the FIRST iteration is the idle
+    aggregation path directly: collect 5 samples 60s apart and capture ONE
+    aggregated reading with sampleCount=5, periodSec=300."""
     hass = _mock_hass_one_iter()
-    # Need two iterations: first to receive the idle hint, second to
-    # actually aggregate. Override is_stopping to allow two full passes.
+    # is_stopping is read once at the loop top, then once per sampling tick.
+    # Allow one full aggregation iteration: top read (#1) + 5 sub-loop reads
+    # (#2-#6); stop on the read that would start iteration 2 (#7).
     call_count = {"n": 0}
 
     def _is_stopping(_self):
         call_count["n"] += 1
-        # After 2 full pushes (each may have many sleep ticks), stop.
-        # Count is incremented on every is_stopping read — including
-        # within the aggregation sub-loop. Allow ~8 reads to cover
-        # iter1 (1 read) + iter2's 5 sub-sleeps + iter2's final push.
-        return call_count["n"] > 8
+        return call_count["n"] > 6
 
     type(hass).is_stopping = property(_is_stopping)
 
-    api = MagicMock()
-    api.push_reading = AsyncMock(side_effect=[
-        # 1st push: snapshot, response signals idle
-        {"success": True, "ingestIntervalMs": 300_000},
-        # 2nd push: aggregated, response again idle (loop stops before 3rd)
-        {"success": True, "ingestIntervalMs": 300_000},
-    ])
+    store = _RecordingStore()
+    cadence = Cadence(interval_s=300)
 
     sleeps: list[float] = []
 
@@ -360,46 +323,15 @@ async def test_publisher_aggregates_when_interval_idle(monkeypatch):
         sleeps.append(delay)
 
     monkeypatch.setattr(asyncio, "sleep", _record_sleep)
-    await run_loop(hass=hass, api_client=api, **_RUN_KWARGS)
+    await run_loop(hass=hass, store=store, cadence=cadence, **_RUN_KWARGS)
 
-    # 2 pushes total: 1 snapshot + 1 aggregated
-    assert api.push_reading.await_count == 2
-    second_call = api.push_reading.await_args_list[1]
-    payload = second_call.kwargs["reading"]
-    assert payload["sampleCount"] == 5
-    assert payload["periodSec"] == 300
-    # Sleep cadence: first iter sleeps 300s after pushing.
-    # Second iter (aggregation) sleeps 60s x 5 sub-sleeps during sampling.
-    assert sleeps[0] == 300.0
-    assert sleeps[1:6] == [60.0, 60.0, 60.0, 60.0, 60.0]
-
-
-# ── Graceful stop signal in readings publisher ────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_publisher_stops_on_device_stopped(monkeypatch):
-    """When push_reading raises DeviceStopped, the loop exits without any
-    further push calls."""
-    hass = MagicMock()
-    hass.states.get = lambda eid: MagicMock(state="80")
-    type(hass).is_stopping = property(lambda _self: False)  # would loop forever without the stop
-
-    api = MagicMock()
-    api.push_reading = AsyncMock(side_effect=DeviceStopped("zombie poll cost"))
-
-    sleeps: list[float] = []
-
-    async def _record_sleep(delay):
-        sleeps.append(delay)
-
-    monkeypatch.setattr(asyncio, "sleep", _record_sleep)
-    await run_loop(hass=hass, api_client=api, **_RUN_KWARGS)
-
-    # Called exactly once — raised on first push and loop exited.
-    api.push_reading.assert_awaited_once()
-    # No sleeps: loop returned before reaching the post-push sleep.
-    assert sleeps == []
+    # ONE aggregated reading captured.
+    assert len(store.appended) == 1
+    aggregated = store.appended[0]
+    assert aggregated["sampleCount"] == 5
+    assert aggregated["periodSec"] == 300
+    # Idle path: 5 sampling sub-sleeps of 60s each, no final post-capture sleep.
+    assert sleeps == [60.0, 60.0, 60.0, 60.0, 60.0]
 
 
 # ── Task 4: gate_payload wired into run_loop — skip ingest on missing core ──
@@ -434,8 +366,8 @@ def _mock_hass_incomplete_one_iter() -> MagicMock:
 
 @pytest.mark.asyncio
 async def test_publisher_skips_post_when_core_field_missing(monkeypatch):
-    api = MagicMock()
-    api.push_reading = AsyncMock(return_value={"success": True})
+    store = _RecordingStore()
+    cadence = Cadence(interval_s=60)
     activity = MagicMock()
     kwargs = dict(_RUN_KWARGS, activity=activity)
 
@@ -444,18 +376,21 @@ async def test_publisher_skips_post_when_core_field_missing(monkeypatch):
         sleeps.append(delay)
     monkeypatch.setattr(asyncio, "sleep", _record_sleep)
 
-    await run_loop(hass=_mock_hass_incomplete_one_iter(), api_client=api, **kwargs)
+    await run_loop(
+        hass=_mock_hass_incomplete_one_iter(), store=store, cadence=cadence, **kwargs
+    )
 
-    api.push_reading.assert_not_awaited()        # never POSTed junk
+    assert store.appended == []                   # never captured junk
     activity.record_ingest_skipped.assert_called_once()
     _, ckwargs = activity.record_ingest_skipped.call_args
     assert "batterySoc" in ckwargs["missing_fields"]
-    assert sleeps == [60.0]                       # still slept the default cadence
+    assert sleeps == [60.0]                       # still slept the cadence interval
 
 
 @pytest.mark.asyncio
 async def test_publisher_posts_when_no_solar_but_core_present(monkeypatch):
-    """Battery-only system (no PV entity) must still POST — pvPower defaults to 0."""
+    """Battery-only system (no PV entity) must still capture — pvPower defaults
+    to 0."""
     hass = MagicMock()
 
     def _get(eid):
@@ -478,8 +413,8 @@ async def test_publisher_posts_when_no_solar_but_core_present(monkeypatch):
         return cc["n"] > 1
     type(hass).is_stopping = property(_is_stopping)
 
-    api = MagicMock()
-    api.push_reading = AsyncMock(return_value={"success": True})
+    store = _RecordingStore()
+    cadence = Cadence(interval_s=60)
     kwargs = dict(
         _RUN_KWARGS,
         entity_map={
@@ -491,29 +426,25 @@ async def test_publisher_posts_when_no_solar_but_core_present(monkeypatch):
         },
     )
     monkeypatch.setattr(asyncio, "sleep", AsyncMock())
-    await run_loop(hass=hass, api_client=api, **kwargs)
+    await run_loop(hass=hass, store=store, cadence=cadence, **kwargs)
 
-    api.push_reading.assert_awaited_once()
-    sent = api.push_reading.await_args.kwargs["reading"]
+    assert len(store.appended) == 1
+    sent = store.appended[0]
     assert sent["pvPower"] == 0.0
 
 
 @pytest.mark.asyncio
 async def test_publisher_skips_aggregated_post_when_core_field_missing(monkeypatch):
-    """Idle path: after a complete snapshot bumps cadence to idle, the next
-    iteration's aggregated samples are incomplete (batterySoc goes
-    unavailable) → the aggregated POST is skipped, not sent as junk."""
-    # batterySoc is healthy until the first push lands, then goes unavailable
-    # so every idle-path sample omits it → aggregated reading is incomplete.
-    state = {"complete": True}
-
+    """Idle path (cadence>=120): the aggregated samples are incomplete
+    (batterySoc is unavailable for every sample) → the aggregated reading is
+    skipped, not captured as junk."""
     def _get(eid):
         if "battery_power" in eid:
             return MagicMock(state="-200")
         if "battery_voltage" in eid:
             return MagicMock(state="52")
-        if "battery" in eid:  # batterySoc
-            return MagicMock(state="80" if state["complete"] else "unavailable")
+        if "battery" in eid:  # batterySoc → always unavailable
+            return MagicMock(state="unavailable")
         if "grid" in eid:
             return MagicMock(state="100")
         if "load" in eid:
@@ -526,20 +457,14 @@ async def test_publisher_skips_aggregated_post_when_core_field_missing(monkeypat
 
     def _is_stopping(_self):
         call_count["n"] += 1
-        # iter1 top read (#1) + iter2 top read (#2) + iter2's 5 sampling
-        # sub-loop reads (#3-#7); stop on the read that would start iter3.
-        return call_count["n"] > 7
+        # iter1 top read (#1) + iter1's 5 sampling sub-loop reads (#2-#6);
+        # stop on the read that would start iter2 (#7).
+        return call_count["n"] > 6
 
     type(hass).is_stopping = property(_is_stopping)
 
-    def _push(**_kw):
-        # First (snapshot) push succeeds and signals idle cadence; thereafter
-        # the soc entity drops out so the aggregated reading is incomplete.
-        state["complete"] = False
-        return {"success": True, "ingestIntervalMs": 300_000}
-
-    api = MagicMock()
-    api.push_reading = AsyncMock(side_effect=_push)
+    store = _RecordingStore()
+    cadence = Cadence(interval_s=300)
     activity = MagicMock()
     kwargs = dict(_RUN_KWARGS, activity=activity)
 
@@ -549,12 +474,33 @@ async def test_publisher_skips_aggregated_post_when_core_field_missing(monkeypat
         sleeps.append(delay)
 
     monkeypatch.setattr(asyncio, "sleep", _record_sleep)
-    await run_loop(hass=hass, api_client=api, **kwargs)
+    await run_loop(hass=hass, store=store, cadence=cadence, **kwargs)
 
-    # Only the first (snapshot) push happened; the aggregated one was skipped.
-    api.push_reading.assert_awaited_once()
+    # Nothing captured; the aggregated reading was skipped.
+    assert store.appended == []
     activity.record_ingest_skipped.assert_called_once()
     _, ckwargs = activity.record_ingest_skipped.call_args
     assert "batterySoc" in ckwargs["missing_fields"]
-    # 300s post-snapshot sleep + 5×60s sampling ticks; idle skip adds no sleep.
-    assert sleeps == [300.0, 60.0, 60.0, 60.0, 60.0, 60.0]
+    # 5×60s sampling ticks; idle skip adds no extra sleep.
+    assert sleeps == [60.0, 60.0, 60.0, 60.0, 60.0]
+
+
+# ── Capture-then-drain: publisher appends to the store (Task 5) ────────────
+
+
+@pytest.mark.asyncio
+async def test_run_loop_appends_to_store(monkeypatch):
+    """With all core sensors present and cadence=60s (active branch), one
+    iteration captures exactly one reading into the store."""
+    store = _RecordingStore()
+    cadence = Cadence(interval_s=60)
+    monkeypatch.setattr(asyncio, "sleep", AsyncMock())
+
+    await run_loop(
+        hass=_mock_hass_one_iter(), store=store, cadence=cadence, **_RUN_KWARGS
+    )
+
+    assert len(store.appended) == 1
+    reading = store.appended[0]
+    assert reading["inverterId"] == "inv-1"
+    assert reading["batterySoc"] == 80.0
