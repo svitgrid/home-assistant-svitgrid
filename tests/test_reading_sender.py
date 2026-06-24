@@ -101,3 +101,22 @@ async def test_drain_4xx_marks_failed(tmp_path):
                             now_iso=now, cadence=cadence)
     assert sent == 0
     assert store._count_by_state_sync() == {"failed": 1}
+
+
+@pytest.mark.asyncio
+async def test_drain_partial_results_marks_each_row(tmp_path):
+    store = _store(tmp_path)
+    now = "2026-06-24T12:00:00Z"
+    store._append_sync({"inverterId": "inv-1", "timestamp": "2026-06-24T10:00:00Z"})
+    store._append_sync({"inverterId": "inv-1", "timestamp": "2026-06-24T10:00:05Z"})
+    client = _FakeClient({"results": [
+        {"ok": True, "inverterId": "inv-1"},
+        {"ok": False, "inverterId": "inv-1"},
+    ]})
+    cadence = Cadence(interval_s=10)
+
+    sent = await drain_once(store=store, api_client=client, api_key="k",
+                            now_iso=now, cadence=cadence)
+
+    assert sent == 1
+    assert store._count_by_state_sync() == {"sent": 1, "failed": 1}
