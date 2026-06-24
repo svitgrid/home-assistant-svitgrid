@@ -39,3 +39,51 @@ def test_count_by_state_groups_pending(tmp_path):
     store._append_sync({"inverterId": "inv-1", "timestamp": "2026-06-24T10:00:00Z"})
     store._append_sync({"inverterId": "inv-1", "timestamp": "2026-06-24T10:00:05Z"})
     assert store._count_by_state_sync() == {"pending": 2}
+
+
+def _seed(store, inverter_id, *timestamps, state="pending"):
+    for ts in timestamps:
+        store._append_sync({"inverterId": inverter_id, "timestamp": ts, "batterySoc": 1.0})
+    if state != "pending":
+        store._mark_failed_sync([(inverter_id, ts) for ts in timestamps], "2026-06-24T12:00:00Z")
+        if state == "failed":
+            return
+
+
+def test_get_sendable_returns_oldest_first_within_cap(tmp_path):
+    store = _store(tmp_path)
+    # cap = 48h relative to now below
+    now = "2026-06-24T12:00:00Z"
+    _seed(store, "inv-1",
+          "2026-06-20T12:00:00Z",   # > 48h old → excluded
+          "2026-06-24T09:00:00Z",
+          "2026-06-24T10:00:00Z")
+    rows = store._get_sendable_sync(now, cap_s=48 * 3600, limit=50)
+    assert [r["ts"] for r in rows] == ["2026-06-24T09:00:00Z", "2026-06-24T10:00:00Z"]
+
+
+def test_mark_sent_excludes_from_sendable(tmp_path):
+    store = _store(tmp_path)
+    now = "2026-06-24T12:00:00Z"
+    _seed(store, "inv-1", "2026-06-24T10:00:00Z")
+    store._mark_sent_sync([("inv-1", "2026-06-24T10:00:00Z")])
+    assert store._get_sendable_sync(now, 48 * 3600, 50) == []
+    assert store._count_by_state_sync() == {"sent": 1}
+
+
+def test_mark_failed_increments_attempts_and_stays_sendable(tmp_path):
+    store = _store(tmp_path)
+    now = "2026-06-24T12:00:00Z"
+    _seed(store, "inv-1", "2026-06-24T10:00:00Z")
+    store._mark_failed_sync([("inv-1", "2026-06-24T10:00:00Z")], now)
+    rows = store._get_sendable_sync(now, 48 * 3600, 50)
+    assert len(rows) == 1 and rows[0]["attempts"] == 1
+
+
+def test_skip_aged_moves_old_unsent_to_skipped(tmp_path):
+    store = _store(tmp_path)
+    now = "2026-06-24T12:00:00Z"
+    _seed(store, "inv-1", "2026-06-20T12:00:00Z", "2026-06-24T10:00:00Z")
+    skipped = store._skip_aged_sync(now, cap_s=48 * 3600)
+    assert skipped == 1
+    assert store._count_by_state_sync() == {"pending": 1, "skipped": 1}

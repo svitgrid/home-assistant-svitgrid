@@ -115,7 +115,76 @@ class ReadingStore:
         finally:
             conn.close()
 
+    def _cap_boundary(self, now_iso: str, cap_s: int) -> str:
+        from datetime import datetime, timedelta
+        now = datetime.fromisoformat(now_iso.replace("Z", "+00:00"))
+        return (now - timedelta(seconds=cap_s)).isoformat().replace("+00:00", "Z")
+
+    def _get_sendable_sync(self, now_iso: str, cap_s: int, limit: int) -> list[dict]:
+        floor = self._cap_boundary(now_iso, cap_s)
+        conn = _connect(self._db_path)
+        try:
+            cur = conn.execute(
+                "SELECT inverter_id, ts, payload, sync_state, attempts "
+                "FROM readings_raw WHERE sync_state IN ('pending','failed') "
+                "AND ts >= ? ORDER BY ts ASC LIMIT ?",
+                (floor, limit),
+            )
+            return [_row_to_dict(r) for r in cur.fetchall()]
+        finally:
+            conn.close()
+
+    def _mark_sent_sync(self, keys: list[tuple[str, str]]) -> None:
+        conn = _connect(self._db_path)
+        try:
+            conn.executemany(
+                "UPDATE readings_raw SET sync_state='sent' WHERE inverter_id=? AND ts=?",
+                keys,
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _mark_failed_sync(self, keys: list[tuple[str, str]], now_iso: str) -> None:
+        conn = _connect(self._db_path)
+        try:
+            conn.executemany(
+                "UPDATE readings_raw SET sync_state='failed', attempts=attempts+1, "
+                "last_attempt_at=? WHERE inverter_id=? AND ts=?",
+                [(now_iso, inv, ts) for (inv, ts) in keys],
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _skip_aged_sync(self, now_iso: str, cap_s: int) -> int:
+        floor = self._cap_boundary(now_iso, cap_s)
+        conn = _connect(self._db_path)
+        try:
+            cur = conn.execute(
+                "UPDATE readings_raw SET sync_state='skipped' "
+                "WHERE sync_state IN ('pending','failed') AND ts < ?",
+                (floor,),
+            )
+            conn.commit()
+            return cur.rowcount
+        finally:
+            conn.close()
+
     # ── async wrappers ────────────────────────────────────────────────
+    async def get_sendable(self, now_iso: str, cap_s: int, limit: int) -> list[dict]:
+        return await self._hass.async_add_executor_job(
+            self._get_sendable_sync, now_iso, cap_s, limit)
+
+    async def mark_sent(self, keys: list[tuple[str, str]]) -> None:
+        await self._hass.async_add_executor_job(self._mark_sent_sync, keys)
+
+    async def mark_failed(self, keys: list[tuple[str, str]], now_iso: str) -> None:
+        await self._hass.async_add_executor_job(self._mark_failed_sync, keys, now_iso)
+
+    async def skip_aged(self, now_iso: str, cap_s: int) -> int:
+        return await self._hass.async_add_executor_job(self._skip_aged_sync, now_iso, cap_s)
+
     async def append(self, reading: dict[str, Any]) -> None:
         await self._hass.async_add_executor_job(self._append_sync, reading)
 
