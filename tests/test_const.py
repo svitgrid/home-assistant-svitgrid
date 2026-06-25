@@ -59,3 +59,13 @@ def test_set_cloud_endpoint_is_an_internal_command():
     )
     assert SET_CLOUD_ENDPOINT_COMMAND == "set_cloud_endpoint"
     assert SET_CLOUD_ENDPOINT_COMMAND in INTERNAL_COMMANDS
+
+
+def test_default_api_base_is_in_allow_list():
+    """The default api_base must be one of the allow-listed URLs — else
+    a fresh install hits an endpoint the broker auth doesn't trust."""
+    from custom_components.svitgrid.cloud_endpoint_handler import (
+        is_allowed_api_base,
+    )
+    from custom_components.svitgrid.const import DEFAULT_API_BASE
+    assert is_allowed_api_base(DEFAULT_API_BASE)
