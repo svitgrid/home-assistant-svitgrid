@@ -312,6 +312,47 @@ class ReadingStore:
         finally:
             conn.close()
 
+    def _set_meta_sync(self, key: str, value: str) -> None:
+        conn = _connect(self._db_path)
+        try:
+            conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", (key, value))
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _get_meta_sync(self, key: str) -> str | None:
+        conn = _connect(self._db_path)
+        try:
+            row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+            return row["value"] if row else None
+        finally:
+            conn.close()
+
+    def _set_lifecycle_sync(self, state: str, reason: str | None, since: str | None) -> None:
+        conn = _connect(self._db_path)
+        try:
+            conn.executemany(
+                "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
+                [("lifecycle_state", state),
+                 ("lifecycle_reason", reason or ""),
+                 ("lifecycle_since", since or "")],
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _get_lifecycle_sync(self) -> dict:
+        st = self._get_meta_sync("lifecycle_state") or "active"
+        rs = self._get_meta_sync("lifecycle_reason") or None
+        sn = self._get_meta_sync("lifecycle_since") or None
+        return {"state": st, "reason": rs or None, "since": sn or None}
+
+    async def set_lifecycle(self, state: str, reason: str | None, since: str | None) -> None:
+        await self._hass.async_add_executor_job(self._set_lifecycle_sync, state, reason, since)
+
+    async def get_lifecycle(self) -> dict:
+        return await self._hass.async_add_executor_job(self._get_lifecycle_sync)
+
     def _connect_for_test(self) -> sqlite3.Connection:
         return _connect(self._db_path)
 

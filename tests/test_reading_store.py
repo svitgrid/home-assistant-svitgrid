@@ -164,6 +164,18 @@ def test_today_summary_falls_back_to_raw_aggregate(tmp_path):
     assert row["energy"]["dailyPvEnergy"] == 8.0
 
 
+def test_lifecycle_meta_roundtrip(tmp_path):
+    store = _store(tmp_path)
+    store._set_lifecycle_sync("deprovisioned", "revoked", "2026-06-25T10:00:00Z")
+    assert store._get_lifecycle_sync() == {
+        "state": "deprovisioned", "reason": "revoked", "since": "2026-06-25T10:00:00Z"}
+
+
+def test_lifecycle_defaults_active_when_unset(tmp_path):
+    store = _store(tmp_path)
+    assert store._get_lifecycle_sync() == {"state": "active", "reason": None, "since": None}
+
+
 def test_history_range_orders_and_bounds(tmp_path):
     store = _store(tmp_path)
     import json
