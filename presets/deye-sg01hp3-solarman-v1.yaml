@@ -8,9 +8,10 @@
 # CLAUDE.md "Pending Verification" status: only read path has been observed.
 # v3 (2026-06-25): added daily load/import/export energy mappings (Solarman today_* sensors).
 # v4 (2026-06-25): added Tier-1 telemetry (inverter/battery temp, battery current, grid frequency).
+# v5 (2026-06-25): added Tier-2 daily energy (battery charge/discharge, generator).
 
 id: deye-sg01hp3-solarman-v1
-version: "4"
+version: "5"
 brand: Deye
 model: SG01HP3
 phases: 3
@@ -48,6 +49,10 @@ entityMap:
   batteryCurrent: sensor.inverter_battery_current
   gridFrequency: sensor.inverter_grid_frequency
   inverterTemperature: sensor.inverter_temperature
+  # Tier-2 daily energy (Solarman today_* counters).
+  dailyBatteryChargeEnergy: sensor.inverter_today_battery_charge
+  dailyBatteryDischargeEnergy: sensor.inverter_today_battery_discharge
+  dailyGeneratorEnergy: sensor.inverter_generator_energy_today
 
 # Write commands deferred — HP3 power scaling unverified live.
 commands: []

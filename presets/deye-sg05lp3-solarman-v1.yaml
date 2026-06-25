@@ -9,9 +9,10 @@
 # 633-635) — the API folds them into phaseGridPowers / phaseLoads at ingest.
 # v2 (2026-06-25): added daily load/import/export energy mappings (Solarman today_* sensors).
 # v3 (2026-06-25): added Tier-1 telemetry (inverter/battery temp, battery current, grid frequency).
+# v4 (2026-06-25): added Tier-2 daily energy (battery charge/discharge, generator).
 
 id: deye-sg05lp3-solarman-v1
-version: "3"
+version: "4"
 brand: Deye
 model: SG05LP3
 phases: 3
@@ -46,6 +47,10 @@ entityMap:
   batteryCurrent: sensor.inverter_battery_current
   gridFrequency: sensor.inverter_grid_frequency
   inverterTemperature: sensor.inverter_temperature
+  # Tier-2 daily energy (Solarman today_* counters).
+  dailyBatteryChargeEnergy: sensor.inverter_today_battery_charge
+  dailyBatteryDischargeEnergy: sensor.inverter_today_battery_discharge
+  dailyGeneratorEnergy: sensor.inverter_generator_energy_today
 
 commands:
   - id: set_battery_charge

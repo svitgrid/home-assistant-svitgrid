@@ -62,6 +62,15 @@ def test_merge_hourly_field_present_in_one_hour():
     assert daily["sample_count"] == 8
 
 
+def test_aggregate_includes_tier2_daily_counters():
+    from custom_components.svitgrid import rollup
+    rows = [{"payload": {"dailyBatteryChargeEnergy": 5.0, "dailyGeneratorEnergy": 2.0}},
+            {"payload": {"dailyBatteryChargeEnergy": 8.0, "dailyGeneratorEnergy": 2.0}}]
+    agg = rollup.aggregate(rows)
+    assert agg["energy"]["dailyBatteryChargeEnergy"] == 8.0   # max over the day
+    assert agg["energy"]["dailyGeneratorEnergy"] == 2.0
+
+
 def test_prune_drops_old_raw_keeps_daily(tmp_path):
     store = ReadingStore(None, str(tmp_path / "readings.db"))
     store._append_sync({"inverterId": "inv-1", "timestamp": "2026-05-01T10:00:00Z",

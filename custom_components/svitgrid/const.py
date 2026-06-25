@@ -50,6 +50,9 @@ ALL_FIELDS = REQUIRED_FIELDS | frozenset(
         "dailyGridImportEnergy",
         "dailyGridExportEnergy",
         "dailyLoadEnergy",
+        "dailyBatteryChargeEnergy",
+        "dailyBatteryDischargeEnergy",
+        "dailyGeneratorEnergy",
         "inverterTemperature",
     }
 )
@@ -90,6 +93,9 @@ MAPPABLE_FIELDS: list[tuple[str, str]] = [
     ("dailyGridImportEnergy", "Daily grid import (kWh)"),
     ("dailyGridExportEnergy", "Daily grid export (kWh)"),
     ("dailyLoadEnergy", "Daily load energy (kWh)"),
+    ("dailyBatteryChargeEnergy", "Daily battery charge energy (kWh)"),
+    ("dailyBatteryDischargeEnergy", "Daily battery discharge energy (kWh)"),
+    ("dailyGeneratorEnergy", "Daily generator energy (kWh)"),
     ("inverterTemperature", "Inverter temperature (°C)"),
 ]
 
@@ -156,6 +162,7 @@ INSTANTANEOUS_FIELDS = frozenset({
 })
 DAILY_COUNTER_FIELDS = frozenset({
     "dailyPvEnergy", "dailyGridImportEnergy", "dailyGridExportEnergy",
-    "dailyLoadEnergy",
+    "dailyLoadEnergy", "dailyBatteryChargeEnergy", "dailyBatteryDischargeEnergy",
+    "dailyGeneratorEnergy",
 })
 PEAK_FIELDS = frozenset({"pvPower", "loadPower"})
