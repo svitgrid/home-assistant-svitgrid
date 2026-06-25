@@ -144,6 +144,46 @@ def _validate_entity_map(value: dict) -> dict:
     return value
 
 
+def apply_cloud_endpoint_change(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    new_api_base: str,
+) -> None:
+    """Apply a `set_cloud_endpoint` command's URL: update ConfigEntry data
+    in-place and schedule a reload on the event loop.
+
+    Why scheduled, not awaited: the caller is the command-poller task spawned
+    by `async_setup_entry`. Awaiting `async_reload` from inside it would
+    deadlock — the reload's unload step blocks waiting for the poller task to
+    finish, which is the very task awaiting the reload. Scheduling via
+    `async_create_task` lets the current poll iteration return cleanly, then
+    the reload runs and the new api_base takes effect.
+
+    No-op when the new URL equals the current one — a redundant migration
+    command (e.g. a re-fired Cloud Function on a same-state flag flip)
+    must not bounce a healthy integration.
+
+    URL VALIDATION IS THE CALLER'S RESPONSIBILITY — this helper trusts
+    `new_api_base` is already passed through `is_allowed_api_base`. Layering
+    keeps the test surface tight."""
+    current = entry.data.get("api_base")
+    if current == new_api_base:
+        _LOGGER.info(
+            "set_cloud_endpoint: already on %s, skipping reload", new_api_base,
+        )
+        return
+
+    new_data = {**entry.data, "api_base": new_api_base}
+    hass.config_entries.async_update_entry(entry, data=new_data)
+    _LOGGER.info(
+        "set_cloud_endpoint: api_base %s -> %s, reloading entry",
+        current, new_api_base,
+    )
+    hass.async_create_task(
+        hass.config_entries.async_reload(entry.entry_id)
+    )
+
+
 async def _async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Update listener: reload the entry so a new entity_map takes effect."""
     await hass.config_entries.async_reload(entry.entry_id)

@@ -1108,3 +1108,88 @@ async def test_paused_at_startup_starts_loops(hass, enable_custom_integrations):
     assert activity is not None
     assert activity.lifecycle_state == "paused"
     assert activity.status == "paused"
+
+
+# ---------------------------------------------------------------------------
+# E2: apply_cloud_endpoint_change helper
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_apply_cloud_endpoint_change_updates_entry_and_schedules_reload(
+    hass,
+):
+    """The helper mutates ConfigEntry.data and schedules (not directly
+    invokes) async_reload, so the calling task can finish cleanly before
+    the reload tears it down."""
+    from unittest.mock import patch
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+    from custom_components.svitgrid import apply_cloud_endpoint_change
+    from custom_components.svitgrid.const import DOMAIN
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        version=2,
+        minor_version=1,
+        title="test",
+        data={
+            "api_base": "https://api-staging.svitgrid.app",
+            "api_key": "k",
+            "edge_device_id": "d",
+            "household_id": "h",
+        },
+        entry_id="e1",
+    )
+    entry.add_to_hass(hass)
+
+    with patch.object(
+        hass.config_entries, "async_reload"
+    ) as mock_reload:
+        apply_cloud_endpoint_change(
+            hass, entry, "https://api.svitgrid.app"
+        )
+
+    # Entry data updated immediately + atomically:
+    assert entry.data["api_base"] == "https://api.svitgrid.app"
+    # Reload scheduled, not directly awaited (the test patched async_reload
+    # — if it had been awaited, the patch.assert_awaited would pass too;
+    # we just need it to have been called at least once on the event loop):
+    await hass.async_block_till_done()
+    mock_reload.assert_called_once_with("e1")
+
+
+@pytest.mark.asyncio
+async def test_apply_cloud_endpoint_change_is_noop_when_unchanged(hass):
+    """If the new URL equals the current one, skip update + reload —
+    a redundant migration command shouldn't bounce a healthy integration."""
+    from unittest.mock import patch
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+    from custom_components.svitgrid import apply_cloud_endpoint_change
+    from custom_components.svitgrid.const import DOMAIN
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        version=2,
+        minor_version=1,
+        title="test",
+        data={
+            "api_base": "https://api-staging.svitgrid.app",
+            "api_key": "k",
+            "edge_device_id": "d",
+            "household_id": "h",
+        },
+        entry_id="e2",
+    )
+    entry.add_to_hass(hass)
+
+    with patch.object(
+        hass.config_entries, "async_reload"
+    ) as mock_reload, patch.object(
+        hass.config_entries, "async_update_entry"
+    ) as mock_update:
+        apply_cloud_endpoint_change(
+            hass, entry, "https://api-staging.svitgrid.app"
+        )
+
+    mock_reload.assert_not_called()
+    mock_update.assert_not_called()
