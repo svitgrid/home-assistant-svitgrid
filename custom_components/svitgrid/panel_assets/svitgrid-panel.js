@@ -2151,10 +2151,10 @@
               byDay.set(day, prev);
             } else if (isTrends) {
               // Accumulate per-inverter {value, count} for weighted-mean calculation.
-              // d.avgs holds daily averages keyed by metric name; count comes from d.sampleCount.
+              // d.avgs holds daily averages keyed by metric name; count comes from d.sample_count.
               const avgs = d.avgs || {};
               const rawVal = avgs[trendMetric];
-              const rawCount = isNum(d.sampleCount) ? d.sampleCount : 0;
+              const rawCount = isNum(d.sample_count) ? d.sample_count : 0;
               if (isNum(rawVal) && rawCount > 0) {
                 const prev = byDay.get(day) || [];
                 prev.push({ value: rawVal, count: rawCount });
