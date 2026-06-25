@@ -1414,7 +1414,7 @@
             const cell = document.createElement("div");
             cell.className = "detail-phase-cell";
             const v = p[GRID_POWER_FIELDS[ph.i]];
-            cell.textContent = isNum(v) ? NF0.format(v) : "—";
+            cell.textContent = isNum(v) ? NF0.format(v) : "";
             refs.gridTable.appendChild(cell);
           }
         }
@@ -1428,7 +1428,7 @@
             const cell = document.createElement("div");
             cell.className = "detail-phase-cell";
             const v = p[GRID_VOLT_FIELDS[ph.i]];
-            cell.textContent = isNum(v) ? NF1.format(v) : "—";
+            cell.textContent = isNum(v) ? NF1.format(v) : "";
             refs.gridTable.appendChild(cell);
           }
         }
@@ -1467,7 +1467,7 @@
           const cell = document.createElement("div");
           cell.className = "detail-phase-cell";
           const v = p[LOAD_POWER_FIELDS[ph.i]];
-          cell.textContent = isNum(v) ? NF0.format(v) : "—";
+          cell.textContent = isNum(v) ? NF0.format(v) : "";
           refs.loadTable.appendChild(cell);
         }
 
