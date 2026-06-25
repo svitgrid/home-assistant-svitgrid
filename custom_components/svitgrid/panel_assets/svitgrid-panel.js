@@ -61,6 +61,12 @@
     waiting: "Waiting for data…",
     liveDotLive: "Live data updating",
     liveDotIdle: "Live data idle",
+    // Takeover screen
+    takeoverDeprovisioned: "Device no longer provisioned",
+    takeoverPaused: "Svitgrid paused",
+    takeoverDeprovisionedNext: "To reconnect, remove the Svitgrid integration (Settings → Devices & Services → Svitgrid → Delete) and pair it again.",
+    takeoverPausedNext: "Paused by the operator. It will resume automatically when re-enabled.",
+    takeoverSince: "since",
   };
 
   // ------------------------------------------------------------------ //
@@ -419,6 +425,48 @@
       padding: var(--sp-2) 0;
     }
 
+    /* Takeover screen (deprovisioned / paused) */
+    .takeover-body {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 48px var(--sp-4);
+      gap: var(--sp-4);
+    }
+    .takeover-icon {
+      width: 56px;
+      height: 56px;
+      opacity: 0.75;
+    }
+    .takeover-headline {
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--sg-text);
+      margin: 0;
+    }
+    .takeover-reason {
+      font-size: 14px;
+      color: var(--sg-text-2);
+      max-width: 480px;
+      margin: 0;
+    }
+    .takeover-since {
+      font-size: 12px;
+      color: var(--sg-muted);
+      margin: 0;
+    }
+    .takeover-next {
+      font-size: 13px;
+      font-weight: 600;
+      max-width: 480px;
+      margin: 0;
+      line-height: 1.5;
+    }
+    .takeover-next.deprovisioned { color: var(--error-color, var(--sg-err)); }
+    .takeover-next.paused { color: var(--warning-color, var(--sg-warn)); }
+
     /* Skeletons */
     .skel-grid { display: grid; gap: var(--sp-4); }
     .skel-card {
@@ -518,6 +566,11 @@
       this._liveDot = null;
       this._tooltip = null;
 
+      // Lifecycle / health
+      this._lifecycle = { state: "active" };
+      this._takeoverShown = false;
+      this._panelBody = null; // the panel-root div (for takeover replacement)
+
       this.attachShadow({ mode: "open" });
     }
 
@@ -577,7 +630,30 @@
 
       root.appendChild(header);
 
-      // Sections
+      this._panelBody = root;
+
+      // Build normal sections (reusable; also called when returning from takeover).
+      this._buildNormalSections();
+
+      shadow.appendChild(root);
+    }
+
+    // Rebuild the normal sections inside an existing panel-root.
+    // Called after a takeover screen clears back to "active".
+    _buildNormalSections() {
+      const root = this._panelBody;
+      if (!root) return;
+      // Remove everything after the header (first child).
+      while (root.childNodes.length > 1) {
+        root.removeChild(root.lastChild);
+      }
+      // Reset refs that are body-scoped.
+      this._invIdsKey = null;
+      this._invNodes = {};
+      this._todayRefs = null;
+      this._lastHistoryFetch = 0;
+      this._tooltip = null;
+
       this._liveSec = this._addSection(root, STR.live, "live-region");
       this._fillSkeleton(this._liveSec, "live");
 
@@ -587,7 +663,6 @@
       this._historySec = this._addSection(root, STR.history, "history-region");
       this._fillSkeleton(this._historySec, "history");
 
-      // Sync footer
       const syncFooter = document.createElement("div");
       syncFooter.className = "sync-footer";
       syncFooter.setAttribute("role", "status");
@@ -599,8 +674,6 @@
       syncFooter.appendChild(skLead);
       this._syncFooter = syncFooter;
       root.appendChild(syncFooter);
-
-      shadow.appendChild(root);
     }
 
     _addSection(root, titleText, ariaLabel) {
@@ -653,6 +726,23 @@
 
     async _refresh() {
       if (!this._hass) return;
+
+      // Health check comes first; on non-active state we skip all data loaders.
+      await this._loadHealth();
+
+      if (this._lifecycle.state !== "active") {
+        // Show takeover and stop; keep header dot idle.
+        this._renderTakeover();
+        this._updateHeaderDot(false);
+        return;
+      }
+
+      // Returning from takeover: rebuild normal sections.
+      if (this._takeoverShown) {
+        this._takeoverShown = false;
+        this._buildNormalSections();
+      }
+
       const results = await Promise.allSettled([
         this._loadLive(),
         this._loadToday(),
@@ -670,8 +760,156 @@
       this._updateHeaderDot(anyOk);
     }
 
+    async _loadHealth() {
+      try {
+        const h = await this._call("svitgrid/health");
+        this._lifecycle = (h && h.state) ? h : { state: "active" };
+      } catch (_) {
+        // Leave previous lifecycle or default to active (fail-open).
+        this._lifecycle = this._lifecycle || { state: "active" };
+      }
+    }
+
     _call(path) {
       return this._hass.callApi("GET", path);
+    }
+
+    // ---------------------------------------------------------------- //
+    // Takeover screen
+    // ---------------------------------------------------------------- //
+    _renderTakeover() {
+      const root = this._panelBody;
+      if (!root) return;
+
+      if (this._takeoverShown) {
+        // Already showing takeover — update text in place without a full rebuild.
+        // Find existing nodes via class names and update them.
+        const headlineEl = root.querySelector(".takeover-headline");
+        const reasonEl = root.querySelector(".takeover-reason");
+        const sinceEl = root.querySelector(".takeover-since");
+        const nextEl = root.querySelector(".takeover-next");
+        const lc = this._lifecycle;
+        if (headlineEl) {
+          headlineEl.textContent =
+            lc.state === "deprovisioned"
+              ? STR.takeoverDeprovisioned
+              : STR.takeoverPaused;
+        }
+        if (reasonEl) {
+          if (lc.reason) {
+            reasonEl.textContent = lc.reason;
+            reasonEl.style.display = "";
+          } else {
+            reasonEl.textContent = "";
+            reasonEl.style.display = "none";
+          }
+        }
+        if (sinceEl) {
+          if (lc.since) {
+            const sinceMs = Date.now() - new Date(lc.since).getTime();
+            sinceEl.textContent = STR.takeoverSince + " " + this._relAge(sinceMs);
+            sinceEl.style.display = "";
+          } else {
+            sinceEl.textContent = "";
+            sinceEl.style.display = "none";
+          }
+        }
+        if (nextEl) {
+          nextEl.className =
+            "takeover-next " +
+            (lc.state === "deprovisioned" ? "deprovisioned" : "paused");
+          nextEl.textContent =
+            lc.state === "deprovisioned"
+              ? STR.takeoverDeprovisionedNext
+              : STR.takeoverPausedNext;
+        }
+        return;
+      }
+
+      // First-time build: clear body content (keep header = first child).
+      while (root.childNodes.length > 1) {
+        root.removeChild(root.lastChild);
+      }
+      this._takeoverShown = true;
+
+      // Null out section refs so they don't receive stale updates.
+      this._liveSec = null;
+      this._todaySec = null;
+      this._historySec = null;
+      this._syncFooter = null;
+      this._invNodes = {};
+      this._todayRefs = null;
+
+      const lc = this._lifecycle;
+      const isDeprovisioned = lc.state === "deprovisioned";
+
+      const body = document.createElement("div");
+      body.className = "takeover-body";
+
+      // Icon — static inline SVG (not user data; XSS safe)
+      const iconWrap = document.createElement("div");
+      iconWrap.className = "takeover-icon";
+      iconWrap.style.color = isDeprovisioned
+        ? "var(--error-color, var(--sg-err))"
+        : "var(--warning-color, var(--sg-warn))";
+      // mdi:link-off for deprovisioned; mdi:pause-circle-outline for paused
+      if (isDeprovisioned) {
+        iconWrap.innerHTML =
+          '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">' +
+          '<path d="M2 5.27L3.28 4 20 20.72 18.73 22l-3.06-3.06L13 21.5c-1.65 1.65-4.37 ' +
+          '1.65-6.02 0L3.47 18C1.82 16.35 1.82 13.63 3.47 12L5.5 10 7.5 12 5.47 14c-.68.' +
+          '68-.68 1.79 0 2.47l3.51 3.51c.68.68 1.79.68 2.47 0l2.14-2.14L2 5.27m10.5-2.36' +
+          'l-1.63 1.63 1.42 1.42 1.63-1.63c.68-.68 1.79-.68 2.47 0l3.51 3.51c.68.68.68 1.' +
+          '79 0 2.47L17.5 12l2 2 1.53-1.53c1.65-1.65 1.65-4.37 0-6.02l-3.51-3.51c-1.65-1.' +
+          '65-4.37-1.65-6.02 0z"/></svg>';
+      } else {
+        iconWrap.innerHTML =
+          '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">' +
+          '<path d="M13 16h2V8h-2m-4 8h2V8H9m3-6C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.' +
+          '48 10-10S17.52 2 12 2m0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 ' +
+          '8z"/></svg>';
+      }
+      body.appendChild(iconWrap);
+
+      // Headline
+      const headline = document.createElement("p");
+      headline.className = "takeover-headline";
+      headline.textContent = isDeprovisioned
+        ? STR.takeoverDeprovisioned
+        : STR.takeoverPaused;
+      body.appendChild(headline);
+
+      // Reason (textContent only — user/API supplied)
+      const reasonEl = document.createElement("p");
+      reasonEl.className = "takeover-reason";
+      if (lc.reason) {
+        reasonEl.textContent = lc.reason;
+      } else {
+        reasonEl.style.display = "none";
+      }
+      body.appendChild(reasonEl);
+
+      // Since (relative time)
+      const sinceEl = document.createElement("p");
+      sinceEl.className = "takeover-since";
+      if (lc.since) {
+        const sinceMs = Date.now() - new Date(lc.since).getTime();
+        sinceEl.textContent = STR.takeoverSince + " " + this._relAge(sinceMs);
+      } else {
+        sinceEl.style.display = "none";
+      }
+      body.appendChild(sinceEl);
+
+      // Next-step text (static copy — not API data)
+      const nextEl = document.createElement("p");
+      nextEl.className =
+        "takeover-next " + (isDeprovisioned ? "deprovisioned" : "paused");
+      nextEl.textContent = isDeprovisioned
+        ? STR.takeoverDeprovisionedNext
+        : STR.takeoverPausedNext;
+      body.appendChild(nextEl);
+
+      root.appendChild(body);
     }
 
     // ---------------------------------------------------------------- //
