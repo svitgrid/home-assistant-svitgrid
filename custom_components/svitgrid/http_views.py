@@ -61,7 +61,16 @@ class SvitgridSyncStatusView(_BaseView):
         return self.json(await self._store.sync_status())
 
 
+class SvitgridHealthView(_BaseView):
+    url = "/api/svitgrid/health"
+    name = "api:svitgrid:health"
+
+    async def get(self, request):
+        return self.json(await self._store.get_lifecycle())
+
+
 def register_views(hass: HomeAssistant, store) -> None:
     for view in (SvitgridLiveView(store), SvitgridTodayView(store),
-                 SvitgridHistoryView(store), SvitgridSyncStatusView(store)):
+                 SvitgridHistoryView(store), SvitgridSyncStatusView(store),
+                 SvitgridHealthView(store)):
         hass.http.register_view(view)

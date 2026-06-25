@@ -1,6 +1,7 @@
 import pytest
 
 from custom_components.svitgrid.http_views import (
+    SvitgridHealthView,
     SvitgridHistoryView,
     SvitgridLiveView,
     SvitgridSyncStatusView,
@@ -75,3 +76,15 @@ async def test_history_view_defaults_to_today_when_params_missing(hass):
     today = _today()
     assert store.history_args[1] == store.history_args[2]
     assert store.history_args[1] == today
+
+
+@pytest.mark.asyncio
+async def test_health_view_returns_lifecycle(hass):
+    class _S:
+        async def get_lifecycle(self):
+            return {"state": "deprovisioned", "reason": "revoked", "since": "2026-06-25T10:00:00Z"}
+
+    view = SvitgridHealthView(_S())
+    resp = await view.get(_FakeRequest(hass))
+    assert resp.status == 200
+    assert b"deprovisioned" in resp.body
