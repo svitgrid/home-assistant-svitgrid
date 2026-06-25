@@ -9,7 +9,7 @@ from typing import Any
 
 from homeassistant.core import HomeAssistant
 
-from .api_client import ReadingRejected
+from .api_client import DeviceEvicted, ReadingRejected
 from .const import BACKFILL_CAP_S, INGEST_BATCH_MAX, READINGS_INTERVAL_S, SENDER_TICK_S
 
 _LOGGER = logging.getLogger(__name__)
@@ -28,6 +28,7 @@ def _now_iso() -> str:
 async def drain_once(
     *, store, api_client, api_key: str, now_iso: str, cadence: Cadence,
     batch_max: int = INGEST_BATCH_MAX, cap_s: int = BACKFILL_CAP_S,
+    lifecycle=None,
 ) -> int:
     """Drain at most one batch. Returns number of rows marked 'sent'."""
     # Age out anything beyond the backfill cap so it never clogs the queue.
@@ -42,6 +43,11 @@ async def drain_once(
 
     try:
         body = await api_client.push_readings_batch(api_key=api_key, readings=readings)
+    except DeviceEvicted as exc:
+        if lifecycle is not None:
+            lifecycle.deprovision(str(exc), now_iso)
+            await _maybe(store.set_lifecycle(lifecycle.state, lifecycle.reason, lifecycle.since))
+        return 0
     except ReadingRejected:
         await _maybe(store.mark_failed(keys, now_iso))
         return 0
@@ -54,6 +60,9 @@ async def drain_once(
         _LOGGER.warning(
             "cloud reports device stopped (%s); leaving %d row(s) pending",
             body.get("stoppedReason"), len(keys))
+        if lifecycle is not None:
+            lifecycle.pause(str(body.get("stoppedReason") or "stopped"), now_iso)
+            await _maybe(store.set_lifecycle(lifecycle.state, lifecycle.reason, lifecycle.since))
         return 0
 
     # Map per-item results back to rows (results are returned in input order).
@@ -81,12 +90,12 @@ async def drain_once(
 
 async def run_sender_loop(
     *, hass: HomeAssistant, store, api_client, api_key: str, cadence: Cadence,
-    tick_s: int = SENDER_TICK_S,
+    tick_s: int = SENDER_TICK_S, lifecycle=None,
 ) -> None:
-    while not hass.is_stopping:
+    while not hass.is_stopping and (lifecycle is None or lifecycle.active):
         try:
             await drain_once(store=store, api_client=api_client, api_key=api_key,
-                             now_iso=_now_iso(), cadence=cadence)
+                             now_iso=_now_iso(), cadence=cadence, lifecycle=lifecycle)
         except Exception:  # never let the sender loop die
             _LOGGER.exception("sender drain failed")
         await asyncio.sleep(tick_s)

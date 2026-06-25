@@ -1,6 +1,7 @@
 import pytest
 
-from custom_components.svitgrid.api_client import ReadingRejected
+from custom_components.svitgrid.api_client import DeviceEvicted, ReadingRejected
+from custom_components.svitgrid.lifecycle import DEPROVISIONED, PAUSED, LifecycleState
 from custom_components.svitgrid.reading_sender import Cadence, drain_once
 from custom_components.svitgrid.reading_store import ReadingStore
 
@@ -10,6 +11,7 @@ class _SyncStore(ReadingStore):
     async def get_sendable(self, now_iso, cap_s, limit): return self._get_sendable_sync(now_iso, cap_s, limit)
     async def mark_sent(self, keys): return self._mark_sent_sync(keys)
     async def mark_failed(self, keys, now_iso): return self._mark_failed_sync(keys, now_iso)
+    async def set_lifecycle(self, *a): return None
 
 
 def _store(tmp_path):
@@ -139,3 +141,29 @@ async def test_drain_stopped_device_leaves_rows_pending(tmp_path):
     assert sent == 0
     assert store._count_by_state_sync() == {"pending": 2}
     assert cadence.interval_s == 10  # cadence unchanged
+
+
+class _EvictClient:
+    async def push_readings_batch(self, api_key, readings):
+        raise DeviceEvicted("revoked")
+
+
+@pytest.mark.asyncio
+async def test_drain_device_evicted_sets_deprovisioned(tmp_path):
+    store = _store(tmp_path)
+    store._append_sync({"inverterId": "i", "timestamp": "2026-06-25T10:00:00Z"})
+    lc = LifecycleState()
+    sent = await drain_once(store=store, api_client=_EvictClient(), api_key="k",
+                            now_iso="2026-06-25T12:00:00Z", cadence=Cadence(interval_s=10), lifecycle=lc)
+    assert sent == 0 and lc.state == DEPROVISIONED
+
+
+@pytest.mark.asyncio
+async def test_drain_stopped_sets_paused(tmp_path):
+    store = _store(tmp_path)
+    store._append_sync({"inverterId": "i", "timestamp": "2026-06-25T10:00:00Z"})
+    lc = LifecycleState()
+    client = _FakeClient({"stopped": True, "stoppedReason": "disabled"})
+    sent = await drain_once(store=store, api_client=client, api_key="k",
+                            now_iso="2026-06-25T12:00:00Z", cadence=Cadence(interval_s=10), lifecycle=lc)
+    assert sent == 0 and lc.state == PAUSED
