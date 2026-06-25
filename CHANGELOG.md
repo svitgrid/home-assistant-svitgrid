@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## 0.9.0 — 2026-06-25
 
 ### Added
 - Runtime cloud-endpoint switch: the integration now handles a server-issued `set_cloud_endpoint` executor command, validating the target URL against an allow-list (`api-staging.svitgrid.app`, `api.svitgrid.app`), updating the ConfigEntry's `api_base`, and reloading the integration in-place. Mirrors the edge-device firmware behaviour from svitgrid sub-project D — lets Svitgrid migrate an HA-paired household between staging and prod without the user touching the HA UI.

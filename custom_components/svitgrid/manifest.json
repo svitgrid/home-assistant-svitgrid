@@ -1,13 +1,19 @@
 {
   "domain": "svitgrid",
   "name": "Svitgrid",
-  "version": "0.8.1",
+  "version": "0.9.0",
   "documentation": "https://github.com/svitgrid/home-assistant-svitgrid",
   "issue_tracker": "https://github.com/svitgrid/home-assistant-svitgrid/issues",
-  "codeowners": ["@svitgrid"],
+  "codeowners": [
+    "@svitgrid"
+  ],
   "iot_class": "cloud_push",
   "integration_type": "service",
-  "requirements": ["aiohttp>=3.9", "cryptography>=42.0", "paho-mqtt>=1.6"],
+  "requirements": [
+    "aiohttp>=3.9",
+    "cryptography>=42.0",
+    "paho-mqtt>=1.6"
+  ],
   "dependencies": [],
   "config_flow": true
 }
