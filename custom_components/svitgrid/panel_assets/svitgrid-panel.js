@@ -845,6 +845,7 @@
       this._lastHistoryFetch = 0;
       this._tooltip = null;
       this._histKey = null;
+      this._histMode = "energy";
       this._histSec = null;
 
       this._liveSec = this._addSection(root, STR.live, "live-region");
@@ -1988,6 +1989,8 @@
     // History — driven by _histRangeDays and _histMetric (SP-C foundation)
     // ---------------------------------------------------------------- //
     async _loadHistory() {
+      this._histReq = (this._histReq || 0) + 1;
+      const req = this._histReq;
       try {
         if (!this._historySec) return true;
 
@@ -2041,6 +2044,9 @@
           }
         }
 
+        // Drop stale responses — a newer request has already been dispatched.
+        if (req !== this._histReq) return true;
+
         const series = Array.from(byDay.entries())
           .map(([day, kwh]) => ({ day, kwh }))
           .sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0));
@@ -2088,6 +2094,7 @@
       for (let ri = 0; ri < rangeDays.length; ri++) {
         const d = rangeDays[ri];
         const btn = document.createElement("button");
+        btn.type = "button";
         btn.className = "hist-chip";
         btn.textContent = rangeLabels[ri];
         btn.setAttribute("aria-pressed", d === this._histRangeDays ? "true" : "false");
@@ -2127,6 +2134,7 @@
       ];
       for (const opt of metricOptions) {
         const btn = document.createElement("button");
+        btn.type = "button";
         btn.className = "hist-chip";
         btn.textContent = opt.label;
         btn.setAttribute("aria-pressed", opt.key === this._histMetric ? "true" : "false");
