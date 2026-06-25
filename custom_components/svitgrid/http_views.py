@@ -45,6 +45,12 @@ class SvitgridHistoryView(_BaseView):
     async def get(self, request):
         q = request.query
         inverter_id = q.get("inverter_id", "")
+        if q.get("granularity") == "hourly":
+            day = q.get("day", _today())
+            return self.json({
+                "inverter_id": inverter_id,
+                "hours": await self._store.hourly_range(inverter_id, day),
+            })
         start = q.get("start", _today())
         end = q.get("end", _today())
         return self.json({

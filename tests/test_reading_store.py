@@ -276,6 +276,68 @@ def test_history_range_orders_and_bounds(tmp_path):
     assert "2026-06-20" not in days_returned
 
 
+def test_hourly_range_returns_ordered_rows_for_day(tmp_path):
+    store = _store(tmp_path)
+    import json
+    conn = store._connect_for_test()
+    try:
+        rows_to_insert = [
+            ("inv-1", "2026-06-24T10:00:00Z", 12, {"pvPower": 1500.0}, {"pvPower": 2000.0}, {"dailyPvEnergy": 1.0}),
+            ("inv-1", "2026-06-24T11:00:00Z", 15, {"pvPower": 2000.0}, {"pvPower": 2500.0}, {"dailyPvEnergy": 2.0}),
+            ("inv-1", "2026-06-24T09:00:00Z", 10, {"pvPower": 500.0}, {"pvPower": 800.0}, {"dailyPvEnergy": 0.5}),
+            ("inv-2", "2026-06-24T10:00:00Z", 8, {}, {}, {}),  # different inverter
+            ("inv-1", "2026-06-23T10:00:00Z", 5, {}, {}, {}),  # different day
+        ]
+        for inv_id, hour_start, sample_count, avgs, peaks, energy in rows_to_insert:
+            conn.execute(
+                "INSERT INTO readings_hourly (inverter_id, hour_start, sample_count, avgs, peaks, energy) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (inv_id, hour_start, sample_count, json.dumps(avgs), json.dumps(peaks), json.dumps(energy)),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = store._hourly_range_sync("inv-1", "2026-06-24")
+    assert len(result) == 3
+    hours_returned = [r["hour"] for r in result]
+    assert hours_returned == [
+        "2026-06-24T09:00:00Z",
+        "2026-06-24T10:00:00Z",
+        "2026-06-24T11:00:00Z",
+    ]
+    # Verify row shape
+    row = result[1]  # the 10:00 row
+    assert row["sample_count"] == 12
+    assert row["avgs"]["pvPower"] == 1500.0
+    assert row["peaks"]["pvPower"] == 2000.0
+    assert row["energy"]["dailyPvEnergy"] == 1.0
+
+
+def test_hourly_range_returns_empty_for_unknown_day(tmp_path):
+    store = _store(tmp_path)
+    result = store._hourly_range_sync("inv-1", "2026-06-24")
+    assert result == []
+
+
+def test_hourly_range_excludes_other_inverters(tmp_path):
+    store = _store(tmp_path)
+    import json
+    conn = store._connect_for_test()
+    try:
+        conn.execute(
+            "INSERT INTO readings_hourly (inverter_id, hour_start, sample_count, avgs, peaks, energy) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            ("inv-2", "2026-06-24T10:00:00Z", 3, json.dumps({}), json.dumps({}), json.dumps({})),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = store._hourly_range_sync("inv-1", "2026-06-24")
+    assert result == []
+
+
 def test_median_gap_seconds_malformed_timestamps_returns_none():
     """Malformed timestamps must not raise; result is None (treat as unknown)."""
     from custom_components.svitgrid.reading_store import _median_gap_seconds

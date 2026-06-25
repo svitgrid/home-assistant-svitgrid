@@ -12,6 +12,7 @@ from custom_components.svitgrid.http_views import (
 class _FakeStore:
     def __init__(self):
         self.history_args = None
+        self.hourly_args = None
 
     async def live_snapshot(self):
         return [{"inverterId": "inv-1", "ts": "2026-06-24T10:00:00Z",
@@ -26,6 +27,13 @@ class _FakeStore:
     async def history_range(self, inverter_id, start, end):
         self.history_args = (inverter_id, start, end)
         return [{"day": "2026-06-23", "sample_count": 5, "avgs": {}, "peaks": {}, "energy": {}}]
+
+    async def hourly_range(self, inverter_id, day):
+        self.hourly_args = (inverter_id, day)
+        return [
+            {"hour": "2026-06-20T09:00:00Z", "sample_count": 10, "avgs": {}, "peaks": {}, "energy": {}},
+            {"hour": "2026-06-20T10:00:00Z", "sample_count": 12, "avgs": {}, "peaks": {}, "energy": {}},
+        ]
 
 
 class _FakeRequest:
@@ -88,3 +96,51 @@ async def test_health_view_returns_lifecycle(hass):
     resp = await view.get(_FakeRequest(hass))
     assert resp.status == 200
     assert b"deprovisioned" in resp.body
+
+
+@pytest.mark.asyncio
+async def test_history_view_hourly_granularity_returns_hours(hass):
+    store = _FakeStore()
+    view = SvitgridHistoryView(store)
+    request = _FakeRequest(hass, query={
+        "inverter_id": "inv-9",
+        "granularity": "hourly",
+        "day": "2026-06-20",
+    })
+    resp = await view.get(request)
+    assert resp.status == 200
+    assert store.hourly_args == ("inv-9", "2026-06-20")
+    assert b"hours" in resp.body
+    assert b"2026-06-20T09:00:00Z" in resp.body
+    # Must NOT have called history_range
+    assert store.history_args is None
+
+
+@pytest.mark.asyncio
+async def test_history_view_hourly_defaults_day_to_today(hass):
+    store = _FakeStore()
+    view = SvitgridHistoryView(store)
+    request = _FakeRequest(hass, query={"granularity": "hourly", "inverter_id": "inv-1"})
+    resp = await view.get(request)
+    assert resp.status == 200
+    today = _today()
+    assert store.hourly_args == ("inv-1", today)
+    assert b"hours" in resp.body
+
+
+@pytest.mark.asyncio
+async def test_history_view_daily_path_unchanged_with_granularity_absent(hass):
+    """Plain ?start=&end= (no granularity) still returns {days: ...} unchanged."""
+    store = _FakeStore()
+    view = SvitgridHistoryView(store)
+    request = _FakeRequest(hass, query={
+        "inverter_id": "inv-9",
+        "start": "2026-06-20",
+        "end": "2026-06-22",
+    })
+    resp = await view.get(request)
+    assert resp.status == 200
+    assert store.history_args == ("inv-9", "2026-06-20", "2026-06-22")
+    assert b"days" in resp.body
+    # hourly_range must not have been called
+    assert store.hourly_args is None

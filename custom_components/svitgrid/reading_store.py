@@ -336,6 +336,23 @@ class ReadingStore:
         finally:
             conn.close()
 
+    def _hourly_range_sync(self, inverter_id: str, day: str) -> list[dict]:
+        day_start = day + "T00:00:00Z"
+        day_end = day + "T23:59:59Z"
+        conn = _connect(self._db_path)
+        try:
+            cur = conn.execute(
+                "SELECT hour_start, sample_count, avgs, peaks, energy "
+                "FROM readings_hourly "
+                "WHERE inverter_id = ? AND hour_start >= ? AND hour_start <= ? "
+                "ORDER BY hour_start",
+                (inverter_id, day_start, day_end))
+            return [{"hour": r["hour_start"], "sample_count": r["sample_count"],
+                     "avgs": json.loads(r["avgs"]), "peaks": json.loads(r["peaks"]),
+                     "energy": json.loads(r["energy"])} for r in cur.fetchall()]
+        finally:
+            conn.close()
+
     def _history_range_sync(self, inverter_id: str, start_day: str,
                             end_day: str) -> list[dict]:
         conn = _connect(self._db_path)
@@ -478,6 +495,10 @@ class ReadingStore:
                             end_day: str) -> list[dict]:
         return await self._hass.async_add_executor_job(
             self._history_range_sync, inverter_id, start_day, end_day)
+
+    async def hourly_range(self, inverter_id: str, day: str) -> list[dict]:
+        return await self._hass.async_add_executor_job(
+            self._hourly_range_sync, inverter_id, day)
 
     async def sync_status(self) -> dict:
         return await self._hass.async_add_executor_job(self._sync_status_sync)
