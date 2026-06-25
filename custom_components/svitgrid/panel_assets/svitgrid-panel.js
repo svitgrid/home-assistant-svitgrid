@@ -497,6 +497,103 @@
       .skel-line { animation: none; }
     }
 
+    /* Detail section */
+    .detail-toggle {
+      display: flex;
+      align-items: center;
+      gap: var(--sp-1);
+      width: 100%;
+      background: none;
+      border: none;
+      border-top: 1px solid var(--sg-divider);
+      margin-top: var(--sp-2);
+      padding: var(--sp-2) 0 0;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 12px;
+      color: var(--sg-text-2);
+      text-align: left;
+    }
+    .detail-toggle:hover { color: var(--sg-text); }
+    .detail-toggle:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+      border-radius: 2px;
+    }
+    .detail-chevron {
+      display: inline-block;
+      font-size: 10px;
+      transition: transform 0.2s ease;
+      flex-shrink: 0;
+    }
+    .detail-toggle[aria-expanded="true"] .detail-chevron {
+      transform: rotate(90deg);
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .detail-chevron { transition: none; }
+    }
+    .detail-region {
+      display: none;
+      padding-top: var(--sp-2);
+    }
+    .detail-region.open {
+      display: block;
+    }
+    .detail-group {
+      margin-bottom: var(--sp-2);
+    }
+    .detail-group-label {
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: var(--sg-muted);
+      margin-bottom: 3px;
+    }
+    .detail-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+    }
+    .detail-chip {
+      font-size: 11px;
+      color: var(--sg-text);
+      background: color-mix(in srgb, var(--sg-divider) 50%, transparent);
+      border-radius: 4px;
+      padding: 1px 6px;
+      font-variant-numeric: tabular-nums;
+    }
+    .detail-batt-val {
+      font-size: 12px;
+      color: var(--sg-text);
+      font-variant-numeric: tabular-nums;
+    }
+    .detail-phase-table {
+      display: grid;
+      font-size: 11px;
+      font-variant-numeric: tabular-nums;
+      column-gap: var(--sp-2);
+      row-gap: 2px;
+    }
+    .detail-phase-table.cols-1 { grid-template-columns: auto 1fr; }
+    .detail-phase-table.cols-2 { grid-template-columns: auto repeat(2, 1fr); }
+    .detail-phase-table.cols-3 { grid-template-columns: auto repeat(3, 1fr); }
+    .detail-phase-hdr {
+      color: var(--sg-muted);
+      font-weight: 700;
+    }
+    .detail-phase-cell {
+      color: var(--sg-text);
+    }
+    .detail-phase-row-label {
+      color: var(--sg-text-2);
+    }
+    .detail-footnote {
+      font-size: 10px;
+      color: var(--sg-muted);
+      margin-top: var(--sp-1);
+    }
+
     /* Responsive */
     @media (max-width: 600px) {
       .panel-root { padding: var(--sp-3); }
@@ -556,6 +653,7 @@
       this._invNodes = {};         // inverterId -> { card, refs... }
       this._freshestAgeMs = null;  // age (ms) of the most-recent inverter reading
       this._todayRefs = null;      // cached DOM refs for today-tile values
+      this._detailOpen = {};       // inverterId -> bool (open/closed state, survives refresh)
 
       // Shadow refs
       this._liveSec = null;
@@ -1098,6 +1196,12 @@
       refs.load = this._buildMetricRow(card, "home", STR.load, true);
       refs.battery = this._buildMetricRow(card, "battery", STR.battery, false);
       refs.grid = this._buildMetricRow(card, "grid", STR.grid, false);
+
+      // Detail section (built once, mutated in place on each poll)
+      const detail = this._buildDetail(id);
+      card.appendChild(detail.wrap);
+      refs.detail = detail.refs;
+
       return refs;
     }
 
@@ -1122,6 +1226,266 @@
       row.appendChild(valWrap);
       card.appendChild(row);
       return { val, sub };
+    }
+
+    // ---------------------------------------------------------------- //
+    // Detail section — build once, mutate in place
+    // ---------------------------------------------------------------- //
+    _buildDetail(inverterId) {
+      const safeId = inverterId.replace(/[^a-zA-Z0-9_-]/g, "_");
+      const regionId = "detail-" + safeId;
+      const isOpen = !!this._detailOpen[inverterId];
+
+      const wrap = document.createElement("div");
+
+      // Toggle button
+      const toggle = document.createElement("button");
+      toggle.className = "detail-toggle";
+      toggle.setAttribute("aria-expanded", isOpen ? "true" : "false");
+      toggle.setAttribute("aria-controls", regionId);
+
+      const chevron = document.createElement("span");
+      chevron.className = "detail-chevron";
+      chevron.textContent = "▸";
+      chevron.setAttribute("aria-hidden", "true");
+      toggle.appendChild(chevron);
+
+      const toggleLabel = document.createElement("span");
+      toggleLabel.textContent = "Details";
+      toggle.appendChild(toggleLabel);
+
+      toggle.addEventListener("click", () => {
+        const opening = toggle.getAttribute("aria-expanded") !== "true";
+        this._detailOpen[inverterId] = opening;
+        toggle.setAttribute("aria-expanded", opening ? "true" : "false");
+        region.classList.toggle("open", opening);
+      });
+
+      wrap.appendChild(toggle);
+
+      // Detail region
+      const region = document.createElement("div");
+      region.className = "detail-region" + (isOpen ? " open" : "");
+      region.setAttribute("role", "region");
+      region.setAttribute("aria-label", "Inverter details");
+      region.id = regionId;
+
+      // --- Solar strings group ---
+      const pvGroup = document.createElement("div");
+      pvGroup.className = "detail-group";
+      const pvLabel = document.createElement("div");
+      pvLabel.className = "detail-group-label";
+      pvLabel.textContent = "Solar strings";
+      const pvChips = document.createElement("div");
+      pvChips.className = "detail-chips";
+      pvGroup.appendChild(pvLabel);
+      pvGroup.appendChild(pvChips);
+      region.appendChild(pvGroup);
+
+      // --- Battery voltage group ---
+      const battGroup = document.createElement("div");
+      battGroup.className = "detail-group";
+      const battLabel = document.createElement("div");
+      battLabel.className = "detail-group-label";
+      battLabel.textContent = "Battery voltage";
+      const battVal = document.createElement("div");
+      battVal.className = "detail-batt-val";
+      battGroup.appendChild(battLabel);
+      battGroup.appendChild(battVal);
+      region.appendChild(battGroup);
+
+      // --- Grid per-phase group ---
+      const gridGroup = document.createElement("div");
+      gridGroup.className = "detail-group";
+      const gridLabel = document.createElement("div");
+      gridLabel.className = "detail-group-label";
+      gridLabel.textContent = "Grid (per phase)";
+      const gridTable = document.createElement("div");
+      gridTable.className = "detail-phase-table";
+      gridGroup.appendChild(gridLabel);
+      gridGroup.appendChild(gridTable);
+      region.appendChild(gridGroup);
+
+      // --- Load per-phase group ---
+      const loadGroup = document.createElement("div");
+      loadGroup.className = "detail-group";
+      const loadLabel = document.createElement("div");
+      loadLabel.className = "detail-group-label";
+      loadLabel.textContent = "Load (per phase)";
+      const loadTable = document.createElement("div");
+      loadTable.className = "detail-phase-table";
+      loadGroup.appendChild(loadLabel);
+      loadGroup.appendChild(loadTable);
+      region.appendChild(loadGroup);
+
+      // --- Reading quality footnote ---
+      const footnote = document.createElement("div");
+      footnote.className = "detail-footnote";
+      region.appendChild(footnote);
+
+      wrap.appendChild(region);
+
+      const refs = {
+        toggle, region,
+        pvGroup, pvChips,
+        battGroup, battVal,
+        gridGroup, gridTable,
+        loadGroup, loadTable,
+        footnote,
+      };
+
+      return { wrap, refs };
+    }
+
+    _updateDetail(refs, payload) {
+      const p = payload && typeof payload === "object" ? payload : {};
+
+      // Field name arrays — kept as literals so grepping / smoke-tests find them.
+      // pvPower1..pvPower8 (extendable); gridPowerL1/gridPowerL2/gridPowerL3;
+      // gridVoltageL1/gridVoltageL2/gridVoltageL3; loadPowerL1/loadPowerL2/loadPowerL3.
+      const PV_FIELDS = [
+        "pvPower1", "pvPower2", "pvPower3", "pvPower4",
+        "pvPower5", "pvPower6", "pvPower7", "pvPower8",
+      ];
+      const GRID_POWER_FIELDS = ["gridPowerL1", "gridPowerL2", "gridPowerL3"];
+      const GRID_VOLT_FIELDS  = ["gridVoltageL1", "gridVoltageL2", "gridVoltageL3"];
+      const LOAD_POWER_FIELDS = ["loadPowerL1", "loadPowerL2", "loadPowerL3"];
+
+      // --- Solar strings ---
+      const pvValues = [];
+      for (let k = 0; k < PV_FIELDS.length; k++) {
+        const v = p[PV_FIELDS[k]];
+        if (isNum(v)) pvValues.push({ label: "PV" + (k + 1), v });
+      }
+      if (pvValues.length > 0) {
+        refs.pvChips.textContent = "";
+        for (const { label, v } of pvValues) {
+          const chip = document.createElement("span");
+          chip.className = "detail-chip";
+          chip.textContent = label + " " + NF0.format(v) + " W";
+          refs.pvChips.appendChild(chip);
+        }
+        refs.pvGroup.style.display = "";
+      } else {
+        refs.pvGroup.style.display = "none";
+      }
+
+      // --- Battery voltage ---
+      const bv = p.batteryVoltage;
+      if (isNum(bv)) {
+        refs.battVal.textContent = NF1.format(bv) + " V";
+        refs.battGroup.style.display = "";
+      } else {
+        refs.battGroup.style.display = "none";
+      }
+
+      // --- Grid per-phase mini-table ---
+      // Determine which phases (0=L1,1=L2,2=L3) have any data.
+      const gridActivePh = [];
+      for (let i = 0; i < 3; i++) {
+        const hasP = isNum(p[GRID_POWER_FIELDS[i]]);
+        const hasV = isNum(p[GRID_VOLT_FIELDS[i]]);
+        if (hasP || hasV) gridActivePh.push({ i, label: "L" + (i + 1), hasP, hasV });
+      }
+      if (gridActivePh.length > 0) {
+        const hasPowerRow = gridActivePh.some((ph) => ph.hasP);
+        const hasVoltRow  = gridActivePh.some((ph) => ph.hasV);
+
+        refs.gridTable.textContent = "";
+        refs.gridTable.className = "detail-phase-table cols-" + gridActivePh.length;
+
+        // Header row: blank + phase labels
+        const hdrBlank = document.createElement("div");
+        hdrBlank.className = "detail-phase-hdr";
+        refs.gridTable.appendChild(hdrBlank);
+        for (const ph of gridActivePh) {
+          const hdr = document.createElement("div");
+          hdr.className = "detail-phase-hdr";
+          hdr.textContent = ph.label;
+          refs.gridTable.appendChild(hdr);
+        }
+
+        if (hasPowerRow) {
+          const rowLbl = document.createElement("div");
+          rowLbl.className = "detail-phase-row-label";
+          rowLbl.textContent = "Power (W)";
+          refs.gridTable.appendChild(rowLbl);
+          for (const ph of gridActivePh) {
+            const cell = document.createElement("div");
+            cell.className = "detail-phase-cell";
+            const v = p[GRID_POWER_FIELDS[ph.i]];
+            cell.textContent = isNum(v) ? NF0.format(v) : "—";
+            refs.gridTable.appendChild(cell);
+          }
+        }
+
+        if (hasVoltRow) {
+          const rowLbl = document.createElement("div");
+          rowLbl.className = "detail-phase-row-label";
+          rowLbl.textContent = "Voltage (V)";
+          refs.gridTable.appendChild(rowLbl);
+          for (const ph of gridActivePh) {
+            const cell = document.createElement("div");
+            cell.className = "detail-phase-cell";
+            const v = p[GRID_VOLT_FIELDS[ph.i]];
+            cell.textContent = isNum(v) ? NF1.format(v) : "—";
+            refs.gridTable.appendChild(cell);
+          }
+        }
+
+        refs.gridGroup.style.display = "";
+      } else {
+        refs.gridGroup.style.display = "none";
+      }
+
+      // --- Load per-phase mini-table ---
+      const loadActivePh = [];
+      for (let i = 0; i < 3; i++) {
+        if (isNum(p[LOAD_POWER_FIELDS[i]])) loadActivePh.push({ i, label: "L" + (i + 1) });
+      }
+      if (loadActivePh.length > 0) {
+        refs.loadTable.textContent = "";
+        refs.loadTable.className = "detail-phase-table cols-" + loadActivePh.length;
+
+        // Header row
+        const hdrBlank = document.createElement("div");
+        hdrBlank.className = "detail-phase-hdr";
+        refs.loadTable.appendChild(hdrBlank);
+        for (const ph of loadActivePh) {
+          const hdr = document.createElement("div");
+          hdr.className = "detail-phase-hdr";
+          hdr.textContent = ph.label;
+          refs.loadTable.appendChild(hdr);
+        }
+
+        // Power row
+        const rowLbl = document.createElement("div");
+        rowLbl.className = "detail-phase-row-label";
+        rowLbl.textContent = "Power (W)";
+        refs.loadTable.appendChild(rowLbl);
+        for (const ph of loadActivePh) {
+          const cell = document.createElement("div");
+          cell.className = "detail-phase-cell";
+          const v = p[LOAD_POWER_FIELDS[ph.i]];
+          cell.textContent = isNum(v) ? NF0.format(v) : "—";
+          refs.loadTable.appendChild(cell);
+        }
+
+        refs.loadGroup.style.display = "";
+      } else {
+        refs.loadGroup.style.display = "none";
+      }
+
+      // --- Reading quality footnote ---
+      const sc = p.sampleCount;
+      const ps = p.periodSec;
+      if (isNum(sc) && isNum(ps)) {
+        refs.footnote.textContent =
+          sc + " samples over " + Math.round(ps / 60) + " min";
+        refs.footnote.style.display = "";
+      } else {
+        refs.footnote.style.display = "none";
+      }
     }
 
     _updateInvCard(node, payload, ageMs) {
@@ -1179,6 +1543,11 @@
       }
 
       this._updateFlowRow(node.flow, { pv, load, batt, grid });
+
+      // Detail section — update in place every poll
+      if (node.detail) {
+        this._updateDetail(node.detail, p);
+      }
     }
 
     _updateFlowRow(flow, v) {
