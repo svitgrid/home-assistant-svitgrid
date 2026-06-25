@@ -70,6 +70,8 @@
     batteryCharged: "Battery charged",
     batteryDischarged: "Battery discharged",
     generator: "Generator",
+    losses: "Losses",
+    current: "Current",
     kwh: "kWh",
     stale: "Stale",
     syncedAll: "All readings synced",
@@ -1343,9 +1345,12 @@
       sysInvTemp.className = "detail-batt-val";
       const sysGridFreq = document.createElement("div");
       sysGridFreq.className = "detail-batt-val";
+      const sysLoadFreq = document.createElement("div");
+      sysLoadFreq.className = "detail-batt-val";
       sysGroup.appendChild(sysLabel);
       sysGroup.appendChild(sysInvTemp);
       sysGroup.appendChild(sysGridFreq);
+      sysGroup.appendChild(sysLoadFreq);
       region.appendChild(sysGroup);
 
       // --- Grid per-phase group ---
@@ -1383,7 +1388,7 @@
         toggle, region,
         pvGroup, pvChips,
         battGroup, battVal, battTemp, battCurrent,
-        sysGroup, sysInvTemp, sysGridFreq,
+        sysGroup, sysInvTemp, sysGridFreq, sysLoadFreq,
         gridGroup, gridTable,
         loadGroup, loadTable,
         footnote,
@@ -1402,9 +1407,11 @@
         "pvPower1", "pvPower2", "pvPower3", "pvPower4",
         "pvPower5", "pvPower6", "pvPower7", "pvPower8",
       ];
-      const GRID_POWER_FIELDS = ["gridPowerL1", "gridPowerL2", "gridPowerL3"];
-      const GRID_VOLT_FIELDS  = ["gridVoltageL1", "gridVoltageL2", "gridVoltageL3"];
-      const LOAD_POWER_FIELDS = ["loadPowerL1", "loadPowerL2", "loadPowerL3"];
+      const GRID_POWER_FIELDS   = ["gridPowerL1", "gridPowerL2", "gridPowerL3"];
+      const GRID_VOLT_FIELDS    = ["gridVoltageL1", "gridVoltageL2", "gridVoltageL3"];
+      const GRID_CURRENT_FIELDS = ["gridCurrentL1", "gridCurrentL2", "gridCurrentL3"];
+      const LOAD_POWER_FIELDS   = ["loadPowerL1", "loadPowerL2", "loadPowerL3"];
+      const LOAD_CURRENT_FIELDS = ["loadCurrentL1", "loadCurrentL2", "loadCurrentL3"];
 
       // --- Solar strings ---
       const pvValues = [];
@@ -1449,9 +1456,10 @@
       }
       refs.battGroup.style.display = (isNum(bv) || isNum(bt) || isNum(bc)) ? "" : "none";
 
-      // --- System (inverter temperature + grid frequency) ---
+      // --- System (inverter temperature + grid frequency + load frequency) ---
       const it = p.inverterTemperature;
       const gf = p.gridFrequency;
+      const lf = p.loadFrequency;
       if (isNum(it)) {
         refs.sysInvTemp.textContent = NF1.format(it) + " °C";
         refs.sysInvTemp.style.display = "";
@@ -1464,7 +1472,13 @@
       } else {
         refs.sysGridFreq.style.display = "none";
       }
-      refs.sysGroup.style.display = (isNum(it) || isNum(gf)) ? "" : "none";
+      if (isNum(lf)) {
+        refs.sysLoadFreq.textContent = NF2.format(lf) + " Hz";
+        refs.sysLoadFreq.style.display = "";
+      } else {
+        refs.sysLoadFreq.style.display = "none";
+      }
+      refs.sysGroup.style.display = (isNum(it) || isNum(gf) || isNum(lf)) ? "" : "none";
 
       // --- Grid per-phase mini-table ---
       // Determine which phases (0=L1,1=L2,2=L3) have any data.
@@ -1472,11 +1486,13 @@
       for (let i = 0; i < 3; i++) {
         const hasP = isNum(p[GRID_POWER_FIELDS[i]]);
         const hasV = isNum(p[GRID_VOLT_FIELDS[i]]);
-        if (hasP || hasV) gridActivePh.push({ i, label: "L" + (i + 1), hasP, hasV });
+        const hasC = isNum(p[GRID_CURRENT_FIELDS[i]]);
+        if (hasP || hasV || hasC) gridActivePh.push({ i, label: "L" + (i + 1), hasP, hasV, hasC });
       }
       if (gridActivePh.length > 0) {
-        const hasPowerRow = gridActivePh.some((ph) => ph.hasP);
-        const hasVoltRow  = gridActivePh.some((ph) => ph.hasV);
+        const hasPowerRow   = gridActivePh.some((ph) => ph.hasP);
+        const hasVoltRow    = gridActivePh.some((ph) => ph.hasV);
+        const hasCurrentRow = gridActivePh.some((ph) => ph.hasC);
 
         refs.gridTable.textContent = "";
         refs.gridTable.className = "detail-phase-table cols-" + gridActivePh.length;
@@ -1520,6 +1536,20 @@
           }
         }
 
+        if (hasCurrentRow) {
+          const rowLbl = document.createElement("div");
+          rowLbl.className = "detail-phase-row-label";
+          rowLbl.textContent = STR.current + " (A)";
+          refs.gridTable.appendChild(rowLbl);
+          for (const ph of gridActivePh) {
+            const cell = document.createElement("div");
+            cell.className = "detail-phase-cell";
+            const v = p[GRID_CURRENT_FIELDS[ph.i]];
+            cell.textContent = isNum(v) ? NF1.format(v) + " A" : "";
+            refs.gridTable.appendChild(cell);
+          }
+        }
+
         refs.gridGroup.style.display = "";
       } else {
         refs.gridGroup.style.display = "none";
@@ -1528,9 +1558,14 @@
       // --- Load per-phase mini-table ---
       const loadActivePh = [];
       for (let i = 0; i < 3; i++) {
-        if (isNum(p[LOAD_POWER_FIELDS[i]])) loadActivePh.push({ i, label: "L" + (i + 1) });
+        const hasP = isNum(p[LOAD_POWER_FIELDS[i]]);
+        const hasC = isNum(p[LOAD_CURRENT_FIELDS[i]]);
+        if (hasP || hasC) loadActivePh.push({ i, label: "L" + (i + 1), hasP, hasC });
       }
       if (loadActivePh.length > 0) {
+        const hasLoadPowerRow   = loadActivePh.some((ph) => ph.hasP);
+        const hasLoadCurrentRow = loadActivePh.some((ph) => ph.hasC);
+
         refs.loadTable.textContent = "";
         refs.loadTable.className = "detail-phase-table cols-" + loadActivePh.length;
 
@@ -1546,16 +1581,33 @@
         }
 
         // Power row
-        const rowLbl = document.createElement("div");
-        rowLbl.className = "detail-phase-row-label";
-        rowLbl.textContent = "Power (W)";
-        refs.loadTable.appendChild(rowLbl);
-        for (const ph of loadActivePh) {
-          const cell = document.createElement("div");
-          cell.className = "detail-phase-cell";
-          const v = p[LOAD_POWER_FIELDS[ph.i]];
-          cell.textContent = isNum(v) ? NF0.format(v) : "";
-          refs.loadTable.appendChild(cell);
+        if (hasLoadPowerRow) {
+          const rowLbl = document.createElement("div");
+          rowLbl.className = "detail-phase-row-label";
+          rowLbl.textContent = "Power (W)";
+          refs.loadTable.appendChild(rowLbl);
+          for (const ph of loadActivePh) {
+            const cell = document.createElement("div");
+            cell.className = "detail-phase-cell";
+            const v = p[LOAD_POWER_FIELDS[ph.i]];
+            cell.textContent = isNum(v) ? NF0.format(v) : "";
+            refs.loadTable.appendChild(cell);
+          }
+        }
+
+        // Current row
+        if (hasLoadCurrentRow) {
+          const rowLbl = document.createElement("div");
+          rowLbl.className = "detail-phase-row-label";
+          rowLbl.textContent = STR.current + " (A)";
+          refs.loadTable.appendChild(rowLbl);
+          for (const ph of loadActivePh) {
+            const cell = document.createElement("div");
+            cell.className = "detail-phase-cell";
+            const v = p[LOAD_CURRENT_FIELDS[ph.i]];
+            cell.textContent = isNum(v) ? NF1.format(v) + " A" : "";
+            refs.loadTable.appendChild(cell);
+          }
         }
 
         refs.loadGroup.style.display = "";
@@ -1766,6 +1818,7 @@
         const battCharged   = sumPresent("dailyBatteryChargeEnergy");
         const battDischarged = sumPresent("dailyBatteryDischargeEnergy");
         const generator     = sumPresent("dailyGeneratorEnergy");
+        const losses        = sumPresent("dailyLossesEnergy");
 
         const tiles = [
           { label: STR.generated,        value: this._kwh(sum("dailyPvEnergy")),          presentOnly: false, present: true },
@@ -1775,6 +1828,7 @@
           { label: STR.batteryCharged,   value: this._kwh(battCharged.value),              presentOnly: true,  present: battCharged.present },
           { label: STR.batteryDischarged, value: this._kwh(battDischarged.value),          presentOnly: true,  present: battDischarged.present },
           { label: STR.generator,        value: this._kwh(generator.value),                presentOnly: true,  present: generator.present },
+          { label: STR.losses,           value: this._kwh(losses.value),                   presentOnly: true,  present: losses.present },
         ];
 
         if (!this._todaySec) return true;
