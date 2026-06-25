@@ -399,3 +399,65 @@ async def test_loop_stops_on_device_stopped(monkeypatch):
     sleeps = await _run_poller_capture_sleep(monkeypatch, hass, api)
     api.poll_commands.assert_awaited_once()
     assert sleeps == []
+
+
+# ---------------------------------------------------------------------------
+# Task 4: lifecycle wiring — poller sets lifecycle on eviction/stop
+# ---------------------------------------------------------------------------
+
+
+class _Store:
+    async def set_lifecycle(self, *a) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_poller_410_sets_deprovisioned(monkeypatch):
+    """DeviceEvicted (410) → lifecycle transitions to DEPROVISIONED before returning."""
+    from custom_components.svitgrid.lifecycle import DEPROVISIONED, LifecycleState
+
+    monkeypatch.setattr(asyncio, "sleep", AsyncMock())
+    api = MagicMock()
+    api.poll_commands = AsyncMock(side_effect=DeviceEvicted("revoked"))
+    hass = MagicMock()
+    type(hass).is_stopping = property(lambda _self: False)
+    lc = LifecycleState()
+    store = _Store()
+    kwargs = dict(
+        hass=hass,
+        api_client=api,
+        keystore=None,
+        entry_data=_entry_data(),
+        wake_event=None,
+        lifecycle=lc,
+        store=store,
+    )
+    await poller_run_loop(**kwargs)
+    api.poll_commands.assert_awaited_once()
+    assert lc.state == DEPROVISIONED
+
+
+@pytest.mark.asyncio
+async def test_poller_stopped_sets_paused(monkeypatch):
+    """DeviceStopped → lifecycle transitions to PAUSED before returning."""
+    from custom_components.svitgrid.lifecycle import PAUSED, LifecycleState
+
+    monkeypatch.setattr(asyncio, "sleep", AsyncMock())
+    api = MagicMock()
+    api.poll_commands = AsyncMock(side_effect=DeviceStopped("disabled"))
+    hass = MagicMock()
+    type(hass).is_stopping = property(lambda _self: False)
+    lc = LifecycleState()
+    store = _Store()
+    kwargs = dict(
+        hass=hass,
+        api_client=api,
+        keystore=None,
+        entry_data=_entry_data(),
+        wake_event=None,
+        lifecycle=lc,
+        store=store,
+    )
+    await poller_run_loop(**kwargs)
+    api.poll_commands.assert_awaited_once()
+    assert lc.state == PAUSED

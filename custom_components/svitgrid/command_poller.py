@@ -312,6 +312,8 @@ async def run_loop(
     entry_data: dict | None = None,
     wake_event: asyncio.Event | None = None,
     activity: Any = None,  # ActivityTracker; None acceptable
+    lifecycle: Any = None,  # LifecycleState; None acceptable (keeps existing callers working)
+    store: Any = None,  # store with async set_lifecycle; None acceptable
 ) -> None:
     """Polling coroutine. Exits when hass.is_stopping becomes True.
 
@@ -336,7 +338,7 @@ async def run_loop(
                     if kid and pub:
                         trusted_public_keys_hex[kid] = pub
 
-    while not hass.is_stopping:
+    while not hass.is_stopping and (lifecycle is None or lifecycle.active):
         next_interval_s = float(interval_s)  # floor; updated from each poll response
         try:
             if keystore is not None:
@@ -386,6 +388,10 @@ async def run_loop(
                 "Command poller: device key revoked (410); stopping. "
                 "Re-pair the integration to resume."
             )
+            if lifecycle is not None:
+                lifecycle.deprovision("Device key revoked (owner household removed)", _now_iso())
+                if store is not None:
+                    await store.set_lifecycle(lifecycle.state, lifecycle.reason, lifecycle.since)
             return
         except DeviceStopped as e:
             _LOGGER.warning(
@@ -394,6 +400,10 @@ async def run_loop(
                 "integration to resume.",
                 e.reason,
             )
+            if lifecycle is not None:
+                lifecycle.pause(str(e.reason), _now_iso())
+                if store is not None:
+                    await store.set_lifecycle(lifecycle.state, lifecycle.reason, lifecycle.since)
             return
         except Exception:  # noqa: BLE001
             _LOGGER.exception("Command poll iteration failed; retrying next tick")
