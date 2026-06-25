@@ -123,6 +123,17 @@
     histTrendUnitPct: "%",
     histTrendUnitDegC: "°C",
     histTrendUnitHz: "Hz",
+    // Intraday drill-down
+    intradayBack: "← Back",
+    intradayTitle: "Hourly profile",
+    intradayNoData: "No hourly detail for this day.",
+    intradaySeriesPv: "Solar",
+    intradaySeriesLoad: "House",
+    intradaySeriesBattery: "Battery",
+    intradaySeriesGrid: "Grid",
+    intradayAriaBar: "View hourly profile for",
+    intradayUnitW: "W",
+    intradayUnitKw: "kW",
   };
 
   // ------------------------------------------------------------------ //
@@ -498,6 +509,87 @@
       align-self: center;
     }
 
+    /* Tappable bar-col button (intraday drill-down) */
+    .bar-col-btn {
+      display: contents; /* inherits bar-col layout */
+      background: none;
+      border: none;
+      padding: 0;
+      margin: 0;
+      cursor: pointer;
+      font: inherit;
+      color: inherit;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-end;
+      flex: 1;
+      min-width: 7px;
+      height: 100%;
+      position: relative;
+    }
+    .bar-col-btn:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 1px;
+      border-radius: 2px;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .bar-col-btn { transition: none; }
+    }
+
+    /* Intraday back button */
+    .intraday-back {
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--accent);
+      background: none;
+      border: none;
+      cursor: pointer;
+      padding: 0;
+      margin-bottom: var(--sp-3);
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .intraday-back:hover { text-decoration: underline; }
+    .intraday-back:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+      border-radius: 2px;
+    }
+
+    /* Intraday multi-series line chart */
+    .intraday-legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--sp-1) var(--sp-3);
+      margin-top: var(--sp-3);
+      font-size: 12px;
+      color: var(--sg-text-2);
+    }
+    .intraday-legend-item {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .intraday-legend-swatch {
+      width: 10px;
+      height: 3px;
+      border-radius: 2px;
+      flex-shrink: 0;
+    }
+    .line-path-pv       { stroke: var(--accent); }
+    .line-path-load     { stroke: var(--sg-text); }
+    .line-path-battery  { stroke: var(--sg-ok); }
+    .line-path-grid     { stroke: var(--info-color, #1565C0); }
+    .line-dot-pv        { fill: var(--accent); }
+    .line-dot-load      { fill: var(--sg-text); }
+    .line-dot-battery   { fill: var(--sg-ok); }
+    .line-dot-grid      { fill: var(--info-color, #1565C0); }
+
     /* Sources stacked-bar segments */
     .bar-seg-pv      { background: var(--accent); }
     .bar-seg-import  { background: var(--info-color, #1565C0); }
@@ -834,6 +926,10 @@
       this._histKey = null;                // cache key: range|metric|data changes trigger re-render
       this._histSec = null;                // h2 section title node (for dynamic text update)
 
+      // Intraday drill-down (Task 5)
+      this._intradayDay = null;            // YYYY-MM-DD of selected day; null = range view
+      this._intradayReq = 0;              // stale-guard token for intraday fetches
+
       // Shadow refs
       this._liveSec = null;
       this._todaySec = null;
@@ -933,6 +1029,8 @@
       this._histKey = null;
       this._histMode = "energy";
       this._histSec = null;
+      this._intradayDay = null;
+      this._intradayReq = 0;
 
       this._liveSec = this._addSection(root, STR.live, "live-region");
       this._fillSkeleton(this._liveSec, "live");
@@ -2437,21 +2535,31 @@
         const col = document.createElement("div");
         col.className = "bar-col";
 
+        // Tappable button wrapping the bar (intraday drill-down)
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "bar-col-btn";
+        btn.setAttribute("aria-label", STR.intradayAriaBar + " " + s.day);
+        btn.addEventListener("click", (e) => {
+          this._intradayDay = s.day;
+          this._loadIntraday(s.day);
+          e.stopPropagation();
+        });
+
         // Value caps on tallest + most-recent
         if (i === tallestIdx || i === lastIdx) {
           const cap = document.createElement("div");
           cap.className = "bar-cap";
           cap.textContent = this._kwh(s.kwh);
-          col.appendChild(cap);
+          btn.appendChild(cap);
         }
 
         const bar = document.createElement("div");
         bar.className = "bar";
         bar.style.height = Math.max(pct, 2) + "%";
         const label = this._localDate(s.day) + ": " + this._kwh(s.kwh) + " kWh";
-        bar.setAttribute("role", "img");
-        bar.setAttribute("aria-label", label);
-        bar.setAttribute("tabindex", "0");
+        bar.setAttribute("role", "presentation");
+        bar.setAttribute("aria-hidden", "true");
         const showTip = (clientX) => {
           tooltip.textContent = label;
           tooltip.classList.add("show");
@@ -2462,13 +2570,13 @@
           tooltip.style.top = (barRect.top - plotRect.top) + "px";
         };
         const hideTip = () => tooltip.classList.remove("show");
-        bar.addEventListener("click", (e) => showTip(e.clientX));
-        bar.addEventListener("mouseenter", (e) => showTip(e.clientX));
-        bar.addEventListener("mouseleave", hideTip);
-        bar.addEventListener("focus", () => showTip(null));
-        bar.addEventListener("blur", hideTip);
+        btn.addEventListener("mouseenter", (e) => showTip(e.clientX));
+        btn.addEventListener("mouseleave", hideTip);
+        btn.addEventListener("focus", () => showTip(null));
+        btn.addEventListener("blur", hideTip);
 
-        col.appendChild(bar);
+        btn.appendChild(bar);
+        col.appendChild(btn);
         chart.appendChild(col);
       }
 
@@ -2573,12 +2681,23 @@
         const col = document.createElement("div");
         col.className = "bar-col";
 
+        // Tappable button wrapping the stacked bar (intraday drill-down)
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "bar-col-btn";
+        btn.setAttribute("aria-label", STR.intradayAriaBar + " " + s.day);
+        btn.addEventListener("click", (e) => {
+          this._intradayDay = s.day;
+          this._loadIntraday(s.day);
+          e.stopPropagation();
+        });
+
         // Value cap on most-recent bar
         if (i === lastIdx && total > 0) {
           const cap = document.createElement("div");
           cap.className = "bar-cap";
           cap.textContent = this._kwh(total);
-          col.appendChild(cap);
+          btn.appendChild(cap);
         }
 
         // Stacked bar: segments stacked bottom-up (flex-direction: column-reverse)
@@ -2593,9 +2712,8 @@
           STR.histSourcesImport + " " + this._kwh(s.imp) + " · " +
           STR.histSourcesBattery + " " + this._kwh(s.batt) + " · " +
           STR.histSourcesTotal + " " + this._kwh(total);
-        stackBar.setAttribute("role", "img");
-        stackBar.setAttribute("aria-label", tipLabel);
-        stackBar.setAttribute("tabindex", "0");
+        stackBar.setAttribute("role", "presentation");
+        stackBar.setAttribute("aria-hidden", "true");
 
         // Segments: batt (bottom in column-reverse = first child), imp, pv (top = last child)
         const segs = [
@@ -2622,13 +2740,13 @@
           tooltip.style.top = (barRect.top - plotRect.top) + "px";
         };
         const hideTip = () => tooltip.classList.remove("show");
-        stackBar.addEventListener("click", (e) => showTip(e.clientX));
-        stackBar.addEventListener("mouseenter", (e) => showTip(e.clientX));
-        stackBar.addEventListener("mouseleave", hideTip);
-        stackBar.addEventListener("focus", () => showTip(null));
-        stackBar.addEventListener("blur", hideTip);
+        btn.addEventListener("mouseenter", (e) => showTip(e.clientX));
+        btn.addEventListener("mouseleave", hideTip);
+        btn.addEventListener("focus", () => showTip(null));
+        btn.addEventListener("blur", hideTip);
 
-        col.appendChild(stackBar);
+        btn.appendChild(stackBar);
+        col.appendChild(btn);
         chart.appendChild(col);
       }
 
@@ -2674,6 +2792,328 @@
       wrap.appendChild(legend);
 
       this._historySec.appendChild(wrap);
+    }
+
+    // ---------------------------------------------------------------- //
+    // Intraday drill-down — fetch + render 24h hourly profile
+    // ---------------------------------------------------------------- //
+
+    // Called when the user taps a day bar.  Fetches the hourly endpoint (LOCAL only)
+    // and renders a 4-series line chart (PV / Load / Battery / Grid power).
+    async _loadIntraday(day) {
+      this._intradayReq = (this._intradayReq || 0) + 1;
+      const req = this._intradayReq;
+      if (!this._historySec) return;
+
+      // Show a loading skeleton while fetching.
+      this._historySec.className = "";
+      this._historySec.innerHTML = "";
+      this._fillSkeleton(this._historySec, "history");
+
+      try {
+        // Mirror how _loadHistory builds the inverter_id param:
+        // pass empty string to get the aggregate across all inverters.
+        const ids = Object.keys(this._invNodes || {});
+        // We sum PV/Load across inverters, battery/grid as signed sums.
+        const pvByHour    = new Map();  // hour0-23 -> summed W
+        const loadByHour  = new Map();
+        const battByHour  = new Map();  // signed
+        const gridByHour  = new Map();  // signed
+
+        const idList = ids.length ? ids : (this._lastLiveInverterId ? [this._lastLiveInverterId] : [""]);
+        for (const id of idList) {
+          let data;
+          try {
+            data = await this._call(
+              "svitgrid/history?inverter_id=" +
+                encodeURIComponent(id) +
+                "&granularity=hourly&day=" +
+                encodeURIComponent(day)
+            );
+          } catch (_) {
+            continue;
+          }
+          const hours = data && Array.isArray(data.hours) ? data.hours : [];
+          for (const h of hours) {
+            if (!h.hour || typeof h.hour !== "string") continue;
+            // Derive hour index 0-23 from the ISO timestamp (YYYY-MM-DDTHH:00:00Z)
+            const hIdx = parseInt(h.hour.slice(11, 13), 10);
+            if (!isNum(hIdx) || hIdx < 0 || hIdx > 23) continue;
+            const avgs = h.avgs || {};
+            pvByHour.set(hIdx,    (pvByHour.get(hIdx)   || 0) + (isNum(avgs.pvPower)      ? avgs.pvPower      : 0));
+            loadByHour.set(hIdx,  (loadByHour.get(hIdx) || 0) + (isNum(avgs.loadPower)    ? avgs.loadPower    : 0));
+            battByHour.set(hIdx,  (battByHour.get(hIdx) || 0) + (isNum(avgs.batteryPower) ? avgs.batteryPower : 0));
+            gridByHour.set(hIdx,  (gridByHour.get(hIdx) || 0) + (isNum(avgs.gridPower)    ? avgs.gridPower    : 0));
+          }
+        }
+
+        // Drop stale responses (user tapped another day while this was in flight).
+        if (req !== this._intradayReq) return;
+
+        // Build series arrays indexed 0-23 (null = no data for that hour).
+        const pvSeries   = [];
+        const loadSeries = [];
+        const battSeries = [];
+        const gridSeries = [];
+        const hasAny = pvByHour.size > 0 || loadByHour.size > 0 || battByHour.size > 0 || gridByHour.size > 0;
+        for (let h = 0; h < 24; h++) {
+          pvSeries.push(  pvByHour.has(h)   ? pvByHour.get(h)   : null);
+          loadSeries.push(loadByHour.has(h)  ? loadByHour.get(h) : null);
+          battSeries.push(battByHour.has(h)  ? battByHour.get(h) : null);
+          gridSeries.push(gridByHour.has(h)  ? gridByHour.get(h) : null);
+        }
+
+        this._renderIntraday(day, hasAny, pvSeries, loadSeries, battSeries, gridSeries);
+      } catch (err) {
+        if (req !== this._intradayReq) return;
+        if (this._historySec) {
+          this._historySec.className = "section-error";
+          this._historySec.innerHTML = "";
+          const msg = document.createElement("div");
+          msg.textContent = "Hourly data unavailable: " + (err && err.message ? err.message : String(err));
+          this._historySec.appendChild(msg);
+        }
+      }
+    }
+
+    // Render the 24h hourly profile.  All series are length-24 arrays (W, null = no data).
+    _renderIntraday(day, hasAny, pvSeries, loadSeries, battSeries, gridSeries) {
+      if (!this._historySec) return;
+      this._historySec.className = "";
+      this._historySec.innerHTML = "";
+
+      // Update section title.
+      if (this._histSec) {
+        const dateLabel = this._localDate(day);
+        this._histSec.textContent = STR.intradayTitle + " — " + dateLabel;
+      }
+
+      // Back button
+      const back = document.createElement("button");
+      back.type = "button";
+      back.className = "intraday-back";
+      back.textContent = STR.intradayBack;
+      back.addEventListener("click", () => {
+        this._intradayDay = null;
+        this._intradayReq += 1; // invalidate any in-flight intraday fetch
+        if (this._histSec) this._histSec.textContent = this._histSectionTitle();
+        this._histKey = null;  // force re-render of the range chart
+        this._lastHistoryFetch = 0;
+        this._loadHistory();
+      });
+      this._historySec.appendChild(back);
+
+      // Empty state
+      if (!hasAny) {
+        const empty = document.createElement("div");
+        empty.className = "history-empty";
+        empty.textContent = STR.intradayNoData;
+        this._historySec.appendChild(empty);
+        return;
+      }
+
+      // Compute min/max across all four series for unified y-scale.
+      let minVal = Infinity;
+      let maxVal = -Infinity;
+      const allSeries = [pvSeries, loadSeries, battSeries, gridSeries];
+      for (const ser of allSeries) {
+        for (const v of ser) {
+          if (v !== null) {
+            if (v < minVal) minVal = v;
+            if (v > maxVal) maxVal = v;
+          }
+        }
+      }
+      const range = maxVal - minVal;
+      const pad = range > 0 ? range * 0.08 : Math.max(Math.abs(maxVal) * 0.05, 10);
+      const yLo = minVal - pad;
+      const yHi = maxVal + pad;
+      const yRange = yHi - yLo || 1;
+
+      // Power label helper: display in kW when >= 1000 W.
+      const fmtW = (v) => {
+        if (v === null) return "—";
+        const abs = Math.abs(v);
+        if (abs >= 1000) return NF1.format(v / 1000) + " kW";
+        return NF0.format(v) + " W";
+      };
+      const yUnit = (maxVal >= 1000 || minVal <= -1000) ? "kW" : "W";
+      const yFmt = (v) => yUnit === "kW" ? NF1.format(v / 1000) : NF0.format(v);
+
+      const SVG_W = 600;
+      const SVG_H = 140;
+
+      const wrap = document.createElement("div");
+      wrap.className = "history-chart";
+
+      const area = document.createElement("div");
+      area.className = "chart-area";
+
+      // Y axis labels: max, mid, min
+      const yAxis = document.createElement("div");
+      yAxis.className = "y-axis";
+      const yTop = document.createElement("span");
+      yTop.textContent = yFmt(yHi);
+      const yMid = document.createElement("span");
+      yMid.textContent = yFmt((yHi + yLo) / 2);
+      const yBot = document.createElement("span");
+      yBot.textContent = yFmt(yLo);
+      yAxis.appendChild(yTop);
+      yAxis.appendChild(yMid);
+      yAxis.appendChild(yBot);
+      area.appendChild(yAxis);
+
+      const plot = document.createElement("div");
+      plot.className = "chart-plot";
+      plot.style.position = "relative";
+
+      // Shared tooltip
+      const tooltip = document.createElement("div");
+      tooltip.className = "chart-tooltip";
+      this._tooltip = tooltip;
+
+      const ns = "http://www.w3.org/2000/svg";
+      const svg = document.createElementNS(ns, "svg");
+      svg.setAttribute("viewBox", "0 0 " + SVG_W + " " + SVG_H);
+      svg.setAttribute("preserveAspectRatio", "none");
+      svg.setAttribute("aria-hidden", "true");
+      svg.classList.add("line-svg");
+
+      // 50% gridline + zero-line if y range crosses zero
+      const glMid = document.createElementNS(ns, "line");
+      glMid.setAttribute("x1", "0"); glMid.setAttribute("x2", SVG_W);
+      glMid.setAttribute("y1", SVG_H / 2); glMid.setAttribute("y2", SVG_H / 2);
+      glMid.classList.add("line-gridline");
+      svg.appendChild(glMid);
+
+      if (yLo < 0 && yHi > 0) {
+        const zeroY = SVG_H - ((0 - yLo) / yRange) * SVG_H;
+        const glZero = document.createElementNS(ns, "line");
+        glZero.setAttribute("x1", "0"); glZero.setAttribute("x2", SVG_W);
+        glZero.setAttribute("y1", zeroY.toFixed(2)); glZero.setAttribute("y2", zeroY.toFixed(2));
+        glZero.classList.add("line-gridline");
+        glZero.style.opacity = "0.5";
+        svg.appendChild(glZero);
+      }
+
+      // x coordinate for hour h (0-23): spread evenly across SVG_W
+      const xOf = (h) => (h / 23) * SVG_W;
+      const yOf = (v) => SVG_H - ((v - yLo) / yRange) * SVG_H;
+
+      const seriesDefs = [
+        { data: pvSeries,   name: STR.intradaySeriesPv,      pathCls: "line-path line-path-pv",      dotCls: "line-dot line-dot-pv"     },
+        { data: loadSeries, name: STR.intradaySeriesLoad,    pathCls: "line-path line-path-load",    dotCls: "line-dot line-dot-load"   },
+        { data: battSeries, name: STR.intradaySeriesBattery, pathCls: "line-path line-path-battery", dotCls: "line-dot line-dot-battery"},
+        { data: gridSeries, name: STR.intradaySeriesGrid,    pathCls: "line-path line-path-grid",    dotCls: "line-dot line-dot-grid"   },
+      ];
+
+      for (const serDef of seriesDefs) {
+        // Build path
+        let pathD = "";
+        let inSeg = false;
+        for (let h = 0; h < 24; h++) {
+          const v = serDef.data[h];
+          if (v === null) { inSeg = false; continue; }
+          const x = xOf(h).toFixed(2);
+          const y = yOf(v).toFixed(2);
+          if (!inSeg) { pathD += "M" + x + "," + y; inSeg = true; }
+          else        { pathD += " L" + x + "," + y; }
+        }
+        if (pathD) {
+          const path = document.createElementNS(ns, "path");
+          path.setAttribute("d", pathD);
+          path.setAttribute("class", serDef.pathCls);
+          svg.appendChild(path);
+        }
+
+        // Dots for each non-null hour (interactive)
+        for (let h = 0; h < 24; h++) {
+          const v = serDef.data[h];
+          if (v === null) continue;
+          const cx = xOf(h);
+          const cy = yOf(v);
+          const circle = document.createElementNS(ns, "circle");
+          circle.setAttribute("cx", cx.toFixed(2));
+          circle.setAttribute("cy", cy.toFixed(2));
+          circle.setAttribute("r", "3");
+          circle.setAttribute("class", serDef.dotCls);
+          const tipLabel = serDef.name + " " + h + ":00 — " + fmtW(v);
+          circle.setAttribute("role", "img");
+          circle.setAttribute("aria-label", tipLabel);
+          circle.setAttribute("tabindex", "0");
+          const showTip = (clientX) => {
+            tooltip.textContent = tipLabel;
+            tooltip.classList.add("show");
+            const plotRect = plot.getBoundingClientRect();
+            const svgRect  = svg.getBoundingClientRect();
+            const xPx = (cx / SVG_W) * svgRect.width + (svgRect.left - plotRect.left) + plot.scrollLeft;
+            const yPx = (cy / SVG_H) * svgRect.height + (svgRect.top  - plotRect.top);
+            tooltip.style.left = (clientX != null ? clientX - plotRect.left + plot.scrollLeft : xPx) + "px";
+            tooltip.style.top  = yPx + "px";
+          };
+          const hideTip = () => tooltip.classList.remove("show");
+          circle.addEventListener("mouseenter", (e) => showTip(e.clientX));
+          circle.addEventListener("mouseleave", hideTip);
+          circle.addEventListener("click", (e) => showTip(e.clientX));
+          circle.addEventListener("focus", () => showTip(null));
+          circle.addEventListener("blur", hideTip);
+          svg.appendChild(circle);
+        }
+      }
+
+      plot.appendChild(svg);
+      plot.appendChild(tooltip);
+      area.appendChild(plot);
+      wrap.appendChild(area);
+
+      // X axis labels: every 3rd hour (0, 3, 6 … 21, 23)
+      const xAxis = document.createElement("div");
+      xAxis.className = "bar-axis";
+      for (let h = 0; h < 24; h++) {
+        const lbl = document.createElement("div");
+        lbl.className = "bar-label";
+        lbl.style.flex = "none";
+        // Position proportionally (to match SVG x coordinates)
+        lbl.style.position = "absolute";
+        lbl.style.left = ((h / 23) * 100).toFixed(1) + "%";
+        lbl.style.transform = "translateX(-50%)";
+        if (h % 3 === 0 || h === 23) {
+          lbl.textContent = h + ":00";
+        }
+        xAxis.appendChild(lbl);
+      }
+      xAxis.style.position = "relative";
+      xAxis.style.height = "14px";
+      xAxis.style.marginLeft = "calc(34px + var(--sp-3))";
+      xAxis.style.marginTop = "var(--sp-1)";
+      wrap.appendChild(xAxis);
+
+      this._historySec.appendChild(wrap);
+
+      // Legend
+      const legend = document.createElement("div");
+      legend.className = "intraday-legend";
+      legend.setAttribute("aria-label", "Chart legend");
+      const swatchColors = [
+        { cls: "bar-seg-pv",          label: STR.intradaySeriesPv,      style: "background:var(--accent)" },
+        { cls: "",                     label: STR.intradaySeriesLoad,    style: "background:var(--sg-text)" },
+        { cls: "bar-seg-battery",      label: STR.intradaySeriesBattery, style: "background:var(--sg-ok)" },
+        { cls: "bar-seg-import",       label: STR.intradaySeriesGrid,    style: "background:var(--info-color,#1565C0)" },
+      ];
+      for (const li of swatchColors) {
+        const item = document.createElement("div");
+        item.className = "intraday-legend-item";
+        const swatch = document.createElement("div");
+        swatch.className = "intraday-legend-swatch";
+        swatch.setAttribute("aria-hidden", "true");
+        swatch.setAttribute("style", li.style);
+        const lbl = document.createElement("span");
+        lbl.textContent = li.label;
+        item.appendChild(swatch);
+        item.appendChild(lbl);
+        legend.appendChild(item);
+      }
+      this._historySec.appendChild(legend);
     }
 
     // ---------------------------------------------------------------- //
