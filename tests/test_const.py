@@ -47,3 +47,15 @@ def test_per_phase_power_fields_are_mappable():
     ):
         assert field in keys, f"{field} missing from MAPPABLE_FIELDS"
         assert field in ALL_FIELDS, f"{field} missing from ALL_FIELDS"
+
+
+def test_set_cloud_endpoint_is_an_internal_command():
+    """set_cloud_endpoint is bypass-signed: the URL allow-list is the
+    trust boundary, not the admin keystore. Must be in INTERNAL_COMMANDS
+    so command_poller's Arm-2 signature-verify path skips it."""
+    from custom_components.svitgrid.const import (
+        INTERNAL_COMMANDS,
+        SET_CLOUD_ENDPOINT_COMMAND,
+    )
+    assert SET_CLOUD_ENDPOINT_COMMAND == "set_cloud_endpoint"
+    assert SET_CLOUD_ENDPOINT_COMMAND in INTERNAL_COMMANDS

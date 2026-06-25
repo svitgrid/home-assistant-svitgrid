@@ -104,7 +104,19 @@ READING_SOURCE = "edge"
 # Internal commands the add-on handles itself (never dispatched to an executor).
 ADD_TRUSTED_KEY_COMMAND = "add_trusted_key"
 REVOKE_TRUSTED_KEY_COMMAND = "revoke_trusted_key"
-INTERNAL_COMMANDS = frozenset({ADD_TRUSTED_KEY_COMMAND, REVOKE_TRUSTED_KEY_COMMAND})
+# Runtime cloud-endpoint switch (sub-project E) — operator flips a
+# household's migratedToProd flag, the D4 Cloud Function enqueues this
+# command, the integration validates the URL + reloads with new api_base.
+# Internal (no admin signature required) — the URL allow-list IS the
+# trust boundary, and the command can only retarget the integration to
+# a Svitgrid-controlled endpoint.
+SET_CLOUD_ENDPOINT_COMMAND = "set_cloud_endpoint"
+
+INTERNAL_COMMANDS = frozenset({
+    ADD_TRUSTED_KEY_COMMAND,
+    REVOKE_TRUSTED_KEY_COMMAND,
+    SET_CLOUD_ENDPOINT_COMMAND,
+})
 
 # Inverter-control commands dispatched to the configured executor.
 # P2A A5: expanded from {set_battery_charge} to cover all 4 commands the
