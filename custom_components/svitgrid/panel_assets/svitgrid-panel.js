@@ -104,6 +104,14 @@
     histMetricLosses: "Losses",
     histAriaRange: "Select history range",
     histAriaMetric: "Select energy metric",
+    histAriaMode: "Select history mode",
+    histModeEnergy: "Energy",
+    histModeSources: "Sources",
+    histSourcesPv: "Solar (PV)",
+    histSourcesImport: "Grid import",
+    histSourcesBattery: "Battery discharge",
+    histSourcesTitle: "Energy sources",
+    histSourcesTotal: "Total",
   };
 
   // ------------------------------------------------------------------ //
@@ -477,6 +485,42 @@
       background: var(--sg-divider);
       flex-shrink: 0;
       align-self: center;
+    }
+
+    /* Sources stacked-bar segments */
+    .bar-seg-pv      { background: var(--accent); }
+    .bar-seg-import  { background: var(--info-color, #1565C0); }
+    .bar-seg-battery { background: var(--sg-ok); }
+    .stacked-bar {
+      width: 100%;
+      display: flex;
+      flex-direction: column-reverse;
+      align-items: stretch;
+      border-radius: 2px 2px 0 0;
+      overflow: hidden;
+      min-height: 2px;
+      cursor: pointer;
+    }
+    .stacked-bar:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    /* Sources legend */
+    .hist-legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--sp-1) var(--sp-3);
+      margin-top: var(--sp-3);
+      font-size: 12px;
+      color: var(--sg-text-2);
+    }
+    .hist-legend-item {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .hist-legend-swatch {
+      width: 10px;
+      height: 10px;
+      border-radius: 2px;
+      flex-shrink: 0;
     }
 
     /* Sync footer */
@@ -902,6 +946,9 @@
 
     // Compute the dynamic history section title from current range/metric state.
     _histSectionTitle() {
+      if (this._histMode === "sources") {
+        return STR.histSourcesTitle + " — last " + this._histRangeDays + " days";
+      }
       const metricLabels = {
         dailyPvEnergy:              STR.histMetricGenerated,
         dailyLoadEnergy:            STR.histMetricConsumed,
@@ -2016,8 +2063,9 @@
         const ids = Object.keys(this._invNodes || {});
         const idList = ids.length ? ids : [this._lastLiveInverterId];
         const metric = this._histMetric;
+        const isSources = this._histMode === "sources";
 
-        const byDay = new Map(); // day -> summed kWh
+        const byDay = new Map(); // day -> summed kWh (energy mode) or {pv,imp,batt} (sources)
         for (const id of idList) {
           let data;
           try {
@@ -2035,28 +2083,45 @@
           const days = data && Array.isArray(data.days) ? data.days : [];
           for (const d of days) {
             const day = d.day;
-            const v =
-              d.energy && isNum(d.energy[metric])
-                ? d.energy[metric]
-                : 0;
             if (typeof day !== "string") continue;
-            byDay.set(day, (byDay.get(day) || 0) + v);
+            if (isSources) {
+              const prev = byDay.get(day) || { pv: 0, imp: 0, batt: 0 };
+              const e = d.energy || {};
+              prev.pv   += isNum(e.dailyPvEnergy)                ? e.dailyPvEnergy                : 0;
+              prev.imp  += isNum(e.dailyGridImportEnergy)        ? e.dailyGridImportEnergy        : 0;
+              prev.batt += isNum(e.dailyBatteryDischargeEnergy)  ? e.dailyBatteryDischargeEnergy  : 0;
+              byDay.set(day, prev);
+            } else {
+              const v = d.energy && isNum(d.energy[metric]) ? d.energy[metric] : 0;
+              byDay.set(day, (byDay.get(day) || 0) + v);
+            }
           }
         }
 
         // Drop stale responses — a newer request has already been dispatched.
         if (req !== this._histReq) return true;
 
-        const series = Array.from(byDay.entries())
-          .map(([day, kwh]) => ({ day, kwh }))
-          .sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0));
-
-        // Build a cache key from range + metric + data fingerprint.
-        const dataFingerprint = series.map((s) => s.day + ":" + s.kwh).join(",");
-        const newKey = this._histRangeDays + "|" + metric + "|" + dataFingerprint;
-        if (newKey !== this._histKey) {
-          this._histKey = newKey;
-          this._renderHistory(series);
+        if (isSources) {
+          const sourceSeries = Array.from(byDay.entries())
+            .map(([day, v]) => ({ day, pv: v.pv, imp: v.imp, batt: v.batt }))
+            .sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0));
+          const dataFingerprint = sourceSeries.map((s) => s.day + ":" + s.pv + ":" + s.imp + ":" + s.batt).join(",");
+          const newKey = this._histRangeDays + "|sources|" + dataFingerprint;
+          if (newKey !== this._histKey) {
+            this._histKey = newKey;
+            this._renderHistorySources(sourceSeries);
+          }
+        } else {
+          const series = Array.from(byDay.entries())
+            .map(([day, kwh]) => ({ day, kwh }))
+            .sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0));
+          // Build a cache key from range + metric + data fingerprint.
+          const dataFingerprint = series.map((s) => s.day + ":" + s.kwh).join(",");
+          const newKey = this._histRangeDays + "|" + metric + "|" + dataFingerprint;
+          if (newKey !== this._histKey) {
+            this._histKey = newKey;
+            this._renderHistory(series);
+          }
         }
         return true;
       } catch (err) {
@@ -2070,19 +2135,44 @@
       }
     }
 
-    _renderHistory(series) {
-      if (!this._historySec) return;
-      this._historySec.className = "";
-      this._historySec.innerHTML = "";
-
-      // Update the section title h2 to reflect current range + metric.
-      if (this._histSec) {
-        this._histSec.textContent = this._histSectionTitle();
-      }
-
-      // ---- Control bar: range chips + separator + metric chips ----
+    // Shared history controls bar: mode switcher + range chips + metric chips (energy only).
+    // Appended to `container` in-place.
+    _appendHistControls(container) {
       const controls = document.createElement("div");
       controls.className = "hist-controls";
+
+      // Mode switcher: Energy | Sources
+      const modeGroup = document.createElement("div");
+      modeGroup.className = "hist-chip-group";
+      modeGroup.setAttribute("role", "group");
+      modeGroup.setAttribute("aria-label", STR.histAriaMode);
+      const modeOptions = [
+        { key: "energy",  label: STR.histModeEnergy },
+        { key: "sources", label: STR.histModeSources },
+      ];
+      for (const mo of modeOptions) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "hist-chip";
+        btn.textContent = mo.label;
+        btn.setAttribute("aria-pressed", mo.key === this._histMode ? "true" : "false");
+        btn.addEventListener("click", () => {
+          if (this._histMode === mo.key) return;
+          this._histMode = mo.key;
+          this._histKey = null;
+          this._lastHistoryFetch = 0;
+          if (this._histSec) this._histSec.textContent = this._histSectionTitle();
+          this._loadHistory();
+        });
+        modeGroup.appendChild(btn);
+      }
+      controls.appendChild(modeGroup);
+
+      // Separator
+      const modeSep = document.createElement("div");
+      modeSep.className = "hist-sep";
+      modeSep.setAttribute("aria-hidden", "true");
+      controls.appendChild(modeSep);
 
       // Range chips: 7 / 30 / 90 / 365
       const rangeGroup = document.createElement("div");
@@ -2101,10 +2191,8 @@
         btn.addEventListener("click", () => {
           if (this._histRangeDays === d) return;
           this._histRangeDays = d;
-          // Invalidate cache and force immediate refetch.
           this._histKey = null;
           this._lastHistoryFetch = 0;
-          // Re-render controls immediately (optimistic pressed state), then load.
           if (this._histSec) this._histSec.textContent = this._histSectionTitle();
           this._loadHistory();
         });
@@ -2112,46 +2200,59 @@
       }
       controls.appendChild(rangeGroup);
 
-      // Separator
-      const sep = document.createElement("div");
-      sep.className = "hist-sep";
-      sep.setAttribute("aria-hidden", "true");
-      controls.appendChild(sep);
+      // Separator + metric chips: only visible in Energy mode
+      if (this._histMode === "energy") {
+        const sep = document.createElement("div");
+        sep.className = "hist-sep";
+        sep.setAttribute("aria-hidden", "true");
+        controls.appendChild(sep);
 
-      // Metric chips
-      const metricGroup = document.createElement("div");
-      metricGroup.className = "hist-chip-group";
-      metricGroup.setAttribute("role", "group");
-      metricGroup.setAttribute("aria-label", STR.histAriaMetric);
-      const metricOptions = [
-        { key: "dailyPvEnergy",              label: STR.histMetricGenerated },
-        { key: "dailyLoadEnergy",            label: STR.histMetricConsumed },
-        { key: "dailyGridImportEnergy",      label: STR.histMetricImported },
-        { key: "dailyGridExportEnergy",      label: STR.histMetricExported },
-        { key: "dailyBatteryChargeEnergy",   label: STR.histMetricBattCharged },
-        { key: "dailyBatteryDischargeEnergy", label: STR.histMetricBattDischarged },
-        { key: "dailyLossesEnergy",          label: STR.histMetricLosses },
-      ];
-      for (const opt of metricOptions) {
-        const btn = document.createElement("button");
-        btn.type = "button";
-        btn.className = "hist-chip";
-        btn.textContent = opt.label;
-        btn.setAttribute("aria-pressed", opt.key === this._histMetric ? "true" : "false");
-        btn.addEventListener("click", () => {
-          if (this._histMetric === opt.key) return;
-          this._histMetric = opt.key;
-          // Invalidate cache and force immediate refetch.
-          this._histKey = null;
-          this._lastHistoryFetch = 0;
-          if (this._histSec) this._histSec.textContent = this._histSectionTitle();
-          this._loadHistory();
-        });
-        metricGroup.appendChild(btn);
+        const metricGroup = document.createElement("div");
+        metricGroup.className = "hist-chip-group";
+        metricGroup.setAttribute("role", "group");
+        metricGroup.setAttribute("aria-label", STR.histAriaMetric);
+        const metricOptions = [
+          { key: "dailyPvEnergy",              label: STR.histMetricGenerated },
+          { key: "dailyLoadEnergy",            label: STR.histMetricConsumed },
+          { key: "dailyGridImportEnergy",      label: STR.histMetricImported },
+          { key: "dailyGridExportEnergy",      label: STR.histMetricExported },
+          { key: "dailyBatteryChargeEnergy",   label: STR.histMetricBattCharged },
+          { key: "dailyBatteryDischargeEnergy", label: STR.histMetricBattDischarged },
+          { key: "dailyLossesEnergy",          label: STR.histMetricLosses },
+        ];
+        for (const opt of metricOptions) {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "hist-chip";
+          btn.textContent = opt.label;
+          btn.setAttribute("aria-pressed", opt.key === this._histMetric ? "true" : "false");
+          btn.addEventListener("click", () => {
+            if (this._histMetric === opt.key) return;
+            this._histMetric = opt.key;
+            this._histKey = null;
+            this._lastHistoryFetch = 0;
+            if (this._histSec) this._histSec.textContent = this._histSectionTitle();
+            this._loadHistory();
+          });
+          metricGroup.appendChild(btn);
+        }
+        controls.appendChild(metricGroup);
       }
-      controls.appendChild(metricGroup);
 
-      this._historySec.appendChild(controls);
+      container.appendChild(controls);
+    }
+
+    _renderHistory(series) {
+      if (!this._historySec) return;
+      this._historySec.className = "";
+      this._historySec.innerHTML = "";
+
+      // Update the section title h2 to reflect current range + metric.
+      if (this._histSec) {
+        this._histSec.textContent = this._histSectionTitle();
+      }
+
+      this._appendHistControls(this._historySec);
 
       // ---- Empty state ----
       const allZero = series.length === 0 || series.every((s) => s.kwh === 0);
@@ -2268,6 +2369,189 @@
         axis.appendChild(lbl);
       }
       wrap.appendChild(axis);
+
+      this._historySec.appendChild(wrap);
+    }
+
+    // ---------------------------------------------------------------- //
+    // History — Sources (stacked) renderer
+    // ---------------------------------------------------------------- //
+    _renderHistorySources(sourceSeries) {
+      if (!this._historySec) return;
+      this._historySec.className = "";
+      this._historySec.innerHTML = "";
+
+      // Update section title.
+      if (this._histSec) {
+        this._histSec.textContent = this._histSectionTitle();
+      }
+
+      this._appendHistControls(this._historySec);
+
+      // ---- Empty state ----
+      const allZero = sourceSeries.length === 0 ||
+        sourceSeries.every((s) => s.pv === 0 && s.imp === 0 && s.batt === 0);
+      if (allZero) {
+        const empty = document.createElement("div");
+        empty.className = "history-empty";
+        empty.textContent = STR.historyEmpty;
+        this._historySec.appendChild(empty);
+        return;
+      }
+
+      // Max total per day determines chart scale.
+      let maxVal = 0;
+      for (const s of sourceSeries) {
+        const total = s.pv + s.imp + s.batt;
+        if (total > maxVal) maxVal = total;
+      }
+
+      const wrap = document.createElement("div");
+      wrap.className = "history-chart";
+
+      const area = document.createElement("div");
+      area.className = "chart-area";
+
+      // Y axis: max, 50%, 0
+      const yAxis = document.createElement("div");
+      yAxis.className = "y-axis";
+      const yMax = document.createElement("span");
+      yMax.textContent = this._kwh(maxVal);
+      const yMid = document.createElement("span");
+      yMid.textContent = this._kwh(maxVal / 2);
+      const yZero = document.createElement("span");
+      yZero.textContent = "0";
+      yAxis.appendChild(yMax);
+      yAxis.appendChild(yMid);
+      yAxis.appendChild(yZero);
+      area.appendChild(yAxis);
+
+      const plot = document.createElement("div");
+      plot.className = "chart-plot";
+
+      const chart = document.createElement("div");
+      chart.className = "bar-chart";
+
+      // 50% gridline
+      const gl = document.createElement("div");
+      gl.className = "gridline";
+      gl.style.top = "50%";
+      chart.appendChild(gl);
+
+      // Tooltip
+      const tooltip = document.createElement("div");
+      tooltip.className = "chart-tooltip";
+      this._tooltip = tooltip;
+
+      const lastIdx = sourceSeries.length - 1;
+
+      for (let i = 0; i < sourceSeries.length; i++) {
+        const s = sourceSeries[i];
+        const total = s.pv + s.imp + s.batt;
+        const pct = maxVal > 0 ? (total / maxVal) * 100 : 0;
+
+        const col = document.createElement("div");
+        col.className = "bar-col";
+
+        // Value cap on most-recent bar
+        if (i === lastIdx && total > 0) {
+          const cap = document.createElement("div");
+          cap.className = "bar-cap";
+          cap.textContent = this._kwh(total);
+          col.appendChild(cap);
+        }
+
+        // Stacked bar: segments stacked bottom-up (flex-direction: column-reverse)
+        // Order in DOM: pv (top segment visually at top), imp, batt (bottom)
+        // With column-reverse, first child = bottom of stack.
+        const stackBar = document.createElement("div");
+        stackBar.className = "stacked-bar";
+        stackBar.style.height = Math.max(pct, 2) + "%";
+        const tipLabel =
+          this._localDate(s.day) + ": " +
+          STR.histSourcesPv + " " + this._kwh(s.pv) + " · " +
+          STR.histSourcesImport + " " + this._kwh(s.imp) + " · " +
+          STR.histSourcesBattery + " " + this._kwh(s.batt) + " · " +
+          STR.histSourcesTotal + " " + this._kwh(total);
+        stackBar.setAttribute("role", "img");
+        stackBar.setAttribute("aria-label", tipLabel);
+        stackBar.setAttribute("tabindex", "0");
+
+        // Segments: batt (bottom in column-reverse = first child), imp, pv (top = last child)
+        const segs = [
+          { val: s.batt, cls: "bar-seg-battery" },
+          { val: s.imp,  cls: "bar-seg-import"  },
+          { val: s.pv,   cls: "bar-seg-pv"      },
+        ];
+        for (const seg of segs) {
+          if (seg.val <= 0) continue;
+          const el = document.createElement("div");
+          el.className = seg.cls;
+          // Height as % of stacked-bar's own height
+          el.style.height = (total > 0 ? (seg.val / total) * 100 : 0) + "%";
+          stackBar.appendChild(el);
+        }
+
+        const showTip = (clientX) => {
+          tooltip.textContent = tipLabel;
+          tooltip.classList.add("show");
+          const plotRect = plot.getBoundingClientRect();
+          const barRect = stackBar.getBoundingClientRect();
+          const x = (clientX != null ? clientX : barRect.left + barRect.width / 2) - plotRect.left + plot.scrollLeft;
+          tooltip.style.left = x + "px";
+          tooltip.style.top = (barRect.top - plotRect.top) + "px";
+        };
+        const hideTip = () => tooltip.classList.remove("show");
+        stackBar.addEventListener("click", (e) => showTip(e.clientX));
+        stackBar.addEventListener("mouseenter", (e) => showTip(e.clientX));
+        stackBar.addEventListener("mouseleave", hideTip);
+        stackBar.addEventListener("focus", () => showTip(null));
+        stackBar.addEventListener("blur", hideTip);
+
+        col.appendChild(stackBar);
+        chart.appendChild(col);
+      }
+
+      plot.appendChild(chart);
+      plot.appendChild(tooltip);
+      area.appendChild(plot);
+      wrap.appendChild(area);
+
+      // X axis labels (every ~5th + last) aligned under bars
+      const axis = document.createElement("div");
+      axis.className = "bar-axis";
+      for (let i = 0; i < sourceSeries.length; i++) {
+        const lbl = document.createElement("div");
+        lbl.className = "bar-label";
+        if (i % 5 === 0 || i === lastIdx) {
+          lbl.textContent = this._localDate(sourceSeries[i].day);
+        }
+        axis.appendChild(lbl);
+      }
+      wrap.appendChild(axis);
+
+      // Legend
+      const legend = document.createElement("div");
+      legend.className = "hist-legend";
+      legend.setAttribute("aria-label", "Chart legend");
+      const legendItems = [
+        { cls: "bar-seg-pv",      label: STR.histSourcesPv },
+        { cls: "bar-seg-import",  label: STR.histSourcesImport },
+        { cls: "bar-seg-battery", label: STR.histSourcesBattery },
+      ];
+      for (const li of legendItems) {
+        const item = document.createElement("div");
+        item.className = "hist-legend-item";
+        const swatch = document.createElement("div");
+        swatch.className = "hist-legend-swatch " + li.cls;
+        swatch.setAttribute("aria-hidden", "true");
+        const lbl = document.createElement("span");
+        lbl.textContent = li.label;
+        item.appendChild(swatch);
+        item.appendChild(lbl);
+        legend.appendChild(item);
+      }
+      wrap.appendChild(legend);
 
       this._historySec.appendChild(wrap);
     }
