@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.1 — 2026-06-25
+
+### Fixed
+- **Pre-flight probe before `set_cloud_endpoint` apply.** Mirrors the firmware sub-project D5 probe semantics: before mutating ConfigEntry + reloading, the integration now hits `/api/v3/me` on the target endpoint with the existing api_key. If the new endpoint can't authenticate the integration, the migration is rejected (ACK returns `reason="probe_failed"`) instead of mutating to a dead URL. Closes a cutover-breaker discovered during the v0.9.0 live smoke on 2026-06-25 — the HA Test household migrated successfully but every subsequent ACK to prod returned 401 because the household's trusted-keys list hadn't been synced. Layered defense: even after the sync gap is fixed server-side, future sync gaps WILL recur, so the probe stays.
+
+### Added
+- **Tier-1 telemetry (battery temperature/current, inverter temperature, grid frequency)** mapped from Deye hybrid Solarman presets and surfaced in the Details panel.
+- **Tier-2 daily energy tiles (battery charged/discharged, generator)** collected from the same Deye Solarman presets and shown in the panel.
+
 ## 0.9.0 — 2026-06-25
 
 ### Added
