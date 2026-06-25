@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import datetime
 from typing import Any
 
 from homeassistant.core import HomeAssistant
@@ -63,6 +64,32 @@ def _create_schema(conn: sqlite3.Connection) -> None:
         """
     )
     conn.commit()
+
+
+def _median_gap_seconds(ts_list: list[str]) -> float | None:
+    """Return the median gap in seconds between consecutive timestamps.
+
+    ts_list must be sorted descending (newest first) — the same order returned
+    by ``ORDER BY ts DESC``.  Returns None when fewer than 2 entries are given.
+    """
+    if len(ts_list) < 2:
+        return None
+    # Parse each ISO-8601 UTC timestamp.
+    parsed = [
+        datetime.fromisoformat(ts.replace("Z", "+00:00")) for ts in ts_list
+    ]
+    # Gaps between consecutive entries (list is desc → older − newer yields positive).
+    gaps = [
+        abs((parsed[i] - parsed[i + 1]).total_seconds())
+        for i in range(len(parsed) - 1)
+    ]
+    # Median: sort and pick middle element (or average of two middle for even N).
+    gaps_sorted = sorted(gaps)
+    n = len(gaps_sorted)
+    mid = n // 2
+    if n % 2 == 1:
+        return float(gaps_sorted[mid])
+    return float((gaps_sorted[mid - 1] + gaps_sorted[mid]) / 2)
 
 
 class ReadingStore:
@@ -251,8 +278,25 @@ class ReadingStore:
                 "SELECT r.inverter_id, r.ts, r.payload FROM readings_raw r "
                 "JOIN (SELECT inverter_id, MAX(ts) mts FROM readings_raw GROUP BY inverter_id) m "
                 "ON r.inverter_id = m.inverter_id AND r.ts = m.mts")
-            return [{"inverterId": r["inverter_id"], "ts": r["ts"],
-                     "payload": json.loads(r["payload"])} for r in cur.fetchall()]
+            rows = cur.fetchall()
+            result = []
+            for r in rows:
+                inverter_id = r["inverter_id"]
+                # Fetch up to 6 recent timestamps to compute the observed cadence.
+                ts_cur = conn.execute(
+                    "SELECT ts FROM readings_raw WHERE inverter_id = ? "
+                    "ORDER BY ts DESC LIMIT 6",
+                    (inverter_id,),
+                )
+                ts_list = [row["ts"] for row in ts_cur.fetchall()]
+                interval_s = _median_gap_seconds(ts_list)
+                result.append({
+                    "inverterId": inverter_id,
+                    "ts": r["ts"],
+                    "payload": json.loads(r["payload"]),
+                    "intervalS": interval_s,
+                })
+            return result
         finally:
             conn.close()
 

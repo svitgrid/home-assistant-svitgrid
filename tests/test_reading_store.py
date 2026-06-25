@@ -99,6 +99,36 @@ def test_live_snapshot_returns_latest_per_inverter(tmp_path):
     assert snap["inv-2"]["payload"]["pvPower"] == 9.0
 
 
+def test_live_snapshot_reports_interval(tmp_path):
+    """3 rows at 300s apart → median gap 300.0, latest ts is the newest."""
+    store = _store(tmp_path)
+    for ts in ("2026-06-25T10:00:00Z", "2026-06-25T10:05:00Z", "2026-06-25T10:10:00Z"):
+        store._append_sync({"inverterId": "inv-1", "timestamp": ts, "pvPower": 1.0})
+    snap = {s["inverterId"]: s for s in store._live_snapshot_sync()}
+    entry = snap["inv-1"]
+    assert entry["ts"] == "2026-06-25T10:10:00Z"
+    assert entry["intervalS"] == 300.0
+
+
+def test_live_snapshot_interval_none_single_reading(tmp_path):
+    """Single row → intervalS is None (not enough data for a gap)."""
+    store = _store(tmp_path)
+    store._append_sync({"inverterId": "inv-2", "timestamp": "2026-06-25T10:00:00Z", "pvPower": 5.0})
+    snap = {s["inverterId"]: s for s in store._live_snapshot_sync()}
+    assert snap["inv-2"]["intervalS"] is None
+
+
+def test_median_gap_seconds_multiple(tmp_path):
+    """Pure helper: 3 ts 300s apart → 300.0; single ts → None."""
+    from custom_components.svitgrid.reading_store import _median_gap_seconds
+    assert _median_gap_seconds([
+        "2026-06-25T10:10:00Z",
+        "2026-06-25T10:05:00Z",
+        "2026-06-25T10:00:00Z",
+    ]) == 300.0
+    assert _median_gap_seconds(["2026-06-25T10:00:00Z"]) is None
+
+
 def test_sync_status_counts_and_last_sent(tmp_path):
     store = _store(tmp_path)
     store._append_sync({"inverterId": "inv-1", "timestamp": "2026-06-24T10:00:00Z"})
