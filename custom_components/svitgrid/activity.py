@@ -34,7 +34,12 @@ class ActivityTracker:
     now: Callable[[], datetime] = _utc_now
 
     # Most recent outcome — used as the `sensor.svitgrid_status` value.
-    status: str = "idle"
+    # Internal field; the `status` property applies lifecycle precedence.
+    _status: str = "idle"
+
+    # Lifecycle state set by LifecycleState mirror (Task 2).
+    lifecycle_state: str = "active"
+    lifecycle_reason: str | None = None
 
     last_ingest_at: datetime | None = None
     last_ingest_status: str | None = None
@@ -50,6 +55,20 @@ class ActivityTracker:
         default_factory=lambda: deque(maxlen=_RECENT_BUFFER_SIZE)
     )
 
+    # ── lifecycle mirror ───────────────────────────────────────────────
+
+    @property
+    def status(self) -> str:
+        """Return lifecycle state when not active; otherwise ingest status."""
+        if self.lifecycle_state != "active":
+            return self.lifecycle_state
+        return self._status
+
+    def set_lifecycle(self, state: str, reason: str | None) -> None:
+        """Mirror lifecycle changes from LifecycleState (Task 2)."""
+        self.lifecycle_state = state
+        self.lifecycle_reason = reason
+
     # ── ingest path ────────────────────────────────────────────────────
 
     def record_ingest_success(
@@ -63,7 +82,7 @@ class ActivityTracker:
         `summary` should contain a few headline fields (pvPower, loadPower,
         batterySoc) for at-a-glance status — full payload not stored."""
         now = self.now()
-        self.status = "ok"
+        self._status = "ok"
         self.last_ingest_at = now
         self.last_ingest_status = "ok"
         self._ingest_times.append(now)
@@ -79,7 +98,7 @@ class ActivityTracker:
     def record_ingest_failure(self, *, reason: str) -> None:
         """Called by readings_publisher on 4xx/5xx (or network error)."""
         now = self.now()
-        self.status = "error"
+        self._status = "error"
         self.last_ingest_at = now
         self.last_ingest_status = "error"
         self._ingest_times.append(now)
@@ -102,7 +121,7 @@ class ActivityTracker:
         `entities` maps each missing field to its mapped entity id (or None
         when the field was never mapped) so the user can find the culprit."""
         now = self.now()
-        self.status = "waiting"
+        self._status = "waiting"
         self.last_ingest_at = now
         self.last_ingest_status = "skipped"
         self._recent_ingests.append({
@@ -122,6 +141,10 @@ class ActivityTracker:
 
     def diagnostics_line(self) -> str:
         """A short (<=255 char) human status for the diagnostics sensor state."""
+        if self.lifecycle_state == "deprovisioned":
+            return "Device removed from its household — re-pair to resume."
+        if self.lifecycle_state == "paused":
+            return f"Paused by operator: {self.lifecycle_reason or 'disabled'}"[:255]
         if self.last_ingest_status == "skipped":
             recent = self._recent_ingests
             missing = recent[-1].get("missing_fields", []) if recent else []

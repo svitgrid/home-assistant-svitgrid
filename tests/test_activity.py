@@ -154,3 +154,15 @@ def test_diagnostics_line_ok_after_success():
 
 def test_diagnostics_line_idle_initially():
     assert ActivityTracker().diagnostics_line() == "idle"
+
+
+def test_lifecycle_overrides_status():
+    a = ActivityTracker()
+    a.record_ingest_success(sample_count=1, period_sec=0, summary={})
+    assert a.status == "ok"
+    a.set_lifecycle("deprovisioned", "revoked")
+    assert a.status == "deprovisioned"
+    assert "re-pair" in a.diagnostics_line().lower()
+    a.set_lifecycle("paused", "disabled")
+    assert a.status == "paused"
+    assert "paused" in a.diagnostics_line().lower()
