@@ -107,11 +107,22 @@
     histAriaMode: "Select history mode",
     histModeEnergy: "Energy",
     histModeSources: "Sources",
+    histModeTrends: "Trends",
     histSourcesPv: "Solar (PV)",
     histSourcesImport: "Grid import",
     histSourcesBattery: "Battery discharge",
     histSourcesTitle: "Energy sources",
     histSourcesTotal: "Total",
+    histTrendsTitle: "Trends",
+    histTrendsNoData: "No trend data for this metric in the selected period.",
+    histAriaTrendMetric: "Select trend metric",
+    histTrendMetricSoc: "Battery SOC",
+    histTrendMetricInvTemp: "Inverter temp",
+    histTrendMetricBattTemp: "Battery temp",
+    histTrendMetricFreq: "Grid frequency",
+    histTrendUnitPct: "%",
+    histTrendUnitDegC: "°C",
+    histTrendUnitHz: "Hz",
   };
 
   // ------------------------------------------------------------------ //
@@ -523,6 +534,36 @@
       flex-shrink: 0;
     }
 
+    /* Trends line-chart SVG */
+    .line-svg {
+      display: block;
+      width: 100%;
+      height: 140px;
+      overflow: visible;
+    }
+    .line-path {
+      fill: none;
+      stroke: var(--accent);
+      stroke-width: 2;
+      stroke-linejoin: round;
+      stroke-linecap: round;
+    }
+    .line-gridline {
+      stroke: var(--sg-divider);
+      stroke-dasharray: 3 3;
+      stroke-width: 1;
+    }
+    .line-dot {
+      fill: var(--accent);
+      stroke: var(--sg-card-bg);
+      stroke-width: 2;
+      cursor: pointer;
+    }
+    .line-dot:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+    @media (prefers-reduced-motion: reduce) {
+      .line-path { stroke-dasharray: none; }
+    }
+
     /* Sync footer */
     .sync-footer {
       margin-top: var(--sp-5);
@@ -787,8 +828,9 @@
 
       // History controls (SP-C foundation — extended by Tasks 3-5)
       this._histRangeDays = 30;            // 7 | 30 | 90 | 365
-      this._histMode = "energy";           // "energy" (mode switcher added by later tasks)
+      this._histMode = "energy";           // "energy" | "sources" | "trends"
       this._histMetric = "dailyPvEnergy";  // active energy field key
+      this._trendMetric = "batterySoc";    // active trend metric key
       this._histKey = null;                // cache key: range|metric|data changes trigger re-render
       this._histSec = null;                // h2 section title node (for dynamic text update)
 
@@ -948,6 +990,16 @@
     _histSectionTitle() {
       if (this._histMode === "sources") {
         return STR.histSourcesTitle + " — last " + this._histRangeDays + " days";
+      }
+      if (this._histMode === "trends") {
+        const trendLabels = {
+          batterySoc:           STR.histTrendMetricSoc,
+          inverterTemperature:  STR.histTrendMetricInvTemp,
+          batteryTemperature:   STR.histTrendMetricBattTemp,
+          gridFrequency:        STR.histTrendMetricFreq,
+        };
+        const label = trendLabels[this._trendMetric] || STR.histTrendsTitle;
+        return label + " — last " + this._histRangeDays + " days";
       }
       const metricLabels = {
         dailyPvEnergy:              STR.histMetricGenerated,
@@ -2064,8 +2116,14 @@
         const idList = ids.length ? ids : [this._lastLiveInverterId];
         const metric = this._histMetric;
         const isSources = this._histMode === "sources";
+        const isTrends = this._histMode === "trends";
+        const trendMetric = this._trendMetric;
 
-        const byDay = new Map(); // day -> summed kWh (energy mode) or {pv,imp,batt} (sources)
+        // byDay maps:
+        //   energy mode  -> day -> summed kWh (number)
+        //   sources mode -> day -> {pv, imp, batt} sums
+        //   trends mode  -> day -> [{value, count}] per-inverter accumulator for weighted mean
+        const byDay = new Map();
         for (const id of idList) {
           let data;
           try {
@@ -2091,6 +2149,20 @@
               prev.imp  += isNum(e.dailyGridImportEnergy)        ? e.dailyGridImportEnergy        : 0;
               prev.batt += isNum(e.dailyBatteryDischargeEnergy)  ? e.dailyBatteryDischargeEnergy  : 0;
               byDay.set(day, prev);
+            } else if (isTrends) {
+              // Accumulate per-inverter {value, count} for weighted-mean calculation.
+              // d.avgs holds daily averages keyed by metric name; count comes from d.sampleCount.
+              const avgs = d.avgs || {};
+              const rawVal = avgs[trendMetric];
+              const rawCount = isNum(d.sampleCount) ? d.sampleCount : 0;
+              if (isNum(rawVal) && rawCount > 0) {
+                const prev = byDay.get(day) || [];
+                prev.push({ value: rawVal, count: rawCount });
+                byDay.set(day, prev);
+              } else if (!byDay.has(day)) {
+                // Mark the day as seen with no data so gaps are explicit.
+                byDay.set(day, []);
+              }
             } else {
               const v = d.energy && isNum(d.energy[metric]) ? d.energy[metric] : 0;
               byDay.set(day, (byDay.get(day) || 0) + v);
@@ -2110,6 +2182,17 @@
           if (newKey !== this._histKey) {
             this._histKey = newKey;
             this._renderHistorySources(sourceSeries);
+          }
+        } else if (isTrends) {
+          // Compute weighted mean per day; days with no data → null (gap).
+          const trendSeries = Array.from(byDay.entries())
+            .map(([day, items]) => ({ day, value: this.weightedMean(items) }))
+            .sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0));
+          const dataFingerprint = trendSeries.map((s) => s.day + ":" + (s.value === null ? "null" : s.value.toFixed(2))).join(",");
+          const newKey = this._histRangeDays + "|trends|" + trendMetric + "|" + dataFingerprint;
+          if (newKey !== this._histKey) {
+            this._histKey = newKey;
+            this._renderHistoryTrends(trendSeries, trendMetric);
           }
         } else {
           const series = Array.from(byDay.entries())
@@ -2141,7 +2224,7 @@
       const controls = document.createElement("div");
       controls.className = "hist-controls";
 
-      // Mode switcher: Energy | Sources
+      // Mode switcher: Energy | Sources | Trends
       const modeGroup = document.createElement("div");
       modeGroup.className = "hist-chip-group";
       modeGroup.setAttribute("role", "group");
@@ -2149,6 +2232,7 @@
       const modeOptions = [
         { key: "energy",  label: STR.histModeEnergy },
         { key: "sources", label: STR.histModeSources },
+        { key: "trends",  label: STR.histModeTrends },
       ];
       for (const mo of modeOptions) {
         const btn = document.createElement("button");
@@ -2237,6 +2321,42 @@
           metricGroup.appendChild(btn);
         }
         controls.appendChild(metricGroup);
+      }
+
+      // Separator + trend-metric chips: only visible in Trends mode
+      if (this._histMode === "trends") {
+        const trendSep = document.createElement("div");
+        trendSep.className = "hist-sep";
+        trendSep.setAttribute("aria-hidden", "true");
+        controls.appendChild(trendSep);
+
+        const trendMetricGroup = document.createElement("div");
+        trendMetricGroup.className = "hist-chip-group";
+        trendMetricGroup.setAttribute("role", "group");
+        trendMetricGroup.setAttribute("aria-label", STR.histAriaTrendMetric);
+        const trendMetricOptions = [
+          { key: "batterySoc",          label: STR.histTrendMetricSoc },
+          { key: "inverterTemperature", label: STR.histTrendMetricInvTemp },
+          { key: "batteryTemperature",  label: STR.histTrendMetricBattTemp },
+          { key: "gridFrequency",       label: STR.histTrendMetricFreq },
+        ];
+        for (const opt of trendMetricOptions) {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "hist-chip";
+          btn.textContent = opt.label;
+          btn.setAttribute("aria-pressed", opt.key === this._trendMetric ? "true" : "false");
+          btn.addEventListener("click", () => {
+            if (this._trendMetric === opt.key) return;
+            this._trendMetric = opt.key;
+            this._histKey = null;
+            this._lastHistoryFetch = 0;
+            if (this._histSec) this._histSec.textContent = this._histSectionTitle();
+            this._loadHistory();
+          });
+          trendMetricGroup.appendChild(btn);
+        }
+        controls.appendChild(trendMetricGroup);
       }
 
       container.appendChild(controls);
@@ -2552,6 +2672,217 @@
         legend.appendChild(item);
       }
       wrap.appendChild(legend);
+
+      this._historySec.appendChild(wrap);
+    }
+
+    // ---------------------------------------------------------------- //
+    // History — Trends (line) helpers + renderer
+    // ---------------------------------------------------------------- //
+
+    // weightedMean(items, metric) — pure helper.
+    // items: Array<{value: number, count: number}> — each entry is one inverter's daily average
+    // and its sample count. Returns the sample_count-weighted mean, or null if items is empty
+    // or total weight is zero (→ gap in the chart, not zero).
+    weightedMean(items) {
+      if (!Array.isArray(items) || items.length === 0) return null;
+      let weightedSum = 0;
+      let totalWeight = 0;
+      for (const item of items) {
+        if (isNum(item.value) && isNum(item.count) && item.count > 0) {
+          weightedSum += item.value * item.count;
+          totalWeight += item.count;
+        }
+      }
+      return totalWeight > 0 ? weightedSum / totalWeight : null;
+    }
+
+    _renderHistoryTrends(trendSeries, trendMetric) {
+      if (!this._historySec) return;
+      this._historySec.className = "";
+      this._historySec.innerHTML = "";
+
+      // Update section title.
+      if (this._histSec) {
+        this._histSec.textContent = this._histSectionTitle();
+      }
+
+      this._appendHistControls(this._historySec);
+
+      // Unit label per metric.
+      const metricUnits = {
+        batterySoc:           STR.histTrendUnitPct,
+        inverterTemperature:  STR.histTrendUnitDegC,
+        batteryTemperature:   STR.histTrendUnitDegC,
+        gridFrequency:        STR.histTrendUnitHz,
+      };
+      const unit = metricUnits[trendMetric] || "";
+
+      // ---- Empty state: no point has a value ----
+      const hasData = trendSeries.some((s) => s.value !== null);
+      if (!hasData) {
+        const empty = document.createElement("div");
+        empty.className = "history-empty";
+        empty.textContent = STR.histTrendsNoData;
+        this._historySec.appendChild(empty);
+        return;
+      }
+
+      // Compute min/max from non-null values for y-axis auto-scale.
+      let minVal = Infinity;
+      let maxVal = -Infinity;
+      for (const s of trendSeries) {
+        if (s.value !== null) {
+          if (s.value < minVal) minVal = s.value;
+          if (s.value > maxVal) maxVal = s.value;
+        }
+      }
+      // Give a small margin so extreme points don't touch the edge.
+      const range = maxVal - minVal;
+      const pad = range > 0 ? range * 0.08 : Math.max(Math.abs(maxVal) * 0.05, 1);
+      const yLo = minVal - pad;
+      const yHi = maxVal + pad;
+      const yRange = yHi - yLo;
+
+      const SVG_W = 600; // viewBox width (scales with element)
+      const SVG_H = 140;
+
+      const wrap = document.createElement("div");
+      wrap.className = "history-chart";
+
+      const area = document.createElement("div");
+      area.className = "chart-area";
+
+      // Y axis labels: max, mid, min
+      const yAxis = document.createElement("div");
+      yAxis.className = "y-axis";
+      const fmt = (v) => {
+        if (unit === STR.histTrendUnitPct) return Math.round(v) + "%";
+        if (unit === STR.histTrendUnitHz)  return v.toFixed(2) + " Hz";
+        return Math.round(v) + unit;
+      };
+      const yTop = document.createElement("span");
+      yTop.textContent = fmt(yHi);
+      const yMid = document.createElement("span");
+      yMid.textContent = fmt((yHi + yLo) / 2);
+      const yBot = document.createElement("span");
+      yBot.textContent = fmt(yLo);
+      yAxis.appendChild(yTop);
+      yAxis.appendChild(yMid);
+      yAxis.appendChild(yBot);
+      area.appendChild(yAxis);
+
+      const plot = document.createElement("div");
+      plot.className = "chart-plot";
+      plot.style.position = "relative";
+
+      // Tooltip (reused pattern from bar chart)
+      const tooltip = document.createElement("div");
+      tooltip.className = "chart-tooltip";
+      this._tooltip = tooltip;
+
+      // SVG element
+      const ns = "http://www.w3.org/2000/svg";
+      const svg = document.createElementNS(ns, "svg");
+      svg.setAttribute("viewBox", "0 0 " + SVG_W + " " + SVG_H);
+      svg.setAttribute("preserveAspectRatio", "none");
+      svg.setAttribute("aria-hidden", "true");
+      svg.classList.add("line-svg");
+
+      // 50% gridline (visual only)
+      const glLine = document.createElementNS(ns, "line");
+      glLine.setAttribute("x1", "0");
+      glLine.setAttribute("y1", SVG_H / 2);
+      glLine.setAttribute("x2", SVG_W);
+      glLine.setAttribute("y2", SVG_H / 2);
+      glLine.classList.add("line-gridline");
+      svg.appendChild(glLine);
+
+      const n = trendSeries.length;
+      // Map day index → SVG x coordinate (centered columns)
+      const xOf = (i) => n > 1 ? (i / (n - 1)) * SVG_W : SVG_W / 2;
+      // Map value → SVG y (0 = top)
+      const yOf = (v) => SVG_H - ((v - yLo) / yRange) * SVG_H;
+
+      // Build path segments: consecutive non-null points form a segment.
+      // A null point breaks the line (gap).
+      let pathD = "";
+      let inSegment = false;
+      for (let i = 0; i < n; i++) {
+        const s = trendSeries[i];
+        if (s.value === null) {
+          inSegment = false;
+          continue;
+        }
+        const x = xOf(i).toFixed(2);
+        const y = yOf(s.value).toFixed(2);
+        if (!inSegment) {
+          pathD += "M" + x + "," + y;
+          inSegment = true;
+        } else {
+          pathD += " L" + x + "," + y;
+        }
+      }
+      if (pathD) {
+        const path = document.createElementNS(ns, "path");
+        path.setAttribute("d", pathD);
+        path.classList.add("line-path");
+        svg.appendChild(path);
+      }
+
+      // Dots for each non-null point (interactive)
+      for (let i = 0; i < n; i++) {
+        const s = trendSeries[i];
+        if (s.value === null) continue;
+        const cx = xOf(i);
+        const cy = yOf(s.value);
+        const circle = document.createElementNS(ns, "circle");
+        circle.setAttribute("cx", cx.toFixed(2));
+        circle.setAttribute("cy", cy.toFixed(2));
+        circle.setAttribute("r", n > 60 ? "2" : "3.5");
+        circle.classList.add("line-dot");
+        const tipLabel = this._localDate(s.day) + ": " + fmt(s.value);
+        circle.setAttribute("role", "img");
+        circle.setAttribute("aria-label", tipLabel);
+        circle.setAttribute("tabindex", "0");
+        const showTip = (clientX) => {
+          tooltip.textContent = tipLabel;
+          tooltip.classList.add("show");
+          const plotRect = plot.getBoundingClientRect();
+          const svgRect = svg.getBoundingClientRect();
+          // Map SVG x percentage to plot pixel offset.
+          const xPx = (cx / SVG_W) * svgRect.width + (svgRect.left - plotRect.left) + plot.scrollLeft;
+          const yPx = (cy / SVG_H) * svgRect.height + (svgRect.top - plotRect.top);
+          tooltip.style.left = (clientX != null ? (clientX - plotRect.left + plot.scrollLeft) : xPx) + "px";
+          tooltip.style.top = yPx + "px";
+        };
+        const hideTip = () => tooltip.classList.remove("show");
+        circle.addEventListener("mouseenter", (e) => showTip(e.clientX));
+        circle.addEventListener("mouseleave", hideTip);
+        circle.addEventListener("click", (e) => showTip(e.clientX));
+        circle.addEventListener("focus", () => showTip(null));
+        circle.addEventListener("blur", hideTip);
+        svg.appendChild(circle);
+      }
+
+      plot.appendChild(svg);
+      plot.appendChild(tooltip);
+      area.appendChild(plot);
+      wrap.appendChild(area);
+
+      // X axis labels (every ~5th + last) consistent with bar chart
+      const lastIdx = trendSeries.length - 1;
+      const axis = document.createElement("div");
+      axis.className = "bar-axis";
+      for (let i = 0; i < trendSeries.length; i++) {
+        const lbl = document.createElement("div");
+        lbl.className = "bar-label";
+        if (i % 5 === 0 || i === lastIdx) {
+          lbl.textContent = this._localDate(trendSeries[i].day);
+        }
+        axis.appendChild(lbl);
+      }
+      wrap.appendChild(axis);
 
       this._historySec.appendChild(wrap);
     }
