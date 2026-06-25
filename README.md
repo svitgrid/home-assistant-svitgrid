@@ -93,6 +93,24 @@ Future releases will add Deye, Growatt, and more SMG-II commands (sell-power cap
 | `Skipping command — signingKeyId X not in trusted keys` | Admin key hasn't propagated yet. In v0.2.0 this usually means your HA installed BEFORE the admin key was registered in the household; re-bootstrap to pull the current trusted keys. | Restart HA, or re-add the integration via the mobile app |
 | `Command X (set_battery_charge) dispatchable but no executor configured` | The add-on received a signed command from the Svitgrid app but you haven't added an `executor:` block to `configuration.yaml` | Add the executor block (see above) or leave it out to stay read-only |
 
+## Migration between Svitgrid environments
+
+The integration is auto-migrated by Svitgrid when your household moves
+between staging (`api-staging.svitgrid.app`) and production
+(`api.svitgrid.app`). You don't need to update the API URL in
+Settings → Devices & Services → Svitgrid.
+
+The migration happens via a server-issued `set_cloud_endpoint` command
+that the integration's command poller processes internally. The URL is
+validated against an allow-list (only the two Svitgrid hostnames are
+accepted), the ConfigEntry is updated atomically, and the integration
+reloads in-place — your entities stay stable, no user action required.
+
+If you manually changed `api_base` to a custom URL for development,
+that override survives an auto-migration only if it's one of the allowed
+hostnames; any other value gets rejected by the integration with
+`reason: disallowed_url` in the server's audit log.
+
 ## License
 
 MIT.

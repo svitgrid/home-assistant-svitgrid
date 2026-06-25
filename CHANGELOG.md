@@ -1,5 +1,13 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- Runtime cloud-endpoint switch: the integration now handles a server-issued `set_cloud_endpoint` executor command, validating the target URL against an allow-list (`api-staging.svitgrid.app`, `api.svitgrid.app`), updating the ConfigEntry's `api_base`, and reloading the integration in-place. Mirrors the edge-device firmware behaviour from svitgrid sub-project D — lets Svitgrid migrate an HA-paired household between staging and prod without the user touching the HA UI.
+
+### Changed
+- Default `api_base` for new installs is now `https://api-staging.svitgrid.app` (was the raw Cloud Run hostname `https://api-334146986852.us-central1.run.app`). Existing installs keep their stored value.
+
 ## 0.8.1
 - **Back off when the server rejects a reading.** If `/ingest/reading` returns a 4xx (e.g. the inverter is missing required sensors, so the payload is incomplete), the publisher now parks at the 30-minute ceiling interval instead of re-POSTing the same rejected payload every 60 seconds. It keeps retrying slowly and recovers automatically once the missing sensors are mapped — but stops hammering the API (and your network) with requests it will keep refusing. Transient 5xx / network errors still retry at the normal cadence. Most installs already skip incomplete payloads via local gating; this is the safety net for older configs and any future schema divergence.
 
