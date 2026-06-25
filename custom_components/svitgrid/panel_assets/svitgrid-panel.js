@@ -67,6 +67,9 @@
     consumed: "Consumed",
     imported: "Imported",
     exported: "Exported",
+    batteryCharged: "Battery charged",
+    batteryDischarged: "Battery discharged",
+    generator: "Generator",
     kwh: "kWh",
     stale: "Stale",
     syncedAll: "All readings synced",
@@ -1748,16 +1751,35 @@
           return total;
         };
 
+        // Present-only helper: returns {value, present} where present=true when
+        // at least one inverter reported a finite value for the field.
+        const sumPresent = (field) => {
+          let total = null;
+          for (const inv of inverters) {
+            const v =
+              inv.energy && isNum(inv.energy[field]) ? inv.energy[field] : null;
+            if (v != null) total = (total || 0) + v;
+          }
+          return { value: total, present: total != null };
+        };
+
+        const battCharged   = sumPresent("dailyBatteryChargeEnergy");
+        const battDischarged = sumPresent("dailyBatteryDischargeEnergy");
+        const generator     = sumPresent("dailyGeneratorEnergy");
+
         const tiles = [
-          { label: STR.generated, value: this._kwh(sum("dailyPvEnergy")) },
-          { label: STR.consumed, value: this._kwh(sum("dailyLoadEnergy")) },
-          { label: STR.imported, value: this._kwh(sum("dailyGridImportEnergy")) },
-          { label: STR.exported, value: this._kwh(sum("dailyGridExportEnergy")) },
+          { label: STR.generated,        value: this._kwh(sum("dailyPvEnergy")),          presentOnly: false, present: true },
+          { label: STR.consumed,         value: this._kwh(sum("dailyLoadEnergy")),         presentOnly: false, present: true },
+          { label: STR.imported,         value: this._kwh(sum("dailyGridImportEnergy")),   presentOnly: false, present: true },
+          { label: STR.exported,         value: this._kwh(sum("dailyGridExportEnergy")),   presentOnly: false, present: true },
+          { label: STR.batteryCharged,   value: this._kwh(battCharged.value),              presentOnly: true,  present: battCharged.present },
+          { label: STR.batteryDischarged, value: this._kwh(battDischarged.value),          presentOnly: true,  present: battDischarged.present },
+          { label: STR.generator,        value: this._kwh(generator.value),                presentOnly: true,  present: generator.present },
         ];
 
         if (!this._todaySec) return true;
 
-        // Build once, then mutate values.
+        // Build once (7 tiles always in DOM), then mutate values + visibility.
         if (!this._todayRefs || this._todayRefs.length !== tiles.length) {
           this._todaySec.className = "";
           this._todaySec.innerHTML = "";
@@ -1779,13 +1801,18 @@
             tile.appendChild(val);
             tile.appendChild(unit);
             tile.appendChild(lbl);
+            if (t.presentOnly && !t.present) tile.style.display = "none";
             grid.appendChild(tile);
-            this._todayRefs.push(val);
+            this._todayRefs.push({ val, tile, presentOnly: t.presentOnly });
           }
           this._todaySec.appendChild(grid);
         } else {
           for (let i = 0; i < tiles.length; i++) {
-            this._todayRefs[i].textContent = tiles[i].value;
+            const ref = this._todayRefs[i];
+            ref.val.textContent = tiles[i].value;
+            if (ref.presentOnly) {
+              ref.tile.style.display = tiles[i].present ? "" : "none";
+            }
           }
         }
         return true;
