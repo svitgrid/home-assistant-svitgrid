@@ -7,9 +7,10 @@
 # hybrids (SG03LP1 / Sun-G3): charge 256, work_mode 244, solar_sell 247,
 # grid_charge_toggle 248.
 # v2 (2026-06-25): added daily load/import/export energy mappings (Solarman today_* sensors).
+# v3 (2026-06-25): added Tier-1 telemetry (inverter/battery temp, battery current, grid frequency).
 
 id: deye-sg05lp1-solarman-v1
-version: "2"
+version: "3"
 brand: Deye
 model: SG05LP1-EU
 phases: 1
@@ -31,6 +32,11 @@ entityMap:
   dailyGridImportEnergy: sensor.inverter_today_energy_import
   dailyGridExportEnergy: sensor.inverter_today_energy_export
   gridVoltageL1: sensor.inverter_grid_voltage
+  # Tier-1 telemetry (Solarman): inverter/battery temp, battery current, grid frequency.
+  batteryTemperature: sensor.inverter_battery_temperature
+  batteryCurrent: sensor.inverter_battery_current
+  gridFrequency: sensor.inverter_grid_frequency
+  inverterTemperature: sensor.inverter_temperature
 
 commands:
   - id: set_battery_charge

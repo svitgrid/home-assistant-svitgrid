@@ -3,9 +3,10 @@
 # Same register family as SG01HP3. Read-only in v1 (power scaling unverified
 # on live BM4 hardware; commands[] will land after a verified live test).
 # v3 (2026-06-25): added daily load/import/export energy mappings (Solarman today_* sensors).
+# v4 (2026-06-25): added Tier-1 telemetry (inverter/battery temp, battery current, grid frequency).
 
 id: deye-sg01hp3-50k-solarman-v1
-version: "3"
+version: "4"
 brand: Deye
 model: SG01HP3 50K
 phases: 3
@@ -38,5 +39,10 @@ entityMap:
   loadPowerL1: sensor.inverter_load_l1_power
   loadPowerL2: sensor.inverter_load_l2_power
   loadPowerL3: sensor.inverter_load_l3_power
+  # Tier-1 telemetry (Solarman): inverter/battery temp, battery current, grid frequency.
+  batteryTemperature: sensor.inverter_battery_temperature
+  batteryCurrent: sensor.inverter_battery_current
+  gridFrequency: sensor.inverter_grid_frequency
+  inverterTemperature: sensor.inverter_temperature
 
 commands: []
