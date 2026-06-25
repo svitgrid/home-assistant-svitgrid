@@ -461,3 +461,134 @@ async def test_poller_stopped_sets_paused(monkeypatch):
     await poller_run_loop(**kwargs)
     api.poll_commands.assert_awaited_once()
     assert lc.state == PAUSED
+
+
+@pytest.mark.asyncio
+async def test_set_cloud_endpoint_success_path_acks_then_applies(hass):
+    """Success path: ACK fires BEFORE apply_cloud_endpoint_change runs, so
+    the cloud sees `success` on the ORIGINAL endpoint before the reload
+    repoints us. Mirrors firmware D5's ack-restart-race fix."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+    from cryptography.hazmat.primitives import serialization
+    from custom_components.svitgrid.command_poller import process_command
+    from custom_components.svitgrid.signing import generate_keypair
+
+    priv, pub_hex = generate_keypair()
+    api_client = MagicMock()
+    api_client.ack_command = AsyncMock()
+    call_order: list[str] = []
+
+    async def record_ack(*args, **kwargs):
+        call_order.append("ack")
+    api_client.ack_command.side_effect = record_ack
+
+    def record_apply(*args, **kwargs):
+        call_order.append("apply")
+
+    with patch(
+        "custom_components.svitgrid.command_poller.apply_cloud_endpoint_change",
+        side_effect=record_apply,
+    ) as mock_apply:
+        await process_command(
+            command={
+                "commandId": "c1",
+                "command": "set_cloud_endpoint",
+                "payload": {"url": "https://api.svitgrid.app"},
+            },
+            api_client=api_client,
+            api_key="k",
+            trusted_public_keys_hex={},
+            our_private_key=priv,
+            our_signing_key_id="ours",
+            executor_version="0.3.0",
+            keystore=None,
+            hass=hass,
+            entry=MagicMock(entry_id="e1"),
+        )
+
+    assert call_order == ["ack", "apply"], (
+        "Must ACK on the original endpoint BEFORE applying the change "
+        "(else cmd.status stays at `delivered` forever — firmware D5 bug)"
+    )
+    api_client.ack_command.assert_awaited_once()
+    ack_call = api_client.ack_command.await_args
+    assert ack_call.kwargs["body"]["success"] is True
+    mock_apply.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_set_cloud_endpoint_rejects_disallowed_url(hass):
+    """Disallowed URL: ACK as rejected, do NOT apply."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+    from custom_components.svitgrid.command_poller import process_command
+    from custom_components.svitgrid.signing import generate_keypair
+
+    priv, _pub_hex = generate_keypair()
+    api_client = MagicMock()
+    api_client.ack_command = AsyncMock()
+
+    with patch(
+        "custom_components.svitgrid.command_poller.apply_cloud_endpoint_change",
+    ) as mock_apply:
+        await process_command(
+            command={
+                "commandId": "c-bad",
+                "command": "set_cloud_endpoint",
+                "payload": {"url": "https://evil.example.com"},
+            },
+            api_client=api_client,
+            api_key="k",
+            trusted_public_keys_hex={},
+            our_private_key=priv,
+            our_signing_key_id="ours",
+            executor_version="0.3.0",
+            keystore=None,
+            hass=hass,
+            entry=MagicMock(entry_id="e1"),
+        )
+
+    api_client.ack_command.assert_awaited_once()
+    body = api_client.ack_command.await_args.kwargs["body"]
+    assert body["success"] is False
+    assert body["rejected"] is True
+    assert body["reason"] == "disallowed_url"
+    mock_apply.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_set_cloud_endpoint_missing_payload_url_is_rejected(hass):
+    """Malformed command (no payload.url) — ACK rejected, no apply."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+    from custom_components.svitgrid.command_poller import process_command
+    from custom_components.svitgrid.signing import generate_keypair
+
+    priv, _pub_hex = generate_keypair()
+    api_client = MagicMock()
+    api_client.ack_command = AsyncMock()
+
+    with patch(
+        "custom_components.svitgrid.command_poller.apply_cloud_endpoint_change",
+    ) as mock_apply:
+        await process_command(
+            command={
+                "commandId": "c-empty",
+                "command": "set_cloud_endpoint",
+                "payload": {},
+            },
+            api_client=api_client,
+            api_key="k",
+            trusted_public_keys_hex={},
+            our_private_key=priv,
+            our_signing_key_id="ours",
+            executor_version="0.3.0",
+            keystore=None,
+            hass=hass,
+            entry=MagicMock(entry_id="e1"),
+        )
+
+    api_client.ack_command.assert_awaited_once()
+    body = api_client.ack_command.await_args.kwargs["body"]
+    assert body["success"] is False
+    assert body["rejected"] is True
+    assert body["reason"] == "disallowed_url"
+    mock_apply.assert_not_called()

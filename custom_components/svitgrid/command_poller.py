@@ -17,19 +17,39 @@ from typing import TYPE_CHECKING, Any
 from cryptography.hazmat.primitives.asymmetric import ec
 from homeassistant.core import HomeAssistant
 
+from homeassistant.config_entries import ConfigEntry
+
 from .api_client import CommandAckFailed, DeviceEvicted, DeviceStopped, SvitgridApiClient
+from .cloud_endpoint_handler import is_allowed_api_base
 from .const import (
     ADD_TRUSTED_KEY_COMMAND,
     COMMAND_POLL_CEILING_S,
     COMMAND_POLL_INTERVAL_S,
     DISPATCHABLE_COMMANDS,
     REVOKE_TRUSTED_KEY_COMMAND,
+    SET_CLOUD_ENDPOINT_COMMAND,
 )
 from .keystore import SvitgridKeystore
 from .signing import sign_payload, verify_payload
 
 if TYPE_CHECKING:
     from .executors.base import BaseExecutor
+
+
+def apply_cloud_endpoint_change(
+    hass: HomeAssistant,
+    entry: "ConfigEntry",
+    new_api_base: str,
+) -> None:
+    """Module-level shim so tests can patch 'command_poller.apply_cloud_endpoint_change'.
+
+    Deferred import of the real implementation in __init__.py avoids a
+    circular import (__init__.py imports command_poller during entry setup).
+    In tests, patch() replaces this name before process_command runs, so the
+    shim body is never reached — the mock is what gets called instead."""
+    from . import apply_cloud_endpoint_change as _real  # noqa: PLC0415
+
+    _real(hass, entry, new_api_base)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -71,6 +91,8 @@ async def process_command(
     executor_version: str,
     keystore: SvitgridKeystore | None,
     executors_by_inverter: dict[str, "BaseExecutor"] | None = None,
+    hass: HomeAssistant | None = None,
+    entry: "ConfigEntry | None" = None,
 ) -> None:
     """Process one polled command. Three dispatch arms:
       1. Internal trust commands (add_trusted_key, revoke_trusted_key) —
@@ -141,6 +163,56 @@ async def process_command(
             our_signing_key_id=our_signing_key_id,
             executor_version=executor_version,
         )
+        return
+
+    # === Arm 1c: set_cloud_endpoint (sub-project E) ===
+    # Internal because the URL allow-list IS the trust boundary; an admin
+    # signature would add nothing — only Svitgrid controls the two URLs
+    # that pass `is_allowed_api_base`.
+    if cmd_type == SET_CLOUD_ENDPOINT_COMMAND:
+        payload = command.get("payload") or {}
+        url = payload.get("url")
+        if not is_allowed_api_base(url):
+            _LOGGER.warning(
+                "set_cloud_endpoint rejected — url not in allow-list: %r", url,
+            )
+            await _send_signed_ack(
+                api_client=api_client,
+                api_key=api_key,
+                command_id=cmd_id,
+                success=False,
+                rejected=True,
+                reason="disallowed_url",
+                our_private_key=our_private_key,
+                our_signing_key_id=our_signing_key_id,
+                executor_version=executor_version,
+            )
+            return
+
+        # ACK SUCCESS FIRST on the ORIGINAL endpoint, THEN apply the
+        # change. If apply came first, the reload would tear down the
+        # api_client mid-flight and the ACK would never reach the cloud,
+        # leaving cmd.status stuck in `delivered` forever (the firmware
+        # sub-project D5 ack-restart-race, same root cause).
+        await _send_signed_ack(
+            api_client=api_client,
+            api_key=api_key,
+            command_id=cmd_id,
+            success=True,
+            result={"appliedUrl": url},
+            our_private_key=our_private_key,
+            our_signing_key_id=our_signing_key_id,
+            executor_version=executor_version,
+        )
+
+        if hass is None or entry is None:
+            _LOGGER.warning(
+                "set_cloud_endpoint ACKed success but no hass/entry passed — "
+                "cannot apply. Caller must thread them through (regression test).",
+            )
+            return
+
+        apply_cloud_endpoint_change(hass, entry, url)
         return
 
     # === Arms 2 and 3 require a verified admin signature ===
@@ -314,6 +386,7 @@ async def run_loop(
     activity: Any = None,  # ActivityTracker; None acceptable
     lifecycle: Any = None,  # LifecycleState; None acceptable (keeps existing callers working)
     store: Any = None,  # store with async set_lifecycle; None acceptable
+    entry: "ConfigEntry | None" = None,
 ) -> None:
     """Polling coroutine. Exits when hass.is_stopping becomes True.
 
@@ -380,6 +453,8 @@ async def run_loop(
                     executor_version=executor_version,
                     keystore=keystore,  # type: ignore[arg-type]
                     executors_by_inverter=executors_by_inverter,
+                    hass=hass,
+                    entry=entry,
                 )
         except DeviceEvicted:
             # 410 Gone — owning household deleted. Authoritative eviction:

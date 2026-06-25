@@ -480,6 +480,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 executors_by_inverter=executors_by_inverter,
                 lifecycle=lifecycle,
                 store=store,
+                entry=entry,
             ),
             name="svitgrid_command_poller",
         )
