@@ -36,20 +36,28 @@ if TYPE_CHECKING:
     from .executors.base import BaseExecutor
 
 
-def apply_cloud_endpoint_change(
-    hass: HomeAssistant,
-    entry: "ConfigEntry",
-    new_api_base: str,
-) -> None:
-    """Module-level shim so tests can patch 'command_poller.apply_cloud_endpoint_change'.
+def apply_cloud_endpoint_change(hass, entry, url):
+    """Module-level shim for `apply_cloud_endpoint_change` — exists to solve
+    TWO constraints simultaneously:
 
-    Deferred import of the real implementation in __init__.py avoids a
-    circular import (__init__.py imports command_poller during entry setup).
-    In tests, patch() replaces this name before process_command runs, so the
-    shim body is never reached — the mock is what gets called instead."""
+    1. CIRCULAR IMPORT: __init__.py imports from command_poller during entry
+       setup (`from .command_poller import run_loop`), so command_poller cannot
+       do `from . import apply_cloud_endpoint_change` at module load time.
+
+    2. TEST PATCH TARGET: tests patch
+       `custom_components.svitgrid.command_poller.apply_cloud_endpoint_change`.
+       For the patch to intercept the call inside process_command, the name
+       must resolve in THIS module's namespace, not __init__.py's. A bare
+       deferred import inside process_command would resolve fresh each call
+       and bypass the patch.
+
+    The shim sits at module scope (so patching works) and uses a deferred
+    import in its body (so circular import doesn't fire at load time).
+    In tests, patch() replaces this function before process_command runs —
+    the shim body never executes."""
     from . import apply_cloud_endpoint_change as _real  # noqa: PLC0415
 
-    _real(hass, entry, new_api_base)
+    _real(hass, entry, url)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -212,7 +220,19 @@ async def process_command(
             )
             return
 
-        apply_cloud_endpoint_change(hass, entry, url)
+        try:
+            apply_cloud_endpoint_change(hass, entry, url)
+        except Exception:
+            # ACK already sent as success — the cloud audit log will say
+            # the migration succeeded, but the local apply just failed.
+            # Operator must reconcile manually. Distinctive log message
+            # for grep-based recovery: "set_cloud_endpoint apply failed".
+            _LOGGER.exception(
+                "set_cloud_endpoint apply failed AFTER successful ACK — "
+                "integration still on old endpoint, cloud thinks migration "
+                "done. cmd_id=%s url=%s manual recovery required.",
+                cmd_id, url,
+            )
         return
 
     # === Arms 2 and 3 require a verified admin signature ===

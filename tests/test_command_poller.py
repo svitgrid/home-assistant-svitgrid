@@ -592,3 +592,57 @@ async def test_set_cloud_endpoint_missing_payload_url_is_rejected(hass):
     assert body["rejected"] is True
     assert body["reason"] == "disallowed_url"
     mock_apply.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_set_cloud_endpoint_apply_failure_after_ack_is_swallowed_and_logged(
+    hass, caplog,
+):
+    """If apply raises AFTER we've ACKed success, swallow + log so the
+    poller keeps running. The cloud already thinks the migration succeeded;
+    operator must manually reconcile via grep of the distinctive log line."""
+    import logging
+    from unittest.mock import AsyncMock, MagicMock, patch
+    from custom_components.svitgrid.command_poller import process_command
+    from custom_components.svitgrid.signing import generate_keypair
+
+    priv, _pub_hex = generate_keypair()
+    api_client = MagicMock()
+    api_client.ack_command = AsyncMock()
+
+    with patch(
+        "custom_components.svitgrid.command_poller.apply_cloud_endpoint_change",
+        side_effect=RuntimeError("boom"),
+    ) as mock_apply:
+        with caplog.at_level(logging.ERROR, logger="custom_components.svitgrid.command_poller"):
+            # Should NOT raise — apply failure is swallowed.
+            await process_command(
+                command={
+                    "commandId": "c-boom",
+                    "command": "set_cloud_endpoint",
+                    "payload": {"url": "https://api.svitgrid.app"},
+                },
+                api_client=api_client,
+                api_key="k",
+                trusted_public_keys_hex={},
+                our_private_key=priv,
+                our_signing_key_id="ours",
+                executor_version="0.3.0",
+                keystore=None,
+                hass=hass,
+                entry=MagicMock(entry_id="e1"),
+            )
+
+    # ACK was sent with success=True (BEFORE the apply failure)
+    api_client.ack_command.assert_awaited_once()
+    assert api_client.ack_command.await_args.kwargs["body"]["success"] is True
+
+    # apply was attempted (and raised)
+    mock_apply.assert_called_once()
+
+    # Distinctive error log for operator grep
+    assert any(
+        "set_cloud_endpoint apply failed" in record.message
+        and record.levelno == logging.ERROR
+        for record in caplog.records
+    ), f"Expected distinctive error log not found. Records: {[r.message for r in caplog.records]}"
