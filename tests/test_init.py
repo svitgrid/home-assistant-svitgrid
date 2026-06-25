@@ -8,6 +8,11 @@ import pytest
 from homeassistant.setup import async_setup_component
 
 from custom_components.svitgrid.const import DOMAIN
+from custom_components.svitgrid.reading_store import ReadingStore
+
+# Default lifecycle the unset-meta store returns; the HA test harness blocks the
+# store's real SQLite open, so we patch get_lifecycle to this by default.
+_ACTIVE_LIFECYCLE = {"state": "active", "reason": None, "since": None}
 
 
 @pytest.fixture(autouse=True)
@@ -17,11 +22,16 @@ def _stub_local_store_side_effects():
     and a live sender against a mock client is noise — stub both. Tests that
     care assert on their OWN explicit patches (nested patch wins in-scope).
     Also stubs register_panel/remove_panel (SP2 Task 2) since the YAML-path
-    hass fixture has no hass.http and panel_custom is a real HA subsystem."""
+    hass fixture has no hass.http and panel_custom is a real HA subsystem.
+
+    SP2 Task 9 also seeds the shared lifecycle from store.get_lifecycle(), which
+    opens the SQLite file — blocked by the HA harness — so default it to active.
+    The deprovisioned test overrides this with its own in-scope patch."""
     with patch("custom_components.svitgrid.run_sender_loop", new_callable=AsyncMock), \
          patch("custom_components.svitgrid.register_views"), \
          patch("custom_components.svitgrid.register_panel", new_callable=AsyncMock), \
-         patch("custom_components.svitgrid.remove_panel"):
+         patch("custom_components.svitgrid.remove_panel"), \
+         patch.object(ReadingStore, "get_lifecycle", AsyncMock(return_value=_ACTIVE_LIFECYCLE)):
         yield
 
 
@@ -823,3 +833,102 @@ async def test_async_unload_entry_calls_remove_panel(hass, enable_custom_integra
 
     assert ok is True
     mock_remove_panel.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_deprovisioned_at_startup_skips_loops(hass, enable_custom_integrations):
+    """When the persisted lifecycle is 'deprovisioned', no background loops are
+    started, but the panel/views/sensors are still set up."""
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+    from unittest.mock import AsyncMock, patch
+
+    from custom_components.svitgrid import async_setup_entry
+    from custom_components.svitgrid.reading_store import ReadingStore
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        version=2,
+        title="Svitgrid (h-abc)",
+        data={
+            "api_base": "https://api.example.com",
+            "api_key": "test-key",
+            "edge_device_id": "ed-1",
+            "household_id": "h-abc",
+            "signing_key_id": "ha-home-01",
+            "private_key_pem": (
+                "-----BEGIN PRIVATE KEY-----\nFAKE\n-----END PRIVATE KEY-----\n"
+            ),
+            "public_key_hex": "04" + "a" * 128,
+            "trusted_keys": [],
+            "inverters": [
+                {
+                    "inverter_id": "ha-xyz",
+                    "entity_map": {"batterySoc": "sensor.soc"},
+                    "command_recipes": [],
+                    "command_config": {},
+                    "brand": "Deye",
+                    "model": "SG04LP3",
+                    "phases": 3,
+                    "has_battery": True,
+                    "pv_strings": 2,
+                    "preset_id": None,
+                }
+            ],
+        },
+        entry_id="test-entry-id-depro",
+    )
+    entry.add_to_hass(hass)
+
+    deprovisioned = {
+        "state": "deprovisioned",
+        "reason": "revoked",
+        "since": "2026-06-25T10:00:00Z",
+    }
+
+    with (
+        patch.object(
+            ReadingStore, "get_lifecycle", AsyncMock(return_value=deprovisioned)
+        ),
+        patch(
+            "custom_components.svitgrid.run_readings_loop", new_callable=AsyncMock
+        ) as rp,
+        patch(
+            "custom_components.svitgrid.run_command_loop", new_callable=AsyncMock
+        ) as cp,
+        patch(
+            "custom_components.svitgrid.run_mqtt_wake_loop", new_callable=AsyncMock
+        ),
+        patch(
+            "custom_components.svitgrid.run_sender_loop", new_callable=AsyncMock
+        ) as sender,
+        patch("custom_components.svitgrid.register_views") as reg_views,
+        patch(
+            "custom_components.svitgrid.register_panel", new_callable=AsyncMock
+        ) as reg_panel,
+        patch.object(
+            hass.config_entries,
+            "async_forward_entry_setups",
+            AsyncMock(return_value=True),
+        ) as fwd,
+    ):
+        ok = await async_setup_entry(hass, entry)
+        await hass.async_block_till_done()
+
+    assert ok is True
+
+    # No background loops started while deprovisioned.
+    assert rp.await_count == 0
+    assert sender.await_count == 0
+    assert cp.await_count == 0
+
+    # Panel / views / sensors still set up.
+    assert reg_views.call_count == 1
+    reg_panel.assert_awaited_once()
+    fwd.assert_awaited_once()
+
+    entry_state = hass.data[DOMAIN][entry.entry_id]
+    assert entry_state.get("readings_tasks") == {}
+    assert entry_state.get("command_task") is None
+    assert entry_state.get("sender_task") is None
+    assert entry_state.get("lifecycle") is not None
+    assert entry_state["lifecycle"].state == "deprovisioned"

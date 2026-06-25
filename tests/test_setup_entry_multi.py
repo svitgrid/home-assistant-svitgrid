@@ -2,7 +2,13 @@ import pytest
 from unittest.mock import AsyncMock, patch
 from custom_components.svitgrid import async_setup_entry, async_migrate_entry
 from custom_components.svitgrid.const import DOMAIN
+from custom_components.svitgrid.reading_store import ReadingStore
 from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+# The HA test harness blocks SQLite file opens under its testing_config dir, so
+# the store's real get_lifecycle() can't run here. Patch it to the default
+# "active" lifecycle the unset-meta store would return.
+_ACTIVE_LIFECYCLE = {"state": "active", "reason": None, "since": None}
 
 
 def _two_inverter_entry():
@@ -27,7 +33,8 @@ async def test_setup_spawns_one_readings_loop_per_inverter(hass):
     async def _fake_readings_loop(*, inverter_id, **kwargs):
         started.append(inverter_id)
 
-    with patch("custom_components.svitgrid.run_readings_loop", side_effect=_fake_readings_loop), \
+    with patch.object(ReadingStore, "get_lifecycle", AsyncMock(return_value=_ACTIVE_LIFECYCLE)), \
+         patch("custom_components.svitgrid.run_readings_loop", side_effect=_fake_readings_loop), \
          patch("custom_components.svitgrid.run_command_loop", return_value=None), \
          patch("custom_components.svitgrid.run_mqtt_wake_loop", return_value=None), \
          patch("custom_components.svitgrid.run_sender_loop", return_value=None), \
@@ -62,7 +69,8 @@ async def test_migrated_v1_entry_sets_up_without_error(hass):
     )
     v1.add_to_hass(hass)
     await async_migrate_entry(hass, v1)
-    with patch("custom_components.svitgrid.run_readings_loop", return_value=None), \
+    with patch.object(ReadingStore, "get_lifecycle", AsyncMock(return_value=_ACTIVE_LIFECYCLE)), \
+         patch("custom_components.svitgrid.run_readings_loop", return_value=None), \
          patch("custom_components.svitgrid.run_command_loop", return_value=None), \
          patch("custom_components.svitgrid.run_mqtt_wake_loop", return_value=None), \
          patch("custom_components.svitgrid.run_sender_loop", return_value=None), \

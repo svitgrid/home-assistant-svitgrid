@@ -40,6 +40,7 @@ from .executors import create_executor
 from .executors.yaml_dispatcher import YamlDispatcher
 from .http_views import register_views
 from .keystore import SvitgridKeystore
+from .lifecycle import LifecycleState
 from .panel import register_panel, remove_panel
 from .mqtt_wake import run_loop as run_mqtt_wake_loop
 from .reading_sender import Cadence, run_sender_loop
@@ -49,10 +50,15 @@ from .readings_publisher import run_loop as run_readings_loop
 _LOGGER = logging.getLogger(__name__)
 
 
-async def _start_local_store(hass: HomeAssistant, api_client, api_key: str):
-    """Create the per-entry local store, start the sender + rollup timer, and
-    register the read views once. Returns (store, cadence, sender_task,
-    cancel_rollup)."""
+async def _start_local_store(hass: HomeAssistant, api_client, api_key: str, activity=None):
+    """Create the per-entry local store, seed the shared lifecycle holder from
+    persisted state, register the read views once, and (only when the device is
+    still active) start the sender + rollup timer. Returns (store, cadence,
+    sender_task, cancel_rollup, lifecycle).
+
+    When the persisted lifecycle is not active (paused/deprovisioned), the
+    sender loop and rollup timer are NOT started; their slots are returned as
+    None. Views/panel registration is always performed by the caller path."""
     import os
     from datetime import UTC, datetime, timedelta
 
@@ -75,10 +81,24 @@ async def _start_local_store(hass: HomeAssistant, api_client, api_key: str):
         register_views(hass, store)
         hass.data[DOMAIN]["_views_registered"] = True
 
+    # Seed the shared lifecycle holder from persisted state. The activity
+    # tracker (if any) is mirrored into the status sensor on lifecycle changes.
+    persisted = await store.get_lifecycle()
+    lifecycle = LifecycleState(
+        state=persisted["state"],
+        reason=persisted["reason"],
+        since=persisted["since"],
+        activity=activity,
+    )
+
+    if not lifecycle.active:
+        # Deprovisioned / paused: do not run the sender or rollup timer.
+        return store, cadence, None, None, lifecycle
+
     sender_task = hass.async_create_background_task(
         run_sender_loop(
             hass=hass, store=store, api_client=api_client,
-            api_key=api_key, cadence=cadence,
+            api_key=api_key, cadence=cadence, lifecycle=lifecycle,
         ),
         name="svitgrid_reading_sender",
     )
@@ -95,7 +115,7 @@ async def _start_local_store(hass: HomeAssistant, api_client, api_key: str):
         hass, _rollup_tick, timedelta(seconds=ROLLUP_INTERVAL_S)
     )
 
-    return store, cadence, sender_task, cancel_rollup
+    return store, cadence, sender_task, cancel_rollup, lifecycle
 
 
 def _validate_entity_map(value: dict) -> dict:
@@ -244,41 +264,57 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     # resolves the real inverter ID from the bootstrap response.
     inverter_id = device_id
 
-    store, cadence, sender_task, cancel_rollup = await _start_local_store(
-        hass, api_client, state.api_key
+    # YAML path has no ActivityTracker; pass None as the activity mirror.
+    store, cadence, sender_task, cancel_rollup, lifecycle = await _start_local_store(
+        hass, api_client, state.api_key, None
     )
     await register_panel(hass)
 
-    readings_task = hass.async_create_background_task(
-        run_readings_loop(
-            hass=hass,
-            store=store,
-            cadence=cadence,
-            inverter_id=inverter_id,
-            entity_map=entity_map,
-        ),
-        name="svitgrid_readings_publisher",
-    )
+    readings_task = None
+    poller_task = None
 
-    poller_task = hass.async_create_background_task(
-        run_command_loop(
-            hass=hass,
-            api_client=api_client,
-            keystore=keystore,
-            trusted_public_keys_hex=trusted_public_keys_hex,
-            executor_version="0.2.0",
-            executors_by_inverter=({inverter_id: executor} if executor else {}),
-            interval_s=command_interval,
-        ),
-        name="svitgrid_command_poller",
-    )
+    if lifecycle.active:
+        readings_task = hass.async_create_background_task(
+            run_readings_loop(
+                hass=hass,
+                store=store,
+                cadence=cadence,
+                inverter_id=inverter_id,
+                entity_map=entity_map,
+                lifecycle=lifecycle,
+            ),
+            name="svitgrid_readings_publisher",
+        )
+
+        poller_task = hass.async_create_background_task(
+            run_command_loop(
+                hass=hass,
+                api_client=api_client,
+                keystore=keystore,
+                trusted_public_keys_hex=trusted_public_keys_hex,
+                executor_version="0.2.0",
+                executors_by_inverter=({inverter_id: executor} if executor else {}),
+                interval_s=command_interval,
+                lifecycle=lifecycle,
+                store=store,
+            ),
+            name="svitgrid_command_poller",
+        )
+    else:
+        _LOGGER.warning(
+            "Svitgrid device is %s (reason=%s); readings/command loops not started.",
+            lifecycle.state, lifecycle.reason,
+        )
 
     async def _on_stop(_event: Event) -> None:
-        cancel_rollup()
+        if cancel_rollup:
+            cancel_rollup()
         for task in (readings_task, poller_task, sender_task):
-            task.cancel()
+            if task:
+                task.cancel()
         await asyncio.gather(
-            readings_task, poller_task, sender_task, return_exceptions=True
+            *[t for t in (readings_task, poller_task, sender_task) if t],
+            return_exceptions=True,
         )
 
     hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _on_stop)
@@ -295,6 +331,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         "store": store,
         "sender_task": sender_task,
         "cancel_rollup": cancel_rollup,
+        "lifecycle": lifecycle,
     })
     _LOGGER.info("Svitgrid integration started (device_id=%s)", device_id)
     return True
@@ -325,60 +362,79 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     store = None
     sender_task = None
     cancel_rollup = None
+    lifecycle = None
 
     if inverters:
-        store, cadence, sender_task, cancel_rollup = await _start_local_store(
-            hass, api_client, api_key
+        store, cadence, sender_task, cancel_rollup, lifecycle = await _start_local_store(
+            hass, api_client, api_key, activity
         )
         await register_panel(hass)
 
-    for inv in inverters:
-        inverter_id = inv["inverter_id"]
-        entity_map = dict(inv.get("entity_map") or {})
-        if not entity_map:
-            _LOGGER.warning(
-                "Inverter %s has an empty entity_map — it will not publish readings.",
-                inverter_id,
+    # When the device is deprovisioned (or paused), skip all polling/publishing
+    # loops. The panel/views/sensors are still set up so the user can see the
+    # lifecycle status; loops stay down until re-provisioning.
+    loops_active = lifecycle is not None and lifecycle.active
+
+    command_task = None
+    mqtt_wake_task = None
+
+    if loops_active:
+        for inv in inverters:
+            inverter_id = inv["inverter_id"]
+            entity_map = dict(inv.get("entity_map") or {})
+            if not entity_map:
+                _LOGGER.warning(
+                    "Inverter %s has an empty entity_map — it will not publish readings.",
+                    inverter_id,
+                )
+            readings_tasks[inverter_id] = hass.async_create_background_task(
+                run_readings_loop(
+                    hass=hass,
+                    store=store,
+                    cadence=cadence,
+                    inverter_id=inverter_id,
+                    entity_map=entity_map,
+                    activity=activity,
+                    lifecycle=lifecycle,
+                ),
+                name=f"svitgrid_readings_{inverter_id}",
             )
-        readings_tasks[inverter_id] = hass.async_create_background_task(
-            run_readings_loop(
+            recipes = inv.get("command_recipes") or []
+            if recipes:
+                executors_by_inverter[inverter_id] = YamlDispatcher(
+                    hass=hass,
+                    commands=recipes,
+                    config=dict(inv.get("command_config") or {}),
+                )
+
+        wake_event = asyncio.Event()
+        command_task = hass.async_create_background_task(
+            run_command_loop(
                 hass=hass,
-                store=store,
-                cadence=cadence,
-                inverter_id=inverter_id,
-                entity_map=entity_map,
+                api_client=api_client,
+                keystore=None,
+                entry_data=dict(data),
+                wake_event=wake_event,
                 activity=activity,
+                executors_by_inverter=executors_by_inverter,
+                lifecycle=lifecycle,
+                store=store,
             ),
-            name=f"svitgrid_readings_{inverter_id}",
+            name="svitgrid_command_poller",
         )
-        recipes = inv.get("command_recipes") or []
-        if recipes:
-            executors_by_inverter[inverter_id] = YamlDispatcher(
-                hass=hass,
-                commands=recipes,
-                config=dict(inv.get("command_config") or {}),
-            )
 
-    wake_event = asyncio.Event()
-    command_task = hass.async_create_background_task(
-        run_command_loop(
-            hass=hass,
-            api_client=api_client,
-            keystore=None,
-            entry_data=dict(data),
-            wake_event=wake_event,
-            activity=activity,
-            executors_by_inverter=executors_by_inverter,
-        ),
-        name="svitgrid_command_poller",
-    )
-
-    mqtt_wake_task = hass.async_create_background_task(
-        run_mqtt_wake_loop(
-            hass=hass, api_client=api_client, api_key=api_key, wake_event=wake_event,
-        ),
-        name="svitgrid_mqtt_wake",
-    )
+        mqtt_wake_task = hass.async_create_background_task(
+            run_mqtt_wake_loop(
+                hass=hass, api_client=api_client, api_key=api_key, wake_event=wake_event,
+            ),
+            name="svitgrid_mqtt_wake",
+        )
+    elif lifecycle is not None:
+        _LOGGER.warning(
+            "Svitgrid device is %s (reason=%s); readings/command/wake loops not "
+            "started for entry %s.",
+            lifecycle.state, lifecycle.reason, entry.entry_id,
+        )
 
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = {
@@ -392,8 +448,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "store": store,
         "sender_task": sender_task,
         "cancel_rollup": cancel_rollup,
+        "lifecycle": lifecycle,
     }
-    await hass.config_entries.async_forward_entry_setups(entry, ["sensor"])
+    await hass.config_entries.async_forward_entry_setups(
+        entry, ["sensor", "binary_sensor"]
+    )
     _LOGGER.info(
         "Svitgrid started from config entry %s with %d inverter(s)",
         entry.entry_id, len(inverters),
@@ -404,7 +463,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Cancel background tasks when the user removes the integration."""
-    await hass.config_entries.async_unload_platforms(entry, ["sensor"])
+    await hass.config_entries.async_unload_platforms(entry, ["sensor", "binary_sensor"])
     remove_panel(hass)
     state = hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
     if state is None:
