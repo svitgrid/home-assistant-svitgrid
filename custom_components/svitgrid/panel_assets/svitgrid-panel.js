@@ -511,7 +511,6 @@
 
     /* Tappable bar-col button (intraday drill-down) */
     .bar-col-btn {
-      display: contents; /* inherits bar-col layout */
       background: none;
       border: none;
       padding: 0;
@@ -2186,6 +2185,7 @@
     // History — driven by _histRangeDays and _histMetric (SP-C foundation)
     // ---------------------------------------------------------------- //
     async _loadHistory() {
+      if (this._intradayDay) return true;
       this._histReq = (this._histReq || 0) + 1;
       const req = this._histReq;
       try {
@@ -3077,7 +3077,7 @@
         lbl.style.position = "absolute";
         lbl.style.left = ((h / 23) * 100).toFixed(1) + "%";
         lbl.style.transform = "translateX(-50%)";
-        if (h % 3 === 0 || h === 23) {
+        if ((h % 3 === 0 && h !== 21) || h === 23) {
           lbl.textContent = h + ":00";
         }
         xAxis.appendChild(lbl);
