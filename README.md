@@ -22,7 +22,7 @@ Open the Svitgrid app → your household's inverter → **Add Home Assistant int
 
 ```yaml
 svitgrid:
-  api_base: "https://api-334146986852.us-central1.run.app"   # staging
+  api_base: "https://api-staging.svitgrid.app"
   device_id: "<paste from mobile app>"
   signing_key_id: "<your chosen id, e.g. ha-home>"
   entity_map:

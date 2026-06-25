@@ -197,6 +197,28 @@ async def process_command(
             )
             return
 
+        # YAML-config installs don't have a ConfigEntry to mutate — ACK
+        # rejected (NOT success) so the cloud audit log accurately reflects
+        # that this install can't auto-migrate. Operator falls back to
+        # instructing the user to update the YAML config manually.
+        if hass is None or entry is None:
+            _LOGGER.warning(
+                "set_cloud_endpoint rejected — no ConfigEntry (YAML install?). "
+                "cmd_id=%s url=%s", cmd_id, url,
+            )
+            await _send_signed_ack(
+                api_client=api_client,
+                api_key=api_key,
+                command_id=cmd_id,
+                success=False,
+                rejected=True,
+                reason="yaml_config_no_entry",
+                our_private_key=our_private_key,
+                our_signing_key_id=our_signing_key_id,
+                executor_version=executor_version,
+            )
+            return
+
         # ACK SUCCESS FIRST on the ORIGINAL endpoint, THEN apply the
         # change. If apply came first, the reload would tear down the
         # api_client mid-flight and the ACK would never reach the cloud,
@@ -212,13 +234,6 @@ async def process_command(
             our_signing_key_id=our_signing_key_id,
             executor_version=executor_version,
         )
-
-        if hass is None or entry is None:
-            _LOGGER.warning(
-                "set_cloud_endpoint ACKed success but no hass/entry passed — "
-                "cannot apply. Caller must thread them through (regression test).",
-            )
-            return
 
         try:
             apply_cloud_endpoint_change(hass, entry, url)

@@ -646,3 +646,45 @@ async def test_set_cloud_endpoint_apply_failure_after_ack_is_swallowed_and_logge
         and record.levelno == logging.ERROR
         for record in caplog.records
     ), f"Expected distinctive error log not found. Records: {[r.message for r in caplog.records]}"
+
+
+async def test_set_cloud_endpoint_rejects_when_no_hass_or_entry(hass):
+    """YAML-config installs (no ConfigEntry) must ACK rejected, not success.
+    Otherwise the cloud audit log lies about migration completion."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+    from custom_components.svitgrid.command_poller import process_command
+    from custom_components.svitgrid.signing import generate_keypair
+
+    priv, _pub_hex = generate_keypair()
+    api_client = MagicMock()
+    api_client.ack_command = AsyncMock()
+
+    with patch(
+        "custom_components.svitgrid.command_poller.apply_cloud_endpoint_change",
+    ) as mock_apply:
+        await process_command(
+            command={
+                "commandId": "c-yaml",
+                "command": "set_cloud_endpoint",
+                "payload": {"url": "https://api.svitgrid.app"},
+            },
+            api_client=api_client,
+            api_key="k",
+            trusted_public_keys_hex={},
+            our_private_key=priv,
+            our_signing_key_id="ours",
+            executor_version="0.3.0",
+            keystore=None,
+            hass=None,
+            entry=None,
+        )
+
+    api_client.ack_command.assert_awaited_once()
+    body = api_client.ack_command.await_args.kwargs["body"]
+    assert body["success"] is False, (
+        "YAML-path must NOT ack success — that lies to the cloud audit log "
+        "about migration completion"
+    )
+    assert body["rejected"] is True
+    assert body["reason"] == "yaml_config_no_entry"
+    mock_apply.assert_not_called()
