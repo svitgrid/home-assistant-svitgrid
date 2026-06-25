@@ -50,11 +50,18 @@ from .readings_publisher import run_loop as run_readings_loop
 _LOGGER = logging.getLogger(__name__)
 
 
-async def _start_local_store(hass: HomeAssistant, api_client, api_key: str, activity=None):
+async def _start_local_store(
+    hass: HomeAssistant, api_client, api_key: str, activity=None, active_ids=None
+):
     """Create the per-entry local store, seed the shared lifecycle holder from
     persisted state, register the read views once, and (only when the device is
     still active) start the sender + rollup timer. Returns (store, cadence,
     sender_task, cancel_rollup, lifecycle).
+
+    active_ids: set of inverter_id strings currently in the active config.
+    Orphaned readings_raw rows (for inverter ids NOT in active_ids) are pruned
+    BEFORE the sender starts so they cannot block the new inverter's queue
+    (head-of-line blocking after a re-pair that changes the inverter id).
 
     When the persisted lifecycle is not active (paused/deprovisioned), the
     sender loop and rollup timer are NOT started; their slots are returned as
@@ -71,6 +78,16 @@ async def _start_local_store(hass: HomeAssistant, api_client, api_key: str, acti
 
     await hass.async_add_executor_job(partial(os.makedirs, db_dir, exist_ok=True))
     store = ReadingStore(hass, os.path.join(db_dir, READINGS_DB_FILE))
+
+    # Prune orphaned rows BEFORE the sender starts (re-pair queue poison fix).
+    if active_ids is not None:
+        pruned = await store.prune_inverters_not_in(active_ids)
+        if pruned:
+            _LOGGER.info(
+                "Pruned %d orphaned readings_raw row(s) for inverters not in active config %s",
+                pruned, active_ids,
+            )
+
     cadence = Cadence()
 
     # Register the read HTTP views once per hass. A second config entry would
@@ -267,8 +284,9 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     inverter_id = device_id
 
     # YAML path has no ActivityTracker; pass None as the activity mirror.
+    # active_ids contains the single inverter_id used by the YAML config.
     store, cadence, sender_task, cancel_rollup, lifecycle = await _start_local_store(
-        hass, api_client, state.api_key, None
+        hass, api_client, state.api_key, None, active_ids={inverter_id}
     )
     await register_panel(hass)
 
@@ -367,8 +385,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     lifecycle = None
 
     if inverters:
+        active_ids = {inv["inverter_id"] for inv in inverters}
         store, cadence, sender_task, cancel_rollup, lifecycle = await _start_local_store(
-            hass, api_client, api_key, activity
+            hass, api_client, api_key, activity, active_ids=active_ids
         )
         await register_panel(hass)
 

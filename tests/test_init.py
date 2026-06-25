@@ -31,7 +31,8 @@ def _stub_local_store_side_effects():
          patch("custom_components.svitgrid.register_views"), \
          patch("custom_components.svitgrid.register_panel", new_callable=AsyncMock), \
          patch("custom_components.svitgrid.remove_panel"), \
-         patch.object(ReadingStore, "get_lifecycle", AsyncMock(return_value=_ACTIVE_LIFECYCLE)):
+         patch.object(ReadingStore, "get_lifecycle", AsyncMock(return_value=_ACTIVE_LIFECYCLE)), \
+         patch.object(ReadingStore, "prune_inverters_not_in", AsyncMock(return_value=0)):
         yield
 
 
@@ -939,6 +940,76 @@ async def test_deprovisioned_at_startup_skips_loops(hass, enable_custom_integrat
     assert activity is not None
     assert activity.lifecycle_state == "deprovisioned"
     assert activity.status == "deprovisioned"
+
+
+@pytest.mark.asyncio
+async def test_async_setup_entry_prunes_orphaned_inverter_rows(hass, enable_custom_integrations):
+    """prune_inverters_not_in must be awaited once with the entry's active inverter-id
+    set BEFORE the sender loop starts. This guards against head-of-line blocking
+    when the inverter id changes after re-pairing."""
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+    from unittest.mock import AsyncMock, patch, call
+
+    from custom_components.svitgrid import async_setup_entry
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        version=2,
+        title="Svitgrid (h-prune-test)",
+        data={
+            "api_base": "https://api.example.com",
+            "api_key": "test-key",
+            "edge_device_id": "ed-1",
+            "household_id": "h-prune",
+            "signing_key_id": "ha-home-01",
+            "private_key_pem": (
+                "-----BEGIN PRIVATE KEY-----\nFAKE\n-----END PRIVATE KEY-----\n"
+            ),
+            "public_key_hex": "04" + "a" * 128,
+            "trusted_keys": [],
+            "inverters": [
+                {
+                    "inverter_id": "ha-prune-inv",
+                    "entity_map": {"batterySoc": "sensor.soc"},
+                    "command_recipes": [],
+                    "command_config": {},
+                    "brand": "Deye",
+                    "model": "SG04LP3",
+                    "phases": 3,
+                    "has_battery": True,
+                    "pv_strings": 2,
+                    "preset_id": None,
+                }
+            ],
+        },
+        entry_id="entry-prune-test",
+    )
+    entry.add_to_hass(hass)
+
+    sender_call_order = []
+
+    async def _track_sender(**kwargs):
+        sender_call_order.append("sender")
+
+    prune_mock = AsyncMock(return_value=0)
+
+    with (
+        patch("custom_components.svitgrid.run_readings_loop", new_callable=AsyncMock),
+        patch("custom_components.svitgrid.run_command_loop", new_callable=AsyncMock),
+        patch("custom_components.svitgrid.run_mqtt_wake_loop", new_callable=AsyncMock),
+        patch("custom_components.svitgrid.run_sender_loop", side_effect=_track_sender),
+        patch("custom_components.svitgrid.register_views"),
+        patch("custom_components.svitgrid.register_panel", new_callable=AsyncMock),
+        patch("custom_components.svitgrid.remove_panel"),
+        patch.object(ReadingStore, "prune_inverters_not_in", prune_mock),
+        patch.object(hass.config_entries, "async_forward_entry_setups", AsyncMock(return_value=True)),
+    ):
+        ok = await async_setup_entry(hass, entry)
+        await hass.async_block_till_done()
+
+    assert ok is True
+    # prune must be called exactly once with the entry's active inverter-id set
+    prune_mock.assert_awaited_once_with({"ha-prune-inv"})
 
 
 @pytest.mark.asyncio

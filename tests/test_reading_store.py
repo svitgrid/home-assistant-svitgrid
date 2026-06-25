@@ -176,6 +176,46 @@ def test_lifecycle_defaults_active_when_unset(tmp_path):
     assert store._get_lifecycle_sync() == {"state": "active", "reason": None, "since": None}
 
 
+def test_prune_inverters_not_in_keeps_listed_and_deletes_rest(tmp_path):
+    """Rows for inverters NOT in keep_ids are deleted; rows for listed ids remain."""
+    store = _store(tmp_path)
+    # seed 2 rows for inv-A and 3 rows for inv-B
+    for i in range(2):
+        store._append_sync({"inverterId": "inv-A", "timestamp": f"2026-06-24T10:0{i}:00Z"})
+    for i in range(3):
+        store._append_sync({"inverterId": "inv-B", "timestamp": f"2026-06-24T11:0{i}:00Z"})
+
+    deleted = store._prune_inverters_not_in_sync({"inv-A"})
+
+    assert deleted == 3  # all inv-B rows removed
+    # only inv-A rows remain
+    conn = store._connect_for_test()
+    try:
+        rows = conn.execute("SELECT inverter_id FROM readings_raw ORDER BY inverter_id, ts").fetchall()
+    finally:
+        conn.close()
+    assert all(r["inverter_id"] == "inv-A" for r in rows)
+    assert len(rows) == 2
+
+
+def test_prune_inverters_not_in_empty_set_deletes_all(tmp_path):
+    """Empty keep set (nothing active) deletes ALL rows from readings_raw.
+    readings_hourly/readings_daily are intentionally untouched (local archive)."""
+    store = _store(tmp_path)
+    store._append_sync({"inverterId": "inv-A", "timestamp": "2026-06-24T10:00:00Z"})
+    store._append_sync({"inverterId": "inv-B", "timestamp": "2026-06-24T10:00:01Z"})
+
+    deleted = store._prune_inverters_not_in_sync(set())
+
+    assert deleted == 2
+    conn = store._connect_for_test()
+    try:
+        count = conn.execute("SELECT COUNT(*) c FROM readings_raw").fetchone()["c"]
+    finally:
+        conn.close()
+    assert count == 0
+
+
 def test_history_range_orders_and_bounds(tmp_path):
     store = _store(tmp_path)
     import json

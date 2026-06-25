@@ -347,6 +347,36 @@ class ReadingStore:
         sn = self._get_meta_sync("lifecycle_since") or None
         return {"state": st, "reason": rs or None, "since": sn or None}
 
+    def _prune_inverters_not_in_sync(self, keep_ids: set) -> int:
+        """Delete readings_raw rows for inverters not in keep_ids.
+
+        Only prunes readings_raw (the outbound queue — the bug vector).
+        readings_hourly / readings_daily are the local archive and are
+        intentionally left untouched.
+
+        Returns the number of rows deleted.
+        """
+        keep = list(keep_ids)
+        conn = _connect(self._db_path)
+        try:
+            if not keep:
+                cur = conn.execute("DELETE FROM readings_raw")
+            else:
+                placeholders = ",".join("?" * len(keep))
+                cur = conn.execute(
+                    f"DELETE FROM readings_raw WHERE inverter_id NOT IN ({placeholders})",
+                    keep,
+                )
+            conn.commit()
+            return cur.rowcount
+        finally:
+            conn.close()
+
+    async def prune_inverters_not_in(self, keep_ids: set) -> int:
+        return await self._hass.async_add_executor_job(
+            self._prune_inverters_not_in_sync, keep_ids
+        )
+
     async def set_lifecycle(self, state: str, reason: str | None, since: str | None) -> None:
         await self._hass.async_add_executor_job(self._set_lifecycle_sync, state, reason, since)
 

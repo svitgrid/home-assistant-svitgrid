@@ -34,6 +34,7 @@ async def test_setup_spawns_one_readings_loop_per_inverter(hass):
         started.append(inverter_id)
 
     with patch.object(ReadingStore, "get_lifecycle", AsyncMock(return_value=_ACTIVE_LIFECYCLE)), \
+         patch.object(ReadingStore, "prune_inverters_not_in", AsyncMock(return_value=0)), \
          patch("custom_components.svitgrid.run_readings_loop", side_effect=_fake_readings_loop), \
          patch("custom_components.svitgrid.run_command_loop", return_value=None), \
          patch("custom_components.svitgrid.run_mqtt_wake_loop", return_value=None), \
@@ -70,6 +71,7 @@ async def test_migrated_v1_entry_sets_up_without_error(hass):
     v1.add_to_hass(hass)
     await async_migrate_entry(hass, v1)
     with patch.object(ReadingStore, "get_lifecycle", AsyncMock(return_value=_ACTIVE_LIFECYCLE)), \
+         patch.object(ReadingStore, "prune_inverters_not_in", AsyncMock(return_value=0)), \
          patch("custom_components.svitgrid.run_readings_loop", return_value=None), \
          patch("custom_components.svitgrid.run_command_loop", return_value=None), \
          patch("custom_components.svitgrid.run_mqtt_wake_loop", return_value=None), \
