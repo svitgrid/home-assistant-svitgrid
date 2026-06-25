@@ -932,3 +932,108 @@ async def test_deprovisioned_at_startup_skips_loops(hass, enable_custom_integrat
     assert entry_state.get("sender_task") is None
     assert entry_state.get("lifecycle") is not None
     assert entry_state["lifecycle"].state == "deprovisioned"
+
+    # C3: verify the ActivityTracker surfaces also reflect deprovisioned so
+    # the status sensor and binary_sensor show the real state after restart.
+    activity = entry_state.get("activity")
+    assert activity is not None
+    assert activity.lifecycle_state == "deprovisioned"
+    assert activity.status == "deprovisioned"
+
+
+@pytest.mark.asyncio
+async def test_paused_at_startup_starts_loops(hass, enable_custom_integrations):
+    """C2: When the persisted lifecycle is 'paused' (not deprovisioned), all
+    background loops ARE started so the command poller can detect an operator
+    re-enable. The binary_sensor surfaces reflect paused via the ActivityTracker."""
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+    from unittest.mock import AsyncMock, patch
+
+    from custom_components.svitgrid import async_setup_entry
+    from custom_components.svitgrid.reading_store import ReadingStore
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        version=2,
+        title="Svitgrid (h-paused)",
+        data={
+            "api_base": "https://api.example.com",
+            "api_key": "test-key",
+            "edge_device_id": "ed-1",
+            "household_id": "h-paused",
+            "signing_key_id": "ha-home-01",
+            "private_key_pem": (
+                "-----BEGIN PRIVATE KEY-----\nFAKE\n-----END PRIVATE KEY-----\n"
+            ),
+            "public_key_hex": "04" + "a" * 128,
+            "trusted_keys": [],
+            "inverters": [
+                {
+                    "inverter_id": "ha-xyz",
+                    "entity_map": {"batterySoc": "sensor.soc"},
+                    "command_recipes": [],
+                    "command_config": {},
+                    "brand": "Deye",
+                    "model": "SG04LP3",
+                    "phases": 3,
+                    "has_battery": True,
+                    "pv_strings": 2,
+                    "preset_id": None,
+                }
+            ],
+        },
+        entry_id="test-entry-id-paused",
+    )
+    entry.add_to_hass(hass)
+
+    paused = {
+        "state": "paused",
+        "reason": "disabled",
+        "since": "2026-06-25T10:00:00Z",
+    }
+
+    with (
+        patch.object(
+            ReadingStore, "get_lifecycle", AsyncMock(return_value=paused)
+        ),
+        patch(
+            "custom_components.svitgrid.run_readings_loop", new_callable=AsyncMock
+        ) as rp,
+        patch(
+            "custom_components.svitgrid.run_command_loop", new_callable=AsyncMock
+        ) as cp,
+        patch(
+            "custom_components.svitgrid.run_mqtt_wake_loop", new_callable=AsyncMock
+        ),
+        patch(
+            "custom_components.svitgrid.run_sender_loop", new_callable=AsyncMock
+        ) as sender,
+        patch("custom_components.svitgrid.register_views"),
+        patch(
+            "custom_components.svitgrid.register_panel", new_callable=AsyncMock
+        ),
+        patch.object(
+            hass.config_entries,
+            "async_forward_entry_setups",
+            AsyncMock(return_value=True),
+        ),
+    ):
+        ok = await async_setup_entry(hass, entry)
+        await hass.async_block_till_done()
+
+    assert ok is True
+
+    # Paused is NOT terminal — loops must start so the command poller can detect
+    # an operator re-enable.
+    assert rp.await_count == 1, "readings loop must start when paused"
+    assert cp.await_count == 1, "command loop must start when paused"
+    assert sender.await_count == 1, "sender loop must start when paused"
+
+    entry_state = hass.data[DOMAIN][entry.entry_id]
+    assert entry_state["lifecycle"].state == "paused"
+
+    # ActivityTracker must reflect paused immediately (C1 seed mirror).
+    activity = entry_state.get("activity")
+    assert activity is not None
+    assert activity.lifecycle_state == "paused"
+    assert activity.status == "paused"

@@ -40,7 +40,7 @@ from .executors import create_executor
 from .executors.yaml_dispatcher import YamlDispatcher
 from .http_views import register_views
 from .keystore import SvitgridKeystore
-from .lifecycle import LifecycleState
+from .lifecycle import DEPROVISIONED, LifecycleState
 from .panel import register_panel, remove_panel
 from .mqtt_wake import run_loop as run_mqtt_wake_loop
 from .reading_sender import Cadence, run_sender_loop
@@ -91,8 +91,10 @@ async def _start_local_store(hass: HomeAssistant, api_client, api_key: str, acti
         activity=activity,
     )
 
-    if not lifecycle.active:
-        # Deprovisioned / paused: do not run the sender or rollup timer.
+    if lifecycle.state == DEPROVISIONED:
+        # Only the terminal deprovisioned state skips the sender and rollup
+        # timer. Paused devices must still run loops so the command poller can
+        # detect an operator re-enable.
         return store, cadence, None, None, lifecycle
 
     sender_task = hass.async_create_background_task(
@@ -273,7 +275,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     readings_task = None
     poller_task = None
 
-    if lifecycle.active:
+    if lifecycle.state != DEPROVISIONED:
         readings_task = hass.async_create_background_task(
             run_readings_loop(
                 hass=hass,
@@ -370,10 +372,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
         await register_panel(hass)
 
-    # When the device is deprovisioned (or paused), skip all polling/publishing
-    # loops. The panel/views/sensors are still set up so the user can see the
-    # lifecycle status; loops stay down until re-provisioning.
-    loops_active = lifecycle is not None and lifecycle.active
+    # Only deprovisioned (terminal) skips all loops. Paused devices still start
+    # loops so the command poller can detect an operator re-enable. The
+    # panel/views/sensors are always set up so the user can see lifecycle status.
+    loops_active = lifecycle is not None and lifecycle.state != DEPROVISIONED
 
     command_task = None
     mqtt_wake_task = None
