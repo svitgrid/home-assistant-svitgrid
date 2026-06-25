@@ -19,7 +19,10 @@ async def test_register_panel_serves_module_and_registers(hass):
     kw = reg.await_args.kwargs
     assert kw["frontend_url_path"] == "svitgrid"
     assert kw["webcomponent_name"] == "svitgrid-panel"
-    assert kw["module_url"] == "/svitgrid_panel/svitgrid-panel.js"
+    # module_url is the static path plus a content-hash cache-buster so browsers
+    # re-fetch the module after each add-on update (static path stays bare).
+    assert kw["module_url"].startswith("/svitgrid_panel/svitgrid-panel.js?h=")
+    assert sp_call.url_path == "/svitgrid_panel/svitgrid-panel.js"
 
 
 @pytest.mark.asyncio
