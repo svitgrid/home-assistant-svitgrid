@@ -504,8 +504,10 @@
       this._timer = null;
       this._lastHistoryFetch = 0;
       this._lastLiveInverterId = null;
-      this._invIdsKey = null; // tracks the set of inverter ids currently rendered
-      this._invNodes = {};    // inverterId -> { card, refs... }
+      this._invIdsKey = null;      // tracks the set of inverter ids currently rendered
+      this._invNodes = {};         // inverterId -> { card, refs... }
+      this._freshestAgeMs = null;  // age (ms) of the most-recent inverter reading
+      this._todayRefs = null;      // cached DOM refs for today-tile values
 
       // Shadow refs
       this._liveSec = null;
@@ -785,8 +787,8 @@
         const now = Date.now();
         let freshest = Infinity;
 
-        // Rebuild grid only when the set of ids changes.
-        const idsKey = inverters.map((i) => i.inverterId || "?").join("|");
+        // Rebuild grid only when the SET of ids changes (sort so order doesn't matter).
+        const idsKey = inverters.map((i) => i.inverterId || "?").sort().join("|");
         if (idsKey !== this._invIdsKey) {
           this._invIdsKey = idsKey;
           this._invNodes = {};
