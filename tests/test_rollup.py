@@ -71,6 +71,15 @@ def test_aggregate_includes_tier2_daily_counters():
     assert agg["energy"]["dailyGeneratorEnergy"] == 2.0
 
 
+def test_aggregate_includes_tier3_losses_and_loadfreq():
+    from custom_components.svitgrid import rollup
+    rows = [{"payload": {"dailyLossesEnergy": 1.0, "loadFrequency": 50.0}},
+            {"payload": {"dailyLossesEnergy": 3.0, "loadFrequency": 50.04}}]
+    agg = rollup.aggregate(rows)
+    assert agg["energy"]["dailyLossesEnergy"] == 3.0          # max over day (DAILY_COUNTER_FIELDS)
+    assert 49.0 <= agg["avgs"]["loadFrequency"] <= 51.0  # averaged (INSTANTANEOUS_FIELDS)
+
+
 def test_prune_drops_old_raw_keeps_daily(tmp_path):
     store = ReadingStore(None, str(tmp_path / "readings.db"))
     store._append_sync({"inverterId": "inv-1", "timestamp": "2026-05-01T10:00:00Z",

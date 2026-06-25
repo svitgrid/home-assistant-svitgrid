@@ -13,9 +13,10 @@
 # v2 (2026-06-25): added daily load/import/export energy mappings (Solarman today_* sensors).
 # v3 (2026-06-25): added Tier-1 telemetry (inverter/battery temp, battery current, grid frequency).
 # v4 (2026-06-25): added Tier-2 daily energy (battery charge/discharge, generator).
+# v5 (2026-06-25): added Tier-3 telemetry (today losses, load frequency, per-phase grid/load currents).
 
 id: deye-gb-s20k-solarman-v1
-version: "4"
+version: "5"
 brand: Deye
 model: GB-S20K
 phases: 3
@@ -54,6 +55,15 @@ entityMap:
   dailyBatteryChargeEnergy: sensor.inverter_today_battery_charge
   dailyBatteryDischargeEnergy: sensor.inverter_today_battery_discharge
   dailyGeneratorEnergy: sensor.inverter_generator_energy_today
+  # Tier-3 telemetry (Solarman): today losses, load frequency, per-phase grid/load currents.
+  dailyLossesEnergy: sensor.inverter_today_losses
+  loadFrequency: sensor.inverter_load_frequency
+  gridCurrentL1: sensor.inverter_external_ct1_current
+  gridCurrentL2: sensor.inverter_external_ct2_current
+  gridCurrentL3: sensor.inverter_external_ct3_current
+  loadCurrentL1: sensor.inverter_output_l1_current
+  loadCurrentL2: sensor.inverter_output_l2_current
+  loadCurrentL3: sensor.inverter_output_l3_current
 
 # Write commands deferred — HV power scaling unverified live (see header).
 commands: []

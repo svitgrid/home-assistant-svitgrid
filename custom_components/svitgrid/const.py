@@ -54,6 +54,14 @@ ALL_FIELDS = REQUIRED_FIELDS | frozenset(
         "dailyBatteryDischargeEnergy",
         "dailyGeneratorEnergy",
         "inverterTemperature",
+        "dailyLossesEnergy",
+        "loadFrequency",
+        "gridCurrentL1",
+        "gridCurrentL2",
+        "gridCurrentL3",
+        "loadCurrentL1",
+        "loadCurrentL2",
+        "loadCurrentL3",
     }
 )
 
@@ -97,6 +105,14 @@ MAPPABLE_FIELDS: list[tuple[str, str]] = [
     ("dailyBatteryDischargeEnergy", "Daily battery discharge energy (kWh)"),
     ("dailyGeneratorEnergy", "Daily generator energy (kWh)"),
     ("inverterTemperature", "Inverter temperature (°C)"),
+    ("dailyLossesEnergy", "Daily losses energy (kWh)"),
+    ("loadFrequency", "Load frequency (Hz)"),
+    ("gridCurrentL1", "Grid current L1 (A)"),
+    ("gridCurrentL2", "Grid current L2 (A)"),
+    ("gridCurrentL3", "Grid current L3 (A)"),
+    ("loadCurrentL1", "Load current L1 (A)"),
+    ("loadCurrentL2", "Load current L2 (A)"),
+    ("loadCurrentL3", "Load current L3 (A)"),
 ]
 
 # Source tag on pushed readings. Must match a value in Plan A's reading
@@ -158,11 +174,11 @@ INGEST_BATCH_MAX = 50              # cloud batch endpoint cap
 INSTANTANEOUS_FIELDS = frozenset({
     "batterySoc", "batteryPower", "batteryVoltage", "batteryCurrent",
     "batteryTemperature", "gridPower", "gridFrequency", "loadPower",
-    "pvPower", "inverterTemperature",
+    "pvPower", "inverterTemperature", "loadFrequency",
 })
 DAILY_COUNTER_FIELDS = frozenset({
     "dailyPvEnergy", "dailyGridImportEnergy", "dailyGridExportEnergy",
     "dailyLoadEnergy", "dailyBatteryChargeEnergy", "dailyBatteryDischargeEnergy",
-    "dailyGeneratorEnergy",
+    "dailyGeneratorEnergy", "dailyLossesEnergy",
 })
 PEAK_FIELDS = frozenset({"pvPower", "loadPower"})
