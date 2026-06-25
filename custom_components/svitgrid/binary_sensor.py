@@ -1,6 +1,7 @@
 """Problem binary_sensor reflecting device lifecycle (deprovision reaction)."""
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from homeassistant.components.binary_sensor import BinarySensorDeviceClass, BinarySensorEntity
@@ -12,12 +13,15 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .activity import ActivityTracker
 from .const import DOMAIN
 
+_LOGGER = logging.getLogger(__name__)
+
 
 class SvitgridProblemBinarySensor(BinarySensorEntity):
     _attr_should_poll = True
     _attr_has_entity_name = True
     _attr_device_class = BinarySensorDeviceClass.PROBLEM
     _attr_name = "Problem"
+    _attr_translation_key = "problem"
 
     def __init__(
         self,
@@ -56,7 +60,8 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     state = hass.data.get(DOMAIN, {}).get(entry.entry_id)
-    if not state:
+    if not state or "activity" not in state:
+        _LOGGER.warning("Svitgrid binary_sensor setup: no activity tracker for entry %s", entry.entry_id)
         return
     activity: ActivityTracker = state["activity"]
     from . import _inverters_from_entry  # local import avoids a circular import

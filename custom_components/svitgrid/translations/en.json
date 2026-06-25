@@ -64,6 +64,13 @@
       "no_entities_selected": "Pick at least one sensor — otherwise the dashboard has nothing to show."
     }
   },
+  "entity": {
+    "binary_sensor": {
+      "problem": {
+        "name": "Problem"
+      }
+    }
+  },
   "options": {
     "step": {
       "init": {
