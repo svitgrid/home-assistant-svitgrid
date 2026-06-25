@@ -192,6 +192,7 @@ async def run_loop(
     inverter_id: str,
     entity_map: dict[str, str],
     activity: Any = None,  # ActivityTracker; None acceptable for older callers
+    lifecycle: Any = None,  # LifecycleState; None = no lifecycle gating
 ) -> None:
     """Long-running coroutine — capture-then-drain producer.
 
@@ -217,7 +218,7 @@ async def run_loop(
     # Cadence carries across iterations. Initial value = clamped holder value.
     next_sleep_s = _clamp_interval(float(cadence.interval_s))
 
-    while not hass.is_stopping:
+    while not hass.is_stopping and (lifecycle is None or lifecycle.active):
         try:
             if next_sleep_s >= _AGGREGATION_THRESHOLD_S:
                 # T10b: idle path — collect N samples then push aggregated.

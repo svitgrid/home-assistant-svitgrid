@@ -509,3 +509,16 @@ async def test_run_loop_appends_to_store(monkeypatch):
     reading = store.appended[0]
     assert reading["inverterId"] == "inv-1"
     assert reading["batterySoc"] == 80.0
+
+
+@pytest.mark.asyncio
+async def test_run_loop_does_not_capture_when_deprovisioned(monkeypatch):
+    from custom_components.svitgrid.lifecycle import LifecycleState
+    hass = _mock_hass_one_iter()
+    store = _RecordingStore()
+    lc = LifecycleState()
+    lc.deprovision("revoked", "2026-06-25T10:00:00Z")
+    async def _noop_sleep(_): pass
+    monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
+    await run_loop(hass=hass, store=store, cadence=Cadence(interval_s=60), lifecycle=lc, **_RUN_KWARGS)
+    assert store.appended == []  # loop exited immediately, nothing captured
