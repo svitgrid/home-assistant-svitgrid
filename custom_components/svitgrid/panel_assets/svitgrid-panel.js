@@ -51,9 +51,8 @@
     title: "Svitgrid",
     live: "Live",
     today: "Today",
-    history: "Solar — last 30 days",
-    historyTitle: "Solar generated — last 30 days (kWh)",
-    historyEmpty: "No solar generation recorded in this period.",
+    history: "Energy — last 30 days",
+    historyEmpty: "No data recorded in this period.",
     noInverters: "No inverters reporting live data.",
     pv: "Solar",
     battery: "Battery",
@@ -91,6 +90,20 @@
     takeoverPausedNext: "Paused by the operator. It will resume automatically when re-enabled.",
     takeoverSince: "since",
     system: "System",
+    // History controls
+    histDays7: "7d",
+    histDays30: "30d",
+    histDays90: "90d",
+    histDays365: "365d",
+    histMetricGenerated: "Generated",
+    histMetricConsumed: "Consumed",
+    histMetricImported: "Imported",
+    histMetricExported: "Exported",
+    histMetricBattCharged: "Batt charged",
+    histMetricBattDischarged: "Batt discharged",
+    histMetricLosses: "Losses",
+    histAriaRange: "Select history range",
+    histAriaMetric: "Select energy metric",
   };
 
   // ------------------------------------------------------------------ //
@@ -419,6 +432,53 @@
       font-size: 13px;
     }
 
+    /* History control bar (range + metric chips) */
+    .hist-controls {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: var(--sp-2) var(--sp-3);
+      margin-bottom: var(--sp-3);
+    }
+    .hist-chip-group {
+      display: flex;
+      gap: var(--sp-1);
+      flex-wrap: wrap;
+    }
+    .hist-chip {
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--sg-text-2);
+      background: color-mix(in srgb, var(--sg-divider) 60%, transparent);
+      border: 1px solid var(--sg-divider);
+      border-radius: 16px;
+      padding: 3px 10px;
+      cursor: pointer;
+      transition: background 0.12s ease, color 0.12s ease;
+      line-height: 1.4;
+    }
+    .hist-chip:hover { background: color-mix(in srgb, var(--accent) 18%, var(--sg-card-bg)); }
+    .hist-chip[aria-pressed="true"] {
+      background: color-mix(in srgb, var(--accent) 22%, var(--sg-card-bg));
+      border-color: var(--accent);
+      color: var(--sg-text);
+    }
+    .hist-chip:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .hist-chip { transition: none; }
+    }
+    .hist-sep {
+      width: 1px;
+      height: 18px;
+      background: var(--sg-divider);
+      flex-shrink: 0;
+      align-self: center;
+    }
+
     /* Sync footer */
     .sync-footer {
       margin-top: var(--sp-5);
@@ -681,6 +741,13 @@
       this._todayRefs = null;      // cached DOM refs for today-tile values
       this._detailOpen = {};       // inverterId -> bool (open/closed state, survives refresh)
 
+      // History controls (SP-C foundation — extended by Tasks 3-5)
+      this._histRangeDays = 30;            // 7 | 30 | 90 | 365
+      this._histMode = "energy";           // "energy" (mode switcher added by later tasks)
+      this._histMetric = "dailyPvEnergy";  // active energy field key
+      this._histKey = null;                // cache key: range|metric|data changes trigger re-render
+      this._histSec = null;                // h2 section title node (for dynamic text update)
+
       // Shadow refs
       this._liveSec = null;
       this._todaySec = null;
@@ -777,6 +844,8 @@
       this._todayRefs = null;
       this._lastHistoryFetch = 0;
       this._tooltip = null;
+      this._histKey = null;
+      this._histSec = null;
 
       this._liveSec = this._addSection(root, STR.live, "live-region");
       this._fillSkeleton(this._liveSec, "live");
@@ -784,7 +853,9 @@
       this._todaySec = this._addSection(root, STR.today, "today-region");
       this._fillSkeleton(this._todaySec, "today");
 
-      this._historySec = this._addSection(root, STR.history, "history-region");
+      const histResult = this._addSectionWithTitle(root, this._histSectionTitle(), "history-region");
+      this._histSec = histResult.title;
+      this._historySec = histResult.sec;
       this._fillSkeleton(this._historySec, "history");
 
       const syncFooter = document.createElement("div");
@@ -811,6 +882,36 @@
       sec.setAttribute("aria-label", ariaLabel);
       root.appendChild(sec);
       return sec;
+    }
+
+    // Like _addSection but returns both the h2 title node and the section div
+    // so the caller can update the title text dynamically.
+    _addSectionWithTitle(root, titleText, ariaLabel) {
+      const h2 = document.createElement("h2");
+      h2.className = "section-title";
+      h2.textContent = titleText;
+      root.appendChild(h2);
+
+      const sec = document.createElement("div");
+      sec.setAttribute("role", "group");
+      sec.setAttribute("aria-label", ariaLabel);
+      root.appendChild(sec);
+      return { title: h2, sec };
+    }
+
+    // Compute the dynamic history section title from current range/metric state.
+    _histSectionTitle() {
+      const metricLabels = {
+        dailyPvEnergy:              STR.histMetricGenerated,
+        dailyLoadEnergy:            STR.histMetricConsumed,
+        dailyGridImportEnergy:      STR.histMetricImported,
+        dailyGridExportEnergy:      STR.histMetricExported,
+        dailyBatteryChargeEnergy:   STR.histMetricBattCharged,
+        dailyBatteryDischargeEnergy: STR.histMetricBattDischarged,
+        dailyLossesEnergy:          STR.histMetricLosses,
+      };
+      const label = metricLabels[this._histMetric] || STR.histMetricGenerated;
+      return label + " — last " + this._histRangeDays + " days";
     }
 
     _fillSkeleton(sec, kind) {
@@ -960,6 +1061,7 @@
       this._liveSec = null;
       this._todaySec = null;
       this._historySec = null;
+      this._histSec = null;
       this._syncFooter = null;
       this._invNodes = {};
       this._todayRefs = null;
@@ -1545,7 +1647,7 @@
             const cell = document.createElement("div");
             cell.className = "detail-phase-cell";
             const v = p[GRID_CURRENT_FIELDS[ph.i]];
-            cell.textContent = isNum(v) ? NF1.format(v) + " A" : "";
+            cell.textContent = isNum(v) ? NF1.format(v) : "";
             refs.gridTable.appendChild(cell);
           }
         }
@@ -1605,7 +1707,7 @@
             const cell = document.createElement("div");
             cell.className = "detail-phase-cell";
             const v = p[LOAD_CURRENT_FIELDS[ph.i]];
-            cell.textContent = isNum(v) ? NF1.format(v) + " A" : "";
+            cell.textContent = isNum(v) ? NF1.format(v) : "";
             refs.loadTable.appendChild(cell);
           }
         }
@@ -1833,7 +1935,7 @@
 
         if (!this._todaySec) return true;
 
-        // Build once (7 tiles always in DOM), then mutate values + visibility.
+        // Build once (8 tiles always in DOM), then mutate values + visibility.
         if (!this._todayRefs || this._todayRefs.length !== tiles.length) {
           this._todaySec.className = "";
           this._todaySec.innerHTML = "";
@@ -1883,14 +1985,14 @@
     }
 
     // ---------------------------------------------------------------- //
-    // History (sum dailyPvEnergy across all inverters per day)
+    // History — driven by _histRangeDays and _histMetric (SP-C foundation)
     // ---------------------------------------------------------------- //
     async _loadHistory() {
       try {
         if (!this._historySec) return true;
 
         if (!this._lastLiveInverterId) {
-          this._historyKey = null;
+          this._histKey = null;
           this._historySec.className = "";
           this._historySec.innerHTML = "";
           const empty = document.createElement("div");
@@ -1901,15 +2003,16 @@
         }
 
         const today = new Date();
-        const start30 = new Date(today);
-        start30.setDate(today.getDate() - 30);
+        const startDate = new Date(today);
+        startDate.setDate(today.getDate() - (this._histRangeDays - 1));
         const endStr = this._dateStr(today);
-        const startStr = this._dateStr(start30);
+        const startStr = this._dateStr(startDate);
 
-        // The history endpoint is per-inverter; we sum dailyPvEnergy across
+        // The history endpoint is per-inverter; we sum the chosen metric across
         // all live inverters per day for parity with the Today tiles.
         const ids = Object.keys(this._invNodes || {});
         const idList = ids.length ? ids : [this._lastLiveInverterId];
+        const metric = this._histMetric;
 
         const byDay = new Map(); // day -> summed kWh
         for (const id of idList) {
@@ -1930,8 +2033,8 @@
           for (const d of days) {
             const day = d.day;
             const v =
-              d.energy && isNum(d.energy.dailyPvEnergy)
-                ? d.energy.dailyPvEnergy
+              d.energy && isNum(d.energy[metric])
+                ? d.energy[metric]
                 : 0;
             if (typeof day !== "string") continue;
             byDay.set(day, (byDay.get(day) || 0) + v);
@@ -1942,7 +2045,13 @@
           .map(([day, kwh]) => ({ day, kwh }))
           .sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0));
 
-        this._renderHistory(series);
+        // Build a cache key from range + metric + data fingerprint.
+        const dataFingerprint = series.map((s) => s.day + ":" + s.kwh).join(",");
+        const newKey = this._histRangeDays + "|" + metric + "|" + dataFingerprint;
+        if (newKey !== this._histKey) {
+          this._histKey = newKey;
+          this._renderHistory(series);
+        }
         return true;
       } catch (err) {
         if (this._historySec) {
@@ -1960,7 +2069,85 @@
       this._historySec.className = "";
       this._historySec.innerHTML = "";
 
-      if (series.length === 0) {
+      // Update the section title h2 to reflect current range + metric.
+      if (this._histSec) {
+        this._histSec.textContent = this._histSectionTitle();
+      }
+
+      // ---- Control bar: range chips + separator + metric chips ----
+      const controls = document.createElement("div");
+      controls.className = "hist-controls";
+
+      // Range chips: 7 / 30 / 90 / 365
+      const rangeGroup = document.createElement("div");
+      rangeGroup.className = "hist-chip-group";
+      rangeGroup.setAttribute("role", "group");
+      rangeGroup.setAttribute("aria-label", STR.histAriaRange);
+      const rangeDays = [7, 30, 90, 365];
+      const rangeLabels = [STR.histDays7, STR.histDays30, STR.histDays90, STR.histDays365];
+      for (let ri = 0; ri < rangeDays.length; ri++) {
+        const d = rangeDays[ri];
+        const btn = document.createElement("button");
+        btn.className = "hist-chip";
+        btn.textContent = rangeLabels[ri];
+        btn.setAttribute("aria-pressed", d === this._histRangeDays ? "true" : "false");
+        btn.addEventListener("click", () => {
+          if (this._histRangeDays === d) return;
+          this._histRangeDays = d;
+          // Invalidate cache and force immediate refetch.
+          this._histKey = null;
+          this._lastHistoryFetch = 0;
+          // Re-render controls immediately (optimistic pressed state), then load.
+          if (this._histSec) this._histSec.textContent = this._histSectionTitle();
+          this._loadHistory();
+        });
+        rangeGroup.appendChild(btn);
+      }
+      controls.appendChild(rangeGroup);
+
+      // Separator
+      const sep = document.createElement("div");
+      sep.className = "hist-sep";
+      sep.setAttribute("aria-hidden", "true");
+      controls.appendChild(sep);
+
+      // Metric chips
+      const metricGroup = document.createElement("div");
+      metricGroup.className = "hist-chip-group";
+      metricGroup.setAttribute("role", "group");
+      metricGroup.setAttribute("aria-label", STR.histAriaMetric);
+      const metricOptions = [
+        { key: "dailyPvEnergy",              label: STR.histMetricGenerated },
+        { key: "dailyLoadEnergy",            label: STR.histMetricConsumed },
+        { key: "dailyGridImportEnergy",      label: STR.histMetricImported },
+        { key: "dailyGridExportEnergy",      label: STR.histMetricExported },
+        { key: "dailyBatteryChargeEnergy",   label: STR.histMetricBattCharged },
+        { key: "dailyBatteryDischargeEnergy", label: STR.histMetricBattDischarged },
+        { key: "dailyLossesEnergy",          label: STR.histMetricLosses },
+      ];
+      for (const opt of metricOptions) {
+        const btn = document.createElement("button");
+        btn.className = "hist-chip";
+        btn.textContent = opt.label;
+        btn.setAttribute("aria-pressed", opt.key === this._histMetric ? "true" : "false");
+        btn.addEventListener("click", () => {
+          if (this._histMetric === opt.key) return;
+          this._histMetric = opt.key;
+          // Invalidate cache and force immediate refetch.
+          this._histKey = null;
+          this._lastHistoryFetch = 0;
+          if (this._histSec) this._histSec.textContent = this._histSectionTitle();
+          this._loadHistory();
+        });
+        metricGroup.appendChild(btn);
+      }
+      controls.appendChild(metricGroup);
+
+      this._historySec.appendChild(controls);
+
+      // ---- Empty state ----
+      const allZero = series.length === 0 || series.every((s) => s.kwh === 0);
+      if (allZero) {
         const empty = document.createElement("div");
         empty.className = "history-empty";
         empty.textContent = STR.historyEmpty;
@@ -1971,24 +2158,8 @@
       let maxVal = 0;
       for (const s of series) if (s.kwh > maxVal) maxVal = s.kwh;
 
-      if (maxVal === 0) {
-        const empty = document.createElement("div");
-        empty.className = "history-empty";
-        empty.textContent = STR.historyEmpty;
-        this._historySec.appendChild(empty);
-        return;
-      }
-
       const wrap = document.createElement("div");
       wrap.className = "history-chart";
-
-      const title = document.createElement("div");
-      title.style.fontSize = "12px";
-      title.style.fontWeight = "600";
-      title.style.color = "var(--sg-text-2)";
-      title.style.marginBottom = "12px";
-      title.textContent = STR.historyTitle;
-      wrap.appendChild(title);
 
       const area = document.createElement("div");
       area.className = "chart-area";
