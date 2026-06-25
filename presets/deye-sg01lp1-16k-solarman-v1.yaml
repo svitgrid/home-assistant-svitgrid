@@ -4,9 +4,10 @@
 # Register family: 1-phase (Sunsynk1PhaseRegisters), same write registers as the
 # smaller SG01LP1: charge 256, work_mode 244, solar_sell 247,
 # grid_charge_toggle 248.
+# v2 (2026-06-25): added daily load/import/export energy mappings (Solarman today_* sensors).
 
 id: deye-sg01lp1-16k-solarman-v1
-version: "1"
+version: "2"
 brand: Deye
 model: SG01LP1 16K
 phases: 1
@@ -23,6 +24,10 @@ entityMap:
   gridPower: sensor.inverter_grid_power
   loadPower: sensor.inverter_load_power
   dailyPvEnergy: sensor.inverter_today_production
+  # Daily energy counters from the Solarman hybrid profile (today_* sensors).
+  dailyLoadEnergy: sensor.inverter_today_load_consumption
+  dailyGridImportEnergy: sensor.inverter_today_energy_import
+  dailyGridExportEnergy: sensor.inverter_today_energy_export
   gridVoltageL1: sensor.inverter_grid_voltage
 
 commands:

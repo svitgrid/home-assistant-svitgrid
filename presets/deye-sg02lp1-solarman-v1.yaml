@@ -3,9 +3,10 @@
 # Solarman HACS profile: deye_hybrid.yaml.
 # Same write registers as 1-phase family; pvStrings=3 distinguishes from
 # SG01LP1.
+# v2 (2026-06-25): added daily load/import/export energy mappings (Solarman today_* sensors).
 
 id: deye-sg02lp1-solarman-v1
-version: "1"
+version: "2"
 brand: Deye
 model: SG02LP1
 phases: 1
@@ -23,6 +24,10 @@ entityMap:
   gridPower: sensor.inverter_grid_power
   loadPower: sensor.inverter_load_power
   dailyPvEnergy: sensor.inverter_today_production
+  # Daily energy counters from the Solarman hybrid profile (today_* sensors).
+  dailyLoadEnergy: sensor.inverter_today_load_consumption
+  dailyGridImportEnergy: sensor.inverter_today_energy_import
+  dailyGridExportEnergy: sensor.inverter_today_energy_export
   gridVoltageL1: sensor.inverter_grid_voltage
 
 commands:
