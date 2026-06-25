@@ -85,6 +85,7 @@
     takeoverDeprovisionedNext: "To reconnect, remove the Svitgrid integration (Settings → Devices & Services → Svitgrid → Delete) and pair it again.",
     takeoverPausedNext: "Paused by the operator. It will resume automatically when re-enabled.",
     takeoverSince: "since",
+    system: "System",
   };
 
   // ------------------------------------------------------------------ //
@@ -654,6 +655,7 @@
   // ------------------------------------------------------------------ //
   const NF1 = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 });
   const NF0 = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 });
+  const NF2 = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 });
 
   function isNum(v) {
     return typeof v === "number" && isFinite(v);
@@ -1310,17 +1312,38 @@
       pvGroup.appendChild(pvChips);
       region.appendChild(pvGroup);
 
-      // --- Battery voltage group ---
+      // --- Battery group (voltage + temperature + current) ---
       const battGroup = document.createElement("div");
       battGroup.className = "detail-group";
       const battLabel = document.createElement("div");
       battLabel.className = "detail-group-label";
-      battLabel.textContent = "Battery voltage";
+      battLabel.textContent = "Battery";
       const battVal = document.createElement("div");
       battVal.className = "detail-batt-val";
+      const battTemp = document.createElement("div");
+      battTemp.className = "detail-batt-val";
+      const battCurrent = document.createElement("div");
+      battCurrent.className = "detail-batt-val";
       battGroup.appendChild(battLabel);
       battGroup.appendChild(battVal);
+      battGroup.appendChild(battTemp);
+      battGroup.appendChild(battCurrent);
       region.appendChild(battGroup);
+
+      // --- System group (inverter temperature + grid frequency) ---
+      const sysGroup = document.createElement("div");
+      sysGroup.className = "detail-group";
+      const sysLabel = document.createElement("div");
+      sysLabel.className = "detail-group-label";
+      sysLabel.textContent = STR.system;
+      const sysInvTemp = document.createElement("div");
+      sysInvTemp.className = "detail-batt-val";
+      const sysGridFreq = document.createElement("div");
+      sysGridFreq.className = "detail-batt-val";
+      sysGroup.appendChild(sysLabel);
+      sysGroup.appendChild(sysInvTemp);
+      sysGroup.appendChild(sysGridFreq);
+      region.appendChild(sysGroup);
 
       // --- Grid per-phase group ---
       const gridGroup = document.createElement("div");
@@ -1356,7 +1379,8 @@
       const refs = {
         toggle, region,
         pvGroup, pvChips,
-        battGroup, battVal,
+        battGroup, battVal, battTemp, battCurrent,
+        sysGroup, sysInvTemp, sysGridFreq,
         gridGroup, gridTable,
         loadGroup, loadTable,
         footnote,
@@ -1398,14 +1422,46 @@
         refs.pvGroup.style.display = "none";
       }
 
-      // --- Battery voltage ---
+      // --- Battery voltage + temperature + current ---
       const bv = p.batteryVoltage;
+      const bt = p.batteryTemperature;
+      const bc = p.batteryCurrent;
       if (isNum(bv)) {
         refs.battVal.textContent = NF1.format(bv) + " V";
-        refs.battGroup.style.display = "";
+        refs.battVal.style.display = "";
       } else {
-        refs.battGroup.style.display = "none";
+        refs.battVal.style.display = "none";
       }
+      if (isNum(bt)) {
+        refs.battTemp.textContent = NF1.format(bt) + " °C";
+        refs.battTemp.style.display = "";
+      } else {
+        refs.battTemp.style.display = "none";
+      }
+      if (isNum(bc)) {
+        refs.battCurrent.textContent = NF1.format(bc) + " A";
+        refs.battCurrent.style.display = "";
+      } else {
+        refs.battCurrent.style.display = "none";
+      }
+      refs.battGroup.style.display = (isNum(bv) || isNum(bt) || isNum(bc)) ? "" : "none";
+
+      // --- System (inverter temperature + grid frequency) ---
+      const it = p.inverterTemperature;
+      const gf = p.gridFrequency;
+      if (isNum(it)) {
+        refs.sysInvTemp.textContent = NF1.format(it) + " °C";
+        refs.sysInvTemp.style.display = "";
+      } else {
+        refs.sysInvTemp.style.display = "none";
+      }
+      if (isNum(gf)) {
+        refs.sysGridFreq.textContent = NF2.format(gf) + " Hz";
+        refs.sysGridFreq.style.display = "";
+      } else {
+        refs.sysGridFreq.style.display = "none";
+      }
+      refs.sysGroup.style.display = (isNum(it) || isNum(gf)) ? "" : "none";
 
       // --- Grid per-phase mini-table ---
       // Determine which phases (0=L1,1=L2,2=L3) have any data.
