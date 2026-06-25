@@ -446,3 +446,9 @@ class TestPushReadingsBatch:
         client = SvitgridApiClient(session, api_base="https://api.example")
         with pytest.raises(ReadingRejected):
             await client.push_readings_batch(api_key="k" * 64, readings=[{"x": 1}])
+
+    async def test_push_readings_batch_410_raises_device_evicted(self):
+        session, _ = _mock_session_with_response(410, {"error": "Device key revoked (owner household removed)"})
+        client = SvitgridApiClient(session, api_base="https://api.example")
+        with pytest.raises(DeviceEvicted):
+            await client.push_readings_batch(api_key="k" * 64, readings=[{"inverterId": "i", "timestamp": "2026-06-25T10:00:00Z"}])

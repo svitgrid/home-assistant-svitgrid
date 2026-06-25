@@ -206,6 +206,8 @@ class SvitgridApiClient:
                     await _err(resp),
                 )
                 return None
+            if resp.status == 410:
+                raise DeviceEvicted(await _err(resp))
             if resp.status >= 400:
                 body = await _err(resp)
                 _LOGGER.warning(
