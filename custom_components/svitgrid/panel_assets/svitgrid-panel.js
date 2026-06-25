@@ -24,8 +24,26 @@
   // ------------------------------------------------------------------ //
   const POLL_MS = 10000;          // live / today / sync cadence
   const HISTORY_MS = 5 * 60 * 1000; // history refetch cadence (5 min)
-  const STALE_MS = 90 * 1000;      // card considered stale past this age
-  const FRESH_MS = 60 * 1000;      // header dot green below this age
+
+  // Cadence-aware staleness: thresholds scale with the inverter's observed
+  // reporting interval (intervalS from the live snapshot) rather than being
+  // fixed.  Floors prevent false-stale on very fast cadences.
+  const STALE_FACTOR = 2.5;           // stale once age > factor × interval
+  const FRESH_FACTOR = 1.5;           // header dot green below factor × interval
+  const STALE_FLOOR_MS = 120 * 1000;  // never flag stale before 2 min
+  const FRESH_FLOOR_MS = 90 * 1000;   // dot green at least up to 90 s
+  const DEFAULT_INTERVAL_MS = 300 * 1000; // fallback when intervalS unknown
+
+  function thresholdsFor(intervalS) {
+    const iv =
+      typeof intervalS === "number" && isFinite(intervalS) && intervalS > 0
+        ? intervalS * 1000
+        : DEFAULT_INTERVAL_MS;
+    return {
+      staleAfterMs: Math.max(iv * STALE_FACTOR, STALE_FLOOR_MS),
+      freshUnderMs: Math.max(iv * FRESH_FACTOR, FRESH_FLOOR_MS),
+    };
+  }
 
   // Future-i18n string table (English for v1). Keep all user copy here so a
   // later `uk` pass swaps one object.
@@ -651,7 +669,8 @@
       this._lastLiveInverterId = null;
       this._invIdsKey = null;      // tracks the set of inverter ids currently rendered
       this._invNodes = {};         // inverterId -> { card, refs... }
-      this._freshestAgeMs = null;  // age (ms) of the most-recent inverter reading
+      this._freshestAgeMs = null;    // age (ms) of the most-recent inverter reading
+      this._freshestIntervalS = null; // intervalS of the freshest inverter (for header dot)
       this._todayRefs = null;      // cached DOM refs for today-tile values
       this._detailOpen = {};       // inverterId -> bool (open/closed state, survives refresh)
 
@@ -1027,7 +1046,8 @@
       }
 
       const ageMs = this._freshestAgeMs;
-      if (ageMs < FRESH_MS) {
+      const { freshUnderMs } = thresholdsFor(this._freshestIntervalS);
+      if (ageMs < freshUnderMs) {
         this._liveDot.classList.add("fresh");
       } else {
         this._liveDot.classList.add("aging");
@@ -1035,7 +1055,7 @@
       const ageLabel = this._relAge(ageMs);
       this._liveDot.setAttribute(
         "aria-label",
-        ageMs < FRESH_MS ? STR.liveDotLive : STR.dataAge + " " + ageLabel
+        ageMs < freshUnderMs ? STR.liveDotLive : STR.dataAge + " " + ageLabel
       );
       if (this._updatedLabel) {
         this._updatedLabel.textContent = STR.dataAge + " " + ageLabel;
@@ -1111,6 +1131,7 @@
           this._invIdsKey = null;
           this._invNodes = {};
           this._freshestAgeMs = null;
+          this._freshestIntervalS = null;
           this._liveSec.className = "";
           this._liveSec.innerHTML = "";
           const empty = document.createElement("div");
@@ -1142,6 +1163,7 @@
         }
 
         // Mutate values in place.
+        let freshestIntervalS = null;
         for (const inv of inverters) {
           const id = inv.inverterId || "?";
           const node = this._invNodes[id];
@@ -1149,11 +1171,16 @@
           const ageMs = isNum(inv.ts) || (typeof inv.ts === "string")
             ? now - new Date(inv.ts).getTime()
             : null;
-          if (isNum(ageMs) && ageMs < freshest) freshest = ageMs;
-          this._updateInvCard(node, inv.payload, ageMs);
+          if (isNum(ageMs) && ageMs < freshest) {
+            freshest = ageMs;
+            freshestIntervalS = (typeof inv.intervalS === "number" && isFinite(inv.intervalS))
+              ? inv.intervalS : null;
+          }
+          this._updateInvCard(node, inv.payload, ageMs, inv.intervalS);
         }
 
         this._freshestAgeMs = isFinite(freshest) ? freshest : null;
+        this._freshestIntervalS = freshestIntervalS;
         return true;
       } catch (err) {
         if (this._liveSec) {
@@ -1163,6 +1190,7 @@
             (err && err.message ? err.message : String(err));
         }
         this._freshestAgeMs = null;
+        this._freshestIntervalS = null;
         return false;
       }
     }
@@ -1488,11 +1516,12 @@
       }
     }
 
-    _updateInvCard(node, payload, ageMs) {
+    _updateInvCard(node, payload, ageMs, intervalS) {
       const p = payload && typeof payload === "object" ? payload : {};
 
-      // Staleness
-      const stale = isNum(ageMs) && ageMs > STALE_MS;
+      // Staleness — threshold scales with observed reporting cadence.
+      const { staleAfterMs } = thresholdsFor(intervalS);
+      const stale = isNum(ageMs) && ageMs > staleAfterMs;
       node.card.classList.toggle("stale", stale);
       if (stale) {
         node.badge.style.display = "";

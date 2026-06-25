@@ -74,10 +74,15 @@ def _median_gap_seconds(ts_list: list[str]) -> float | None:
     """
     if len(ts_list) < 2:
         return None
-    # Parse each ISO-8601 UTC timestamp.
-    parsed = [
-        datetime.fromisoformat(ts.replace("Z", "+00:00")) for ts in ts_list
-    ]
+    # Parse each ISO-8601 UTC timestamp, skipping malformed entries.
+    parsed = []
+    for ts in ts_list:
+        try:
+            parsed.append(datetime.fromisoformat(ts.replace("Z", "+00:00")))
+        except (ValueError, AttributeError):
+            pass  # malformed timestamp — treat as unknown, skip rather than crash
+    if len(parsed) < 2:
+        return None
     # Gaps between consecutive entries (list is desc → older − newer yields positive).
     gaps = [
         abs((parsed[i] - parsed[i + 1]).total_seconds())

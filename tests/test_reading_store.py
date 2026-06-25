@@ -274,3 +274,22 @@ def test_history_range_orders_and_bounds(tmp_path):
     assert days_returned == ["2026-06-22", "2026-06-23", "2026-06-24"]
     # Out-of-range day and other inverter must not appear.
     assert "2026-06-20" not in days_returned
+
+
+def test_median_gap_seconds_malformed_timestamps_returns_none():
+    """Malformed timestamps must not raise; result is None (treat as unknown)."""
+    from custom_components.svitgrid.reading_store import _median_gap_seconds
+
+    # All malformed → fewer than 2 parseable entries → None, no exception.
+    assert _median_gap_seconds(["not-a-timestamp", "also-bad"]) is None
+
+    # One valid + one malformed → still fewer than 2 parseable → None.
+    assert _median_gap_seconds(["2026-06-25T10:00:00Z", "bad"]) is None
+
+    # Two valid despite a malformed entry mixed in → result is a number.
+    result = _median_gap_seconds([
+        "2026-06-25T10:10:00Z",
+        "BAD-ENTRY",
+        "2026-06-25T10:00:00Z",
+    ])
+    assert result == 600.0
