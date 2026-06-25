@@ -24,6 +24,7 @@ from homeassistant.helpers.typing import ConfigType
 from .activity import ActivityTracker
 from .api_client import SvitgridApiClient
 from .bootstrap import run_first_time
+from .cloud_endpoint_handler import probe_endpoint_auth
 from .command_poller import run_loop as run_command_loop
 from .const import (
     COMMAND_POLL_INTERVAL_S,
@@ -144,34 +145,56 @@ def _validate_entity_map(value: dict) -> dict:
     return value
 
 
-def apply_cloud_endpoint_change(
+async def apply_cloud_endpoint_change(
     hass: HomeAssistant,
     entry: ConfigEntry,
     new_api_base: str,
-) -> None:
-    """Apply a `set_cloud_endpoint` command's URL: update ConfigEntry data
-    in-place and schedule a reload on the event loop.
+) -> bool:
+    """Pre-flight probe + apply a `set_cloud_endpoint` command's URL.
 
-    Why scheduled, not awaited: the caller is the command-poller task spawned
-    by `async_setup_entry`. Awaiting `async_reload` from inside it would
-    deadlock — the reload's unload step blocks waiting for the poller task to
-    finish, which is the very task awaiting the reload. Scheduling via
+    Phase 1: probe the new endpoint with our api_key (GET /api/v3/me).
+    If the probe returns non-200, log a distinctive ERROR and return False
+    without mutating anything — prevents silent dead-in-water state when the
+    new env doesn't have our api_key/trustedDevices synced.
+
+    Phase 2 (probe OK): update ConfigEntry data in-place and schedule a
+    reload on the event loop. Returns True.
+
+    Why reload is scheduled, not awaited: the caller is the command-poller
+    task spawned by `async_setup_entry`. Awaiting `async_reload` from inside
+    it would deadlock — the reload's unload step blocks waiting for the poller
+    task to finish, which is the very task awaiting the reload. Scheduling via
     `async_create_task` lets the current poll iteration return cleanly, then
     the reload runs and the new api_base takes effect.
 
-    No-op when the new URL equals the current one — a redundant migration
-    command (e.g. a re-fired Cloud Function on a same-state flag flip)
-    must not bounce a healthy integration.
+    No-op (returns True) when the new URL equals the current one — a
+    redundant migration command (e.g. a re-fired Cloud Function on a
+    same-state flag flip) must not bounce a healthy integration.
 
-    URL VALIDATION IS THE CALLER'S RESPONSIBILITY — this helper trusts
-    `new_api_base` is already passed through `is_allowed_api_base`. Layering
-    keeps the test surface tight."""
+    URL VALIDATION and the AUTH PROBE IS THE CALLER'S RESPONSIBILITY for
+    command_poller Arm 1c (which calls probe_endpoint_auth before this helper).
+    This helper also probes internally so it remains correct when called from
+    other paths."""
     current = entry.data.get("api_base")
     if current == new_api_base:
         _LOGGER.info(
             "set_cloud_endpoint: already on %s, skipping reload", new_api_base,
         )
-        return
+        return True
+
+    # Pre-flight auth probe — mirrors firmware D5's ce_apply_url semantics.
+    session = aiohttp_client.async_get_clientsession(hass)
+    api_key = entry.data.get("api_key", "")
+    probe_ok = await probe_endpoint_auth(session, api_key=api_key, new_api_base=new_api_base)
+    if not probe_ok:
+        _LOGGER.error(
+            "set_cloud_endpoint probe failed — new endpoint %s did not accept "
+            "our api_key (HTTP non-200). Migration aborted; integration stays "
+            "on %s. Ensure the target environment has the api_key registered "
+            "and households/{id}/trustedDevices synced before retrying.",
+            new_api_base, current,
+        )
+        return False
 
     new_data = {**entry.data, "api_base": new_api_base}
     hass.config_entries.async_update_entry(entry, data=new_data)
@@ -182,6 +205,7 @@ def apply_cloud_endpoint_change(
     hass.async_create_task(
         hass.config_entries.async_reload(entry.entry_id)
     )
+    return True
 
 
 async def _async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:

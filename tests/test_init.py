@@ -1122,7 +1122,7 @@ async def test_apply_cloud_endpoint_change_updates_entry_and_schedules_reload(
     """The helper mutates ConfigEntry.data and schedules (not directly
     invokes) async_reload, so the calling task can finish cleanly before
     the reload tears it down."""
-    from unittest.mock import patch
+    from unittest.mock import AsyncMock, patch
     from pytest_homeassistant_custom_component.common import MockConfigEntry
     from custom_components.svitgrid import apply_cloud_endpoint_change
     from custom_components.svitgrid.const import DOMAIN
@@ -1142,13 +1142,18 @@ async def test_apply_cloud_endpoint_change_updates_entry_and_schedules_reload(
     )
     entry.add_to_hass(hass)
 
-    with patch.object(
+    with patch(
+        "custom_components.svitgrid.probe_endpoint_auth",
+        new_callable=AsyncMock,
+        return_value=True,
+    ), patch.object(
         hass.config_entries, "async_reload"
     ) as mock_reload:
-        apply_cloud_endpoint_change(
+        result = await apply_cloud_endpoint_change(
             hass, entry, "https://api.svitgrid.app"
         )
 
+    assert result is True
     # Entry data updated immediately + atomically:
     assert entry.data["api_base"] == "https://api.svitgrid.app"
     # Reload scheduled, not directly awaited (the test patched async_reload
@@ -1187,9 +1192,121 @@ async def test_apply_cloud_endpoint_change_is_noop_when_unchanged(hass):
     ) as mock_reload, patch.object(
         hass.config_entries, "async_update_entry"
     ) as mock_update:
-        apply_cloud_endpoint_change(
+        result = await apply_cloud_endpoint_change(
             hass, entry, "https://api-staging.svitgrid.app"
         )
 
+    assert result is True
     mock_reload.assert_not_called()
     mock_update.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# E-fix: pre-flight probe on apply_cloud_endpoint_change
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_apply_cloud_endpoint_change_returns_true_on_probe_success(hass):
+    """When the pre-flight probe to the new endpoint returns 200, the helper
+    must mutate ConfigEntry, schedule reload, and return True."""
+    from unittest.mock import AsyncMock, patch
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+    from custom_components.svitgrid import apply_cloud_endpoint_change
+    from custom_components.svitgrid.const import DOMAIN
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        version=2,
+        minor_version=1,
+        title="test",
+        data={
+            "api_base": "https://api-staging.svitgrid.app",
+            "api_key": "test-api-key",
+            "edge_device_id": "d",
+            "household_id": "h",
+        },
+        entry_id="probe-ok",
+    )
+    entry.add_to_hass(hass)
+
+    with patch(
+        "custom_components.svitgrid.probe_endpoint_auth",
+        new_callable=AsyncMock,
+        return_value=True,
+    ) as mock_probe, patch.object(
+        hass.config_entries, "async_reload"
+    ) as mock_reload:
+        result = await apply_cloud_endpoint_change(
+            hass, entry, "https://api.svitgrid.app"
+        )
+
+    assert result is True
+    # Entry data must have been mutated
+    assert entry.data["api_base"] == "https://api.svitgrid.app"
+    # Reload must have been scheduled
+    await hass.async_block_till_done()
+    mock_reload.assert_called_once_with("probe-ok")
+    # Probe must have been called with the new URL and our api_key
+    mock_probe.assert_awaited_once()
+    call_args = mock_probe.await_args
+    assert call_args.kwargs.get("api_key") == "test-api-key" or call_args.args[1] == "test-api-key"
+    # new_api_base should be the new URL
+    new_base_arg = call_args.kwargs.get("new_api_base") or call_args.args[-1]
+    assert new_base_arg == "https://api.svitgrid.app"
+
+
+@pytest.mark.asyncio
+async def test_apply_cloud_endpoint_change_returns_false_on_probe_failure(
+    hass, caplog,
+):
+    """When the pre-flight probe returns False (non-200), the helper must NOT
+    mutate ConfigEntry, NOT schedule reload, log a distinctive ERROR, and
+    return False."""
+    import logging
+    from unittest.mock import AsyncMock, patch
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+    from custom_components.svitgrid import apply_cloud_endpoint_change
+    from custom_components.svitgrid.const import DOMAIN
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        version=2,
+        minor_version=1,
+        title="test",
+        data={
+            "api_base": "https://api-staging.svitgrid.app",
+            "api_key": "test-api-key",
+            "edge_device_id": "d",
+            "household_id": "h",
+        },
+        entry_id="probe-fail",
+    )
+    entry.add_to_hass(hass)
+
+    with patch(
+        "custom_components.svitgrid.probe_endpoint_auth",
+        new_callable=AsyncMock,
+        return_value=False,
+    ), patch.object(
+        hass.config_entries, "async_reload"
+    ) as mock_reload, patch.object(
+        hass.config_entries, "async_update_entry"
+    ) as mock_update, caplog.at_level(
+        logging.ERROR, logger="custom_components.svitgrid"
+    ):
+        result = await apply_cloud_endpoint_change(
+            hass, entry, "https://api.svitgrid.app"
+        )
+
+    assert result is False
+    # ConfigEntry must NOT have been mutated
+    assert entry.data["api_base"] == "https://api-staging.svitgrid.app"
+    mock_update.assert_not_called()
+    mock_reload.assert_not_called()
+    # Distinctive grep-friendly error log
+    assert any(
+        "set_cloud_endpoint probe failed" in record.message
+        and record.levelno == logging.ERROR
+        for record in caplog.records
+    ), f"Expected distinctive error log. Records: {[r.message for r in caplog.records]}"

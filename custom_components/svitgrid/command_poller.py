@@ -20,7 +20,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
 
 from .api_client import CommandAckFailed, DeviceEvicted, DeviceStopped, SvitgridApiClient
-from .cloud_endpoint_handler import is_allowed_api_base
+from .cloud_endpoint_handler import is_allowed_api_base, probe_endpoint_auth
 from .const import (
     ADD_TRUSTED_KEY_COMMAND,
     COMMAND_POLL_CEILING_S,
@@ -36,9 +36,9 @@ if TYPE_CHECKING:
     from .executors.base import BaseExecutor
 
 
-def apply_cloud_endpoint_change(hass, entry, url):
-    """Module-level shim for `apply_cloud_endpoint_change` — exists to solve
-    TWO constraints simultaneously:
+async def apply_cloud_endpoint_change(hass, entry, url):
+    """Module-level async shim for `apply_cloud_endpoint_change` — exists to
+    solve TWO constraints simultaneously:
 
     1. CIRCULAR IMPORT: __init__.py imports from command_poller during entry
        setup (`from .command_poller import run_loop`), so command_poller cannot
@@ -57,7 +57,7 @@ def apply_cloud_endpoint_change(hass, entry, url):
     the shim body never executes."""
     from . import apply_cloud_endpoint_change as _real  # noqa: PLC0415
 
-    _real(hass, entry, url)
+    return await _real(hass, entry, url)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -177,6 +177,11 @@ async def process_command(
     # Internal because the URL allow-list IS the trust boundary; an admin
     # signature would add nothing — only Svitgrid controls the two URLs
     # that pass `is_allowed_api_base`.
+    #
+    # Ordering (mirrors firmware D5's ce_apply_url):
+    #   validate URL → probe new endpoint → ACK accordingly → apply
+    # ACK now reflects TRUTH: probe-failed cases get rejected ACKs instead
+    # of false success (E-fix: pre-flight probe, 2026-06-24).
     if cmd_type == SET_CLOUD_ENDPOINT_COMMAND:
         payload = command.get("payload") or {}
         url = payload.get("url")
@@ -219,11 +224,40 @@ async def process_command(
             )
             return
 
-        # ACK SUCCESS FIRST on the ORIGINAL endpoint, THEN apply the
-        # change. If apply came first, the reload would tear down the
-        # api_client mid-flight and the ACK would never reach the cloud,
-        # leaving cmd.status stuck in `delivered` forever (the firmware
-        # sub-project D5 ack-restart-race, same root cause).
+        # Pre-flight auth probe — mirrors firmware D5's ce_apply_url two-step.
+        # Use the current api_client's session so we don't create a bare
+        # aiohttp session; pass the api_key from our keystore/entry_data.
+        from homeassistant.helpers import aiohttp_client  # noqa: PLC0415
+
+        session = aiohttp_client.async_get_clientsession(hass)
+        probe_ok = await probe_endpoint_auth(
+            session, api_key=api_key, new_api_base=url
+        )
+        if not probe_ok:
+            _LOGGER.error(
+                "set_cloud_endpoint probe failed — new endpoint %s did not "
+                "accept our api_key. Migration rejected. cmd_id=%s",
+                url, cmd_id,
+            )
+            await _send_signed_ack(
+                api_client=api_client,
+                api_key=api_key,
+                command_id=cmd_id,
+                success=False,
+                rejected=True,
+                reason="probe_failed",
+                our_private_key=our_private_key,
+                our_signing_key_id=our_signing_key_id,
+                executor_version=executor_version,
+            )
+            return
+
+        # Probe succeeded — ACK SUCCESS on the ORIGINAL endpoint, THEN apply.
+        # If apply came first, the reload would tear down the api_client
+        # mid-flight and the ACK would never reach the cloud, leaving
+        # cmd.status stuck in `delivered` forever (firmware D5 ack-restart-race,
+        # same root cause). The probe has already proven the new endpoint works,
+        # so ACK reflects truth.
         await _send_signed_ack(
             api_client=api_client,
             api_key=api_key,
@@ -236,7 +270,7 @@ async def process_command(
         )
 
         try:
-            apply_cloud_endpoint_change(hass, entry, url)
+            await apply_cloud_endpoint_change(hass, entry, url)
         except Exception:
             # ACK already sent as success — the cloud audit log will say
             # the migration succeeded, but the local apply just failed.
