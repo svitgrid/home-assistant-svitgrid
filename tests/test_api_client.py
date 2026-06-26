@@ -419,6 +419,28 @@ class TestAddInverter:
 
 
 @pytest.mark.asyncio
+class TestGetPreset:
+    async def test_200_returns_parsed_dict(self):
+        payload = {
+            "id": "deye-sg04lp3-solarman-v1",
+            "version": "6",
+            "entityMap": {"pv1Power": "sensor.x"},
+        }
+        session, _ = _mock_session_with_response(200, payload)
+        client = SvitgridApiClient(session, api_base="https://api.example")
+        result = await client.get_preset("deye-sg04lp3-solarman-v1")
+        assert result == payload
+        call_args = session.get.call_args
+        assert call_args.args[0].endswith("/api/v1/ha-presets/deye-sg04lp3-solarman-v1")
+
+    async def test_404_returns_none(self):
+        session, _ = _mock_session_with_response(404, {"error": "Not found"})
+        client = SvitgridApiClient(session, api_base="https://api.example")
+        result = await client.get_preset("unknown-preset")
+        assert result is None
+
+
+@pytest.mark.asyncio
 class TestPushReadingsBatch:
     async def test_posts_readings_array_and_returns_body(self):
         session, _ = _mock_session_with_response(

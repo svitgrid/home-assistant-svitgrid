@@ -220,6 +220,18 @@ class SvitgridApiClient:
                 _LOGGER.debug("push_readings_batch: 2xx with non-JSON body")
                 return {}
 
+    async def get_preset(self, preset_id: str) -> dict | None:
+        """GET a live preset (entityMap + version) from the public presets endpoint.
+
+        Returns the parsed JSON dict on 200, or None on any non-200 status.
+        The endpoint is public — no api-key header is required."""
+        url = f"{self._base}/api/v1/ha-presets/{preset_id}"
+        async with self._session.get(url) as resp:
+            if resp.status == 200:
+                return await resp.json()
+            _LOGGER.debug("get_preset(%s) returned status=%s", preset_id, resp.status)
+            return None
+
     async def add_inverter(
         self,
         *,
