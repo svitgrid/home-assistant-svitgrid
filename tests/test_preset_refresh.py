@@ -90,3 +90,30 @@ async def test_refresh_noop_when_version_not_newer():
     out, changed = await refresh_entry_inverters(invs, fetch, log=lambda *_: None)
     assert changed is False
     assert "dailyLossesEnergy" not in out[0]["entity_map"]
+
+
+@pytest.mark.asyncio
+async def test_refresh_records_version_when_all_keys_already_present():
+    invs = [{"inverterId": "i1", "preset_id": "p1",
+             "entity_map": {"pv1Power": "s.a"},
+             "merged_preset_version": "5"}]
+
+    async def fetch(pid):
+        return {"version": "6", "entityMap": {"pv1Power": "s.z"}}  # all keys already present
+
+    out, changed = await refresh_entry_inverters(invs, fetch, log=lambda *_: None)
+    assert changed is True
+    assert str(out[0]["merged_preset_version"]) == "6"
+    assert out[0]["entity_map"]["pv1Power"] == "s.a"   # untouched (add-only)
+
+
+@pytest.mark.asyncio
+async def test_refresh_failopen_on_none_preset():
+    invs = [{"inverterId": "i1", "preset_id": "p1", "entity_map": {"pv1Power": "s.a"}}]
+
+    async def fetch(pid):
+        return None
+
+    out, changed = await refresh_entry_inverters(invs, fetch, log=lambda *_: None)
+    assert changed is False
+    assert out == invs
