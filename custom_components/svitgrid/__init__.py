@@ -44,6 +44,7 @@ from .keystore import SvitgridKeystore
 from .lifecycle import DEPROVISIONED, LifecycleState
 from .panel import register_panel, remove_panel
 from .mqtt_wake import run_loop as run_mqtt_wake_loop
+from .preset_refresh import refresh_entry_inverters
 from .reading_sender import Cadence, run_sender_loop
 from .reading_store import ReadingStore
 from .readings_publisher import run_loop as run_readings_loop
@@ -459,6 +460,27 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # loops so the command poller can detect an operator re-enable. The
     # panel/views/sensors are always set up so the user can see lifecycle status.
     loops_active = lifecycle is not None and lifecycle.state != DEPROVISIONED
+
+    # Refresh entity_map from preset before starting the publisher so the
+    # publisher always uses the most up-to-date field mappings. Skip when
+    # deprovisioned (no loops will start anyway). Fail-open: never blocks setup.
+    if loops_active:
+        async def _fetch_preset(pid):
+            return await api_client.get_preset(pid)
+        try:
+            _inv_list = list(entry.data.get("inverters") or [])
+            new_inverters, changed = await refresh_entry_inverters(
+                _inv_list, _fetch_preset, _LOGGER.info
+            )
+            if changed:
+                hass.config_entries.async_update_entry(
+                    entry, data={**entry.data, "inverters": new_inverters}
+                )
+                # Re-read inverters from the now-updated entry so the publisher
+                # uses the refreshed entity_map.
+                inverters = _inverters_from_entry(entry)
+        except Exception:  # never block setup — fail-open
+            _LOGGER.exception("entity_map preset refresh failed")
 
     command_task = None
     mqtt_wake_task = None

@@ -1256,6 +1256,166 @@ async def test_apply_cloud_endpoint_change_returns_true_on_probe_success(hass):
     assert new_base_arg == "https://api.svitgrid.app"
 
 
+# ---------------------------------------------------------------------------
+# Task 3: preset entity-map refresh wired into async_setup_entry
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_preset_refresh_at_setup_merges_new_fields(hass, enable_custom_integrations):
+    """When get_preset returns a newer-version preset with extra fields, setup
+    persists the merged entity_map and merged_preset_version into the entry,
+    and the publisher receives the refreshed entity_map."""
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+    from unittest.mock import AsyncMock, patch
+
+    from custom_components.svitgrid import async_setup_entry
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        version=2,
+        title="Svitgrid (preset-refresh)",
+        data={
+            "api_base": "https://api.example.com",
+            "api_key": "test-key",
+            "edge_device_id": "ed-1",
+            "household_id": "h-refresh",
+            "signing_key_id": "ha-home-01",
+            "private_key_pem": "-----BEGIN PRIVATE KEY-----\nFAKE\n-----END PRIVATE KEY-----\n",
+            "public_key_hex": "04" + "a" * 128,
+            "trusted_keys": [],
+            "inverters": [
+                {
+                    "inverter_id": "ha-refresh-inv",
+                    "entity_map": {"batterySoc": "sensor.soc"},
+                    "command_recipes": [],
+                    "command_config": {},
+                    "brand": "Deye",
+                    "model": "SG04LP3",
+                    "phases": 3,
+                    "has_battery": True,
+                    "pv_strings": 2,
+                    "preset_id": "deye-sg04lp3-v1",
+                    # no merged_preset_version → first-time merge
+                }
+            ],
+        },
+        entry_id="entry-preset-refresh",
+    )
+    entry.add_to_hass(hass)
+
+    # Preset returns version 2 with an extra field the entry doesn't have yet.
+    newer_preset = {
+        "version": 2,
+        "entityMap": {
+            "batterySoc": "sensor.soc",      # already present — should not overwrite
+            "loadPower": "sensor.load_power", # new field
+        },
+    }
+
+    captured_entity_map = {}
+
+    async def _fake_readings_loop(**kwargs):
+        captured_entity_map["entity_map"] = kwargs.get("entity_map")
+
+    with (
+        patch("custom_components.svitgrid.run_readings_loop", _fake_readings_loop),
+        patch("custom_components.svitgrid.run_command_loop", new_callable=AsyncMock),
+        patch("custom_components.svitgrid.run_mqtt_wake_loop", new_callable=AsyncMock),
+        patch("custom_components.svitgrid.run_sender_loop", new_callable=AsyncMock),
+        patch("custom_components.svitgrid.register_views"),
+        patch("custom_components.svitgrid.register_panel", new_callable=AsyncMock),
+        patch("custom_components.svitgrid.remove_panel"),
+        patch.object(hass.config_entries, "async_forward_entry_setups", AsyncMock(return_value=True)),
+    ):
+        # Patch api_client.get_preset AFTER the client is constructed inside setup.
+        # We do it by patching SvitgridApiClient so the instance returned has
+        # get_preset mocked to return our newer preset.
+        with patch("custom_components.svitgrid.SvitgridApiClient") as mock_cls:
+            mock_instance = mock_cls.return_value
+            mock_instance.get_preset = AsyncMock(return_value=newer_preset)
+
+            ok = await async_setup_entry(hass, entry)
+            await hass.async_block_till_done()
+
+    assert ok is True
+
+    # Entry's stored inverter must have the new field + merged_preset_version set.
+    stored_inverters = entry.data["inverters"]
+    assert len(stored_inverters) == 1
+    inv = stored_inverters[0]
+    assert "loadPower" in inv["entity_map"], "new field must be merged into entity_map"
+    assert inv["entity_map"]["batterySoc"] == "sensor.soc", "existing field must be preserved"
+    assert inv.get("merged_preset_version") == 2, "merged_preset_version must be persisted"
+
+    # Publisher must have received the refreshed entity_map (with the new field).
+    assert "loadPower" in captured_entity_map.get("entity_map", {}), \
+        "publisher must see the refreshed entity_map"
+
+
+@pytest.mark.asyncio
+async def test_preset_refresh_fail_open_at_setup(hass, enable_custom_integrations):
+    """When get_preset raises, setup still completes and the entry is unchanged."""
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+    from unittest.mock import AsyncMock, patch
+
+    from custom_components.svitgrid import async_setup_entry
+
+    original_inverter = {
+        "inverter_id": "ha-failopen-inv",
+        "entity_map": {"batterySoc": "sensor.soc"},
+        "command_recipes": [],
+        "command_config": {},
+        "brand": "Deye",
+        "model": "SG04LP3",
+        "phases": 3,
+        "has_battery": True,
+        "pv_strings": 2,
+        "preset_id": "deye-sg04lp3-v1",
+    }
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        version=2,
+        title="Svitgrid (preset-failopen)",
+        data={
+            "api_base": "https://api.example.com",
+            "api_key": "test-key",
+            "edge_device_id": "ed-1",
+            "household_id": "h-failopen",
+            "signing_key_id": "ha-home-01",
+            "private_key_pem": "-----BEGIN PRIVATE KEY-----\nFAKE\n-----END PRIVATE KEY-----\n",
+            "public_key_hex": "04" + "a" * 128,
+            "trusted_keys": [],
+            "inverters": [original_inverter],
+        },
+        entry_id="entry-preset-failopen",
+    )
+    entry.add_to_hass(hass)
+
+    with (
+        patch("custom_components.svitgrid.run_readings_loop", new_callable=AsyncMock),
+        patch("custom_components.svitgrid.run_command_loop", new_callable=AsyncMock),
+        patch("custom_components.svitgrid.run_mqtt_wake_loop", new_callable=AsyncMock),
+        patch("custom_components.svitgrid.run_sender_loop", new_callable=AsyncMock),
+        patch("custom_components.svitgrid.register_views"),
+        patch("custom_components.svitgrid.register_panel", new_callable=AsyncMock),
+        patch("custom_components.svitgrid.remove_panel"),
+        patch.object(hass.config_entries, "async_forward_entry_setups", AsyncMock(return_value=True)),
+    ):
+        with patch("custom_components.svitgrid.SvitgridApiClient") as mock_cls:
+            mock_instance = mock_cls.return_value
+            mock_instance.get_preset = AsyncMock(side_effect=RuntimeError("network error"))
+
+            ok = await async_setup_entry(hass, entry)
+            await hass.async_block_till_done()
+
+    assert ok is True, "setup must succeed even when get_preset raises"
+    # Entry must be unchanged — fail-open, no update_entry.
+    assert entry.data["inverters"][0]["entity_map"] == {"batterySoc": "sensor.soc"}
+    assert "merged_preset_version" not in entry.data["inverters"][0]
+
+
 @pytest.mark.asyncio
 async def test_apply_cloud_endpoint_change_returns_false_on_probe_failure(
     hass, caplog,
