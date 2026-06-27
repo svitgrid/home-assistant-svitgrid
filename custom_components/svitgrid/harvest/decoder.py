@@ -68,6 +68,19 @@ def decode(spec: RegisterSpec, raw: RawRegisters) -> dict[str, float | None]:
     return out
 
 
+def sanitize(fields: dict[str, float | None], spec: RegisterSpec) -> dict[str, float | None]:
+    """Re-apply the spec-derivable reader clamps (spec §3.2).
+
+    Only batterySoc clamp lives here; batteryPower>50000 and batteryTemp[-20,80]
+    are inside the builtins. batteryVoltage (HV/LV) and Huawei pvPower>=0 are
+    NOT reproduced (model-property-dependent) — the cloud validator backstops."""
+    out = dict(fields)
+    soc = out.get("batterySoc")
+    if soc is not None:
+        out["batterySoc"] = max(0.0, min(100.0, soc))
+    return out
+
+
 def _apply_builtin(d: Derivation, out: dict[str, float | None], spec: RegisterSpec) -> None:
     b = d.builtin
     if b == "battery_temp_clamp":
