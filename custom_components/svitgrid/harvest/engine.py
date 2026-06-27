@@ -12,6 +12,7 @@ from typing import Any
 from ..readings_publisher import (
     _DEFAULT_INTERVAL_S,
     _clamp_interval,
+    _summary_of,
     assemble_payload,
     gate_payload,
 )
@@ -21,12 +22,13 @@ from .transport import read_raw
 _LOGGER = logging.getLogger(__name__)
 
 
-async def poll_once(*, hass, spec, cfg, inverter_id: str, store) -> bool:
+async def poll_once(*, hass, spec, cfg, inverter_id: str, store) -> dict | None:
     """Read the inverter once, decode + sanitize, gate, and append to store.
 
-    Returns True when a reading was appended; False when gated (missing required
-    fields) — caller should log the outcome at the right verbosity but need not
-    treat False as an error (transient gaps are normal at startup / cloudy days).
+    Returns the appended payload dict on success; None when gated (missing
+    required fields) — caller should log the outcome at the right verbosity but
+    need not treat None as an error (transient gaps are normal at startup /
+    cloudy days).
     """
     raw = await read_raw(hass, spec, cfg)
     fields = sanitize(decode(spec, raw), spec)
@@ -35,9 +37,9 @@ async def poll_once(*, hass, spec, cfg, inverter_id: str, store) -> bool:
     payload, missing = gate_payload(payload)
     if missing:
         _LOGGER.debug("harvest %s gated: missing required fields %s", inverter_id, missing)
-        return False
+        return None
     await store.append(payload)
-    return True
+    return payload
 
 
 async def run_direct_harvest_loop(
@@ -77,18 +79,19 @@ async def run_direct_harvest_loop(
                     "harvest %s: spec not ready yet, skipping tick", inverter_id
                 )
             else:
-                ok = await poll_once(
+                payload = await poll_once(
                     hass=hass, spec=spec, cfg=cfg,
                     inverter_id=inverter_id, store=store,
                 )
-                if ok and activity is not None:
+                if payload is not None and activity is not None:
                     # Mirror the entity run_loop call: sample_count=1, period_sec
-                    # from the current cadence. summary is omitted (payload not
-                    # returned from poll_once to keep its interface simple).
+                    # from the current cadence, summary from the payload so the
+                    # activity dashboard shows headline fields (parity with entity
+                    # publisher which passes _summary_of(payload)).
                     activity.record_ingest_success(
                         sample_count=1,
                         period_sec=int(next_sleep_s),
-                        summary={},
+                        summary=_summary_of(payload),
                     )
         except Exception as exc:  # noqa: BLE001  — fail-soft, retry next tick
             _LOGGER.exception(

@@ -34,16 +34,16 @@ async def test_poll_once_appends_payload(hass, monkeypatch):
     raw = {1: {588: 78, 590: 1500, 587: 5230, 625: 64536, 653: 1800, 672: 1500, 673: 800}}
     monkeypatch.setattr(eng, "read_raw", AsyncMock(return_value=raw))
     store = type("S", (), {"append": AsyncMock()})()
-    ok = await eng.poll_once(hass=hass, spec=SPEC, cfg={"ip": "x", "logger_serial": "1"},
-                             inverter_id="inv-1", store=store)
-    assert ok is True
+    returned = await eng.poll_once(hass=hass, spec=SPEC, cfg={"ip": "x", "logger_serial": "1"},
+                                   inverter_id="inv-1", store=store)
+    assert returned is not None
     store.append.assert_awaited_once()
-    payload = store.append.await_args[0][0]
-    assert payload["batterySoc"] == 78.0
-    assert payload["batteryPower"] == -1500.0   # sign-normalized
-    assert payload["gridPower"] == -1000.0
-    assert payload["pvPower"] == 2300.0
-    assert payload["pvPower1"] == 1500.0 and payload["pvPower2"] == 800.0
+    # The returned value IS the payload dict that was appended.
+    assert returned["batterySoc"] == 78.0
+    assert returned["batteryPower"] == -1500.0   # sign-normalized
+    assert returned["gridPower"] == -1000.0
+    assert returned["pvPower"] == 2300.0
+    assert returned["pvPower1"] == 1500.0 and returned["pvPower2"] == 800.0
 
 
 @pytest.mark.asyncio
@@ -51,9 +51,9 @@ async def test_poll_once_gated_when_required_missing(hass, monkeypatch):
     # only batterySoc present → CORE_PAYLOAD_FIELDS missing → gated, not appended
     monkeypatch.setattr(eng, "read_raw", AsyncMock(return_value={1: {588: 50}}))
     store = type("S", (), {"append": AsyncMock()})()
-    ok = await eng.poll_once(hass=hass, spec=SPEC, cfg={"ip": "x", "logger_serial": "1"},
-                             inverter_id="inv-1", store=store)
-    assert ok is False
+    result = await eng.poll_once(hass=hass, spec=SPEC, cfg={"ip": "x", "logger_serial": "1"},
+                                 inverter_id="inv-1", store=store)
+    assert result is None
     store.append.assert_not_awaited()
 
 
@@ -90,3 +90,38 @@ async def test_run_direct_harvest_loop_single_iteration(monkeypatch):
     assert len(poll_calls) == 1
     assert poll_calls[0]["inverter_id"] == "inv-1"
     assert poll_calls[0]["spec"] is SPEC
+
+
+@pytest.mark.asyncio
+async def test_run_direct_harvest_loop_exception_is_fail_soft(monkeypatch):
+    """An exception from poll_once must be caught; loop continues and exits cleanly."""
+    call_count = 0
+
+    async def exploding_poll_once(**kwargs):
+        nonlocal call_count
+        call_count += 1
+        # Flip is_stopping so the loop exits after this single iteration.
+        fake_hass.is_stopping = True
+        raise RuntimeError("simulated inverter read failure")
+
+    monkeypatch.setattr(eng, "poll_once", exploding_poll_once)
+    monkeypatch.setattr(asyncio, "sleep", AsyncMock())
+
+    class FakeHass:
+        is_stopping = False
+
+    fake_hass = FakeHass()
+    spec_holder = type("SH", (), {"spec": SPEC})()
+    cadence = type("C", (), {"interval_s": 60})()
+
+    # Must complete without raising — the exception is caught inside the loop.
+    await eng.run_direct_harvest_loop(
+        hass=fake_hass,
+        store=None,
+        cadence=cadence,
+        inverter_id="inv-1",
+        cfg={"ip": "x", "logger_serial": "1"},
+        spec_holder=spec_holder,
+    )
+
+    assert call_count == 1
