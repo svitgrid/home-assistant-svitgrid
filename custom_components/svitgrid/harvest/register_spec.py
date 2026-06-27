@@ -1,9 +1,10 @@
 """Register-spec data model — Python mirror of the Dart RegisterSpec.
 
 Parses the JSON served by GET /api/v1/register-specs/:modelId. `writes` are
-ignored here (SP-C consumes them)."""
+parsed here (SP-C consumes them)."""
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 BUILTIN_CATALOG = frozenset({
@@ -81,6 +82,72 @@ class SpecFlags:
         )
 
 
+_ENCODING_RE = re.compile(r"^bit:\d+$")
+
+
+@dataclass(frozen=True)
+class FieldWrite:
+    payload_field: str
+    address: int | None = None
+    base: int | None = None
+    encoding: str = "full_word"
+    value_scale: float = 1.0
+    on_value: int | None = None
+    off_value: int | None = None
+    clear_mask: int | None = None
+    via_next_slot: bool = False
+    limits: object | None = None
+
+    @staticmethod
+    def from_dict(d: dict) -> FieldWrite:
+        return FieldWrite(
+            payload_field=d["payloadField"],
+            address=(int(d["address"]) if d.get("address") is not None else None),
+            base=(int(d["base"]) if d.get("base") is not None else None),
+            encoding=d.get("encoding", "full_word"),
+            value_scale=float(d.get("valueScale", 1.0)),
+            on_value=(int(d["onValue"]) if d.get("onValue") is not None else None),
+            off_value=(int(d["offValue"]) if d.get("offValue") is not None else None),
+            clear_mask=(int(d["clearMask"]) if d.get("clearMask") is not None else None),
+            via_next_slot=bool(d.get("viaNextSlot", False)),
+            limits=d.get("limits"),
+        )
+
+
+@dataclass(frozen=True)
+class SlotSpec:
+    index_field: str
+    count: int
+    stride: int
+    end_via_next_slot: bool
+    fields: tuple[FieldWrite, ...]
+
+    @staticmethod
+    def from_dict(d: dict) -> SlotSpec:
+        return SlotSpec(
+            index_field=d["indexField"],
+            count=int(d["count"]),
+            stride=int(d["stride"]),
+            end_via_next_slot=bool(d.get("endViaNextSlotStart", False)),
+            fields=tuple(FieldWrite.from_dict(f) for f in d.get("fields", [])),
+        )
+
+
+@dataclass(frozen=True)
+class WriteCommand:
+    command: str
+    fields: tuple[FieldWrite, ...]
+    slot: SlotSpec | None = None
+
+    @staticmethod
+    def from_dict(d: dict) -> WriteCommand:
+        return WriteCommand(
+            command=d["command"],
+            fields=tuple(FieldWrite.from_dict(f) for f in d.get("fields", [])),
+            slot=(SlotSpec.from_dict(d["slot"]) if d.get("slot") is not None else None),
+        )
+
+
 @dataclass(frozen=True)
 class RegisterSpec:
     model_id: str
@@ -91,6 +158,7 @@ class RegisterSpec:
     flags: SpecFlags
     reads: tuple[ReadDef, ...]
     derivations: tuple[Derivation, ...]
+    writes: tuple[WriteCommand, ...]
 
     @staticmethod
     def from_dict(d: dict) -> RegisterSpec:
@@ -103,6 +171,7 @@ class RegisterSpec:
             flags=SpecFlags.from_dict(d.get("flags") or {}),
             reads=tuple(ReadDef.from_dict(r) for r in d.get("reads", [])),
             derivations=tuple(Derivation.from_dict(x) for x in d.get("derivations", [])),
+            writes=tuple(WriteCommand.from_dict(w) for w in d.get("writes", [])),
         )
 
     def validate(self) -> list[str]:
@@ -116,4 +185,24 @@ class RegisterSpec:
                     continue
                 if inp not in known:
                     problems.append(f"derivation {x.field} references missing field: {inp}")
+        for wc in self.writes:
+            for fw in wc.fields:
+                if fw.encoding != "full_word" and not _ENCODING_RE.match(fw.encoding):
+                    problems.append(
+                        f"write command {wc.command!r} field {fw.payload_field!r}: "
+                        f"invalid encoding {fw.encoding!r}"
+                    )
+            if wc.slot is not None:
+                if not wc.slot.index_field:
+                    problems.append(
+                        f"write command {wc.command!r} slot: missing index_field"
+                    )
+                if wc.slot.count < 1:
+                    problems.append(
+                        f"write command {wc.command!r} slot: count must be >= 1"
+                    )
+                if not wc.slot.fields:
+                    problems.append(
+                        f"write command {wc.command!r} slot: fields must be non-empty"
+                    )
         return problems
