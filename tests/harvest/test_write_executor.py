@@ -90,6 +90,41 @@ def _spec_battery_charge() -> RegisterSpec:
     ])
 
 
+def _spec_battery_charge_slot() -> RegisterSpec:
+    """RegisterSpec with a slot command: full_word start + bit:0+clear_mask enable.
+
+    Models the battery_charge slot (count=6, stride=1) with:
+      - slotStart at base=148 (full_word)
+      - gridChargeEnabled at base=172 (bit:0, clear_mask=0x03)
+    """
+    return _spec_with_writes([
+        {
+            "command": "set_battery_charge_slot",
+            "fields": [],
+            "slot": {
+                "indexField": "slotIndex",
+                "count": 6,
+                "stride": 1,
+                "fields": [
+                    {
+                        "payloadField": "slotStart",
+                        "base": 148,
+                        "encoding": "full_word",
+                    },
+                    {
+                        "payloadField": "gridChargeEnabled",
+                        "base": 172,
+                        "encoding": "bit:0",
+                        "clearMask": 3,
+                        "onValue": 1,
+                        "offValue": 0,
+                    },
+                ],
+            },
+        }
+    ])
+
+
 def _make_executor(spec: RegisterSpec | None, read_word_side_effect=None, write_registers_side_effect=None):
     """Build a WriteExecutor with mocked transport functions.
 
@@ -119,9 +154,10 @@ def _make_executor(spec: RegisterSpec | None, read_word_side_effect=None, write_
 @pytest.mark.asyncio
 async def test_dispatch_full_word_happy_path():
     """work_mode full_word: write + verify both succeed → correct result dict."""
-    executor, mock_read, mock_write = _make_executor(_spec_work_mode())
+    spec = _spec_work_mode()
+    executor, mock_read, mock_write = _make_executor(spec)
 
-    # verify read returns the written value (142)
+    # verify read returns the written value (3)
     mock_read.return_value = 3
 
     with (
@@ -131,7 +167,7 @@ async def test_dispatch_full_word_happy_path():
         result = await executor.dispatch("set_work_mode", {"workMode": 3})
 
     assert result == {"written": [[1, 142, 3]], "verified": True}
-    mock_write.assert_awaited_once()
+    mock_write.assert_awaited_once_with(executor._hass, spec, _CFG, [(1, 142, 3)])
     # verify read called once (no prior needed for full_word without clear_mask)
     assert mock_read.await_count == 1
 
@@ -159,6 +195,52 @@ async def test_dispatch_bit_field_prior_read_and_rmw():
     mock_write.assert_awaited_once()
     # prior read + verify read = 2 total calls
     assert mock_read.await_count == 2
+
+
+# ---------------------------------------------------------------------------
+# 2b. slot + bit:0 — prior read at slot-resolved address + RMW + verify
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_dispatch_slot_bit_field_prior_rmw():
+    """slot + bit:0 with clear_mask: prior read at slot-resolved address → RMW written → verified.
+
+    Setup:
+      - slotIndex = 2, count = 6, stride = 1
+      - enable field: base = 172, bit:0, clear_mask = 0x03
+        → resolved address = 172 + 2*1 = 174
+        → prior seeded as 0xF2 = 0b11110010
+        → written value = (0xF2 & ~0x03) | (1 << 0) = 0xF0 | 1 = 241
+      - start field: base = 148, full_word
+        → resolved address = 148 + 2*1 = 150
+        → written value = 800
+
+    read_word call order: prior@174, verify@150, verify@174
+    """
+    spec = _spec_battery_charge_slot()
+    executor, mock_read, mock_write = _make_executor(spec)
+
+    # [prior@174 → 0xF2, verify@150 → 800, verify@174 → 241]
+    mock_read.side_effect = [0xF2, 800, 241]
+
+    with (
+        patch(f"{MODULE}.read_word", mock_read),
+        patch(f"{MODULE}.write_registers", mock_write),
+    ):
+        result = await executor.dispatch(
+            "set_battery_charge_slot",
+            {"slotIndex": 2, "slotStart": 800, "gridChargeEnabled": True},
+        )
+
+    # prior was read at address 174 (172 + 2*1)
+    assert mock_read.call_args_list[0].args[-1] == 174
+
+    # write_registers called with exact (unit, address, value) pairs in field order
+    mock_write.assert_awaited_once_with(
+        executor._hass, spec, _CFG, [(1, 150, 800), (1, 174, 241)]
+    )
+
+    assert result == {"written": [[1, 150, 800], [1, 174, 241]], "verified": True}
 
 
 # ---------------------------------------------------------------------------
