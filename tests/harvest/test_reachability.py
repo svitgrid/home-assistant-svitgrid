@@ -70,7 +70,7 @@ async def test_returns_false_when_read_word_raises():
 
 
 async def test_cfg_contains_ip_port_from_harvest_config():
-    """transport.read_word is called with cfg carrying ip and port from harvest_config."""
+    """transport.read_word is called with cfg carrying ip, port, slave_id from harvest_config."""
     mock_rw = AsyncMock(return_value=99)
     with patch(f"{MODULE}.transport.read_word", mock_rw):
         await check_inverter_reachable(_HASS, _HARVEST_CFG)
@@ -79,6 +79,7 @@ async def test_cfg_contains_ip_port_from_harvest_config():
     _hass_arg, _spec_arg, cfg_arg, unit_id_arg, _addr_arg = mock_rw.call_args.args
     assert cfg_arg["ip"] == _HARVEST_CFG["ip"]
     assert cfg_arg["port"] == _HARVEST_CFG["port"]
+    assert cfg_arg["slave_id"] == _HARVEST_CFG["slave_id"]
     assert unit_id_arg == _HARVEST_CFG["slave_id"]
 
 
@@ -117,3 +118,41 @@ async def test_uses_probe_address_when_no_spec():
 
     _hass_arg, _spec_arg, _cfg_arg, _unit_id_arg, address_arg = mock_rw.call_args.args
     assert address_arg == _PROBE_ADDRESS
+
+
+# ---------------------------------------------------------------------------
+# Protocol-aware default port
+# ---------------------------------------------------------------------------
+
+
+async def test_modbus_tcp_no_port_defaults_to_502():
+    """modbus_tcp with no explicit port key → cfg["port"] == 502."""
+    cfg_no_port = {
+        "protocol": "modbus_tcp",
+        "ip": "192.168.1.200",
+        "slave_id": 1,
+        "model_id": "some_modbus_device",
+    }
+    mock_rw = AsyncMock(return_value=10)
+    with patch(f"{MODULE}.transport.read_word", mock_rw):
+        await check_inverter_reachable(_HASS, cfg_no_port)
+
+    _hass_arg, _spec_arg, cfg_arg, _unit_id_arg, _addr_arg = mock_rw.call_args.args
+    assert cfg_arg["port"] == 502
+
+
+async def test_solarman_v5_no_port_defaults_to_8899():
+    """solarman_v5 with no explicit port key → cfg["port"] == 8899."""
+    cfg_no_port = {
+        "protocol": "solarman_v5",
+        "ip": "192.168.1.100",
+        "slave_id": 1,
+        "model_id": "deye_sg04lp3",
+        "logger_serial": "1234567890",
+    }
+    mock_rw = AsyncMock(return_value=55)
+    with patch(f"{MODULE}.transport.read_word", mock_rw):
+        await check_inverter_reachable(_HASS, cfg_no_port)
+
+    _hass_arg, _spec_arg, cfg_arg, _unit_id_arg, _addr_arg = mock_rw.call_args.args
+    assert cfg_arg["port"] == 8899

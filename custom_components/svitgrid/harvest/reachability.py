@@ -62,9 +62,14 @@ async def check_inverter_reachable(
                         When omitted a minimal spec is built from harvest_config
                         and _PROBE_ADDRESS is used.
     """
+    default_port = (
+        8899
+        if harvest_config.get("protocol", "solarman_v5") == "solarman_v5"
+        else 502
+    )
     cfg: dict = {
         "ip": harvest_config["ip"],
-        "port": harvest_config.get("port", 8899),
+        "port": harvest_config.get("port", default_port),
         "logger_serial": harvest_config.get("logger_serial", ""),
         "slave_id": harvest_config.get("slave_id", 1),
     }
@@ -81,7 +86,7 @@ async def check_inverter_reachable(
             model_id=str(harvest_config.get("model_id", "unknown")),
             version=0,
             protocol=str(harvest_config.get("protocol", "solarman_v5")),
-            port=int(harvest_config.get("port", 8899)),
+            port=int(harvest_config.get("port", default_port)),
             default_slave_id=unit_id,
             flags=SpecFlags(),
             reads=(),
