@@ -6,7 +6,8 @@
         "description": "How would you like to connect to Svitgrid?",
         "menu_options": {
           "pair": "Pair with the Svitgrid mobile app (recommended)",
-          "manual": "Configure manually (advanced — read-only)"
+          "manual": "Configure manually (advanced — read-only)",
+          "harvest_config": "Set up direct inverter connection manually"
         }
       },
       "manual_meta": {

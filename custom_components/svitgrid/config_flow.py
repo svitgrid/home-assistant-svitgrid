@@ -94,10 +94,10 @@ class SvitgridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._harvest_config: dict[str, Any] | None = None
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
-        """First step — present Pair vs Manual."""
+        """First step — present Pair vs Manual vs direct-harvest."""
         return self.async_show_menu(
             step_id="user",
-            menu_options=["pair", "manual"],
+            menu_options=["pair", "manual", "harvest_config"],
         )
 
     # ─── Manual branch (Phase 2A M3–M7) ──────────────────────────────────
