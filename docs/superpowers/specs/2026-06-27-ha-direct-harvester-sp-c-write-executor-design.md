@@ -40,7 +40,7 @@ SP-C is **writes only**. The phone→add-on onboarding handoff is SP-D.
 
 | Decision | Choice |
 |---|---|
-| Command scope | Full set incl. multi-register TOU: `set_work_mode`, `set_gen_force`, `set_solar_sell`, `set_grid_charge_toggle`, `set_gen_port_mode`, `set_battery_charge` (TOU) |
+| Command scope | Full set incl. multi-register TOU: `set_work_mode`, `set_gen_force`, `set_solar_sell`, `set_grid_charge_toggle`, `set_gen_port_mode`, `set_sell_power_cap`, `set_battery_charge` (TOU). SP-C also adds the new command names to `const.DISPATCHABLE_COMMANDS` (currently 4) so the poller dispatches them. |
 | Write-spec format | Extend `WriteDef` to a command-spec with one or more **field-writes**; `encoding: bit:N` = read-modify-write; a **`slot` block** (base + per-field offsets + stride + end-via-next-slot) for TOU |
 | Correctness | **Write golden vectors** — `{command, payload} → expectedRegisterWrites` generated from the REAL Dart writer; a Python contract test pins the Python executor to it (mirrors SP-B reads) |
 | Verification | **Verify read-back**: write → read the written registers → confirm intended values → ACK success; else ACK `rejected/reason` |
@@ -92,61 +92,72 @@ valueScale, onValue, offValue, limits}`. It expresses a single-register write.
 SP-C generalizes a model's `writes` to a list of **command-specs**, each one of
 two shapes:
 
-### 3.1 Simple command (one or a few field-writes)
+Field/payload names + addresses below are the **actual** ones from the Dart
+writers (3-phase / 1-phase pairs). The golden vectors (from the real writers)
+are the ultimate oracle, so an imprecision here is caught at the contract.
 
 ```yaml
 writes:
-  - command: set_gen_force          # 3-phase: full word
+  - command: set_gen_force            # payload {on: bool}
     fields:
-      - { payloadField: enabled, address: 132, encoding: full_word, onValue: 1, offValue: 0 }
-  - command: set_gen_force          # 1-phase variant (different model spec)
+      - { payloadField: on, address: 132, encoding: full_word, onValue: 1, offValue: 0 }   # 3-phase
+      # 1-phase spec emits instead: { payloadField: on, address: 326, encoding: "bit:13" }  # RMW
+  - command: set_work_mode            # payload {workMode: 0|1|2}
     fields:
-      - { payloadField: enabled, address: 326, encoding: "bit:13" }   # read-modify-write
-  - command: set_work_mode
+      - { payloadField: workMode, address: 142, encoding: full_word, limits: { min: 0, max: 2 } }  # 244 1-phase
+  - command: set_solar_sell           # payload {solarSell: 0|1}
     fields:
-      - { payloadField: workMode, address: 142, encoding: full_word, limits: { min: 0, max: 2 } }
-  - command: set_solar_sell
+      - { payloadField: solarSell, address: 145, encoding: "bit:0", onValue: 1, offValue: 0 }      # 247 1-phase
+  - command: set_grid_charge_toggle   # payload {gridChargeEnabled: bool}  — addr 146/248, preserve bits 1-7
     fields:
-      - { payloadField: enabled, address: 145, encoding: "bit:0", onValue: 1, offValue: 0 }
-  - command: set_grid_charge_toggle
+      - { payloadField: gridChargeEnabled, address: 146, encoding: "bit:0", onValue: 1, offValue: 0 }  # 248 1-phase
+  - command: set_gen_port_mode        # payload {genPortMode: 0|1|2}
     fields:
-      - { payloadField: enabled, address: 130, encoding: full_word, onValue: 1, offValue: 0 }
-  - command: set_gen_port_mode
+      - { payloadField: genPortMode, address: 133, encoding: full_word, limits: { min: 0, max: 2 } }   # 235 1-phase
+  - command: set_sell_power_cap       # payload {sellPowerCapW: int, ratedPowerW?: int}
     fields:
-      - { payloadField: mode, address: 133, encoding: full_word }
+      - { payloadField: sellPowerCapW, address: 143, encoding: full_word, limits: { min: 0, max: 15000 } }  # 245 1-phase; clamp to ratedPowerW
 ```
 
 - `encoding: full_word` → `value = round(payload[field] / valueScale)` (or
-  `onValue`/`offValue` for booleans), clamped to `limits`, written as one register.
+  `onValue`/`offValue` for booleans / 0-1 ints), clamped to `limits`, written as
+  one register. (Most control payloads carry the **raw register value already**,
+  so `valueScale` defaults to 1.)
 - `encoding: bit:N` → **read-modify-write**: read the register, set bit N for a
-  truthy payload (or `onValue`), clear it otherwise, write the modified word back.
-- A command may carry multiple `fields` (each its own register/encoding); all are
-  written in one executor call.
+  truthy payload (or `onValue`), clear it otherwise, **preserving the other
+  bits**, write the modified word back. (grid-charge toggle preserves bits 1-7 =
+  the day-of-week schedule — the read MUST succeed or the command rejects.)
+- A command may carry multiple `fields`; all are written in one executor call.
 
 ### 3.2 Slotted command (battery-charge / TOU)
 
 ```yaml
-  - command: set_battery_charge
-    slot:
-      indexField: slotIndex          # payload carries which of the 6 TOU slots
+  - command: set_battery_charge        # payload: slotIndex, slotStart, slotEnd, powerLimit,
+    slot:                              #          chargeVoltage, gridChargeSoc, gridChargeEnabled
+      indexField: slotIndex            # which of the 6 TOU slots (0-5)
       count: 6
-      stride: 1                      # registers per slot step
-      endViaNextSlotStart: true      # set slot N's end by writing slot N+1's start
+      stride: 1                        # registers per slot step
+      endViaNextSlotStart: true        # set slot N's end by writing slot N+1's start (wrap mod 6)
       fields:
-        - { payloadField: slotStart,         base: 148, encoding: full_word }   # HHMM
-        - { payloadField: chargePowerLimitW, base: 154, encoding: full_word, limits: { min: 0, max: 12000 } }
-        - { payloadField: chargeVoltage,     base: 160, encoding: full_word, valueScale: 0.01 }
+        - { payloadField: slotStart,         base: 148, encoding: full_word }   # HHMM, raw
+        - { payloadField: powerLimit,        base: 154, encoding: full_word, limits: { min: 0, max: 12000 } }  # watts, raw
+        - { payloadField: chargeVoltage,     base: 160, encoding: full_word }   # RAW register value (inverter reads it x0.01V); valueScale=1
         - { payloadField: gridChargeSoc,     base: 166, encoding: full_word, limits: { min: 0, max: 100 } }
-        - { payloadField: gridChargeEnabled, base: 172, encoding: "bit:0", onValue: 1, offValue: 0 }
+        - { payloadField: gridChargeEnabled, base: 172, encoding: "bit:0", clearMask: 0x03, onValue: 1, offValue: 0 }
         - { payloadField: slotEnd,           base: 148, encoding: full_word, viaNextSlot: true }  # writes slot (N+1) start
 ```
 
-- The target register for a slot field = `base + indexField * stride` (1-phase
-  models use a different base set, e.g. 250/256/262/268/274 — emitted per model).
-- `endViaNextSlotStart`/`viaNextSlot`: the `slotEnd` field is written to the
-  **next** slot's start register (`base + (index+1)*stride`) because Deye has no
-  end register. The executor and the golden vectors encode this exactly as the
-  Dart writer does (consistent with the SP-A custom-event TOU behavior).
+1-phase models emit the different base set (250 / 256 / 262 / 268 / 274).
+
+- The target register for a slot field = `base + slotIndex * stride`.
+- `endViaNextSlotStart`/`viaNextSlot`: the `slotEnd` field writes the **next**
+  slot's start register (`base + ((slotIndex+1) mod count) * stride`) — Deye has
+  no end register. Exactly the Dart writer's behavior (the SP-A custom-event TOU).
+- `chargeVoltage`/`powerLimit`/`gridChargeSoc`/`slotStart`/`slotEnd` are written
+  **raw** (the payload already carries the register value), so `valueScale = 1`.
+- The enable field is NOT a plain `bit:0`: the Dart writer does
+  `(prev & ~0x03) | (enabled ? 1 : 0)` — `clearMask: 0x03` then set bit 0. The
+  format carries an optional `clearMask`; the golden vectors pin the exact word.
 
 The format is data; the executor and the contract test give it meaning. The Dart
 `battery_charge_registers.dart` / `work_mode_registers.dart` / `gen_force_executor.dart`
@@ -167,13 +178,28 @@ the SP-A staleness gate already byte-checks them.
 
 ### 4.2 Write golden vectors
 
-A new `tool/export_write_golden_vectors.dart` emits
-`write-golden-vectors.json`: a list of `{ modelId, command, payload,
-expectedRegisterWrites: [{unitId, address, value}] }`, where
-`expectedRegisterWrites` is what the **real Dart writer** produces for that
-command+payload (the ground truth — including bit-RMW masking against a seeded
-prior register value, and the TOU end-via-next-slot register math). Committed and
-staleness-gated like SP-B's read vectors.
+Same two-gate structure as SP-A/SP-B, write-side:
+
+- A Dart **reference write-applier** (`lib/src/spec/write_reference.dart`,
+  analogue of `reference_decoder.dart`) is the *executable meaning of the
+  write-spec*: `applyWrites(spec.writes, command, payload, priorRegisters) →
+  [(unitId, address, value)]` — resolves slot offsets, `valueScale`/`limits`,
+  `bit:N`+`clearMask` RMW (against the seeded `priorRegisters`), and the
+  end-via-next-slot register.
+- A Dart **contract test** asserts the reference write-applier reproduces the
+  **real Dart writers'** register writes for representative cases — capturing the
+  writers' actual `(address, value)` calls via a mock client. This validates the
+  authored spec data against the fleet's real writers (so a wrong authored
+  address is caught, not just self-consistent).
+- `tool/export_write_golden_vectors.dart` runs the reference write-applier over a
+  fixture set of `{modelId, command, payload, priorRegisters}` and emits
+  `write-golden-vectors.json` = `[{ modelId, command, payload, priorRegisters,
+  expectedRegisterWrites }]`. Committed + staleness-gated.
+
+The Python executor's `compute_register_writes` is the Python port of the
+reference write-applier; the Python contract test pins it to these vectors. So
+the Python writes are pinned to a Dart applier that is itself pinned to the real
+Dart writers — Python ≡ spec-applier ≡ real fleet writers.
 
 The vector set MUST cover: every command × a representative writable model;
 the 1-phase **bit:13 RMW** gen-force (with a seeded prior word so the mask is
