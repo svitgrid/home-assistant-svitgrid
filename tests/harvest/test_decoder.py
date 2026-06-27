@@ -1,7 +1,9 @@
 # tests/harvest/test_decoder.py
 import math
-from custom_components.svitgrid.harvest.register_spec import RegisterSpec
+
 from custom_components.svitgrid.harvest.decoder import decode
+from custom_components.svitgrid.harvest.register_spec import RegisterSpec
+
 
 def _spec(**over):
     base = {

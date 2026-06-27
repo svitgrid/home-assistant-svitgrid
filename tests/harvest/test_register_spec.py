@@ -1,5 +1,6 @@
 from custom_components.svitgrid.harvest.register_spec import (
-    RegisterSpec, BUILTIN_CATALOG,
+    BUILTIN_CATALOG,
+    RegisterSpec,
 )
 
 DEYE = {
@@ -54,8 +55,8 @@ def test_validate_allows_pipe_group_marker():
     assert RegisterSpec.from_dict(d).validate() == []
 
 def test_builtin_catalog_has_seven():
-    assert BUILTIN_CATALOG == frozenset({
+    assert frozenset({
         "pv_power_from_vi", "battery_sign_normalize", "battery_temp_clamp",
         "phase_voltage_grid_or_load", "phase_load_ct_or_inverter",
         "grid_relay_bit", "daily_grid_unavailable",
-    })
+    }) == BUILTIN_CATALOG
