@@ -119,11 +119,26 @@ A faithful port of the SP-A Dart **reference decoder**:
   daily_grid_unavailable` — each implemented once, keyed by name.
 
 **Plus the reader sanity-clamps** that SP-A deliberately left out of the data
-format (spec §3.5): `pvPower >= 0`, `|batteryPower| > 50000 → 0`,
-`batteryTemperature` kept only within `[-20, 80]`, etc. These make the Python
-output match the **real reader** (the golden-vector ground truth), not the
-clamp-free reference decoder. They live in a small `sanitize()` step applied
-after `decode`, so the clamp set is explicit and testable in isolation.
+format (spec §3.5). These make the Python output match the **real reader** (the
+golden-vector ground truth) for the seven contract-compared fields. They live in
+a small `sanitize(fields, spec)` step applied after `decode`, explicit and
+testable in isolation. The clamp set is scoped to what is **reproducible from the
+spec + flags**:
+- `batterySoc` → `clamp(0, 100)` — universal, no model property needed.
+- `batteryPower > 50000 → 0` and `batteryTemperature` kept within `[-20, 80]`
+  are **already inside the ported builtins** (`battery_sign_normalize`,
+  `battery_temp_clamp`), so `sanitize` doesn't repeat them.
+
+Two reader clamps depend on model properties the spec does **not** carry —
+`batteryVoltage`'s HV-vs-LV threshold (Dart `registers.isHighVoltage`: 70 V LV /
+1000 V HV) and Huawei's `pvPower >= 0`. SP-B does **not** reproduce these (an
+untested clamp guessing the threshold is worse than none): the golden vectors
+keep `batteryVoltage`/`pvPower` in-range (where reader == unclamped decoder), and
+the cloud's reading validator remains the backstop for garbage reads. A future
+flag (`batteryVoltageMax`, `clampPvPowerNonNegative`) could make them
+reproducible; deferred. Other reader clamps (battery current, BMS limits,
+inverter temp, generator gate, EV charger) affect fields outside the seven
+compared and are out of SP-B scope.
 
 `null` means absent (sentinel hit, missing register, clamp-rejected) — the
 payload builder omits absent fields, so nothing fabricated ships.
