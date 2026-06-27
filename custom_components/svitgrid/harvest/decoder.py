@@ -68,13 +68,41 @@ def decode(spec: RegisterSpec, raw: RawRegisters) -> dict[str, float | None]:
     return out
 
 
+# Non-nullable double fields in Dart's InverterReading that default to 0.0.
+# When a model's spec does not read a field (e.g. no-battery grid-tie inverters
+# skip batterySoc/batteryPower/batteryVoltage/loadPower), the field is absent
+# from decode()'s output dict entirely. sanitize() inserts 0.0 for those absent
+# fields to match the Dart reader's behaviour. Explicitly-None entries (field key
+# present with value None — meaning the register was in reads but data was missing)
+# are intentionally left untouched.
+_STANDARD_ZERO_FIELDS: frozenset[str] = frozenset({
+    "batterySoc",
+    "batteryPower",
+    "batteryVoltage",
+    "gridPower",
+    "loadPower",
+    "totalPvPower",
+    "dailyPvEnergy",
+    "dailyGridImportEnergy",
+    "dailyGridExportEnergy",
+    "dailyLoadEnergy",
+})
+
+
 def sanitize(fields: dict[str, float | None], spec: RegisterSpec) -> dict[str, float | None]:
     """Re-apply the spec-derivable reader clamps (spec §3.2).
 
-    Only batterySoc clamp lives here; batteryPower>50000 and batteryTemp[-20,80]
-    are inside the builtins. batteryVoltage (HV/LV) and Huawei pvPower>=0 are
-    NOT reproduced (model-property-dependent) — the cloud validator backstops."""
+    Steps:
+    1. Insert 0.0 for standard non-nullable InverterReading fields that are
+       entirely absent from the decode output (models that don't read them).
+    2. Clamp batterySoc to [0, 100].
+    batteryPower>50000 and batteryTemp[-20,80] are inside the builtins.
+    batteryVoltage (HV/LV) and Huawei pvPower>=0 are NOT reproduced
+    (model-property-dependent) — the cloud validator backstops."""
     out = dict(fields)
+    for f in _STANDARD_ZERO_FIELDS:
+        if f not in out:
+            out[f] = 0.0
     soc = out.get("batterySoc")
     if soc is not None:
         out["batterySoc"] = max(0.0, min(100.0, soc))
