@@ -128,6 +128,21 @@ spec + flags**:
 - `batteryPower > 50000 → 0` and `batteryTemperature` kept within `[-20, 80]`
   are **already inside the ported builtins** (`battery_sign_normalize`,
   `battery_temp_clamp`), so `sanitize` doesn't repeat them.
+- **Structurally-absent standard fields → `0.0`.** Dart's `InverterReading`
+  initializes its non-nullable double fields to `0.0`, so the real reader reports
+  `0.0` for fields a model structurally lacks (e.g. a Huawei/grid-tie string
+  inverter has no battery or load). `sanitize` reproduces this: for the standard
+  non-nullable fields (`batterySoc, batteryPower, batteryVoltage, gridPower,
+  loadPower, pvPower, dailyPvEnergy, dailyGridImportEnergy, dailyGridExportEnergy,
+  dailyLoadEnergy`) that are **structurally absent** (the spec defines no read for
+  them, so the key is missing from `decode`'s output), it inserts `0.0`. This is
+  fleet-consistent (the mobile/edge harvesters send the same `0.0` defaults), not
+  fabrication. **Crucially**, a field whose read IS defined but came back
+  `None` (sentinel/partial-read failure) is left as `None` — the key is present
+  with value `None`, so the `key not in output` guard skips it; the engine then
+  omits it and the gate skips the reading rather than shipping a false `0`
+  (e.g. no phantom `batterySoc = 0%` low-battery alert). This absent-key-vs-None
+  distinction was discovered and locked by the golden-vector contract.
 
 Two reader clamps depend on model properties the spec does **not** carry —
 `batteryVoltage`'s HV-vs-LV threshold (Dart `registers.isHighVoltage`: 70 V LV /
