@@ -87,6 +87,11 @@ class SvitgridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         # by async_step_manual_meta → async_step_manual_entities and
         # submitted in /finalize's body when the pair completes.
         self._manual_inverter: dict[str, Any] | None = None
+        # Direct-Modbus harvest spec (SP-B). Stays None in preset / HA-only
+        # paths; populated by async_step_harvest_config and threaded into the
+        # created inverter dict at finalize so the direct harvester (Task 11)
+        # can find it. SP-D will replace manual entry with a phone handoff.
+        self._harvest_config: dict[str, Any] | None = None
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """First step — present Pair vs Manual."""
@@ -164,6 +169,69 @@ class SvitgridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="manual_entities",
             data_schema=vol.Schema(schema_dict),
             errors=errors,
+        )
+
+    # ─── Direct-Modbus harvest config (SP-B) ───────────────────────────
+
+    async def async_step_harvest_config(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Collect the direct-Modbus harvest spec for the inverter being set up.
+
+        Stores a snake_case `harvest_config` dict onto ``self._harvest_config``
+        and proceeds to the existing pair flow, which finalizes and threads the
+        spec into the created inverter dict. Validation: `ip` is required and
+        `logger_serial` is required for the Solarman V5 protocol (the data
+        logger serial is part of the V5 frame); modbus_tcp needs no serial.
+        SP-D will replace this manual entry with a phone handoff.
+        """
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            protocol = user_input.get("protocol", "solarman_v5")
+            ip = (user_input.get("ip") or "").strip()
+            model_id = (user_input.get("model_id") or "").strip()
+            logger_serial = (user_input.get("logger_serial") or "").strip()
+
+            if not ip:
+                errors["ip"] = "required"
+            if not model_id:
+                errors["model_id"] = "required"
+            if protocol == "solarman_v5" and not logger_serial:
+                errors["logger_serial"] = "logger_serial_required"
+
+            if not errors:
+                self._harvest_config = {
+                    "protocol": protocol,
+                    "ip": ip,
+                    "port": int(user_input.get("port", 8899)),
+                    "slave_id": int(user_input.get("slave_id", 1)),
+                    "model_id": model_id,
+                    "logger_serial": logger_serial or None,
+                }
+                # Hand off to the existing pair flow — same code-display +
+                # poll-for-claim + finalize path as the preset / manual branch.
+                return await self.async_step_pair()
+
+        schema = vol.Schema({
+            vol.Required("protocol", default="solarman_v5"): SelectSelector(
+                SelectSelectorConfig(options=["solarman_v5", "modbus_tcp"]),
+            ),
+            vol.Required("ip"): TextSelector(TextSelectorConfig()),
+            vol.Required("port", default=8899): NumberSelector(
+                NumberSelectorConfig(
+                    min=1, max=65535, step=1, mode=NumberSelectorMode.BOX,
+                ),
+            ),
+            vol.Required("slave_id", default=1): NumberSelector(
+                NumberSelectorConfig(
+                    min=1, max=247, step=1, mode=NumberSelectorMode.BOX,
+                ),
+            ),
+            vol.Required("model_id"): TextSelector(TextSelectorConfig()),
+            vol.Optional("logger_serial"): TextSelector(TextSelectorConfig()),
+        })
+        return self.async_show_form(
+            step_id="harvest_config", data_schema=schema, errors=errors,
         )
 
     # ─── Pair branch (preset OR continuation of manual) ────────────────
@@ -246,6 +314,12 @@ class SvitgridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             "pv_strings": self._final_payload.get("pvStrings"),
             "preset_id": self._final_payload.get("presetId"),
         }
+        # SP-B: thread the direct-Modbus harvest spec into the inverter dict
+        # when one was collected (async_step_harvest_config). Absent on the
+        # preset / HA-only paths, so only add the key when set to keep those
+        # entries unchanged.
+        if self._harvest_config is not None:
+            inverter["harvest_config"] = self._harvest_config
         return self.async_create_entry(
             title=self._entry_title(),
             data={
