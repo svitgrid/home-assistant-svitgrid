@@ -21,3 +21,13 @@ def test_assembles_renames_and_aggregates():
 def test_no_pv_means_no_pvpower_key():
     payload = assemble_payload(inverter_id="i", fields={"batterySoc": 50.0})
     assert "pvPower" not in payload
+
+
+def test_assembles_six_pv_strings():
+    payload = assemble_payload(inverter_id="i", fields={
+        "pv1Power": 1000.0, "pv2Power": 1000.0, "pv3Power": 1000.0,
+        "pv4Power": 1000.0, "pv5Power": 1000.0, "pv6Power": 1000.0,
+    })
+    assert payload["pvPower"] == 6000.0  # all six summed
+    assert payload["pvPower5"] == 1000.0 and payload["pvPower6"] == 1000.0
+    assert "pv5Power" not in payload and "pv6Power" not in payload

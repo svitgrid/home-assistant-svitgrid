@@ -59,6 +59,8 @@ _PV_STRING_API_NAMES = {
     "pv2Power": "pvPower2",
     "pv3Power": "pvPower3",
     "pv4Power": "pvPower4",
+    "pv5Power": "pvPower5",
+    "pv6Power": "pvPower6",
 }
 
 
@@ -80,7 +82,7 @@ def assemble_payload(*, inverter_id: str, fields: dict[str, Any]) -> dict[str, A
     # (Server schema requires `pvPower` as a top-level scalar.)
     pv_total = 0.0
     has_any_pv = False
-    for pv_field in ("pv1Power", "pv2Power", "pv3Power", "pv4Power"):
+    for pv_field in ("pv1Power", "pv2Power", "pv3Power", "pv4Power", "pv5Power", "pv6Power"):
         if pv_field in payload:
             pv_total += payload[pv_field]
             has_any_pv = True
