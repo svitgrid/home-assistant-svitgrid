@@ -45,6 +45,14 @@ def test_validate_rejects_dangling_input():
     problems = RegisterSpec.from_dict(d).validate()
     assert any("missing" in p for p in problems)
 
+def test_validate_allows_pipe_group_marker():
+    d = {**DEYE, "reads": [{"field": "vL1", "address": 1}, {"field": "vLoad1", "address": 2}],
+         "derivations": [{"field": "phaseVoltages", "op": "builtin",
+                          "builtin": "phase_voltage_grid_or_load",
+                          "inputs": ["vL1", "|", "vLoad1"]}]}
+    from custom_components.svitgrid.harvest.register_spec import RegisterSpec
+    assert RegisterSpec.from_dict(d).validate() == []
+
 def test_builtin_catalog_has_seven():
     assert BUILTIN_CATALOG == frozenset({
         "pv_power_from_vi", "battery_sign_normalize", "battery_temp_clamp",

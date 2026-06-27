@@ -4,7 +4,7 @@ Parses the JSON served by GET /api/v1/register-specs/:modelId. `writes` are
 ignored here (SP-C consumes them)."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field as _field
+from dataclasses import dataclass
 
 BUILTIN_CATALOG = frozenset({
     "pv_power_from_vi", "battery_sign_normalize", "battery_temp_clamp",
@@ -26,7 +26,7 @@ class ReadDef:
     function_code: str = "FC03"
 
     @staticmethod
-    def from_dict(d: dict) -> "ReadDef":
+    def from_dict(d: dict) -> ReadDef:
         return ReadDef(
             field=d["field"],
             address=int(d["address"]),
@@ -49,7 +49,7 @@ class Derivation:
     builtin: str | None = None
 
     @staticmethod
-    def from_dict(d: dict) -> "Derivation":
+    def from_dict(d: dict) -> Derivation:
         return Derivation(
             field=d["field"],
             op=d["op"],
@@ -69,7 +69,7 @@ class SpecFlags:
     grid_relay_mask: int | None = None
 
     @staticmethod
-    def from_dict(d: dict) -> "SpecFlags":
+    def from_dict(d: dict) -> SpecFlags:
         d = d or {}
         return SpecFlags(
             pv_power_from_voltage_current=bool(d.get("pvPowerFromVoltageCurrent", False)),
@@ -93,7 +93,7 @@ class RegisterSpec:
     derivations: tuple[Derivation, ...]
 
     @staticmethod
-    def from_dict(d: dict) -> "RegisterSpec":
+    def from_dict(d: dict) -> RegisterSpec:
         return RegisterSpec(
             model_id=d["modelId"],
             version=int(d["version"]),
