@@ -111,6 +111,14 @@ class TestFullWordEncoding:
         # round(10 / 3.0) = round(3.333) = 3
         assert result == [(1, 10, 3)]
 
+    def test_negative_value_wraps_to_16bit(self):
+        """full_word field with no min limit: negative value wraps via & 0xFFFF."""
+        fw = _fw(payload_field="val", address=100)  # no limits, scale=1
+        cmd = _cmd([fw])
+        result = compute_register_writes(cmd, {"val": -100}, {})
+        # -100 & 0xFFFF == 65436
+        assert result == [(1, 100, (-100) & 0xFFFF)]
+
 
 # ---------------------------------------------------------------------------
 # bit:N encoding
@@ -294,9 +302,13 @@ class TestSlotEncoding:
         # addr = 200 + 3*1 = 203; value = round(5000/10.0) = 500
         assert result == [(1, 203, 500)]
 
-    def test_slot_ignores_top_level_fields(self):
-        """When slot is set, only slot fields are emitted — not cmd.fields."""
-        top_fw = _fw(payload_field="ignored", address=999)
+    def test_slot_command_also_emits_top_level_fields(self):
+        """When slot is set, top-level cmd.fields are emitted FIRST, then slot fields.
+
+        Matches Dart applyWrites which iterates cmd.fields unconditionally before
+        appending slot fields — no early return on a slotted command.
+        """
+        top_fw = _fw(payload_field="topField", address=999)
         field = _fw(payload_field="socMin", base=103)
         slot = SlotSpec(
             index_field="slotIndex",
@@ -306,9 +318,12 @@ class TestSlotEncoding:
             fields=(field,),
         )
         cmd = WriteCommand(command="test_cmd", fields=(top_fw,), slot=slot)
-        result = compute_register_writes(cmd, {"slotIndex": 0, "socMin": 5, "ignored": 42}, {})
-        assert len(result) == 1
-        assert result[0][1] == 103  # top-level address 999 NOT emitted
+        result = compute_register_writes(cmd, {"slotIndex": 0, "socMin": 5, "topField": 42}, {})
+        # top-level field (address=999, value=42) emitted first
+        # slot field (address=103 + 0*2=103, value=5) emitted second
+        assert len(result) == 2
+        assert result[0] == (1, 999, 42)  # top-level field first
+        assert result[1] == (1, 103, 5)   # slot field second
 
 
 # ---------------------------------------------------------------------------

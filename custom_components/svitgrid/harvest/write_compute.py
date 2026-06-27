@@ -34,7 +34,7 @@ def _encode_value(
         if f.clear_mask is not None:
             base &= ~f.clear_mask
         truthy = _is_on(raw, f)
-        return (base | (1 << bit)) if truthy else (base & ~(1 << bit))
+        return ((base | (1 << bit)) if truthy else (base & ~(1 << bit))) & 0xFFFF
 
     # full_word
     if f.on_value is not None and isinstance(raw, bool):
@@ -54,7 +54,7 @@ def _encode_value(
         base = prior.get(address, 0) & ~f.clear_mask
         v = base | v
 
-    return v
+    return v & 0xFFFF
 
 
 def compute_register_writes(
@@ -83,6 +83,9 @@ def compute_register_writes(
     """
     out: list[tuple[int, int, int]] = []
 
+    for f in cmd.fields:
+        out.append((unit_id, f.address, _encode_value(f, payload, prior, f.address)))
+
     if cmd.slot is not None:
         s = cmd.slot
         idx = int(payload[s.index_field])
@@ -94,9 +97,5 @@ def compute_register_writes(
             slot_idx = ((idx + 1) % s.count) if f.via_next_slot else idx
             addr = f.base + slot_idx * s.stride
             out.append((unit_id, addr, _encode_value(f, payload, prior, addr)))
-        return out
-
-    for f in cmd.fields:
-        out.append((unit_id, f.address, _encode_value(f, payload, prior, f.address)))
 
     return out
