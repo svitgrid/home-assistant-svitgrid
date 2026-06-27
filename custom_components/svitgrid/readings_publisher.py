@@ -62,28 +62,20 @@ _PV_STRING_API_NAMES = {
 }
 
 
-def build_reading_payload(
-    *, hass: HomeAssistant, inverter_id: str, entity_map: dict[str, str]
-) -> dict[str, Any]:
-    """Build a single reading payload. Fields whose mapped entity is
-    missing / unavailable / non-numeric are omitted (not sent as null or 0).
+def assemble_payload(*, inverter_id: str, fields: dict[str, Any]) -> dict[str, Any]:
+    """Assemble the canonical reading payload from already-collected field values.
+
+    Extracted so both the HA-entity path (build_reading_payload) and the
+    direct-harvest engine (Task 9) share exactly the same assembly logic:
+    timestamp, inverterId, source, pvPower aggregation, and pvPowerN rename.
     """
     payload: dict[str, Any] = {
         "inverterId": inverter_id,
         "timestamp": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         "source": READING_SOURCE,
     }
-    for field, entity_id in entity_map.items():
-        state = hass.states.get(entity_id)
-        if state is None:
-            continue
-        raw = state.state
-        if raw in _UNAVAILABLE_STATES or not isinstance(raw, str):
-            continue
-        try:
-            payload[field] = float(raw)
-        except (TypeError, ValueError):
-            continue
+    for field, value in fields.items():
+        payload[field] = value
     # Aggregate pvPower from the per-MPPT values the server requires.
     # (Server schema requires `pvPower` as a top-level scalar.)
     pv_total = 0.0
@@ -105,6 +97,27 @@ def build_reading_payload(
         if internal in payload:
             payload[api_name] = payload.pop(internal)
     return payload
+
+
+def build_reading_payload(
+    *, hass: HomeAssistant, inverter_id: str, entity_map: dict[str, str]
+) -> dict[str, Any]:
+    """Build a single reading payload. Fields whose mapped entity is
+    missing / unavailable / non-numeric are omitted (not sent as null or 0).
+    """
+    fields: dict[str, Any] = {}
+    for field, entity_id in entity_map.items():
+        state = hass.states.get(entity_id)
+        if state is None:
+            continue
+        raw = state.state
+        if raw in _UNAVAILABLE_STATES or not isinstance(raw, str):
+            continue
+        try:
+            fields[field] = float(raw)
+        except (TypeError, ValueError):
+            continue
+    return assemble_payload(inverter_id=inverter_id, fields=fields)
 
 
 def gate_payload(payload: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
@@ -187,8 +200,8 @@ def _summary_of(payload: dict[str, Any]) -> dict[str, Any]:
 async def run_loop(
     *,
     hass: HomeAssistant,
-    store: "ReadingStore",
-    cadence: "Cadence",
+    store: ReadingStore,
+    cadence: Cadence,
     inverter_id: str,
     entity_map: dict[str, str],
     activity: Any = None,  # ActivityTracker; None acceptable for older callers
