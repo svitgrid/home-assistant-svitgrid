@@ -283,7 +283,7 @@
         ],
         "writes": [
           {
-            "command": "gen_force",
+            "command": "set_gen_force",
             "fields": [
               {
                 "payloadField": "on",
@@ -294,7 +294,7 @@
             ]
           },
           {
-            "command": "work_mode",
+            "command": "set_work_mode",
             "fields": [
               {
                 "payloadField": "workMode",
@@ -303,7 +303,7 @@
             ]
           },
           {
-            "command": "solar_sell",
+            "command": "set_solar_sell",
             "fields": [
               {
                 "payloadField": "solarSell",
@@ -313,7 +313,7 @@
             ]
           },
           {
-            "command": "grid_charge_toggle",
+            "command": "set_grid_charge_toggle",
             "fields": [
               {
                 "payloadField": "gridChargeEnabled",
@@ -323,7 +323,7 @@
             ]
           },
           {
-            "command": "gen_port_mode",
+            "command": "set_gen_port_mode",
             "fields": [
               {
                 "payloadField": "genPortMode",
@@ -332,7 +332,7 @@
             ]
           },
           {
-            "command": "sell_power_cap",
+            "command": "set_sell_power_cap",
             "fields": [
               {
                 "payloadField": "sellPowerCapW",
@@ -345,7 +345,7 @@
             ]
           },
           {
-            "command": "battery_charge",
+            "command": "set_battery_charge",
             "slot": {
               "indexField": "slotIndex",
               "count": 6,
@@ -740,7 +740,7 @@
         ],
         "writes": [
           {
-            "command": "gen_force",
+            "command": "set_gen_force",
             "fields": [
               {
                 "payloadField": "on",
@@ -751,7 +751,7 @@
             ]
           },
           {
-            "command": "work_mode",
+            "command": "set_work_mode",
             "fields": [
               {
                 "payloadField": "workMode",
@@ -760,7 +760,7 @@
             ]
           },
           {
-            "command": "solar_sell",
+            "command": "set_solar_sell",
             "fields": [
               {
                 "payloadField": "solarSell",
@@ -770,7 +770,7 @@
             ]
           },
           {
-            "command": "grid_charge_toggle",
+            "command": "set_grid_charge_toggle",
             "fields": [
               {
                 "payloadField": "gridChargeEnabled",
@@ -780,7 +780,7 @@
             ]
           },
           {
-            "command": "gen_port_mode",
+            "command": "set_gen_port_mode",
             "fields": [
               {
                 "payloadField": "genPortMode",
@@ -789,7 +789,7 @@
             ]
           },
           {
-            "command": "sell_power_cap",
+            "command": "set_sell_power_cap",
             "fields": [
               {
                 "payloadField": "sellPowerCapW",
@@ -802,7 +802,7 @@
             ]
           },
           {
-            "command": "battery_charge",
+            "command": "set_battery_charge",
             "slot": {
               "indexField": "slotIndex",
               "count": 6,
@@ -1197,7 +1197,7 @@
         ],
         "writes": [
           {
-            "command": "gen_force",
+            "command": "set_gen_force",
             "fields": [
               {
                 "payloadField": "on",
@@ -1208,7 +1208,7 @@
             ]
           },
           {
-            "command": "work_mode",
+            "command": "set_work_mode",
             "fields": [
               {
                 "payloadField": "workMode",
@@ -1217,7 +1217,7 @@
             ]
           },
           {
-            "command": "solar_sell",
+            "command": "set_solar_sell",
             "fields": [
               {
                 "payloadField": "solarSell",
@@ -1227,7 +1227,7 @@
             ]
           },
           {
-            "command": "grid_charge_toggle",
+            "command": "set_grid_charge_toggle",
             "fields": [
               {
                 "payloadField": "gridChargeEnabled",
@@ -1237,7 +1237,7 @@
             ]
           },
           {
-            "command": "gen_port_mode",
+            "command": "set_gen_port_mode",
             "fields": [
               {
                 "payloadField": "genPortMode",
@@ -1246,7 +1246,7 @@
             ]
           },
           {
-            "command": "sell_power_cap",
+            "command": "set_sell_power_cap",
             "fields": [
               {
                 "payloadField": "sellPowerCapW",
@@ -1259,7 +1259,7 @@
             ]
           },
           {
-            "command": "battery_charge",
+            "command": "set_battery_charge",
             "slot": {
               "indexField": "slotIndex",
               "count": 6,
@@ -1552,7 +1552,7 @@
         ],
         "writes": [
           {
-            "command": "gen_force",
+            "command": "set_gen_force",
             "fields": [
               {
                 "payloadField": "on",
@@ -1562,7 +1562,7 @@
             ]
           },
           {
-            "command": "work_mode",
+            "command": "set_work_mode",
             "fields": [
               {
                 "payloadField": "workMode",
@@ -1571,7 +1571,7 @@
             ]
           },
           {
-            "command": "solar_sell",
+            "command": "set_solar_sell",
             "fields": [
               {
                 "payloadField": "solarSell",
@@ -1581,7 +1581,7 @@
             ]
           },
           {
-            "command": "grid_charge_toggle",
+            "command": "set_grid_charge_toggle",
             "fields": [
               {
                 "payloadField": "gridChargeEnabled",
@@ -1591,7 +1591,7 @@
             ]
           },
           {
-            "command": "gen_port_mode",
+            "command": "set_gen_port_mode",
             "fields": [
               {
                 "payloadField": "genPortMode",
@@ -1600,7 +1600,7 @@
             ]
           },
           {
-            "command": "sell_power_cap",
+            "command": "set_sell_power_cap",
             "fields": [
               {
                 "payloadField": "sellPowerCapW",
@@ -1613,7 +1613,7 @@
             ]
           },
           {
-            "command": "battery_charge",
+            "command": "set_battery_charge",
             "slot": {
               "indexField": "slotIndex",
               "count": 6,
@@ -1879,7 +1879,7 @@
         ],
         "writes": [
           {
-            "command": "gen_force",
+            "command": "set_gen_force",
             "fields": [
               {
                 "payloadField": "on",
@@ -1889,7 +1889,7 @@
             ]
           },
           {
-            "command": "work_mode",
+            "command": "set_work_mode",
             "fields": [
               {
                 "payloadField": "workMode",
@@ -1898,7 +1898,7 @@
             ]
           },
           {
-            "command": "solar_sell",
+            "command": "set_solar_sell",
             "fields": [
               {
                 "payloadField": "solarSell",
@@ -1908,7 +1908,7 @@
             ]
           },
           {
-            "command": "grid_charge_toggle",
+            "command": "set_grid_charge_toggle",
             "fields": [
               {
                 "payloadField": "gridChargeEnabled",
@@ -1918,7 +1918,7 @@
             ]
           },
           {
-            "command": "gen_port_mode",
+            "command": "set_gen_port_mode",
             "fields": [
               {
                 "payloadField": "genPortMode",
@@ -1927,7 +1927,7 @@
             ]
           },
           {
-            "command": "sell_power_cap",
+            "command": "set_sell_power_cap",
             "fields": [
               {
                 "payloadField": "sellPowerCapW",
@@ -1940,7 +1940,7 @@
             ]
           },
           {
-            "command": "battery_charge",
+            "command": "set_battery_charge",
             "slot": {
               "indexField": "slotIndex",
               "count": 6,
@@ -2222,7 +2222,7 @@
         ],
         "writes": [
           {
-            "command": "gen_force",
+            "command": "set_gen_force",
             "fields": [
               {
                 "payloadField": "on",
@@ -2232,7 +2232,7 @@
             ]
           },
           {
-            "command": "work_mode",
+            "command": "set_work_mode",
             "fields": [
               {
                 "payloadField": "workMode",
@@ -2241,7 +2241,7 @@
             ]
           },
           {
-            "command": "solar_sell",
+            "command": "set_solar_sell",
             "fields": [
               {
                 "payloadField": "solarSell",
@@ -2251,7 +2251,7 @@
             ]
           },
           {
-            "command": "grid_charge_toggle",
+            "command": "set_grid_charge_toggle",
             "fields": [
               {
                 "payloadField": "gridChargeEnabled",
@@ -2261,7 +2261,7 @@
             ]
           },
           {
-            "command": "gen_port_mode",
+            "command": "set_gen_port_mode",
             "fields": [
               {
                 "payloadField": "genPortMode",
@@ -2270,7 +2270,7 @@
             ]
           },
           {
-            "command": "sell_power_cap",
+            "command": "set_sell_power_cap",
             "fields": [
               {
                 "payloadField": "sellPowerCapW",
@@ -2283,7 +2283,7 @@
             ]
           },
           {
-            "command": "battery_charge",
+            "command": "set_battery_charge",
             "slot": {
               "indexField": "slotIndex",
               "count": 6,
@@ -2549,7 +2549,7 @@
         ],
         "writes": [
           {
-            "command": "gen_force",
+            "command": "set_gen_force",
             "fields": [
               {
                 "payloadField": "on",
@@ -2559,7 +2559,7 @@
             ]
           },
           {
-            "command": "work_mode",
+            "command": "set_work_mode",
             "fields": [
               {
                 "payloadField": "workMode",
@@ -2568,7 +2568,7 @@
             ]
           },
           {
-            "command": "solar_sell",
+            "command": "set_solar_sell",
             "fields": [
               {
                 "payloadField": "solarSell",
@@ -2578,7 +2578,7 @@
             ]
           },
           {
-            "command": "grid_charge_toggle",
+            "command": "set_grid_charge_toggle",
             "fields": [
               {
                 "payloadField": "gridChargeEnabled",
@@ -2588,7 +2588,7 @@
             ]
           },
           {
-            "command": "gen_port_mode",
+            "command": "set_gen_port_mode",
             "fields": [
               {
                 "payloadField": "genPortMode",
@@ -2597,7 +2597,7 @@
             ]
           },
           {
-            "command": "sell_power_cap",
+            "command": "set_sell_power_cap",
             "fields": [
               {
                 "payloadField": "sellPowerCapW",
@@ -2610,7 +2610,7 @@
             ]
           },
           {
-            "command": "battery_charge",
+            "command": "set_battery_charge",
             "slot": {
               "indexField": "slotIndex",
               "count": 6,
@@ -2876,7 +2876,7 @@
         ],
         "writes": [
           {
-            "command": "gen_force",
+            "command": "set_gen_force",
             "fields": [
               {
                 "payloadField": "on",
@@ -2886,7 +2886,7 @@
             ]
           },
           {
-            "command": "work_mode",
+            "command": "set_work_mode",
             "fields": [
               {
                 "payloadField": "workMode",
@@ -2895,7 +2895,7 @@
             ]
           },
           {
-            "command": "solar_sell",
+            "command": "set_solar_sell",
             "fields": [
               {
                 "payloadField": "solarSell",
@@ -2905,7 +2905,7 @@
             ]
           },
           {
-            "command": "grid_charge_toggle",
+            "command": "set_grid_charge_toggle",
             "fields": [
               {
                 "payloadField": "gridChargeEnabled",
@@ -2915,7 +2915,7 @@
             ]
           },
           {
-            "command": "gen_port_mode",
+            "command": "set_gen_port_mode",
             "fields": [
               {
                 "payloadField": "genPortMode",
@@ -2924,7 +2924,7 @@
             ]
           },
           {
-            "command": "sell_power_cap",
+            "command": "set_sell_power_cap",
             "fields": [
               {
                 "payloadField": "sellPowerCapW",
@@ -2937,7 +2937,7 @@
             ]
           },
           {
-            "command": "battery_charge",
+            "command": "set_battery_charge",
             "slot": {
               "indexField": "slotIndex",
               "count": 6,
@@ -3203,7 +3203,7 @@
         ],
         "writes": [
           {
-            "command": "gen_force",
+            "command": "set_gen_force",
             "fields": [
               {
                 "payloadField": "on",
@@ -3213,7 +3213,7 @@
             ]
           },
           {
-            "command": "work_mode",
+            "command": "set_work_mode",
             "fields": [
               {
                 "payloadField": "workMode",
@@ -3222,7 +3222,7 @@
             ]
           },
           {
-            "command": "solar_sell",
+            "command": "set_solar_sell",
             "fields": [
               {
                 "payloadField": "solarSell",
@@ -3232,7 +3232,7 @@
             ]
           },
           {
-            "command": "grid_charge_toggle",
+            "command": "set_grid_charge_toggle",
             "fields": [
               {
                 "payloadField": "gridChargeEnabled",
@@ -3242,7 +3242,7 @@
             ]
           },
           {
-            "command": "gen_port_mode",
+            "command": "set_gen_port_mode",
             "fields": [
               {
                 "payloadField": "genPortMode",
@@ -3251,7 +3251,7 @@
             ]
           },
           {
-            "command": "sell_power_cap",
+            "command": "set_sell_power_cap",
             "fields": [
               {
                 "payloadField": "sellPowerCapW",
@@ -3264,7 +3264,7 @@
             ]
           },
           {
-            "command": "battery_charge",
+            "command": "set_battery_charge",
             "slot": {
               "indexField": "slotIndex",
               "count": 6,
@@ -3530,7 +3530,7 @@
         ],
         "writes": [
           {
-            "command": "gen_force",
+            "command": "set_gen_force",
             "fields": [
               {
                 "payloadField": "on",
@@ -3540,7 +3540,7 @@
             ]
           },
           {
-            "command": "work_mode",
+            "command": "set_work_mode",
             "fields": [
               {
                 "payloadField": "workMode",
@@ -3549,7 +3549,7 @@
             ]
           },
           {
-            "command": "solar_sell",
+            "command": "set_solar_sell",
             "fields": [
               {
                 "payloadField": "solarSell",
@@ -3559,7 +3559,7 @@
             ]
           },
           {
-            "command": "grid_charge_toggle",
+            "command": "set_grid_charge_toggle",
             "fields": [
               {
                 "payloadField": "gridChargeEnabled",
@@ -3569,7 +3569,7 @@
             ]
           },
           {
-            "command": "gen_port_mode",
+            "command": "set_gen_port_mode",
             "fields": [
               {
                 "payloadField": "genPortMode",
@@ -3578,7 +3578,7 @@
             ]
           },
           {
-            "command": "sell_power_cap",
+            "command": "set_sell_power_cap",
             "fields": [
               {
                 "payloadField": "sellPowerCapW",
@@ -3591,7 +3591,7 @@
             ]
           },
           {
-            "command": "battery_charge",
+            "command": "set_battery_charge",
             "slot": {
               "indexField": "slotIndex",
               "count": 6,
@@ -3857,7 +3857,7 @@
         ],
         "writes": [
           {
-            "command": "gen_force",
+            "command": "set_gen_force",
             "fields": [
               {
                 "payloadField": "on",
@@ -3867,7 +3867,7 @@
             ]
           },
           {
-            "command": "work_mode",
+            "command": "set_work_mode",
             "fields": [
               {
                 "payloadField": "workMode",
@@ -3876,7 +3876,7 @@
             ]
           },
           {
-            "command": "solar_sell",
+            "command": "set_solar_sell",
             "fields": [
               {
                 "payloadField": "solarSell",
@@ -3886,7 +3886,7 @@
             ]
           },
           {
-            "command": "grid_charge_toggle",
+            "command": "set_grid_charge_toggle",
             "fields": [
               {
                 "payloadField": "gridChargeEnabled",
@@ -3896,7 +3896,7 @@
             ]
           },
           {
-            "command": "gen_port_mode",
+            "command": "set_gen_port_mode",
             "fields": [
               {
                 "payloadField": "genPortMode",
@@ -3905,7 +3905,7 @@
             ]
           },
           {
-            "command": "sell_power_cap",
+            "command": "set_sell_power_cap",
             "fields": [
               {
                 "payloadField": "sellPowerCapW",
@@ -3918,7 +3918,7 @@
             ]
           },
           {
-            "command": "battery_charge",
+            "command": "set_battery_charge",
             "slot": {
               "indexField": "slotIndex",
               "count": 6,
@@ -4184,7 +4184,7 @@
         ],
         "writes": [
           {
-            "command": "gen_force",
+            "command": "set_gen_force",
             "fields": [
               {
                 "payloadField": "on",
@@ -4194,7 +4194,7 @@
             ]
           },
           {
-            "command": "work_mode",
+            "command": "set_work_mode",
             "fields": [
               {
                 "payloadField": "workMode",
@@ -4203,7 +4203,7 @@
             ]
           },
           {
-            "command": "solar_sell",
+            "command": "set_solar_sell",
             "fields": [
               {
                 "payloadField": "solarSell",
@@ -4213,7 +4213,7 @@
             ]
           },
           {
-            "command": "grid_charge_toggle",
+            "command": "set_grid_charge_toggle",
             "fields": [
               {
                 "payloadField": "gridChargeEnabled",
@@ -4223,7 +4223,7 @@
             ]
           },
           {
-            "command": "gen_port_mode",
+            "command": "set_gen_port_mode",
             "fields": [
               {
                 "payloadField": "genPortMode",
@@ -4232,7 +4232,7 @@
             ]
           },
           {
-            "command": "sell_power_cap",
+            "command": "set_sell_power_cap",
             "fields": [
               {
                 "payloadField": "sellPowerCapW",
@@ -4245,7 +4245,7 @@
             ]
           },
           {
-            "command": "battery_charge",
+            "command": "set_battery_charge",
             "slot": {
               "indexField": "slotIndex",
               "count": 6,
@@ -4634,7 +4634,7 @@
         ],
         "writes": [
           {
-            "command": "gen_force",
+            "command": "set_gen_force",
             "fields": [
               {
                 "payloadField": "on",
@@ -4645,7 +4645,7 @@
             ]
           },
           {
-            "command": "work_mode",
+            "command": "set_work_mode",
             "fields": [
               {
                 "payloadField": "workMode",
@@ -4654,7 +4654,7 @@
             ]
           },
           {
-            "command": "solar_sell",
+            "command": "set_solar_sell",
             "fields": [
               {
                 "payloadField": "solarSell",
@@ -4664,7 +4664,7 @@
             ]
           },
           {
-            "command": "grid_charge_toggle",
+            "command": "set_grid_charge_toggle",
             "fields": [
               {
                 "payloadField": "gridChargeEnabled",
@@ -4674,7 +4674,7 @@
             ]
           },
           {
-            "command": "gen_port_mode",
+            "command": "set_gen_port_mode",
             "fields": [
               {
                 "payloadField": "genPortMode",
@@ -4683,7 +4683,7 @@
             ]
           },
           {
-            "command": "sell_power_cap",
+            "command": "set_sell_power_cap",
             "fields": [
               {
                 "payloadField": "sellPowerCapW",
@@ -4696,7 +4696,7 @@
             ]
           },
           {
-            "command": "battery_charge",
+            "command": "set_battery_charge",
             "slot": {
               "indexField": "slotIndex",
               "count": 6,
@@ -5108,7 +5108,7 @@
         ],
         "writes": [
           {
-            "command": "gen_force",
+            "command": "set_gen_force",
             "fields": [
               {
                 "payloadField": "on",
@@ -5119,7 +5119,7 @@
             ]
           },
           {
-            "command": "work_mode",
+            "command": "set_work_mode",
             "fields": [
               {
                 "payloadField": "workMode",
@@ -5128,7 +5128,7 @@
             ]
           },
           {
-            "command": "solar_sell",
+            "command": "set_solar_sell",
             "fields": [
               {
                 "payloadField": "solarSell",
@@ -5138,7 +5138,7 @@
             ]
           },
           {
-            "command": "grid_charge_toggle",
+            "command": "set_grid_charge_toggle",
             "fields": [
               {
                 "payloadField": "gridChargeEnabled",
@@ -5148,7 +5148,7 @@
             ]
           },
           {
-            "command": "gen_port_mode",
+            "command": "set_gen_port_mode",
             "fields": [
               {
                 "payloadField": "genPortMode",
@@ -5157,7 +5157,7 @@
             ]
           },
           {
-            "command": "sell_power_cap",
+            "command": "set_sell_power_cap",
             "fields": [
               {
                 "payloadField": "sellPowerCapW",
@@ -5170,7 +5170,7 @@
             ]
           },
           {
-            "command": "battery_charge",
+            "command": "set_battery_charge",
             "slot": {
               "indexField": "slotIndex",
               "count": 6,
@@ -5582,7 +5582,7 @@
         ],
         "writes": [
           {
-            "command": "gen_force",
+            "command": "set_gen_force",
             "fields": [
               {
                 "payloadField": "on",
@@ -5593,7 +5593,7 @@
             ]
           },
           {
-            "command": "work_mode",
+            "command": "set_work_mode",
             "fields": [
               {
                 "payloadField": "workMode",
@@ -5602,7 +5602,7 @@
             ]
           },
           {
-            "command": "solar_sell",
+            "command": "set_solar_sell",
             "fields": [
               {
                 "payloadField": "solarSell",
@@ -5612,7 +5612,7 @@
             ]
           },
           {
-            "command": "grid_charge_toggle",
+            "command": "set_grid_charge_toggle",
             "fields": [
               {
                 "payloadField": "gridChargeEnabled",
@@ -5622,7 +5622,7 @@
             ]
           },
           {
-            "command": "gen_port_mode",
+            "command": "set_gen_port_mode",
             "fields": [
               {
                 "payloadField": "genPortMode",
@@ -5631,7 +5631,7 @@
             ]
           },
           {
-            "command": "sell_power_cap",
+            "command": "set_sell_power_cap",
             "fields": [
               {
                 "payloadField": "sellPowerCapW",
@@ -5644,7 +5644,7 @@
             ]
           },
           {
-            "command": "battery_charge",
+            "command": "set_battery_charge",
             "slot": {
               "indexField": "slotIndex",
               "count": 6,
@@ -6056,7 +6056,7 @@
         ],
         "writes": [
           {
-            "command": "gen_force",
+            "command": "set_gen_force",
             "fields": [
               {
                 "payloadField": "on",
@@ -6067,7 +6067,7 @@
             ]
           },
           {
-            "command": "work_mode",
+            "command": "set_work_mode",
             "fields": [
               {
                 "payloadField": "workMode",
@@ -6076,7 +6076,7 @@
             ]
           },
           {
-            "command": "solar_sell",
+            "command": "set_solar_sell",
             "fields": [
               {
                 "payloadField": "solarSell",
@@ -6086,7 +6086,7 @@
             ]
           },
           {
-            "command": "grid_charge_toggle",
+            "command": "set_grid_charge_toggle",
             "fields": [
               {
                 "payloadField": "gridChargeEnabled",
@@ -6096,7 +6096,7 @@
             ]
           },
           {
-            "command": "gen_port_mode",
+            "command": "set_gen_port_mode",
             "fields": [
               {
                 "payloadField": "genPortMode",
@@ -6105,7 +6105,7 @@
             ]
           },
           {
-            "command": "sell_power_cap",
+            "command": "set_sell_power_cap",
             "fields": [
               {
                 "payloadField": "sellPowerCapW",
@@ -6118,7 +6118,7 @@
             ]
           },
           {
-            "command": "battery_charge",
+            "command": "set_battery_charge",
             "slot": {
               "indexField": "slotIndex",
               "count": 6,
@@ -6570,7 +6570,7 @@
         ],
         "writes": [
           {
-            "command": "gen_force",
+            "command": "set_gen_force",
             "fields": [
               {
                 "payloadField": "on",
@@ -6581,7 +6581,7 @@
             ]
           },
           {
-            "command": "work_mode",
+            "command": "set_work_mode",
             "fields": [
               {
                 "payloadField": "workMode",
@@ -6590,7 +6590,7 @@
             ]
           },
           {
-            "command": "solar_sell",
+            "command": "set_solar_sell",
             "fields": [
               {
                 "payloadField": "solarSell",
@@ -6600,7 +6600,7 @@
             ]
           },
           {
-            "command": "grid_charge_toggle",
+            "command": "set_grid_charge_toggle",
             "fields": [
               {
                 "payloadField": "gridChargeEnabled",
@@ -6610,7 +6610,7 @@
             ]
           },
           {
-            "command": "gen_port_mode",
+            "command": "set_gen_port_mode",
             "fields": [
               {
                 "payloadField": "genPortMode",
@@ -6619,7 +6619,7 @@
             ]
           },
           {
-            "command": "sell_power_cap",
+            "command": "set_sell_power_cap",
             "fields": [
               {
                 "payloadField": "sellPowerCapW",
@@ -6632,7 +6632,7 @@
             ]
           },
           {
-            "command": "battery_charge",
+            "command": "set_battery_charge",
             "slot": {
               "indexField": "slotIndex",
               "count": 6,

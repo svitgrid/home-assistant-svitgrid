@@ -54,6 +54,11 @@ def _collect_prior_addresses(
     if cmd.slot is not None:
         s = cmd.slot
         idx = int(payload[s.index_field])
+        # Range-check the slot index BEFORE deriving an address, mirroring
+        # compute_register_writes — otherwise a bad slotIndex would read a
+        # bogus prior address before the later ValueError fires.
+        if not (0 <= idx < s.count):
+            raise ValueError(f"slot index {idx} out of range 0..{s.count - 1}")
         for f in s.fields:
             if _needs_prior(f):
                 slot_idx = ((idx + 1) % s.count) if f.via_next_slot else idx

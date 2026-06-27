@@ -3,7 +3,7 @@
   "vectors": [
     {
       "modelId": "deye_sg04lp3",
-      "command": "gen_force",
+      "command": "set_gen_force",
       "payload": {
         "on": true
       },
@@ -11,7 +11,7 @@
         "132": 0
       },
       "writeCommand": {
-        "command": "gen_force",
+        "command": "set_gen_force",
         "fields": [
           {
             "payloadField": "on",
@@ -31,7 +31,7 @@
     },
     {
       "modelId": "deye_sg04lp3",
-      "command": "work_mode",
+      "command": "set_work_mode",
       "payload": {
         "workMode": 2
       },
@@ -39,7 +39,7 @@
         "142": 0
       },
       "writeCommand": {
-        "command": "work_mode",
+        "command": "set_work_mode",
         "fields": [
           {
             "payloadField": "workMode",
@@ -57,7 +57,7 @@
     },
     {
       "modelId": "deye_sg04lp3",
-      "command": "solar_sell",
+      "command": "set_solar_sell",
       "payload": {
         "solarSell": 1
       },
@@ -65,7 +65,7 @@
         "145": 254
       },
       "writeCommand": {
-        "command": "solar_sell",
+        "command": "set_solar_sell",
         "fields": [
           {
             "payloadField": "solarSell",
@@ -84,7 +84,7 @@
     },
     {
       "modelId": "deye_sg04lp3",
-      "command": "grid_charge_toggle",
+      "command": "set_grid_charge_toggle",
       "payload": {
         "gridChargeEnabled": true
       },
@@ -92,7 +92,7 @@
         "146": 254
       },
       "writeCommand": {
-        "command": "grid_charge_toggle",
+        "command": "set_grid_charge_toggle",
         "fields": [
           {
             "payloadField": "gridChargeEnabled",
@@ -111,7 +111,7 @@
     },
     {
       "modelId": "deye_sg04lp3",
-      "command": "gen_port_mode",
+      "command": "set_gen_port_mode",
       "payload": {
         "genPortMode": 1
       },
@@ -119,7 +119,7 @@
         "133": 0
       },
       "writeCommand": {
-        "command": "gen_port_mode",
+        "command": "set_gen_port_mode",
         "fields": [
           {
             "payloadField": "genPortMode",
@@ -137,7 +137,7 @@
     },
     {
       "modelId": "deye_sg04lp3",
-      "command": "sell_power_cap",
+      "command": "set_sell_power_cap",
       "payload": {
         "sellPowerCapW": 5000,
         "ratedPowerW": 8000
@@ -146,7 +146,7 @@
         "143": 0
       },
       "writeCommand": {
-        "command": "sell_power_cap",
+        "command": "set_sell_power_cap",
         "fields": [
           {
             "payloadField": "sellPowerCapW",
@@ -168,7 +168,7 @@
     },
     {
       "modelId": "deye_sg04lp3",
-      "command": "battery_charge",
+      "command": "set_battery_charge",
       "payload": {
         "slotIndex": 2,
         "slotStart": 830,
@@ -182,7 +182,7 @@
         "174": 242
       },
       "writeCommand": {
-        "command": "battery_charge",
+        "command": "set_battery_charge",
         "slot": {
           "indexField": "slotIndex",
           "count": 6,
@@ -263,7 +263,7 @@
     },
     {
       "modelId": "deye_sg04lp3",
-      "command": "battery_charge",
+      "command": "set_battery_charge",
       "payload": {
         "slotIndex": 5,
         "slotStart": 2200,
@@ -277,7 +277,7 @@
         "177": 243
       },
       "writeCommand": {
-        "command": "battery_charge",
+        "command": "set_battery_charge",
         "slot": {
           "indexField": "slotIndex",
           "count": 6,
@@ -358,7 +358,7 @@
     },
     {
       "modelId": "deye_sg03lp1",
-      "command": "gen_force",
+      "command": "set_gen_force",
       "payload": {
         "on": true
       },
@@ -366,7 +366,7 @@
         "326": 4351
       },
       "writeCommand": {
-        "command": "gen_force",
+        "command": "set_gen_force",
         "fields": [
           {
             "payloadField": "on",
@@ -385,7 +385,7 @@
     },
     {
       "modelId": "deye_sg03lp1",
-      "command": "work_mode",
+      "command": "set_work_mode",
       "payload": {
         "workMode": 2
       },
@@ -393,7 +393,7 @@
         "244": 0
       },
       "writeCommand": {
-        "command": "work_mode",
+        "command": "set_work_mode",
         "fields": [
           {
             "payloadField": "workMode",
@@ -411,7 +411,7 @@
     },
     {
       "modelId": "deye_sg03lp1",
-      "command": "solar_sell",
+      "command": "set_solar_sell",
       "payload": {
         "solarSell": 1
       },
@@ -419,7 +419,7 @@
         "247": 254
       },
       "writeCommand": {
-        "command": "solar_sell",
+        "command": "set_solar_sell",
         "fields": [
           {
             "payloadField": "solarSell",
@@ -438,7 +438,7 @@
     },
     {
       "modelId": "deye_sg03lp1",
-      "command": "grid_charge_toggle",
+      "command": "set_grid_charge_toggle",
       "payload": {
         "gridChargeEnabled": true
       },
@@ -446,7 +446,7 @@
         "248": 254
       },
       "writeCommand": {
-        "command": "grid_charge_toggle",
+        "command": "set_grid_charge_toggle",
         "fields": [
           {
             "payloadField": "gridChargeEnabled",
@@ -465,7 +465,7 @@
     },
     {
       "modelId": "deye_sg03lp1",
-      "command": "gen_port_mode",
+      "command": "set_gen_port_mode",
       "payload": {
         "genPortMode": 1
       },
@@ -473,7 +473,7 @@
         "235": 0
       },
       "writeCommand": {
-        "command": "gen_port_mode",
+        "command": "set_gen_port_mode",
         "fields": [
           {
             "payloadField": "genPortMode",
@@ -491,7 +491,7 @@
     },
     {
       "modelId": "deye_sg03lp1",
-      "command": "sell_power_cap",
+      "command": "set_sell_power_cap",
       "payload": {
         "sellPowerCapW": 20000
       },
@@ -499,7 +499,7 @@
         "245": 0
       },
       "writeCommand": {
-        "command": "sell_power_cap",
+        "command": "set_sell_power_cap",
         "fields": [
           {
             "payloadField": "sellPowerCapW",
@@ -521,7 +521,7 @@
     },
     {
       "modelId": "deye_sg03lp1",
-      "command": "battery_charge",
+      "command": "set_battery_charge",
       "payload": {
         "slotIndex": 2,
         "slotStart": 830,
@@ -535,7 +535,7 @@
         "276": 242
       },
       "writeCommand": {
-        "command": "battery_charge",
+        "command": "set_battery_charge",
         "slot": {
           "indexField": "slotIndex",
           "count": 6,
@@ -616,7 +616,7 @@
     },
     {
       "modelId": "deye_sg03lp1",
-      "command": "battery_charge",
+      "command": "set_battery_charge",
       "payload": {
         "slotIndex": 5,
         "slotStart": 2200,
@@ -630,7 +630,7 @@
         "279": 243
       },
       "writeCommand": {
-        "command": "battery_charge",
+        "command": "set_battery_charge",
         "slot": {
           "indexField": "slotIndex",
           "count": 6,

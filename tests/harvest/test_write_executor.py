@@ -16,12 +16,14 @@ Coverage:
 """
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from custom_components.svitgrid.harvest.register_spec import RegisterSpec
+from custom_components.svitgrid.harvest.register_spec import RegisterSpec, WriteCommand
 
 # ---------------------------------------------------------------------------
 # Fixtures / Helpers
@@ -60,10 +62,13 @@ def _spec_work_mode() -> RegisterSpec:
 
 
 def _spec_gen_force() -> RegisterSpec:
-    """RegisterSpec with a bit:13 gen_force write command (1-phase RMW)."""
+    """RegisterSpec with a bit:13 gen_force write command (1-phase RMW).
+
+    Uses the production-realistic ``set_``-prefixed cloud command name.
+    """
     return _spec_with_writes([
         {
-            "command": "gen_force",
+            "command": "set_gen_force",
             "fields": [
                 {
                     "payloadField": "genForce",
@@ -189,7 +194,7 @@ async def test_dispatch_bit_field_prior_read_and_rmw():
         patch(f"{MODULE}.read_word", mock_read),
         patch(f"{MODULE}.write_registers", mock_write),
     ):
-        result = await executor.dispatch("gen_force", {"genForce": 1})
+        result = await executor.dispatch("set_gen_force", {"genForce": 1})
 
     assert result == {"written": [[1, 326, 0x2000]], "verified": True}
     mock_write.assert_awaited_once()
@@ -313,7 +318,7 @@ async def test_dispatch_prior_read_fail_raises():
         patch(f"{MODULE}.write_registers", mock_write),
         pytest.raises(RuntimeError, match="prior_read_failed:326"),
     ):
-        await executor.dispatch("gen_force", {"genForce": 1})
+        await executor.dispatch("set_gen_force", {"genForce": 1})
 
 
 # ---------------------------------------------------------------------------
@@ -355,3 +360,110 @@ async def test_dispatch_verify_read_none_raises():
         pytest.raises(RuntimeError, match="verify_read_failed:142"),
     ):
         await executor.dispatch("set_work_mode", {"workMode": 3})
+
+
+# ---------------------------------------------------------------------------
+# 9. REGRESSION (SP-C critical fix): a REAL set_-prefixed cloud command name
+#    resolves against a REAL/vendored spec's writes.
+#
+#    The bug: the cloud dispatches `set_`-prefixed command names
+#    (DISPATCHABLE_COMMANDS in const.py — set_gen_force, set_work_mode, …) but
+#    the authored register-spec `writes[].command` values used to be UNPREFIXED
+#    (gen_force, work_mode, …). dispatch() matches command names by exact string,
+#    so every real write ACKed "unsupported" (NotImplementedError). These tests
+#    load the actual VENDORED write-golden-vectors.json (the same artifact the
+#    add-on ships) and prove a real cloud command name now resolves + writes.
+# ---------------------------------------------------------------------------
+
+_WRITE_VECTORS_PATH = (
+    Path(__file__).resolve().parents[1] / "fixtures" / "write-golden-vectors.json"
+)
+
+
+def _load_write_vectors() -> list[dict]:
+    data = json.loads(_WRITE_VECTORS_PATH.read_text())
+    return data["vectors"] if isinstance(data, dict) else data
+
+
+def _vector_for(command: str) -> dict:
+    """Return the first vendored write vector whose top-level command matches."""
+    for v in _load_write_vectors():
+        if v["command"] == command:
+            return v
+    raise AssertionError(f"no vendored write vector with command {command!r}")
+
+
+def _executor_for_vector(vector: dict):
+    """Build a WriteExecutor whose spec.writes is the REAL vendored WriteCommand.
+
+    Models hardware with an in-memory register file seeded from the vector's
+    priorRegisters; write_registers mutates it and read_word reads it back, so
+    prior-read + verify both behave like a real (working) inverter.
+    Returns (executor, registers, read_word, write_registers).
+    """
+    from custom_components.svitgrid.harvest.write_executor import WriteExecutor
+
+    cmd = WriteCommand.from_dict(vector["writeCommand"])
+    spec = SimpleNamespace(writes=(cmd,), default_slave_id=1)
+    spec_holder = SimpleNamespace(spec=spec)
+    executor = WriteExecutor(object(), spec_holder, _CFG)
+
+    registers: dict[int, int] = {
+        int(k): int(v) for k, v in vector.get("priorRegisters", {}).items()
+    }
+
+    async def fake_read_word(hass, spec_arg, cfg, unit, addr):
+        return registers.get(int(addr), 0)
+
+    async def fake_write_registers(hass, spec_arg, cfg, writes):
+        for _unit, addr, value in writes:
+            registers[int(addr)] = int(value)
+
+    return executor, registers, fake_read_word, fake_write_registers
+
+
+@pytest.mark.asyncio
+async def test_real_set_prefixed_cloud_command_resolves_against_vendored_spec():
+    """A real `set_gen_force` cloud command resolves + writes against the vendored spec.
+
+    This is the exact gap the reviewer flagged: previously this dispatch raised
+    NotImplementedError because the authored command was unprefixed `gen_force`.
+    """
+    vector = _vector_for("set_gen_force")
+    executor, _registers, fake_read, fake_write = _executor_for_vector(vector)
+
+    expected_writes = [
+        [w["unitId"], w["address"], w["value"]]
+        for w in vector["expectedRegisterWrites"]
+    ]
+
+    with (
+        patch(f"{MODULE}.read_word", fake_read),
+        patch(f"{MODULE}.write_registers", fake_write),
+    ):
+        # Must NOT raise NotImplementedError — the real cloud name now resolves.
+        result = await executor.dispatch(vector["command"], vector["payload"])
+
+    assert result["verified"] is True
+    assert result["written"] == expected_writes
+
+
+@pytest.mark.asyncio
+async def test_legacy_set_battery_charge_alias_resolves_against_vendored_spec():
+    """The legacy alias dispatch('set_battery_charge', ...) resolves against the spec."""
+    vector = _vector_for("set_battery_charge")
+    executor, _registers, fake_read, fake_write = _executor_for_vector(vector)
+
+    expected_writes = [
+        [w["unitId"], w["address"], w["value"]]
+        for w in vector["expectedRegisterWrites"]
+    ]
+
+    with (
+        patch(f"{MODULE}.read_word", fake_read),
+        patch(f"{MODULE}.write_registers", fake_write),
+    ):
+        result = await executor.dispatch("set_battery_charge", vector["payload"])
+
+    assert result["verified"] is True
+    assert result["written"] == expected_writes
