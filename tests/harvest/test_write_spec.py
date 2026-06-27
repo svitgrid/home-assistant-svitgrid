@@ -287,3 +287,40 @@ class TestValidateWrites:
         }
         problems = self._spec([bad_slot]).validate()
         assert any("fields" in p for p in problems)
+
+    def test_slot_field_bad_encoding_rejected(self):
+        """Gap being fixed: slot fields with invalid encoding must be caught."""
+        bad_slot = {
+            "command": "set_tou_slot",
+            "fields": [{"payloadField": "startTime", "base": 148}],
+            "slot": {
+                "indexField": "slotIndex",
+                "count": 6,
+                "stride": 2,
+                "endViaNextSlotStart": False,
+                "fields": [
+                    {"payloadField": "socMin", "base": 103, "encoding": "nibble"},
+                ],
+            },
+        }
+        problems = self._spec([bad_slot]).validate()
+        assert any("encoding" in p for p in problems)
+
+    def test_empty_payload_field_rejected(self):
+        """Fields constructed directly with payload_field='' must fail validate()."""
+        fw = FieldWrite(payload_field="", address=10, encoding="full_word")
+        slot_fw = FieldWrite(payload_field="", base=103, encoding="full_word")
+        slot = SlotSpec(
+            index_field="slotIndex",
+            count=1,
+            stride=2,
+            end_via_next_slot=False,
+            fields=(slot_fw,),
+        )
+        wc = WriteCommand(command="do_thing", fields=(fw,), slot=slot)
+        # Call the helper directly — from_dict enforces non-empty payloadField via KeyError
+        problems: list[str] = []
+        from custom_components.svitgrid.harvest.register_spec import _validate_field_write
+        problems.extend(_validate_field_write(wc.command, fw, "top-level"))
+        problems.extend(_validate_field_write(wc.command, slot_fw, "slot"))
+        assert any("payload_field" in p for p in problems)

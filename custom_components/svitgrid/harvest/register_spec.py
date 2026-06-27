@@ -85,6 +85,21 @@ class SpecFlags:
 _ENCODING_RE = re.compile(r"^bit:\d+$")
 
 
+def _validate_field_write(command: str, fw: FieldWrite, context: str) -> list[str]:
+    """Return a (possibly empty) list of problems for one FieldWrite."""
+    problems: list[str] = []
+    if fw.encoding != "full_word" and not _ENCODING_RE.match(fw.encoding):
+        problems.append(
+            f"write command {command!r} {context} field {fw.payload_field!r}: "
+            f"invalid encoding {fw.encoding!r}"
+        )
+    if not fw.payload_field:
+        problems.append(
+            f"write command {command!r} {context} field: payload_field must be non-empty"
+        )
+    return problems
+
+
 @dataclass(frozen=True)
 class FieldWrite:
     payload_field: str
@@ -187,11 +202,7 @@ class RegisterSpec:
                     problems.append(f"derivation {x.field} references missing field: {inp}")
         for wc in self.writes:
             for fw in wc.fields:
-                if fw.encoding != "full_word" and not _ENCODING_RE.match(fw.encoding):
-                    problems.append(
-                        f"write command {wc.command!r} field {fw.payload_field!r}: "
-                        f"invalid encoding {fw.encoding!r}"
-                    )
+                problems.extend(_validate_field_write(wc.command, fw, "top-level"))
             if wc.slot is not None:
                 if not wc.slot.index_field:
                     problems.append(
@@ -205,4 +216,6 @@ class RegisterSpec:
                     problems.append(
                         f"write command {wc.command!r} slot: fields must be non-empty"
                     )
+                for fw in wc.slot.fields:
+                    problems.extend(_validate_field_write(wc.command, fw, "slot"))
         return problems
