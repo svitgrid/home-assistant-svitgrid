@@ -290,6 +290,43 @@ class SvitgridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if self._final_payload is None:
             return self.async_abort(reason="pairing_failed")
 
+        # SP-D: the cloud /finalize response may carry a direct-Modbus
+        # `harvestConfig` (camelCase) when the mobile app handed off a
+        # direct-harvest inverter. Snake-case it onto self._harvest_config and
+        # run a BLOCKING reachability check before creating the entry — a
+        # failed probe re-shows this step's form with `cannot_reach_inverter`
+        # and creates NO entry, so the dormant SP-B reads / SP-C writes only
+        # activate once we can actually reach the inverter. Relay pairings
+        # (no harvestConfig) skip the check entirely.
+        hc = self._final_payload.get("harvestConfig")
+        if hc is not None:
+            self._harvest_config = {
+                "protocol": hc.get("protocol"),
+                "ip": hc.get("ip"),
+                "port": int(hc.get("port")),
+                "slave_id": int(hc.get("slaveId", 1)),
+                "model_id": hc.get("modelId"),
+                "logger_serial": hc.get("loggerSerial"),
+            }
+            # No spec is loaded here (loading one needs an authenticated
+            # GET /register-specs round-trip we don't have at flow time), so
+            # the checker falls back to its default probe address. Good enough
+            # to prove the inverter answers on ip:port.
+            from .harvest.reachability import check_inverter_reachable
+
+            reachable = await check_inverter_reachable(
+                self.hass, self._harvest_config
+            )
+            if not reachable:
+                return self.async_show_form(
+                    step_id="pair_finalize",
+                    errors={"base": "cannot_reach_inverter"},
+                    description_placeholders={
+                        "ip": f"{self._harvest_config['ip']}:"
+                        f"{self._harvest_config['port']}"
+                    },
+                )
+
         # Phase 2: persist preset metadata returned by /finalize so
         # async_setup_entry can boot the readings publisher with a working
         # entityMap without any extra round-trip. Translate the API's

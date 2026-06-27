@@ -61,7 +61,8 @@
     },
     "error": {
       "cannot_connect": "Cannot reach the Svitgrid cloud. Check your internet.",
-      "no_entities_selected": "Pick at least one sensor — otherwise the dashboard has nothing to show."
+      "no_entities_selected": "Pick at least one sensor — otherwise the dashboard has nothing to show.",
+      "cannot_reach_inverter": "Couldn't reach the inverter at {ip}. Check the address and make sure Home Assistant is on the same network as the inverter, then try again."
     }
   },
   "entity": {
