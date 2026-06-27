@@ -232,6 +232,18 @@ class SvitgridApiClient:
             _LOGGER.debug("get_preset(%s) returned status=%s", preset_id, resp.status)
             return None
 
+    async def get_register_spec(self, model_id: str) -> dict | None:
+        """GET a register spec (registers + version) from the public register-specs endpoint.
+
+        Returns the parsed JSON dict on 200, or None on any non-200 status.
+        The endpoint is public — no api-key header is required."""
+        url = f"{self._base}/api/v1/register-specs/{model_id}"
+        async with self._session.get(url) as resp:
+            if resp.status == 200:
+                return await resp.json()
+            _LOGGER.debug("get_register_spec(%s) returned status=%s", model_id, resp.status)
+            return None
+
     async def add_inverter(
         self,
         *,
