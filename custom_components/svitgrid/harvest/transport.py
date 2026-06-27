@@ -58,6 +58,7 @@ async def read_raw(hass, spec: RegisterSpec, cfg: dict) -> RawRegisters:
         return await hass.async_add_executor_job(_read_solarman, cfg, ranges)
     if spec.protocol == "modbus_tcp":
         return await hass.async_add_executor_job(_read_modbus, cfg, ranges)
+    _LOGGER.error("unsupported harvest protocol: %s", spec.protocol)
     raise ValueError(f"unsupported protocol: {spec.protocol}")
 
 
@@ -82,7 +83,13 @@ def _read_solarman(cfg: dict, ranges: list[tuple[int, int, int, str]]) -> RawReg
         auto_reconnect=False,
     )
     try:
-        for unit_id, start, count, _fc in ranges:
+        for unit_id, start, count, fc in ranges:
+            if fc != "FC03":
+                _LOGGER.debug(
+                    "solarman: ignoring %s range at addr=%s (Solarman V5 reads holding registers only)",
+                    fc,
+                    start,
+                )
             words = sm.read_holding_registers(register_addr=start, quantity=count)
             slot = out.setdefault(unit_id, {})
             for i, w in enumerate(words):

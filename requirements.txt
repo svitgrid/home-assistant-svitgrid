@@ -1,4 +1,4 @@
 aiohttp>=3.9
 cryptography>=42.0
 pysolarmanv5>=3.0
-pymodbus>=3.5
+pymodbus>=3.7  # device_id= kwarg requires >=3.7 (3.5/3.6 used slave=)
