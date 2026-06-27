@@ -134,3 +134,99 @@ def _read_modbus(cfg: dict, ranges: list[tuple[int, int, int, str]]) -> RawRegis
         with contextlib.suppress(Exception):
             client.close()
     return out
+
+
+# ---------------------------------------------------------------------------
+# Write path
+# ---------------------------------------------------------------------------
+
+async def read_word(hass, spec: RegisterSpec, cfg: dict, unit_id: int, address: int) -> int | None:
+    """Read a single register and return its value, or ``None`` on any error.
+
+    Reuses the protocol-level read helpers so callers can use it for
+    pre-write verify reads and bit-RMW prior-value reads.
+    """
+    try:
+        if spec.protocol == "solarman_v5":
+            raw = await hass.async_add_executor_job(
+                _read_solarman, cfg, [(unit_id, address, 1, "FC03")]
+            )
+        elif spec.protocol == "modbus_tcp":
+            raw = await hass.async_add_executor_job(
+                _read_modbus, cfg, [(unit_id, address, 1, "FC03")]
+            )
+        else:
+            return None
+        return raw.get(unit_id, {}).get(address)
+    except Exception:
+        _LOGGER.debug("read_word error unit=%s addr=%s", unit_id, address)
+        return None
+
+
+async def write_registers(
+    hass,
+    spec: RegisterSpec,
+    cfg: dict,
+    writes: list[tuple[int, int, int]],
+) -> None:
+    """Write one or more holding registers.
+
+    *writes* is a list of ``(unit_id, address, value)`` tuples.  All writes
+    are dispatched in a single blocking call via
+    ``hass.async_add_executor_job``.
+    """
+    if spec.protocol == "solarman_v5":
+        await hass.async_add_executor_job(_write_solarman, cfg, writes)
+    elif spec.protocol == "modbus_tcp":
+        await hass.async_add_executor_job(_write_modbus, cfg, writes)
+    else:
+        raise ValueError(f"unsupported protocol: {spec.protocol}")
+
+
+def _write_solarman(cfg: dict, writes: list[tuple[int, int, int]]) -> None:
+    """Open one Solarman V5 connection and write all *(unit_id, address, value)* tuples.
+
+    pysolarmanv5 write method:
+      write_holding_registers(register_addr, values) → None
+    (``mb_slave_id`` is fixed at connection time; unit_id is ignored here
+    because Solarman V5 encodes the slave in the protocol header.)
+    """
+    from pysolarmanv5 import PySolarmanV5  # lazy import
+
+    sm = PySolarmanV5(
+        cfg["ip"],
+        int(cfg["logger_serial"]),
+        port=int(cfg.get("port", 8899)),
+        mb_slave_id=int(cfg.get("slave_id", 1)),
+        socket_timeout=8,
+        auto_reconnect=False,
+    )
+    try:
+        for _unit_id, address, value in writes:
+            sm.write_holding_registers(register_addr=address, values=[value])
+    finally:
+        with contextlib.suppress(Exception):
+            sm.disconnect()
+
+
+def _write_modbus(cfg: dict, writes: list[tuple[int, int, int]]) -> None:
+    """Open one Modbus TCP connection and write all *(unit_id, address, value)* tuples.
+
+    pymodbus 3.x write method:
+      write_registers(address, values, *, device_id) → result
+    result.isError() → bool
+    """
+    from pymodbus.client import ModbusTcpClient  # lazy import
+
+    client = ModbusTcpClient(cfg["ip"], port=int(cfg.get("port", 502)), timeout=8)
+    try:
+        client.connect()
+        for unit_id, address, value in writes:
+            result = client.write_registers(address, [value], device_id=unit_id)
+            if result.isError():
+                raise RuntimeError(
+                    f"modbus write error unit={unit_id} addr={address}: {result}"
+                )
+    finally:
+        with contextlib.suppress(Exception):
+            client.close()
