@@ -281,7 +281,117 @@
             ]
           }
         ],
-        "writes": []
+        "writes": [
+          {
+            "command": "gen_force",
+            "fields": [
+              {
+                "payloadField": "on",
+                "address": 132,
+                "onValue": 1,
+                "offValue": 0
+              }
+            ]
+          },
+          {
+            "command": "work_mode",
+            "fields": [
+              {
+                "payloadField": "workMode",
+                "address": 142
+              }
+            ]
+          },
+          {
+            "command": "solar_sell",
+            "fields": [
+              {
+                "payloadField": "solarSell",
+                "address": 145,
+                "encoding": "bit:0"
+              }
+            ]
+          },
+          {
+            "command": "grid_charge_toggle",
+            "fields": [
+              {
+                "payloadField": "gridChargeEnabled",
+                "address": 146,
+                "encoding": "bit:0"
+              }
+            ]
+          },
+          {
+            "command": "gen_port_mode",
+            "fields": [
+              {
+                "payloadField": "genPortMode",
+                "address": 133
+              }
+            ]
+          },
+          {
+            "command": "sell_power_cap",
+            "fields": [
+              {
+                "payloadField": "sellPowerCapW",
+                "address": 143,
+                "limits": {
+                  "min": 0,
+                  "max": 15000
+                }
+              }
+            ]
+          },
+          {
+            "command": "battery_charge",
+            "slot": {
+              "indexField": "slotIndex",
+              "count": 6,
+              "stride": 1,
+              "endViaNextSlotStart": true,
+              "fields": [
+                {
+                  "payloadField": "slotStart",
+                  "base": 148
+                },
+                {
+                  "payloadField": "slotEnd",
+                  "base": 148,
+                  "viaNextSlot": true
+                },
+                {
+                  "payloadField": "powerLimit",
+                  "base": 154
+                },
+                {
+                  "payloadField": "chargeVoltage",
+                  "base": 160,
+                  "limits": {
+                    "min": 0,
+                    "max": 6500
+                  }
+                },
+                {
+                  "payloadField": "gridChargeSoc",
+                  "base": 166,
+                  "limits": {
+                    "min": 0,
+                    "max": 100
+                  }
+                },
+                {
+                  "payloadField": "gridChargeEnabled",
+                  "base": 172,
+                  "onValue": 1,
+                  "offValue": 0,
+                  "clearMask": 3
+                }
+              ]
+            }
+          }
+        ]
       },
       "rawRegisters": {
         "1": {
@@ -628,7 +738,117 @@
             ]
           }
         ],
-        "writes": []
+        "writes": [
+          {
+            "command": "gen_force",
+            "fields": [
+              {
+                "payloadField": "on",
+                "address": 132,
+                "onValue": 1,
+                "offValue": 0
+              }
+            ]
+          },
+          {
+            "command": "work_mode",
+            "fields": [
+              {
+                "payloadField": "workMode",
+                "address": 142
+              }
+            ]
+          },
+          {
+            "command": "solar_sell",
+            "fields": [
+              {
+                "payloadField": "solarSell",
+                "address": 145,
+                "encoding": "bit:0"
+              }
+            ]
+          },
+          {
+            "command": "grid_charge_toggle",
+            "fields": [
+              {
+                "payloadField": "gridChargeEnabled",
+                "address": 146,
+                "encoding": "bit:0"
+              }
+            ]
+          },
+          {
+            "command": "gen_port_mode",
+            "fields": [
+              {
+                "payloadField": "genPortMode",
+                "address": 133
+              }
+            ]
+          },
+          {
+            "command": "sell_power_cap",
+            "fields": [
+              {
+                "payloadField": "sellPowerCapW",
+                "address": 143,
+                "limits": {
+                  "min": 0,
+                  "max": 15000
+                }
+              }
+            ]
+          },
+          {
+            "command": "battery_charge",
+            "slot": {
+              "indexField": "slotIndex",
+              "count": 6,
+              "stride": 1,
+              "endViaNextSlotStart": true,
+              "fields": [
+                {
+                  "payloadField": "slotStart",
+                  "base": 148
+                },
+                {
+                  "payloadField": "slotEnd",
+                  "base": 148,
+                  "viaNextSlot": true
+                },
+                {
+                  "payloadField": "powerLimit",
+                  "base": 154
+                },
+                {
+                  "payloadField": "chargeVoltage",
+                  "base": 160,
+                  "limits": {
+                    "min": 0,
+                    "max": 6500
+                  }
+                },
+                {
+                  "payloadField": "gridChargeSoc",
+                  "base": 166,
+                  "limits": {
+                    "min": 0,
+                    "max": 100
+                  }
+                },
+                {
+                  "payloadField": "gridChargeEnabled",
+                  "base": 172,
+                  "onValue": 1,
+                  "offValue": 0,
+                  "clearMask": 3
+                }
+              ]
+            }
+          }
+        ]
       },
       "rawRegisters": {
         "1": {
@@ -975,7 +1195,117 @@
             ]
           }
         ],
-        "writes": []
+        "writes": [
+          {
+            "command": "gen_force",
+            "fields": [
+              {
+                "payloadField": "on",
+                "address": 132,
+                "onValue": 1,
+                "offValue": 0
+              }
+            ]
+          },
+          {
+            "command": "work_mode",
+            "fields": [
+              {
+                "payloadField": "workMode",
+                "address": 142
+              }
+            ]
+          },
+          {
+            "command": "solar_sell",
+            "fields": [
+              {
+                "payloadField": "solarSell",
+                "address": 145,
+                "encoding": "bit:0"
+              }
+            ]
+          },
+          {
+            "command": "grid_charge_toggle",
+            "fields": [
+              {
+                "payloadField": "gridChargeEnabled",
+                "address": 146,
+                "encoding": "bit:0"
+              }
+            ]
+          },
+          {
+            "command": "gen_port_mode",
+            "fields": [
+              {
+                "payloadField": "genPortMode",
+                "address": 133
+              }
+            ]
+          },
+          {
+            "command": "sell_power_cap",
+            "fields": [
+              {
+                "payloadField": "sellPowerCapW",
+                "address": 143,
+                "limits": {
+                  "min": 0,
+                  "max": 15000
+                }
+              }
+            ]
+          },
+          {
+            "command": "battery_charge",
+            "slot": {
+              "indexField": "slotIndex",
+              "count": 6,
+              "stride": 1,
+              "endViaNextSlotStart": true,
+              "fields": [
+                {
+                  "payloadField": "slotStart",
+                  "base": 148
+                },
+                {
+                  "payloadField": "slotEnd",
+                  "base": 148,
+                  "viaNextSlot": true
+                },
+                {
+                  "payloadField": "powerLimit",
+                  "base": 154
+                },
+                {
+                  "payloadField": "chargeVoltage",
+                  "base": 160,
+                  "limits": {
+                    "min": 0,
+                    "max": 6500
+                  }
+                },
+                {
+                  "payloadField": "gridChargeSoc",
+                  "base": 166,
+                  "limits": {
+                    "min": 0,
+                    "max": 100
+                  }
+                },
+                {
+                  "payloadField": "gridChargeEnabled",
+                  "base": 172,
+                  "onValue": 1,
+                  "offValue": 0,
+                  "clearMask": 3
+                }
+              ]
+            }
+          }
+        ]
       },
       "rawRegisters": {
         "1": {
@@ -1220,7 +1550,116 @@
             ]
           }
         ],
-        "writes": []
+        "writes": [
+          {
+            "command": "gen_force",
+            "fields": [
+              {
+                "payloadField": "on",
+                "address": 326,
+                "encoding": "bit:13"
+              }
+            ]
+          },
+          {
+            "command": "work_mode",
+            "fields": [
+              {
+                "payloadField": "workMode",
+                "address": 244
+              }
+            ]
+          },
+          {
+            "command": "solar_sell",
+            "fields": [
+              {
+                "payloadField": "solarSell",
+                "address": 247,
+                "encoding": "bit:0"
+              }
+            ]
+          },
+          {
+            "command": "grid_charge_toggle",
+            "fields": [
+              {
+                "payloadField": "gridChargeEnabled",
+                "address": 248,
+                "encoding": "bit:0"
+              }
+            ]
+          },
+          {
+            "command": "gen_port_mode",
+            "fields": [
+              {
+                "payloadField": "genPortMode",
+                "address": 235
+              }
+            ]
+          },
+          {
+            "command": "sell_power_cap",
+            "fields": [
+              {
+                "payloadField": "sellPowerCapW",
+                "address": 245,
+                "limits": {
+                  "min": 0,
+                  "max": 15000
+                }
+              }
+            ]
+          },
+          {
+            "command": "battery_charge",
+            "slot": {
+              "indexField": "slotIndex",
+              "count": 6,
+              "stride": 1,
+              "endViaNextSlotStart": true,
+              "fields": [
+                {
+                  "payloadField": "slotStart",
+                  "base": 250
+                },
+                {
+                  "payloadField": "slotEnd",
+                  "base": 250,
+                  "viaNextSlot": true
+                },
+                {
+                  "payloadField": "powerLimit",
+                  "base": 256
+                },
+                {
+                  "payloadField": "chargeVoltage",
+                  "base": 262,
+                  "limits": {
+                    "min": 0,
+                    "max": 6500
+                  }
+                },
+                {
+                  "payloadField": "gridChargeSoc",
+                  "base": 268,
+                  "limits": {
+                    "min": 0,
+                    "max": 100
+                  }
+                },
+                {
+                  "payloadField": "gridChargeEnabled",
+                  "base": 274,
+                  "onValue": 1,
+                  "offValue": 0,
+                  "clearMask": 3
+                }
+              ]
+            }
+          }
+        ]
       },
       "rawRegisters": {
         "1": {
@@ -1438,7 +1877,116 @@
             ]
           }
         ],
-        "writes": []
+        "writes": [
+          {
+            "command": "gen_force",
+            "fields": [
+              {
+                "payloadField": "on",
+                "address": 326,
+                "encoding": "bit:13"
+              }
+            ]
+          },
+          {
+            "command": "work_mode",
+            "fields": [
+              {
+                "payloadField": "workMode",
+                "address": 244
+              }
+            ]
+          },
+          {
+            "command": "solar_sell",
+            "fields": [
+              {
+                "payloadField": "solarSell",
+                "address": 247,
+                "encoding": "bit:0"
+              }
+            ]
+          },
+          {
+            "command": "grid_charge_toggle",
+            "fields": [
+              {
+                "payloadField": "gridChargeEnabled",
+                "address": 248,
+                "encoding": "bit:0"
+              }
+            ]
+          },
+          {
+            "command": "gen_port_mode",
+            "fields": [
+              {
+                "payloadField": "genPortMode",
+                "address": 235
+              }
+            ]
+          },
+          {
+            "command": "sell_power_cap",
+            "fields": [
+              {
+                "payloadField": "sellPowerCapW",
+                "address": 245,
+                "limits": {
+                  "min": 0,
+                  "max": 15000
+                }
+              }
+            ]
+          },
+          {
+            "command": "battery_charge",
+            "slot": {
+              "indexField": "slotIndex",
+              "count": 6,
+              "stride": 1,
+              "endViaNextSlotStart": true,
+              "fields": [
+                {
+                  "payloadField": "slotStart",
+                  "base": 250
+                },
+                {
+                  "payloadField": "slotEnd",
+                  "base": 250,
+                  "viaNextSlot": true
+                },
+                {
+                  "payloadField": "powerLimit",
+                  "base": 256
+                },
+                {
+                  "payloadField": "chargeVoltage",
+                  "base": 262,
+                  "limits": {
+                    "min": 0,
+                    "max": 6500
+                  }
+                },
+                {
+                  "payloadField": "gridChargeSoc",
+                  "base": 268,
+                  "limits": {
+                    "min": 0,
+                    "max": 100
+                  }
+                },
+                {
+                  "payloadField": "gridChargeEnabled",
+                  "base": 274,
+                  "onValue": 1,
+                  "offValue": 0,
+                  "clearMask": 3
+                }
+              ]
+            }
+          }
+        ]
       },
       "rawRegisters": {
         "1": {
@@ -1672,7 +2220,116 @@
             ]
           }
         ],
-        "writes": []
+        "writes": [
+          {
+            "command": "gen_force",
+            "fields": [
+              {
+                "payloadField": "on",
+                "address": 326,
+                "encoding": "bit:13"
+              }
+            ]
+          },
+          {
+            "command": "work_mode",
+            "fields": [
+              {
+                "payloadField": "workMode",
+                "address": 244
+              }
+            ]
+          },
+          {
+            "command": "solar_sell",
+            "fields": [
+              {
+                "payloadField": "solarSell",
+                "address": 247,
+                "encoding": "bit:0"
+              }
+            ]
+          },
+          {
+            "command": "grid_charge_toggle",
+            "fields": [
+              {
+                "payloadField": "gridChargeEnabled",
+                "address": 248,
+                "encoding": "bit:0"
+              }
+            ]
+          },
+          {
+            "command": "gen_port_mode",
+            "fields": [
+              {
+                "payloadField": "genPortMode",
+                "address": 235
+              }
+            ]
+          },
+          {
+            "command": "sell_power_cap",
+            "fields": [
+              {
+                "payloadField": "sellPowerCapW",
+                "address": 245,
+                "limits": {
+                  "min": 0,
+                  "max": 15000
+                }
+              }
+            ]
+          },
+          {
+            "command": "battery_charge",
+            "slot": {
+              "indexField": "slotIndex",
+              "count": 6,
+              "stride": 1,
+              "endViaNextSlotStart": true,
+              "fields": [
+                {
+                  "payloadField": "slotStart",
+                  "base": 250
+                },
+                {
+                  "payloadField": "slotEnd",
+                  "base": 250,
+                  "viaNextSlot": true
+                },
+                {
+                  "payloadField": "powerLimit",
+                  "base": 256
+                },
+                {
+                  "payloadField": "chargeVoltage",
+                  "base": 262,
+                  "limits": {
+                    "min": 0,
+                    "max": 6500
+                  }
+                },
+                {
+                  "payloadField": "gridChargeSoc",
+                  "base": 268,
+                  "limits": {
+                    "min": 0,
+                    "max": 100
+                  }
+                },
+                {
+                  "payloadField": "gridChargeEnabled",
+                  "base": 274,
+                  "onValue": 1,
+                  "offValue": 0,
+                  "clearMask": 3
+                }
+              ]
+            }
+          }
+        ]
       },
       "rawRegisters": {
         "1": {
@@ -1890,7 +2547,116 @@
             ]
           }
         ],
-        "writes": []
+        "writes": [
+          {
+            "command": "gen_force",
+            "fields": [
+              {
+                "payloadField": "on",
+                "address": 326,
+                "encoding": "bit:13"
+              }
+            ]
+          },
+          {
+            "command": "work_mode",
+            "fields": [
+              {
+                "payloadField": "workMode",
+                "address": 244
+              }
+            ]
+          },
+          {
+            "command": "solar_sell",
+            "fields": [
+              {
+                "payloadField": "solarSell",
+                "address": 247,
+                "encoding": "bit:0"
+              }
+            ]
+          },
+          {
+            "command": "grid_charge_toggle",
+            "fields": [
+              {
+                "payloadField": "gridChargeEnabled",
+                "address": 248,
+                "encoding": "bit:0"
+              }
+            ]
+          },
+          {
+            "command": "gen_port_mode",
+            "fields": [
+              {
+                "payloadField": "genPortMode",
+                "address": 235
+              }
+            ]
+          },
+          {
+            "command": "sell_power_cap",
+            "fields": [
+              {
+                "payloadField": "sellPowerCapW",
+                "address": 245,
+                "limits": {
+                  "min": 0,
+                  "max": 15000
+                }
+              }
+            ]
+          },
+          {
+            "command": "battery_charge",
+            "slot": {
+              "indexField": "slotIndex",
+              "count": 6,
+              "stride": 1,
+              "endViaNextSlotStart": true,
+              "fields": [
+                {
+                  "payloadField": "slotStart",
+                  "base": 250
+                },
+                {
+                  "payloadField": "slotEnd",
+                  "base": 250,
+                  "viaNextSlot": true
+                },
+                {
+                  "payloadField": "powerLimit",
+                  "base": 256
+                },
+                {
+                  "payloadField": "chargeVoltage",
+                  "base": 262,
+                  "limits": {
+                    "min": 0,
+                    "max": 6500
+                  }
+                },
+                {
+                  "payloadField": "gridChargeSoc",
+                  "base": 268,
+                  "limits": {
+                    "min": 0,
+                    "max": 100
+                  }
+                },
+                {
+                  "payloadField": "gridChargeEnabled",
+                  "base": 274,
+                  "onValue": 1,
+                  "offValue": 0,
+                  "clearMask": 3
+                }
+              ]
+            }
+          }
+        ]
       },
       "rawRegisters": {
         "1": {
@@ -2108,7 +2874,116 @@
             ]
           }
         ],
-        "writes": []
+        "writes": [
+          {
+            "command": "gen_force",
+            "fields": [
+              {
+                "payloadField": "on",
+                "address": 326,
+                "encoding": "bit:13"
+              }
+            ]
+          },
+          {
+            "command": "work_mode",
+            "fields": [
+              {
+                "payloadField": "workMode",
+                "address": 244
+              }
+            ]
+          },
+          {
+            "command": "solar_sell",
+            "fields": [
+              {
+                "payloadField": "solarSell",
+                "address": 247,
+                "encoding": "bit:0"
+              }
+            ]
+          },
+          {
+            "command": "grid_charge_toggle",
+            "fields": [
+              {
+                "payloadField": "gridChargeEnabled",
+                "address": 248,
+                "encoding": "bit:0"
+              }
+            ]
+          },
+          {
+            "command": "gen_port_mode",
+            "fields": [
+              {
+                "payloadField": "genPortMode",
+                "address": 235
+              }
+            ]
+          },
+          {
+            "command": "sell_power_cap",
+            "fields": [
+              {
+                "payloadField": "sellPowerCapW",
+                "address": 245,
+                "limits": {
+                  "min": 0,
+                  "max": 15000
+                }
+              }
+            ]
+          },
+          {
+            "command": "battery_charge",
+            "slot": {
+              "indexField": "slotIndex",
+              "count": 6,
+              "stride": 1,
+              "endViaNextSlotStart": true,
+              "fields": [
+                {
+                  "payloadField": "slotStart",
+                  "base": 250
+                },
+                {
+                  "payloadField": "slotEnd",
+                  "base": 250,
+                  "viaNextSlot": true
+                },
+                {
+                  "payloadField": "powerLimit",
+                  "base": 256
+                },
+                {
+                  "payloadField": "chargeVoltage",
+                  "base": 262,
+                  "limits": {
+                    "min": 0,
+                    "max": 6500
+                  }
+                },
+                {
+                  "payloadField": "gridChargeSoc",
+                  "base": 268,
+                  "limits": {
+                    "min": 0,
+                    "max": 100
+                  }
+                },
+                {
+                  "payloadField": "gridChargeEnabled",
+                  "base": 274,
+                  "onValue": 1,
+                  "offValue": 0,
+                  "clearMask": 3
+                }
+              ]
+            }
+          }
+        ]
       },
       "rawRegisters": {
         "1": {
@@ -2326,7 +3201,116 @@
             ]
           }
         ],
-        "writes": []
+        "writes": [
+          {
+            "command": "gen_force",
+            "fields": [
+              {
+                "payloadField": "on",
+                "address": 326,
+                "encoding": "bit:13"
+              }
+            ]
+          },
+          {
+            "command": "work_mode",
+            "fields": [
+              {
+                "payloadField": "workMode",
+                "address": 244
+              }
+            ]
+          },
+          {
+            "command": "solar_sell",
+            "fields": [
+              {
+                "payloadField": "solarSell",
+                "address": 247,
+                "encoding": "bit:0"
+              }
+            ]
+          },
+          {
+            "command": "grid_charge_toggle",
+            "fields": [
+              {
+                "payloadField": "gridChargeEnabled",
+                "address": 248,
+                "encoding": "bit:0"
+              }
+            ]
+          },
+          {
+            "command": "gen_port_mode",
+            "fields": [
+              {
+                "payloadField": "genPortMode",
+                "address": 235
+              }
+            ]
+          },
+          {
+            "command": "sell_power_cap",
+            "fields": [
+              {
+                "payloadField": "sellPowerCapW",
+                "address": 245,
+                "limits": {
+                  "min": 0,
+                  "max": 15000
+                }
+              }
+            ]
+          },
+          {
+            "command": "battery_charge",
+            "slot": {
+              "indexField": "slotIndex",
+              "count": 6,
+              "stride": 1,
+              "endViaNextSlotStart": true,
+              "fields": [
+                {
+                  "payloadField": "slotStart",
+                  "base": 250
+                },
+                {
+                  "payloadField": "slotEnd",
+                  "base": 250,
+                  "viaNextSlot": true
+                },
+                {
+                  "payloadField": "powerLimit",
+                  "base": 256
+                },
+                {
+                  "payloadField": "chargeVoltage",
+                  "base": 262,
+                  "limits": {
+                    "min": 0,
+                    "max": 6500
+                  }
+                },
+                {
+                  "payloadField": "gridChargeSoc",
+                  "base": 268,
+                  "limits": {
+                    "min": 0,
+                    "max": 100
+                  }
+                },
+                {
+                  "payloadField": "gridChargeEnabled",
+                  "base": 274,
+                  "onValue": 1,
+                  "offValue": 0,
+                  "clearMask": 3
+                }
+              ]
+            }
+          }
+        ]
       },
       "rawRegisters": {
         "1": {
@@ -2544,7 +3528,116 @@
             ]
           }
         ],
-        "writes": []
+        "writes": [
+          {
+            "command": "gen_force",
+            "fields": [
+              {
+                "payloadField": "on",
+                "address": 326,
+                "encoding": "bit:13"
+              }
+            ]
+          },
+          {
+            "command": "work_mode",
+            "fields": [
+              {
+                "payloadField": "workMode",
+                "address": 244
+              }
+            ]
+          },
+          {
+            "command": "solar_sell",
+            "fields": [
+              {
+                "payloadField": "solarSell",
+                "address": 247,
+                "encoding": "bit:0"
+              }
+            ]
+          },
+          {
+            "command": "grid_charge_toggle",
+            "fields": [
+              {
+                "payloadField": "gridChargeEnabled",
+                "address": 248,
+                "encoding": "bit:0"
+              }
+            ]
+          },
+          {
+            "command": "gen_port_mode",
+            "fields": [
+              {
+                "payloadField": "genPortMode",
+                "address": 235
+              }
+            ]
+          },
+          {
+            "command": "sell_power_cap",
+            "fields": [
+              {
+                "payloadField": "sellPowerCapW",
+                "address": 245,
+                "limits": {
+                  "min": 0,
+                  "max": 15000
+                }
+              }
+            ]
+          },
+          {
+            "command": "battery_charge",
+            "slot": {
+              "indexField": "slotIndex",
+              "count": 6,
+              "stride": 1,
+              "endViaNextSlotStart": true,
+              "fields": [
+                {
+                  "payloadField": "slotStart",
+                  "base": 250
+                },
+                {
+                  "payloadField": "slotEnd",
+                  "base": 250,
+                  "viaNextSlot": true
+                },
+                {
+                  "payloadField": "powerLimit",
+                  "base": 256
+                },
+                {
+                  "payloadField": "chargeVoltage",
+                  "base": 262,
+                  "limits": {
+                    "min": 0,
+                    "max": 6500
+                  }
+                },
+                {
+                  "payloadField": "gridChargeSoc",
+                  "base": 268,
+                  "limits": {
+                    "min": 0,
+                    "max": 100
+                  }
+                },
+                {
+                  "payloadField": "gridChargeEnabled",
+                  "base": 274,
+                  "onValue": 1,
+                  "offValue": 0,
+                  "clearMask": 3
+                }
+              ]
+            }
+          }
+        ]
       },
       "rawRegisters": {
         "1": {
@@ -2762,7 +3855,116 @@
             ]
           }
         ],
-        "writes": []
+        "writes": [
+          {
+            "command": "gen_force",
+            "fields": [
+              {
+                "payloadField": "on",
+                "address": 326,
+                "encoding": "bit:13"
+              }
+            ]
+          },
+          {
+            "command": "work_mode",
+            "fields": [
+              {
+                "payloadField": "workMode",
+                "address": 244
+              }
+            ]
+          },
+          {
+            "command": "solar_sell",
+            "fields": [
+              {
+                "payloadField": "solarSell",
+                "address": 247,
+                "encoding": "bit:0"
+              }
+            ]
+          },
+          {
+            "command": "grid_charge_toggle",
+            "fields": [
+              {
+                "payloadField": "gridChargeEnabled",
+                "address": 248,
+                "encoding": "bit:0"
+              }
+            ]
+          },
+          {
+            "command": "gen_port_mode",
+            "fields": [
+              {
+                "payloadField": "genPortMode",
+                "address": 235
+              }
+            ]
+          },
+          {
+            "command": "sell_power_cap",
+            "fields": [
+              {
+                "payloadField": "sellPowerCapW",
+                "address": 245,
+                "limits": {
+                  "min": 0,
+                  "max": 15000
+                }
+              }
+            ]
+          },
+          {
+            "command": "battery_charge",
+            "slot": {
+              "indexField": "slotIndex",
+              "count": 6,
+              "stride": 1,
+              "endViaNextSlotStart": true,
+              "fields": [
+                {
+                  "payloadField": "slotStart",
+                  "base": 250
+                },
+                {
+                  "payloadField": "slotEnd",
+                  "base": 250,
+                  "viaNextSlot": true
+                },
+                {
+                  "payloadField": "powerLimit",
+                  "base": 256
+                },
+                {
+                  "payloadField": "chargeVoltage",
+                  "base": 262,
+                  "limits": {
+                    "min": 0,
+                    "max": 6500
+                  }
+                },
+                {
+                  "payloadField": "gridChargeSoc",
+                  "base": 268,
+                  "limits": {
+                    "min": 0,
+                    "max": 100
+                  }
+                },
+                {
+                  "payloadField": "gridChargeEnabled",
+                  "base": 274,
+                  "onValue": 1,
+                  "offValue": 0,
+                  "clearMask": 3
+                }
+              ]
+            }
+          }
+        ]
       },
       "rawRegisters": {
         "1": {
@@ -2980,7 +4182,116 @@
             ]
           }
         ],
-        "writes": []
+        "writes": [
+          {
+            "command": "gen_force",
+            "fields": [
+              {
+                "payloadField": "on",
+                "address": 326,
+                "encoding": "bit:13"
+              }
+            ]
+          },
+          {
+            "command": "work_mode",
+            "fields": [
+              {
+                "payloadField": "workMode",
+                "address": 244
+              }
+            ]
+          },
+          {
+            "command": "solar_sell",
+            "fields": [
+              {
+                "payloadField": "solarSell",
+                "address": 247,
+                "encoding": "bit:0"
+              }
+            ]
+          },
+          {
+            "command": "grid_charge_toggle",
+            "fields": [
+              {
+                "payloadField": "gridChargeEnabled",
+                "address": 248,
+                "encoding": "bit:0"
+              }
+            ]
+          },
+          {
+            "command": "gen_port_mode",
+            "fields": [
+              {
+                "payloadField": "genPortMode",
+                "address": 235
+              }
+            ]
+          },
+          {
+            "command": "sell_power_cap",
+            "fields": [
+              {
+                "payloadField": "sellPowerCapW",
+                "address": 245,
+                "limits": {
+                  "min": 0,
+                  "max": 15000
+                }
+              }
+            ]
+          },
+          {
+            "command": "battery_charge",
+            "slot": {
+              "indexField": "slotIndex",
+              "count": 6,
+              "stride": 1,
+              "endViaNextSlotStart": true,
+              "fields": [
+                {
+                  "payloadField": "slotStart",
+                  "base": 250
+                },
+                {
+                  "payloadField": "slotEnd",
+                  "base": 250,
+                  "viaNextSlot": true
+                },
+                {
+                  "payloadField": "powerLimit",
+                  "base": 256
+                },
+                {
+                  "payloadField": "chargeVoltage",
+                  "base": 262,
+                  "limits": {
+                    "min": 0,
+                    "max": 6500
+                  }
+                },
+                {
+                  "payloadField": "gridChargeSoc",
+                  "base": 268,
+                  "limits": {
+                    "min": 0,
+                    "max": 100
+                  }
+                },
+                {
+                  "payloadField": "gridChargeEnabled",
+                  "base": 274,
+                  "onValue": 1,
+                  "offValue": 0,
+                  "clearMask": 3
+                }
+              ]
+            }
+          }
+        ]
       },
       "rawRegisters": {
         "1": {
@@ -3321,7 +4632,117 @@
             ]
           }
         ],
-        "writes": []
+        "writes": [
+          {
+            "command": "gen_force",
+            "fields": [
+              {
+                "payloadField": "on",
+                "address": 132,
+                "onValue": 1,
+                "offValue": 0
+              }
+            ]
+          },
+          {
+            "command": "work_mode",
+            "fields": [
+              {
+                "payloadField": "workMode",
+                "address": 142
+              }
+            ]
+          },
+          {
+            "command": "solar_sell",
+            "fields": [
+              {
+                "payloadField": "solarSell",
+                "address": 145,
+                "encoding": "bit:0"
+              }
+            ]
+          },
+          {
+            "command": "grid_charge_toggle",
+            "fields": [
+              {
+                "payloadField": "gridChargeEnabled",
+                "address": 146,
+                "encoding": "bit:0"
+              }
+            ]
+          },
+          {
+            "command": "gen_port_mode",
+            "fields": [
+              {
+                "payloadField": "genPortMode",
+                "address": 133
+              }
+            ]
+          },
+          {
+            "command": "sell_power_cap",
+            "fields": [
+              {
+                "payloadField": "sellPowerCapW",
+                "address": 143,
+                "limits": {
+                  "min": 0,
+                  "max": 15000
+                }
+              }
+            ]
+          },
+          {
+            "command": "battery_charge",
+            "slot": {
+              "indexField": "slotIndex",
+              "count": 6,
+              "stride": 1,
+              "endViaNextSlotStart": true,
+              "fields": [
+                {
+                  "payloadField": "slotStart",
+                  "base": 148
+                },
+                {
+                  "payloadField": "slotEnd",
+                  "base": 148,
+                  "viaNextSlot": true
+                },
+                {
+                  "payloadField": "powerLimit",
+                  "base": 154
+                },
+                {
+                  "payloadField": "chargeVoltage",
+                  "base": 160,
+                  "limits": {
+                    "min": 0,
+                    "max": 6500
+                  }
+                },
+                {
+                  "payloadField": "gridChargeSoc",
+                  "base": 166,
+                  "limits": {
+                    "min": 0,
+                    "max": 100
+                  }
+                },
+                {
+                  "payloadField": "gridChargeEnabled",
+                  "base": 172,
+                  "onValue": 1,
+                  "offValue": 0,
+                  "clearMask": 3
+                }
+              ]
+            }
+          }
+        ]
       },
       "rawRegisters": {
         "1": {
@@ -3685,7 +5106,117 @@
             ]
           }
         ],
-        "writes": []
+        "writes": [
+          {
+            "command": "gen_force",
+            "fields": [
+              {
+                "payloadField": "on",
+                "address": 132,
+                "onValue": 1,
+                "offValue": 0
+              }
+            ]
+          },
+          {
+            "command": "work_mode",
+            "fields": [
+              {
+                "payloadField": "workMode",
+                "address": 142
+              }
+            ]
+          },
+          {
+            "command": "solar_sell",
+            "fields": [
+              {
+                "payloadField": "solarSell",
+                "address": 145,
+                "encoding": "bit:0"
+              }
+            ]
+          },
+          {
+            "command": "grid_charge_toggle",
+            "fields": [
+              {
+                "payloadField": "gridChargeEnabled",
+                "address": 146,
+                "encoding": "bit:0"
+              }
+            ]
+          },
+          {
+            "command": "gen_port_mode",
+            "fields": [
+              {
+                "payloadField": "genPortMode",
+                "address": 133
+              }
+            ]
+          },
+          {
+            "command": "sell_power_cap",
+            "fields": [
+              {
+                "payloadField": "sellPowerCapW",
+                "address": 143,
+                "limits": {
+                  "min": 0,
+                  "max": 15000
+                }
+              }
+            ]
+          },
+          {
+            "command": "battery_charge",
+            "slot": {
+              "indexField": "slotIndex",
+              "count": 6,
+              "stride": 1,
+              "endViaNextSlotStart": true,
+              "fields": [
+                {
+                  "payloadField": "slotStart",
+                  "base": 148
+                },
+                {
+                  "payloadField": "slotEnd",
+                  "base": 148,
+                  "viaNextSlot": true
+                },
+                {
+                  "payloadField": "powerLimit",
+                  "base": 154
+                },
+                {
+                  "payloadField": "chargeVoltage",
+                  "base": 160,
+                  "limits": {
+                    "min": 0,
+                    "max": 6500
+                  }
+                },
+                {
+                  "payloadField": "gridChargeSoc",
+                  "base": 166,
+                  "limits": {
+                    "min": 0,
+                    "max": 100
+                  }
+                },
+                {
+                  "payloadField": "gridChargeEnabled",
+                  "base": 172,
+                  "onValue": 1,
+                  "offValue": 0,
+                  "clearMask": 3
+                }
+              ]
+            }
+          }
+        ]
       },
       "rawRegisters": {
         "1": {
@@ -4049,7 +5580,117 @@
             ]
           }
         ],
-        "writes": []
+        "writes": [
+          {
+            "command": "gen_force",
+            "fields": [
+              {
+                "payloadField": "on",
+                "address": 132,
+                "onValue": 1,
+                "offValue": 0
+              }
+            ]
+          },
+          {
+            "command": "work_mode",
+            "fields": [
+              {
+                "payloadField": "workMode",
+                "address": 142
+              }
+            ]
+          },
+          {
+            "command": "solar_sell",
+            "fields": [
+              {
+                "payloadField": "solarSell",
+                "address": 145,
+                "encoding": "bit:0"
+              }
+            ]
+          },
+          {
+            "command": "grid_charge_toggle",
+            "fields": [
+              {
+                "payloadField": "gridChargeEnabled",
+                "address": 146,
+                "encoding": "bit:0"
+              }
+            ]
+          },
+          {
+            "command": "gen_port_mode",
+            "fields": [
+              {
+                "payloadField": "genPortMode",
+                "address": 133
+              }
+            ]
+          },
+          {
+            "command": "sell_power_cap",
+            "fields": [
+              {
+                "payloadField": "sellPowerCapW",
+                "address": 143,
+                "limits": {
+                  "min": 0,
+                  "max": 15000
+                }
+              }
+            ]
+          },
+          {
+            "command": "battery_charge",
+            "slot": {
+              "indexField": "slotIndex",
+              "count": 6,
+              "stride": 1,
+              "endViaNextSlotStart": true,
+              "fields": [
+                {
+                  "payloadField": "slotStart",
+                  "base": 148
+                },
+                {
+                  "payloadField": "slotEnd",
+                  "base": 148,
+                  "viaNextSlot": true
+                },
+                {
+                  "payloadField": "powerLimit",
+                  "base": 154
+                },
+                {
+                  "payloadField": "chargeVoltage",
+                  "base": 160,
+                  "limits": {
+                    "min": 0,
+                    "max": 6500
+                  }
+                },
+                {
+                  "payloadField": "gridChargeSoc",
+                  "base": 166,
+                  "limits": {
+                    "min": 0,
+                    "max": 100
+                  }
+                },
+                {
+                  "payloadField": "gridChargeEnabled",
+                  "base": 172,
+                  "onValue": 1,
+                  "offValue": 0,
+                  "clearMask": 3
+                }
+              ]
+            }
+          }
+        ]
       },
       "rawRegisters": {
         "1": {
@@ -4413,7 +6054,117 @@
             ]
           }
         ],
-        "writes": []
+        "writes": [
+          {
+            "command": "gen_force",
+            "fields": [
+              {
+                "payloadField": "on",
+                "address": 132,
+                "onValue": 1,
+                "offValue": 0
+              }
+            ]
+          },
+          {
+            "command": "work_mode",
+            "fields": [
+              {
+                "payloadField": "workMode",
+                "address": 142
+              }
+            ]
+          },
+          {
+            "command": "solar_sell",
+            "fields": [
+              {
+                "payloadField": "solarSell",
+                "address": 145,
+                "encoding": "bit:0"
+              }
+            ]
+          },
+          {
+            "command": "grid_charge_toggle",
+            "fields": [
+              {
+                "payloadField": "gridChargeEnabled",
+                "address": 146,
+                "encoding": "bit:0"
+              }
+            ]
+          },
+          {
+            "command": "gen_port_mode",
+            "fields": [
+              {
+                "payloadField": "genPortMode",
+                "address": 133
+              }
+            ]
+          },
+          {
+            "command": "sell_power_cap",
+            "fields": [
+              {
+                "payloadField": "sellPowerCapW",
+                "address": 143,
+                "limits": {
+                  "min": 0,
+                  "max": 15000
+                }
+              }
+            ]
+          },
+          {
+            "command": "battery_charge",
+            "slot": {
+              "indexField": "slotIndex",
+              "count": 6,
+              "stride": 1,
+              "endViaNextSlotStart": true,
+              "fields": [
+                {
+                  "payloadField": "slotStart",
+                  "base": 148
+                },
+                {
+                  "payloadField": "slotEnd",
+                  "base": 148,
+                  "viaNextSlot": true
+                },
+                {
+                  "payloadField": "powerLimit",
+                  "base": 154
+                },
+                {
+                  "payloadField": "chargeVoltage",
+                  "base": 160,
+                  "limits": {
+                    "min": 0,
+                    "max": 6500
+                  }
+                },
+                {
+                  "payloadField": "gridChargeSoc",
+                  "base": 166,
+                  "limits": {
+                    "min": 0,
+                    "max": 100
+                  }
+                },
+                {
+                  "payloadField": "gridChargeEnabled",
+                  "base": 172,
+                  "onValue": 1,
+                  "offValue": 0,
+                  "clearMask": 3
+                }
+              ]
+            }
+          }
+        ]
       },
       "rawRegisters": {
         "1": {
@@ -4817,7 +6568,117 @@
             ]
           }
         ],
-        "writes": []
+        "writes": [
+          {
+            "command": "gen_force",
+            "fields": [
+              {
+                "payloadField": "on",
+                "address": 132,
+                "onValue": 1,
+                "offValue": 0
+              }
+            ]
+          },
+          {
+            "command": "work_mode",
+            "fields": [
+              {
+                "payloadField": "workMode",
+                "address": 142
+              }
+            ]
+          },
+          {
+            "command": "solar_sell",
+            "fields": [
+              {
+                "payloadField": "solarSell",
+                "address": 145,
+                "encoding": "bit:0"
+              }
+            ]
+          },
+          {
+            "command": "grid_charge_toggle",
+            "fields": [
+              {
+                "payloadField": "gridChargeEnabled",
+                "address": 146,
+                "encoding": "bit:0"
+              }
+            ]
+          },
+          {
+            "command": "gen_port_mode",
+            "fields": [
+              {
+                "payloadField": "genPortMode",
+                "address": 133
+              }
+            ]
+          },
+          {
+            "command": "sell_power_cap",
+            "fields": [
+              {
+                "payloadField": "sellPowerCapW",
+                "address": 143,
+                "limits": {
+                  "min": 0,
+                  "max": 15000
+                }
+              }
+            ]
+          },
+          {
+            "command": "battery_charge",
+            "slot": {
+              "indexField": "slotIndex",
+              "count": 6,
+              "stride": 1,
+              "endViaNextSlotStart": true,
+              "fields": [
+                {
+                  "payloadField": "slotStart",
+                  "base": 148
+                },
+                {
+                  "payloadField": "slotEnd",
+                  "base": 148,
+                  "viaNextSlot": true
+                },
+                {
+                  "payloadField": "powerLimit",
+                  "base": 154
+                },
+                {
+                  "payloadField": "chargeVoltage",
+                  "base": 160,
+                  "limits": {
+                    "min": 0,
+                    "max": 6500
+                  }
+                },
+                {
+                  "payloadField": "gridChargeSoc",
+                  "base": 166,
+                  "limits": {
+                    "min": 0,
+                    "max": 100
+                  }
+                },
+                {
+                  "payloadField": "gridChargeEnabled",
+                  "base": 172,
+                  "onValue": 1,
+                  "offValue": 0,
+                  "clearMask": 3
+                }
+              ]
+            }
+          }
+        ]
       },
       "rawRegisters": {
         "1": {

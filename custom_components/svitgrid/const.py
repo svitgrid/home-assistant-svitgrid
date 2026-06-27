@@ -151,6 +151,9 @@ DISPATCHABLE_COMMANDS = frozenset({
     "set_work_mode",
     "set_solar_sell",
     "set_grid_charge_toggle",
+    "set_gen_force",
+    "set_gen_port_mode",
+    "set_sell_power_cap",
 })
 
 # Pairing flow

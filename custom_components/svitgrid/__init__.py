@@ -43,6 +43,7 @@ from .executors.yaml_dispatcher import YamlDispatcher
 from .harvest.engine import run_direct_harvest_loop
 from .harvest.register_spec import RegisterSpec
 from .harvest.spec_cache import load_spec
+from .harvest.write_executor import WriteExecutor
 from .http_views import register_views
 from .keystore import SvitgridKeystore
 from .lifecycle import DEPROVISIONED, LifecycleState
@@ -527,6 +528,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     ),
                     name=f"svitgrid_harvest_{inverter_id}",
                 )
+                # Direct-harvest inverters get the native WriteExecutor, which
+                # turns signed control commands into register writes. It REUSES
+                # the same spec_holder built above for the read loop, so writes
+                # share the live spec (and any later refresh). This replaces the
+                # YamlDispatcher relay path — an inverter has exactly one executor.
+                executors_by_inverter[inverter_id] = WriteExecutor(
+                    hass=hass,
+                    spec_holder=spec_holder,
+                    cfg=harvest_config,
+                )
             else:
                 entity_map = dict(inv.get("entity_map") or {})
                 if not entity_map:
@@ -546,13 +557,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     ),
                     name=f"svitgrid_readings_{inverter_id}",
                 )
-            recipes = inv.get("command_recipes") or []
-            if recipes:
-                executors_by_inverter[inverter_id] = YamlDispatcher(
-                    hass=hass,
-                    commands=recipes,
-                    config=dict(inv.get("command_config") or {}),
-                )
+                # Relay (HA-entity) inverters use the recipe-driven YamlDispatcher.
+                recipes = inv.get("command_recipes") or []
+                if recipes:
+                    executors_by_inverter[inverter_id] = YamlDispatcher(
+                        hass=hass,
+                        commands=recipes,
+                        config=dict(inv.get("command_config") or {}),
+                    )
 
         wake_event = asyncio.Event()
         command_task = hass.async_create_background_task(
