@@ -1,0 +1,713 @@
+{
+  "sourceCommit": "dev",
+  "vectors": [
+    {
+      "modelId": "deye_sg04lp3",
+      "command": "gen_force",
+      "payload": {
+        "on": true
+      },
+      "priorRegisters": {
+        "132": 0
+      },
+      "writeCommand": {
+        "command": "gen_force",
+        "fields": [
+          {
+            "payloadField": "on",
+            "address": 132,
+            "onValue": 1,
+            "offValue": 0
+          }
+        ]
+      },
+      "expectedRegisterWrites": [
+        {
+          "unitId": 1,
+          "address": 132,
+          "value": 1
+        }
+      ]
+    },
+    {
+      "modelId": "deye_sg04lp3",
+      "command": "work_mode",
+      "payload": {
+        "workMode": 2
+      },
+      "priorRegisters": {
+        "142": 0
+      },
+      "writeCommand": {
+        "command": "work_mode",
+        "fields": [
+          {
+            "payloadField": "workMode",
+            "address": 142
+          }
+        ]
+      },
+      "expectedRegisterWrites": [
+        {
+          "unitId": 1,
+          "address": 142,
+          "value": 2
+        }
+      ]
+    },
+    {
+      "modelId": "deye_sg04lp3",
+      "command": "solar_sell",
+      "payload": {
+        "solarSell": 1
+      },
+      "priorRegisters": {
+        "145": 254
+      },
+      "writeCommand": {
+        "command": "solar_sell",
+        "fields": [
+          {
+            "payloadField": "solarSell",
+            "address": 145,
+            "encoding": "bit:0"
+          }
+        ]
+      },
+      "expectedRegisterWrites": [
+        {
+          "unitId": 1,
+          "address": 145,
+          "value": 255
+        }
+      ]
+    },
+    {
+      "modelId": "deye_sg04lp3",
+      "command": "grid_charge_toggle",
+      "payload": {
+        "gridChargeEnabled": true
+      },
+      "priorRegisters": {
+        "146": 254
+      },
+      "writeCommand": {
+        "command": "grid_charge_toggle",
+        "fields": [
+          {
+            "payloadField": "gridChargeEnabled",
+            "address": 146,
+            "encoding": "bit:0"
+          }
+        ]
+      },
+      "expectedRegisterWrites": [
+        {
+          "unitId": 1,
+          "address": 146,
+          "value": 255
+        }
+      ]
+    },
+    {
+      "modelId": "deye_sg04lp3",
+      "command": "gen_port_mode",
+      "payload": {
+        "genPortMode": 1
+      },
+      "priorRegisters": {
+        "133": 0
+      },
+      "writeCommand": {
+        "command": "gen_port_mode",
+        "fields": [
+          {
+            "payloadField": "genPortMode",
+            "address": 133
+          }
+        ]
+      },
+      "expectedRegisterWrites": [
+        {
+          "unitId": 1,
+          "address": 133,
+          "value": 1
+        }
+      ]
+    },
+    {
+      "modelId": "deye_sg04lp3",
+      "command": "sell_power_cap",
+      "payload": {
+        "sellPowerCapW": 5000,
+        "ratedPowerW": 8000
+      },
+      "priorRegisters": {
+        "143": 0
+      },
+      "writeCommand": {
+        "command": "sell_power_cap",
+        "fields": [
+          {
+            "payloadField": "sellPowerCapW",
+            "address": 143,
+            "limits": {
+              "min": 0,
+              "max": 15000
+            }
+          }
+        ]
+      },
+      "expectedRegisterWrites": [
+        {
+          "unitId": 1,
+          "address": 143,
+          "value": 5000
+        }
+      ]
+    },
+    {
+      "modelId": "deye_sg04lp3",
+      "command": "battery_charge",
+      "payload": {
+        "slotIndex": 2,
+        "slotStart": 830,
+        "slotEnd": 1200,
+        "powerLimit": 3000,
+        "chargeVoltage": 5760,
+        "gridChargeSoc": 80,
+        "gridChargeEnabled": true
+      },
+      "priorRegisters": {
+        "174": 242
+      },
+      "writeCommand": {
+        "command": "battery_charge",
+        "slot": {
+          "indexField": "slotIndex",
+          "count": 6,
+          "stride": 1,
+          "endViaNextSlotStart": true,
+          "fields": [
+            {
+              "payloadField": "slotStart",
+              "base": 148
+            },
+            {
+              "payloadField": "slotEnd",
+              "base": 148,
+              "viaNextSlot": true
+            },
+            {
+              "payloadField": "powerLimit",
+              "base": 154
+            },
+            {
+              "payloadField": "chargeVoltage",
+              "base": 160,
+              "limits": {
+                "min": 0,
+                "max": 6500
+              }
+            },
+            {
+              "payloadField": "gridChargeSoc",
+              "base": 166,
+              "limits": {
+                "min": 0,
+                "max": 100
+              }
+            },
+            {
+              "payloadField": "gridChargeEnabled",
+              "base": 172,
+              "onValue": 1,
+              "offValue": 0,
+              "clearMask": 3
+            }
+          ]
+        }
+      },
+      "expectedRegisterWrites": [
+        {
+          "unitId": 1,
+          "address": 150,
+          "value": 830
+        },
+        {
+          "unitId": 1,
+          "address": 151,
+          "value": 1200
+        },
+        {
+          "unitId": 1,
+          "address": 156,
+          "value": 3000
+        },
+        {
+          "unitId": 1,
+          "address": 162,
+          "value": 5760
+        },
+        {
+          "unitId": 1,
+          "address": 168,
+          "value": 80
+        },
+        {
+          "unitId": 1,
+          "address": 174,
+          "value": 241
+        }
+      ]
+    },
+    {
+      "modelId": "deye_sg04lp3",
+      "command": "battery_charge",
+      "payload": {
+        "slotIndex": 5,
+        "slotStart": 2200,
+        "slotEnd": 600,
+        "powerLimit": 2500,
+        "chargeVoltage": 5500,
+        "gridChargeSoc": 60,
+        "gridChargeEnabled": false
+      },
+      "priorRegisters": {
+        "177": 243
+      },
+      "writeCommand": {
+        "command": "battery_charge",
+        "slot": {
+          "indexField": "slotIndex",
+          "count": 6,
+          "stride": 1,
+          "endViaNextSlotStart": true,
+          "fields": [
+            {
+              "payloadField": "slotStart",
+              "base": 148
+            },
+            {
+              "payloadField": "slotEnd",
+              "base": 148,
+              "viaNextSlot": true
+            },
+            {
+              "payloadField": "powerLimit",
+              "base": 154
+            },
+            {
+              "payloadField": "chargeVoltage",
+              "base": 160,
+              "limits": {
+                "min": 0,
+                "max": 6500
+              }
+            },
+            {
+              "payloadField": "gridChargeSoc",
+              "base": 166,
+              "limits": {
+                "min": 0,
+                "max": 100
+              }
+            },
+            {
+              "payloadField": "gridChargeEnabled",
+              "base": 172,
+              "onValue": 1,
+              "offValue": 0,
+              "clearMask": 3
+            }
+          ]
+        }
+      },
+      "expectedRegisterWrites": [
+        {
+          "unitId": 1,
+          "address": 153,
+          "value": 2200
+        },
+        {
+          "unitId": 1,
+          "address": 148,
+          "value": 600
+        },
+        {
+          "unitId": 1,
+          "address": 159,
+          "value": 2500
+        },
+        {
+          "unitId": 1,
+          "address": 165,
+          "value": 5500
+        },
+        {
+          "unitId": 1,
+          "address": 171,
+          "value": 60
+        },
+        {
+          "unitId": 1,
+          "address": 177,
+          "value": 240
+        }
+      ]
+    },
+    {
+      "modelId": "deye_sg03lp1",
+      "command": "gen_force",
+      "payload": {
+        "on": true
+      },
+      "priorRegisters": {
+        "326": 4351
+      },
+      "writeCommand": {
+        "command": "gen_force",
+        "fields": [
+          {
+            "payloadField": "on",
+            "address": 326,
+            "encoding": "bit:13"
+          }
+        ]
+      },
+      "expectedRegisterWrites": [
+        {
+          "unitId": 1,
+          "address": 326,
+          "value": 12543
+        }
+      ]
+    },
+    {
+      "modelId": "deye_sg03lp1",
+      "command": "work_mode",
+      "payload": {
+        "workMode": 2
+      },
+      "priorRegisters": {
+        "244": 0
+      },
+      "writeCommand": {
+        "command": "work_mode",
+        "fields": [
+          {
+            "payloadField": "workMode",
+            "address": 244
+          }
+        ]
+      },
+      "expectedRegisterWrites": [
+        {
+          "unitId": 1,
+          "address": 244,
+          "value": 2
+        }
+      ]
+    },
+    {
+      "modelId": "deye_sg03lp1",
+      "command": "solar_sell",
+      "payload": {
+        "solarSell": 1
+      },
+      "priorRegisters": {
+        "247": 254
+      },
+      "writeCommand": {
+        "command": "solar_sell",
+        "fields": [
+          {
+            "payloadField": "solarSell",
+            "address": 247,
+            "encoding": "bit:0"
+          }
+        ]
+      },
+      "expectedRegisterWrites": [
+        {
+          "unitId": 1,
+          "address": 247,
+          "value": 255
+        }
+      ]
+    },
+    {
+      "modelId": "deye_sg03lp1",
+      "command": "grid_charge_toggle",
+      "payload": {
+        "gridChargeEnabled": true
+      },
+      "priorRegisters": {
+        "248": 254
+      },
+      "writeCommand": {
+        "command": "grid_charge_toggle",
+        "fields": [
+          {
+            "payloadField": "gridChargeEnabled",
+            "address": 248,
+            "encoding": "bit:0"
+          }
+        ]
+      },
+      "expectedRegisterWrites": [
+        {
+          "unitId": 1,
+          "address": 248,
+          "value": 255
+        }
+      ]
+    },
+    {
+      "modelId": "deye_sg03lp1",
+      "command": "gen_port_mode",
+      "payload": {
+        "genPortMode": 1
+      },
+      "priorRegisters": {
+        "235": 0
+      },
+      "writeCommand": {
+        "command": "gen_port_mode",
+        "fields": [
+          {
+            "payloadField": "genPortMode",
+            "address": 235
+          }
+        ]
+      },
+      "expectedRegisterWrites": [
+        {
+          "unitId": 1,
+          "address": 235,
+          "value": 1
+        }
+      ]
+    },
+    {
+      "modelId": "deye_sg03lp1",
+      "command": "sell_power_cap",
+      "payload": {
+        "sellPowerCapW": 20000
+      },
+      "priorRegisters": {
+        "245": 0
+      },
+      "writeCommand": {
+        "command": "sell_power_cap",
+        "fields": [
+          {
+            "payloadField": "sellPowerCapW",
+            "address": 245,
+            "limits": {
+              "min": 0,
+              "max": 15000
+            }
+          }
+        ]
+      },
+      "expectedRegisterWrites": [
+        {
+          "unitId": 1,
+          "address": 245,
+          "value": 15000
+        }
+      ]
+    },
+    {
+      "modelId": "deye_sg03lp1",
+      "command": "battery_charge",
+      "payload": {
+        "slotIndex": 2,
+        "slotStart": 830,
+        "slotEnd": 1200,
+        "powerLimit": 3000,
+        "chargeVoltage": 5760,
+        "gridChargeSoc": 80,
+        "gridChargeEnabled": true
+      },
+      "priorRegisters": {
+        "276": 242
+      },
+      "writeCommand": {
+        "command": "battery_charge",
+        "slot": {
+          "indexField": "slotIndex",
+          "count": 6,
+          "stride": 1,
+          "endViaNextSlotStart": true,
+          "fields": [
+            {
+              "payloadField": "slotStart",
+              "base": 250
+            },
+            {
+              "payloadField": "slotEnd",
+              "base": 250,
+              "viaNextSlot": true
+            },
+            {
+              "payloadField": "powerLimit",
+              "base": 256
+            },
+            {
+              "payloadField": "chargeVoltage",
+              "base": 262,
+              "limits": {
+                "min": 0,
+                "max": 6500
+              }
+            },
+            {
+              "payloadField": "gridChargeSoc",
+              "base": 268,
+              "limits": {
+                "min": 0,
+                "max": 100
+              }
+            },
+            {
+              "payloadField": "gridChargeEnabled",
+              "base": 274,
+              "onValue": 1,
+              "offValue": 0,
+              "clearMask": 3
+            }
+          ]
+        }
+      },
+      "expectedRegisterWrites": [
+        {
+          "unitId": 1,
+          "address": 252,
+          "value": 830
+        },
+        {
+          "unitId": 1,
+          "address": 253,
+          "value": 1200
+        },
+        {
+          "unitId": 1,
+          "address": 258,
+          "value": 3000
+        },
+        {
+          "unitId": 1,
+          "address": 264,
+          "value": 5760
+        },
+        {
+          "unitId": 1,
+          "address": 270,
+          "value": 80
+        },
+        {
+          "unitId": 1,
+          "address": 276,
+          "value": 241
+        }
+      ]
+    },
+    {
+      "modelId": "deye_sg03lp1",
+      "command": "battery_charge",
+      "payload": {
+        "slotIndex": 5,
+        "slotStart": 2200,
+        "slotEnd": 600,
+        "powerLimit": 2500,
+        "chargeVoltage": 5500,
+        "gridChargeSoc": 60,
+        "gridChargeEnabled": false
+      },
+      "priorRegisters": {
+        "279": 243
+      },
+      "writeCommand": {
+        "command": "battery_charge",
+        "slot": {
+          "indexField": "slotIndex",
+          "count": 6,
+          "stride": 1,
+          "endViaNextSlotStart": true,
+          "fields": [
+            {
+              "payloadField": "slotStart",
+              "base": 250
+            },
+            {
+              "payloadField": "slotEnd",
+              "base": 250,
+              "viaNextSlot": true
+            },
+            {
+              "payloadField": "powerLimit",
+              "base": 256
+            },
+            {
+              "payloadField": "chargeVoltage",
+              "base": 262,
+              "limits": {
+                "min": 0,
+                "max": 6500
+              }
+            },
+            {
+              "payloadField": "gridChargeSoc",
+              "base": 268,
+              "limits": {
+                "min": 0,
+                "max": 100
+              }
+            },
+            {
+              "payloadField": "gridChargeEnabled",
+              "base": 274,
+              "onValue": 1,
+              "offValue": 0,
+              "clearMask": 3
+            }
+          ]
+        }
+      },
+      "expectedRegisterWrites": [
+        {
+          "unitId": 1,
+          "address": 255,
+          "value": 2200
+        },
+        {
+          "unitId": 1,
+          "address": 250,
+          "value": 600
+        },
+        {
+          "unitId": 1,
+          "address": 261,
+          "value": 2500
+        },
+        {
+          "unitId": 1,
+          "address": 267,
+          "value": 5500
+        },
+        {
+          "unitId": 1,
+          "address": 273,
+          "value": 60
+        },
+        {
+          "unitId": 1,
+          "address": 279,
+          "value": 240
+        }
+      ]
+    }
+  ]
+}
