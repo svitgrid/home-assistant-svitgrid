@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from types import SimpleNamespace
 
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
@@ -39,11 +40,14 @@ from .const import (
 )
 from .executors import create_executor
 from .executors.yaml_dispatcher import YamlDispatcher
+from .harvest.engine import run_direct_harvest_loop
+from .harvest.register_spec import RegisterSpec
+from .harvest.spec_cache import load_spec
 from .http_views import register_views
 from .keystore import SvitgridKeystore
 from .lifecycle import DEPROVISIONED, LifecycleState
-from .panel import register_panel, remove_panel
 from .mqtt_wake import run_loop as run_mqtt_wake_loop
+from .panel import register_panel, remove_panel
 from .preset_refresh import refresh_entry_inverters
 from .reading_sender import Cadence, run_sender_loop
 from .reading_store import ReadingStore
@@ -488,24 +492,60 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if loops_active:
         for inv in inverters:
             inverter_id = inv["inverter_id"]
-            entity_map = dict(inv.get("entity_map") or {})
-            if not entity_map:
-                _LOGGER.warning(
-                    "Inverter %s has an empty entity_map — it will not publish readings.",
-                    inverter_id,
+            harvest_config = inv.get("harvest_config")
+            if harvest_config:
+                # Direct-Modbus harvest path (SP-B): poll the inverter itself
+                # via the register spec instead of reading HA entities. Load the
+                # spec once at setup (SP-D revisits periodic refresh) into a tiny
+                # mutable holder the loop re-reads each tick. Fail-open: a failed
+                # load leaves spec=None and the loop idles until a spec exists.
+                spec_holder = SimpleNamespace(spec=None)
+                try:
+                    spec_dict, _changed = await load_spec(
+                        api_client.get_register_spec,
+                        harvest_config["model_id"],
+                        cached=None,
+                    )
+                    if spec_dict is not None:
+                        spec_holder.spec = RegisterSpec.from_dict(spec_dict)
+                except Exception:  # never block setup — fail-open
+                    _LOGGER.exception(
+                        "harvest spec load/parse failed for inverter %s; loop "
+                        "will idle until a spec is available",
+                        inverter_id,
+                    )
+                readings_tasks[inverter_id] = hass.async_create_background_task(
+                    run_direct_harvest_loop(
+                        hass=hass,
+                        store=store,
+                        cadence=cadence,
+                        inverter_id=inverter_id,
+                        cfg=harvest_config,
+                        spec_holder=spec_holder,
+                        lifecycle=lifecycle,
+                        activity=activity,
+                    ),
+                    name=f"svitgrid_harvest_{inverter_id}",
                 )
-            readings_tasks[inverter_id] = hass.async_create_background_task(
-                run_readings_loop(
-                    hass=hass,
-                    store=store,
-                    cadence=cadence,
-                    inverter_id=inverter_id,
-                    entity_map=entity_map,
-                    activity=activity,
-                    lifecycle=lifecycle,
-                ),
-                name=f"svitgrid_readings_{inverter_id}",
-            )
+            else:
+                entity_map = dict(inv.get("entity_map") or {})
+                if not entity_map:
+                    _LOGGER.warning(
+                        "Inverter %s has an empty entity_map — it will not publish readings.",
+                        inverter_id,
+                    )
+                readings_tasks[inverter_id] = hass.async_create_background_task(
+                    run_readings_loop(
+                        hass=hass,
+                        store=store,
+                        cadence=cadence,
+                        inverter_id=inverter_id,
+                        entity_map=entity_map,
+                        activity=activity,
+                        lifecycle=lifecycle,
+                    ),
+                    name=f"svitgrid_readings_{inverter_id}",
+                )
             recipes = inv.get("command_recipes") or []
             if recipes:
                 executors_by_inverter[inverter_id] = YamlDispatcher(
