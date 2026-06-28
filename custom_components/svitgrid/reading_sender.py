@@ -70,7 +70,7 @@ async def drain_once(
     sent_keys: list[tuple[str, str]] = []
     failed_keys: list[tuple[str, str]] = []
     if isinstance(results, list) and len(results) == len(keys):
-        for key, res in zip(keys, results):
+        for key, res in zip(keys, results, strict=False):
             (sent_keys if res.get("ok") else failed_keys).append(key)
     else:
         # No per-item detail → 2xx means the cloud accepted the batch.
@@ -92,13 +92,20 @@ async def run_sender_loop(
     *, hass: HomeAssistant, store, api_client, api_key: str, cadence: Cadence,
     tick_s: int = SENDER_TICK_S, lifecycle=None,
 ) -> None:
+    wait_for_data = getattr(store, "wait_for_data", None)
     while not hass.is_stopping and (lifecycle is None or lifecycle.active):
         try:
             await drain_once(store=store, api_client=api_client, api_key=api_key,
                              now_iso=_now_iso(), cadence=cadence, lifecycle=lifecycle)
         except Exception:  # never let the sender loop die
             _LOGGER.exception("sender drain failed")
-        await asyncio.sleep(tick_s)
+        # Use the store's data-available event when present so a fresh reading
+        # wakes the sender immediately instead of waiting up to tick_s.
+        # Fall back to a plain sleep for test doubles or stores that lack the method.
+        if wait_for_data is not None:
+            await wait_for_data(tick_s)
+        else:
+            await asyncio.sleep(tick_s)
 
 
 async def _maybe(awaitable_or_value: Any) -> Any:

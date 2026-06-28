@@ -1,6 +1,8 @@
 """Durable local SQLite store for produced readings (Sub-project 1)."""
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import sqlite3
 from datetime import datetime
@@ -77,10 +79,8 @@ def _median_gap_seconds(ts_list: list[str]) -> float | None:
     # Parse each ISO-8601 UTC timestamp, skipping malformed entries.
     parsed = []
     for ts in ts_list:
-        try:
+        with contextlib.suppress(ValueError, AttributeError):
             parsed.append(datetime.fromisoformat(ts.replace("Z", "+00:00")))
-        except (ValueError, AttributeError):
-            pass  # malformed timestamp — treat as unknown, skip rather than crash
     if len(parsed) < 2:
         return None
     # Gaps between consecutive entries (list is desc → older − newer yields positive).
@@ -104,6 +104,28 @@ class ReadingStore:
     def __init__(self, hass: HomeAssistant | None, db_path: str) -> None:
         self._hass = hass
         self._db_path = db_path
+        # Lazily created asyncio.Event — do NOT create at __init__ time because
+        # that would bind to whatever loop happens to be current at construction,
+        # which may differ from the running loop used by the sender.
+        self._data_event: asyncio.Event | None = None
+
+    def _ensure_event(self) -> asyncio.Event:
+        """Return the data-available Event, creating it in the running loop on first use."""
+        if self._data_event is None:
+            self._data_event = asyncio.Event()
+        return self._data_event
+
+    def _signal_data_available(self) -> None:
+        """Set the data-available event.  Must be called from the event-loop thread."""
+        if self._data_event is not None:
+            self._data_event.set()
+
+    async def wait_for_data(self, wait_s: float) -> None:  # noqa: ASYNC109
+        """Wait until a reading is appended or *wait_s* seconds elapse (never raises)."""
+        event = self._ensure_event()
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(event.wait(), timeout=wait_s)
+        event.clear()
 
     # ── sync core (unit-tested directly) ──────────────────────────────
     def _append_sync(self, reading: dict[str, Any]) -> None:
@@ -317,7 +339,7 @@ class ReadingStore:
             if rows:
                 return rows
             # Fallback: aggregate today's raw (daily row not rolled up yet).
-            from datetime import datetime, timedelta
+            from datetime import datetime, timedelta  # noqa: I001
             from . import rollup as _r
             next_day = (datetime.strptime(day, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
             cur = conn.execute(
@@ -476,6 +498,8 @@ class ReadingStore:
 
     async def append(self, reading: dict[str, Any]) -> None:
         await self._hass.async_add_executor_job(self._append_sync, reading)
+        # Wake the sender immediately so the fresh reading is pushed within ~ms.
+        self._signal_data_available()
 
     async def recent(self, inverter_id: str, limit: int) -> list[dict[str, Any]]:
         return await self._hass.async_add_executor_job(

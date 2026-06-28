@@ -1,3 +1,7 @@
+import asyncio
+
+import pytest
+
 from custom_components.svitgrid.reading_store import ReadingStore
 
 
@@ -355,3 +359,61 @@ def test_median_gap_seconds_malformed_timestamps_returns_none():
         "2026-06-25T10:00:00Z",
     ])
     assert result == 600.0
+
+
+# ── wait_for_data event tests ──────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_wait_for_data_returns_promptly_after_append(tmp_path):
+    """After append() sets the event, wait_for_data should return almost immediately."""
+    store = _store(tmp_path)
+    reading = {"inverterId": "inv-1", "timestamp": "2026-06-28T10:00:00Z"}
+
+    start = asyncio.get_event_loop().time()
+    # Schedule an append to fire shortly after we start waiting
+    async def _appender():
+        await asyncio.sleep(0.05)
+        store._append_sync(reading)
+        store._signal_data_available()
+
+    asyncio.create_task(_appender())
+    await store.wait_for_data(wait_s=5.0)
+    elapsed = asyncio.get_event_loop().time() - start
+
+    # Should return well before the 5s timeout — expect it within ~0.5s
+    assert elapsed < 0.5, f"wait_for_data took too long: {elapsed:.3f}s"
+
+
+@pytest.mark.asyncio
+async def test_wait_for_data_times_out_cleanly_when_no_data(tmp_path):
+    """wait_for_data must return (not raise) after timeout when nothing is appended."""
+    store = _store(tmp_path)
+    start = asyncio.get_event_loop().time()
+    await store.wait_for_data(wait_s=0.1)
+    elapsed = asyncio.get_event_loop().time() - start
+    # Should have waited roughly 0.1s and returned without raising
+    assert 0.05 <= elapsed < 0.5
+
+
+@pytest.mark.asyncio
+async def test_append_async_signals_wait_for_data(tmp_path):
+    """The async append() wrapper (via _signal_data_available) wakes wait_for_data."""
+    store = _store(tmp_path)
+
+    class _FakeHass:
+        async def async_add_executor_job(self, fn, *args):
+            return fn(*args)
+
+    store._hass = _FakeHass()
+
+    start = asyncio.get_event_loop().time()
+
+    async def _appender():
+        await asyncio.sleep(0.05)
+        await store.append({"inverterId": "inv-1", "timestamp": "2026-06-28T10:00:01Z"})
+
+    asyncio.create_task(_appender())
+    await store.wait_for_data(wait_s=5.0)
+    elapsed = asyncio.get_event_loop().time() - start
+    assert elapsed < 0.5
