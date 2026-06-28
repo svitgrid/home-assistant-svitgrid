@@ -38,7 +38,10 @@ def island_key_present_and_valid(request: object, island_key: str | None) -> boo
     header_value: str | None = request.headers.get("X-Island-Key")
     if not header_value:
         return False
-    return hmac.compare_digest(header_value, island_key)
+    try:
+        return hmac.compare_digest(header_value, island_key)
+    except (TypeError, ValueError):
+        return False
 
 
 def island_request_authorized(request: object, island_key: str | None) -> bool:

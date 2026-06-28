@@ -407,3 +407,165 @@ async def test_missing_required_field_returns_400(hass):
     assert resp.status == 400
     data = json.loads(resp.body)
     assert data["error"] == "bad_request"
+
+
+# ---------------------------------------------------------------------------
+# CRITICAL: signature↔command binding gap tests (RED phase)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_command_mismatch_top_level_command_differs_from_signed(hass):
+    """Valid key + valid sig over {command:A,payload:P} but top-level command=B → 403 command_mismatch, executor NOT called."""
+    private_key, pub_hex = generate_keypair()
+    key_id = "admin-key-1"
+    trusted = {key_id: pub_hex}
+    _install_keystore(hass, trusted_public_keys_hex=trusted)
+
+    executor = _make_executor(result={"applied": True})
+    _install_executor(hass, INVERTER_ID, executor)
+
+    # Build a body where signed command is "set_battery_charge" but top-level is different
+    signed_payload = {"inverterId": INVERTER_ID, "chargeW": 3000}
+    from custom_components.svitgrid.signing import sign_payload
+    signed_event_data = {"command": "set_battery_charge", "payload": signed_payload}
+    signature = sign_payload(signed_event_data, private_key)
+
+    body = {
+        "command": "set_work_mode",  # Different from what was signed!
+        "payload": signed_payload,
+        "signingKeyId": key_id,
+        "signedEventData": signed_event_data,
+        "signature": signature,
+    }
+    view = SvitgridCommandsView()
+    request = _FakeRequest(hass, island_key_header=ISLAND_KEY, body=body)
+    resp = await view.post(request)
+
+    assert resp.status == 403
+    data = json.loads(resp.body)
+    assert data["error"] == "command_mismatch"
+    executor.dispatch.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_command_mismatch_top_level_payload_differs_from_signed(hass):
+    """Valid key + valid sig but top-level payload differs from signed payload → 403, executor NOT called."""
+    private_key, pub_hex = generate_keypair()
+    key_id = "admin-key-1"
+    trusted = {key_id: pub_hex}
+    _install_keystore(hass, trusted_public_keys_hex=trusted)
+
+    executor = _make_executor(result={"applied": True})
+    _install_executor(hass, INVERTER_ID, executor)
+
+    from custom_components.svitgrid.signing import sign_payload
+    signed_payload = {"inverterId": INVERTER_ID, "chargeW": 3000}
+    signed_event_data = {"command": "set_battery_charge", "payload": signed_payload}
+    signature = sign_payload(signed_event_data, private_key)
+
+    # Top-level payload has higher chargeW than what was signed
+    body = {
+        "command": "set_battery_charge",
+        "payload": {"inverterId": INVERTER_ID, "chargeW": 99999},  # Different!
+        "signingKeyId": key_id,
+        "signedEventData": signed_event_data,
+        "signature": signature,
+    }
+    view = SvitgridCommandsView()
+    request = _FakeRequest(hass, island_key_header=ISLAND_KEY, body=body)
+    resp = await view.post(request)
+
+    assert resp.status == 403
+    data = json.loads(resp.body)
+    assert data["error"] == "command_mismatch"
+    executor.dispatch.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_signed_event_data_missing_command_field_returns_400(hass):
+    """Valid key + sig where signedEventData is missing 'command' → 400 bad_request."""
+    private_key, pub_hex = generate_keypair()
+    key_id = "admin-key-1"
+    trusted = {key_id: pub_hex}
+    _install_keystore(hass, trusted_public_keys_hex=trusted)
+
+    executor = _make_executor(result={"applied": True})
+    _install_executor(hass, INVERTER_ID, executor)
+
+    from custom_components.svitgrid.signing import sign_payload
+    # signedEventData is missing 'command'
+    signed_event_data = {"payload": {"inverterId": INVERTER_ID}}
+    signature = sign_payload(signed_event_data, private_key)
+
+    body = {
+        "command": "set_battery_charge",
+        "payload": {"inverterId": INVERTER_ID},
+        "signingKeyId": key_id,
+        "signedEventData": signed_event_data,
+        "signature": signature,
+    }
+    view = SvitgridCommandsView()
+    request = _FakeRequest(hass, island_key_header=ISLAND_KEY, body=body)
+    resp = await view.post(request)
+
+    assert resp.status == 400
+    data = json.loads(resp.body)
+    assert data["error"] == "bad_request"
+    executor.dispatch.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_signed_event_data_non_dict_payload_returns_400(hass):
+    """Valid key + sig where signedEventData has non-dict payload → 400 bad_request."""
+    private_key, pub_hex = generate_keypair()
+    key_id = "admin-key-1"
+    trusted = {key_id: pub_hex}
+    _install_keystore(hass, trusted_public_keys_hex=trusted)
+
+    executor = _make_executor(result={"applied": True})
+    _install_executor(hass, INVERTER_ID, executor)
+
+    from custom_components.svitgrid.signing import sign_payload
+    # signedEventData has a list as payload (not a dict)
+    signed_event_data = {"command": "set_battery_charge", "payload": ["this", "is", "a", "list"]}
+    signature = sign_payload(signed_event_data, private_key)
+
+    body = {
+        "command": "set_battery_charge",
+        "payload": {"inverterId": INVERTER_ID},
+        "signingKeyId": key_id,
+        "signedEventData": signed_event_data,
+        "signature": signature,
+    }
+    view = SvitgridCommandsView()
+    request = _FakeRequest(hass, island_key_header=ISLAND_KEY, body=body)
+    resp = await view.post(request)
+
+    assert resp.status == 400
+    data = json.loads(resp.body)
+    assert data["error"] == "bad_request"
+    executor.dispatch.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_happy_path_top_level_matches_signed_dispatches_correctly(hass):
+    """Happy path: top-level command+payload match what was signed → 200, executor called once."""
+    private_key, pub_hex = generate_keypair()
+    key_id = "admin-key-1"
+    trusted = {key_id: pub_hex}
+    _install_keystore(hass, trusted_public_keys_hex=trusted)
+
+    executor = _make_executor(result={"applied": True})
+    _install_executor(hass, INVERTER_ID, executor)
+
+    cmd_payload = {"inverterId": INVERTER_ID, "chargeW": 5000}
+    body = _make_signed_body(private_key, key_id, "set_battery_charge", cmd_payload)
+    view = SvitgridCommandsView()
+    request = _FakeRequest(hass, island_key_header=ISLAND_KEY, body=body)
+    resp = await view.post(request)
+
+    assert resp.status == 200
+    data = json.loads(resp.body)
+    assert data["ok"] is True
+    executor.dispatch.assert_awaited_once_with("set_battery_charge", cmd_payload)

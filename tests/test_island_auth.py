@@ -169,3 +169,30 @@ def test_authorized_session_only_when_island_key_none():
     req_not_authed = _FakeRequest(authenticated=False)
     assert island_request_authorized(req_authed, None) is True
     assert island_request_authorized(req_not_authed, None) is False
+
+
+# ---------------------------------------------------------------------------
+# MINOR 2: non-ASCII X-Island-Key header must not crash (TypeError) (RED phase)
+# ---------------------------------------------------------------------------
+
+
+def test_key_valid_non_ascii_header_does_not_raise():
+    """Non-ASCII X-Island-Key header value → returns False, never raises TypeError/ValueError."""
+
+    class _NonASCIIHeaders:
+        def get(self, key, default=None):  # noqa: D102
+            if key.lower() == "x-island-key":
+                # Return a string with non-ASCII characters
+                return "café-secret"
+            return default
+
+    class _NonASCIIRequest:
+        headers = _NonASCIIHeaders()
+
+        def get(self, key, default=None):  # noqa: D102
+            return default
+
+    req = _NonASCIIRequest()
+    # Must not raise; must return False (key mismatch or TypeError caught)
+    result = island_key_present_and_valid(req, "cafe-secret")
+    assert result is False

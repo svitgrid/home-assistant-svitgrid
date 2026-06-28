@@ -211,6 +211,16 @@ class SvitgridCommandsView(HomeAssistantView):
         if not verify_signed_command(trusted_public_keys_hex, signing_key_id, signed_event_data, signature):
             return self._json_error(403, "signature_invalid")
 
+        # --- Binding: ensure top-level command+payload match what was signed ---
+        if not isinstance(signed_event_data, dict):
+            return self._json_error(400, "bad_request")
+        signed_command = signed_event_data.get("command")
+        signed_payload = signed_event_data.get("payload")
+        if not signed_command or not isinstance(signed_command, str) or not isinstance(signed_payload, dict):
+            return self._json_error(400, "bad_request")
+        if command != signed_command or payload != signed_payload:
+            return self._json_error(403, "command_mismatch")
+
         # --- Replay protection ---
         now = time.monotonic()
         if command_id is not None:
@@ -218,8 +228,8 @@ class SvitgridCommandsView(HomeAssistantView):
             if command_id in self._seen_commands:
                 return self.json({"ok": True, "deduped": True})
 
-        # --- Dispatch ---
-        inverter_id = payload.get("inverterId")
+        # --- Dispatch using the signed values (authoritative source) ---
+        inverter_id = signed_payload.get("inverterId")
         executors = self._get_executors(hass)
         executor = executors.get(inverter_id)
 
@@ -227,7 +237,7 @@ class SvitgridCommandsView(HomeAssistantView):
             return self._json_error(404, "unknown_inverter")
 
         try:
-            result = await executor.dispatch(command, payload)
+            result = await executor.dispatch(signed_command, signed_payload)
         except NotImplementedError:
             return self._json_error(422, "unsupported")
         except Exception as exc:  # noqa: BLE001
