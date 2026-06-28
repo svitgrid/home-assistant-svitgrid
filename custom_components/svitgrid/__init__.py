@@ -58,7 +58,8 @@ _LOGGER = logging.getLogger(__name__)
 
 
 async def _start_local_store(
-    hass: HomeAssistant, api_client, api_key: str, activity=None, active_ids=None
+    hass: HomeAssistant, api_client, api_key: str, activity=None, active_ids=None,
+    cloud_ingest_enabled: bool = True,
 ):
     """Create the per-entry local store, seed the shared lifecycle holder from
     persisted state, register the read views once, and (only when the device is
@@ -69,6 +70,10 @@ async def _start_local_store(
     Orphaned readings_raw rows (for inverter ids NOT in active_ids) are pruned
     BEFORE the sender starts so they cannot block the new inverter's queue
     (head-of-line blocking after a re-pair that changes the inverter id).
+
+    cloud_ingest_enabled: when False (pure island mode), the cloud sender
+    (run_sender_loop) is NOT spawned. The local store, rollup timer, and all
+    harvest/readings loops run regardless — only the cloud upload path is gated.
 
     When the persisted lifecycle is not active (paused/deprovisioned), the
     sender loop and rollup timer are NOT started; their slots are returned as
@@ -121,13 +126,19 @@ async def _start_local_store(
         # detect an operator re-enable.
         return store, cadence, None, None, lifecycle
 
-    sender_task = hass.async_create_background_task(
-        run_sender_loop(
-            hass=hass, store=store, api_client=api_client,
-            api_key=api_key, cadence=cadence, lifecycle=lifecycle,
-        ),
-        name="svitgrid_reading_sender",
-    )
+    # Gate the cloud sender on the per-entry flag. The harvest engine, local-store
+    # writes, and rollup timer all run regardless — only cloud upload is skipped.
+    # (The command poller stays spawned even in pure island — harmless; SP3 may
+    # gate it if needed.)
+    sender_task = None
+    if cloud_ingest_enabled:
+        sender_task = hass.async_create_background_task(
+            run_sender_loop(
+                hass=hass, store=store, api_client=api_client,
+                api_key=api_key, cadence=cadence, lifecycle=lifecycle,
+            ),
+            name="svitgrid_reading_sender",
+        )
 
     async def _rollup_tick(_now=None):
         now_iso = datetime.now(UTC).isoformat().replace("+00:00", "Z")
@@ -456,8 +467,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     if inverters:
         active_ids = {inv["inverter_id"] for inv in inverters}
+        # Read the cloud-sync flag: data wins over options; default True when
+        # absent in both so existing entries (no flag) continue to ingest.
+        cloud_ingest_enabled = entry.data.get(
+            "cloud_ingest_enabled",
+            entry.options.get("cloud_ingest_enabled", True),
+        )
         store, cadence, sender_task, cancel_rollup, lifecycle = await _start_local_store(
-            hass, api_client, api_key, activity, active_ids=active_ids
+            hass, api_client, api_key, activity, active_ids=active_ids,
+            cloud_ingest_enabled=cloud_ingest_enabled,
         )
         await register_panel(hass)
 
