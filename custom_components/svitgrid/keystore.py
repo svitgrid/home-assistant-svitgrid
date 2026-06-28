@@ -1,8 +1,9 @@
 """Wraps HA's Store for the add-on's persistent state: API key, keypair,
-signingKeyId, and the cached trustedKeyIds list."""
+signingKeyId, the cached trustedKeyIds list, and the island API key."""
 
 from __future__ import annotations
 
+import secrets
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -14,6 +15,11 @@ from homeassistant.helpers.storage import Store
 from .const import STORAGE_KEY, STORAGE_VERSION
 
 
+def generate_island_key() -> str:
+    """Return a new random URL-safe island API key (≥32 chars)."""
+    return secrets.token_urlsafe(32)
+
+
 @dataclass
 class KeystoreState:
     api_key: str
@@ -22,6 +28,7 @@ class KeystoreState:
     signing_key_id: str
     trusted_key_ids: list[str]
     trusted_public_keys_hex: dict[str, str]
+    island_key: str | None = None
 
     def load_private_key(self) -> ec.EllipticCurvePrivateKey:
         return serialization.load_pem_private_key(
@@ -56,6 +63,7 @@ class SvitgridKeystore:
             signing_key_id=data["signing_key_id"],
             trusted_key_ids=list(data.get("trusted_key_ids", [])),
             trusted_public_keys_hex=dict(data.get("trusted_public_keys_hex", {})),
+            island_key=data.get("island_key"),
         )
 
     async def save(
@@ -97,4 +105,19 @@ class SvitgridKeystore:
             return
         current.trusted_public_keys_hex = dict(trusted_public_keys_hex)
         current.trusted_key_ids = sorted(trusted_public_keys_hex.keys())
+        await self._store.async_save(asdict(current))
+
+    async def async_get_island_key(self) -> str | None:
+        """Return the stored island API key, or None if not yet set."""
+        current = await self.load()
+        if current is None:
+            return None
+        return current.island_key
+
+    async def async_set_island_key(self, key: str) -> None:
+        """Persist the island API key, preserving all other keystore fields."""
+        current = await self.load()
+        if current is None:
+            return
+        current.island_key = key
         await self._store.async_save(asdict(current))
