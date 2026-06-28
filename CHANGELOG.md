@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.10.0 — 2026-06-28
+
+### Added
+- **Direct Modbus harvesting (no separate inverter integration needed).** The add-on can now talk to a supported inverter directly over its own protocol — Solarman V5 (data-logger sticks) or raw Modbus TCP (Victron, Huawei, Solplanet) — decoding readings itself instead of only relaying existing Home Assistant sensor entities. Set it up from the Svitgrid phone app: choose **Home Assistant → Direct**, run the usual inverter-discovery wizard (scan the inverter's IP, pick the model, set the Modbus slave id / optional port), and that connection is handed to the add-on through pairing. A **manual** "Set up direct inverter connection" option is also available in the integration's **Configure** menu for the no-phone path.
+- **Reachability check before finishing setup.** When a direct-harvest connection is handed off, the add-on does one quick Modbus read at the given address before completing — if Home Assistant can't reach the inverter (wrong address, different network), setup stops with a clear error instead of silently collecting no data.
+- **Inverter control over direct Modbus.** For supported Deye / Sunsynk / Sol-Ark hybrids, the add-on can now execute control commands directly — work mode, force generator, solar sell, grid-charge toggle, generator-port mode, max sell-power, and time-of-use battery-charge windows — each written and then read back to confirm it applied.
+
+### Notes
+- Only `deye_sg04lp3` is hardware-verified; every other model's register addresses are best-effort starting points. The reachability check proves connectivity, not that the register map is correct — verify a new model against live data before trusting its readings/writes.
+- Requires the Svitgrid API with the direct-harvest pairing fields (register-spec endpoint + `harvestConfig` on pairing claim/finalize).
+
 ## 0.9.1 — 2026-06-25
 
 ### Fixed
