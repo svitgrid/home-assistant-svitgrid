@@ -294,13 +294,15 @@ async def process_command(
         _LOGGER.warning("Skipping unsigned non-internal command %s", cmd_id)
         return
 
-    if not verify_signed_command(trusted_public_keys_hex, sig_key_id, signed_event_data, sig):
+    if not sig_key_id or sig_key_id not in trusted_public_keys_hex:
         _LOGGER.warning(
-            "Skipping command %s — signingKeyId %s not in trusted keys or signature verification failed (cache has %d)",
-            cmd_id,
-            sig_key_id,
-            len(trusted_public_keys_hex),
+            "Skipping command %s — signingKeyId %s not in trusted keys (cache has %d)",
+            cmd_id, sig_key_id, len(trusted_public_keys_hex),
         )
+        return
+
+    if not verify_signed_command(trusted_public_keys_hex, sig_key_id, signed_event_data, sig):
+        _LOGGER.warning("Skipping command %s — admin signature verification failed", cmd_id)
         return
 
     # === Arm 2: Dispatchable commands ===

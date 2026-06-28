@@ -55,6 +55,11 @@ def test_rejects_empty_signature():
     assert verify_signed_command({"kid-1": pub}, "kid-1", data, "") is False
 
 
+def test_rejects_present_but_empty_pubkey():
+    """Key is in trusted dict but pubkey hex is empty string → False."""
+    assert verify_signed_command({"kid-1": ""}, "kid-1", {}, "sig") is False
+
+
 def test_never_raises_on_garbage_inputs():
     """Garbage public key hex → False, no exception."""
     result = verify_signed_command(
