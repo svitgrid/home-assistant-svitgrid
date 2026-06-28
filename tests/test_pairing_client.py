@@ -6,11 +6,11 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from custom_components.svitgrid.pairing_client import (
-    PairingClient,
     PairingClaimed,
-    PairingPending,
+    PairingClient,
     PairingExpired,
     PairingNotFound,
+    PairingPending,
 )
 
 
@@ -86,6 +86,39 @@ async def test_get_status_not_found_raises(mock_session):
 
 
 @pytest.mark.asyncio
+async def test_get_status_claimed_with_island_key(mock_session):
+    """get_status parses islandKey from the claimed-status body."""
+    mock_session.get.return_value = _mock_response(200, {
+        "status": "claimed",
+        "householdId": "h-island",
+        "presetId": None,
+        "island": True,
+        "cloudIngest": False,
+        "islandKey": "sk-app-generated-key",
+    })
+    client = PairingClient(mock_session, api_base="https://api.example.com")
+    status = await client.get_status("secret-abc")
+    assert isinstance(status, PairingClaimed)
+    assert status.island is True
+    assert status.cloud_ingest is False
+    assert status.island_key == "sk-app-generated-key"
+
+
+@pytest.mark.asyncio
+async def test_get_status_claimed_without_island_key(mock_session):
+    """get_status returns island_key=None when islandKey absent (non-island or app omitted it)."""
+    mock_session.get.return_value = _mock_response(200, {
+        "status": "claimed",
+        "householdId": "h-std",
+        "presetId": None,
+    })
+    client = PairingClient(mock_session, api_base="https://api.example.com")
+    status = await client.get_status("secret-abc")
+    assert isinstance(status, PairingClaimed)
+    assert status.island_key is None
+
+
+@pytest.mark.asyncio
 async def test_finalize_returns_apikey(mock_session):
     mock_session.post.return_value = _mock_response(200, {
         "edgeDeviceId": "ed-1",
@@ -103,3 +136,24 @@ async def test_finalize_returns_apikey(mock_session):
     )
     assert result["apiKey"] == "test-key-1234567890"
     assert result["edgeDeviceId"] == "ed-1"
+
+
+@pytest.mark.asyncio
+async def test_finalize_post_body_excludes_island_key_and_cloud_ingest(mock_session):
+    """finalize POST body must NOT include islandKey or cloudIngestEnabled —
+    the cloud no longer reads them from the finalize call (pivot: app owns the key)."""
+    mock_session.post.return_value = _mock_response(200, {
+        "edgeDeviceId": "ed-1", "hardwareId": "h",
+        "apiKey": "k", "householdId": "h",
+        "presetId": None, "trustedKeys": [],
+    })
+    client = PairingClient(mock_session, api_base="https://api.example.com")
+    await client.finalize(
+        secret="secret-abc",
+        public_key_hex="04" + "a" * 128,
+        signing_key_id="ha-home-01",
+    )
+    assert mock_session.post.called
+    posted_json = mock_session.post.call_args.kwargs.get("json", {})
+    assert "islandKey" not in posted_json
+    assert "cloudIngestEnabled" not in posted_json

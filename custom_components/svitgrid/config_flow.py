@@ -42,7 +42,7 @@ from .const import (
     PAIRING_MAX_POLL_DURATION_S,
     PAIRING_POLL_INTERVAL_S,
 )
-from .keystore import SvitgridKeystore, generate_island_key
+from .keystore import SvitgridKeystore
 from .pairing_client import (
     PairingClaimed,
     PairingClient,
@@ -94,13 +94,13 @@ class SvitgridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         # can find it. SP-D will replace manual entry with a phone handoff.
         self._harvest_config: dict[str, Any] | None = None
         # Island-mode (SP2): the PairingClient instance and the claimed status
-        # are stored so async_step_pair_finalize can call finalize itself,
-        # generate the island key, and include it in the POST body.
+        # are stored so async_step_pair_finalize can read the app-provided
+        # island key from PairingClaimed.island_key (pivot: app generates it).
         self._pairing_client: PairingClient | None = None
         self._claimed_status: PairingClaimed | None = None
-        # The generated island key (set during island pairings only). Stored as
-        # instance state so async_create_entry can include it in entry.data even
-        # though the variable is local to the finalize block above.
+        # The app-provided island key (set during island pairings only). Stored
+        # as instance state so async_create_entry can include it in entry.data
+        # even though the variable is local to the finalize block above.
         self._island_key: str | None = None
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
@@ -300,9 +300,9 @@ class SvitgridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Polling saw 'claimed'; call /finalize (if not yet done), then create the entry.
 
         When _final_payload is None (normal path through _poll_for_claim), this method
-        calls pairing_client.finalize itself. For island pairings it first generates
-        and stores the island API key, then passes it in the finalize POST body so the
-        cloud can relay it to the mobile app (Task 1 of SP2).
+        calls pairing_client.finalize itself. For island pairings it reads the
+        app-provided island key from PairingClaimed.island_key (pivot: the app
+        generates the key and the cloud returns it in the /status response).
 
         When _final_payload is already set (tests that pre-set it directly, or the
         re-entry after a failed reachability check), the finalize call is skipped."""
@@ -311,20 +311,25 @@ class SvitgridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             if self._claimed_status is None or self._pairing_client is None:
                 return self.async_abort(reason="pairing_failed")
 
-            island_key: str | None = None
-            cloud_ingest_enabled: bool | None = None
             if self._claimed_status.island:
-                island_key = generate_island_key()
-                # Stash on self so async_create_entry can include it in
-                # entry.data (the local var goes out of scope before that call).
-                self._island_key = island_key
-                # Best-effort write for re-pairings where the keystore blob
-                # already exists.  For fresh installs the blob doesn't exist
-                # yet (it's created in async_setup_entry), so this call is a
-                # no-op; the authoritative write happens in async_setup_entry
-                # via entry.data["island_key"] → keystore.save(island_key=…).
-                await SvitgridKeystore(self.hass).async_set_island_key(island_key)
-                cloud_ingest_enabled = self._claimed_status.cloud_ingest
+                island_key = self._claimed_status.island_key
+                if island_key is None:
+                    # App failed to provide the key. Log and proceed without it;
+                    # island auth will be unavailable until the user re-pairs.
+                    _LOGGER.warning(
+                        "Island pairing: /status did not return islandKey; "
+                        "add-on will operate without island authentication"
+                    )
+                else:
+                    # Stash on self so async_create_entry can include it in
+                    # entry.data (the local var goes out of scope before that call).
+                    self._island_key = island_key
+                    # Best-effort write for re-pairings where the keystore blob
+                    # already exists. For fresh installs the blob doesn't exist
+                    # yet (it's created in async_setup_entry), so this call is a
+                    # no-op; the authoritative write happens in async_setup_entry
+                    # via entry.data["island_key"] → keystore.save(island_key=…).
+                    await SvitgridKeystore(self.hass).async_set_island_key(island_key)
 
             self._final_payload = await self._pairing_client.finalize(
                 secret=self._secret,
@@ -334,8 +339,6 @@ class SvitgridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 # so it creates inverters/{hwid} with the right brand / entityMap.
                 # Preset-mode: None — API looks up the preset server-side.
                 inverter=self._manual_inverter,
-                island_key=island_key,
-                cloud_ingest_enabled=cloud_ingest_enabled,
             )
 
         # SP-D: the cloud /finalize response may carry a direct-Modbus
@@ -459,7 +462,7 @@ class SvitgridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     if (self._claimed_status is not None and self._claimed_status.island)
                     else {}
                 ),
-                # SP2 keystore-population fix: stash the generated island key so
+                # SP2 keystore-population fix: stash the app-provided island key so
                 # async_setup_entry can seed the keystore blob with it.
                 # async_set_island_key at finalize-time is a no-op for fresh
                 # installs (blob doesn't exist yet); entry.data is the durable
