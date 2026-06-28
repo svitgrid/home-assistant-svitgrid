@@ -45,7 +45,9 @@ class SvitgridKeystore:
         "public_key_hex": "04...",
         "private_key_pem": "-----BEGIN PRIVATE KEY-----...",
         "signing_key_id": "ha-...",
-        "trusted_key_ids": ["keyId1", "keyId2"]
+        "trusted_key_ids": ["keyId1", "keyId2"],
+        "trusted_public_keys_hex": {"keyId1": "04...", "keyId2": "04..."},
+        "island_key": "<url-safe token or null>"
       }
     """
 
@@ -75,7 +77,19 @@ class SvitgridKeystore:
         signing_key_id: str,
         trusted_key_ids: list[str],
         trusted_public_keys_hex: dict[str, str] | None = None,
+        island_key: str | None = None,
     ) -> None:
+        # Preserve the currently stored island_key when the caller does not
+        # explicitly pass one (e.g. re-pairing / key-rotation flows that have
+        # no reason to touch the island key).  Passing island_key= explicitly
+        # always wins, including passing None to clear it intentionally — but
+        # since None is also the default sentinel, we resolve by reading the
+        # current store value when the caller omits the argument.
+        resolved_island_key = island_key
+        if resolved_island_key is None:
+            current = await self.load()
+            if current is not None:
+                resolved_island_key = current.island_key
         await self._store.async_save(
             asdict(
                 KeystoreState(
@@ -85,6 +99,7 @@ class SvitgridKeystore:
                     signing_key_id=signing_key_id,
                     trusted_key_ids=trusted_key_ids,
                     trusted_public_keys_hex=trusted_public_keys_hex or {},
+                    island_key=resolved_island_key,
                 )
             )
         )

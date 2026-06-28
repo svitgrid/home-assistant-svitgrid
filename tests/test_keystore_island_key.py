@@ -109,6 +109,74 @@ async def test_island_key_absent_in_legacy_blob_loads_none(hass):
     assert loaded.island_key is None
 
 
+@pytest.mark.asyncio
+async def test_set_island_key_on_empty_store_is_noop(hass):
+    """async_set_island_key on a fresh/empty keystore (no prior save) is a no-op:
+    async_get_island_key() still returns None afterwards."""
+    ks = SvitgridKeystore(hass)
+    # No save() — store is completely empty.
+    await ks.async_set_island_key("orphan-key")
+    # Must still be None because there is no state row to attach the key to.
+    assert await ks.async_get_island_key() is None
+
+
+@pytest.mark.asyncio
+async def test_save_without_island_key_preserves_existing_island_key(hass):
+    """save() called without island_key= must NOT clobber the stored island key."""
+    ks = SvitgridKeystore(hass)
+    from custom_components.svitgrid.signing import generate_keypair
+
+    priv, pub_hex = generate_keypair()
+    await ks.save(
+        api_key="api-key-preserve",
+        public_key_hex=pub_hex,
+        private_key_pem=_pem(priv),
+        signing_key_id="sk-p",
+        trusted_key_ids=["sk-p"],
+    )
+    await ks.async_set_island_key("preserved-island-key")
+
+    # Re-save (simulates re-pairing / key-rotation) WITHOUT passing island_key.
+    await ks.save(
+        api_key="api-key-preserve-v2",
+        public_key_hex=pub_hex,
+        private_key_pem=_pem(priv),
+        signing_key_id="sk-p",
+        trusted_key_ids=["sk-p"],
+    )
+
+    # Island key must survive the save() call.
+    assert await ks.async_get_island_key() == "preserved-island-key"
+
+
+@pytest.mark.asyncio
+async def test_save_with_island_key_updates_it(hass):
+    """save(island_key=...) explicitly replaces the stored island key."""
+    ks = SvitgridKeystore(hass)
+    from custom_components.svitgrid.signing import generate_keypair
+
+    priv, pub_hex = generate_keypair()
+    await ks.save(
+        api_key="api-key-upd",
+        public_key_hex=pub_hex,
+        private_key_pem=_pem(priv),
+        signing_key_id="sk-u",
+        trusted_key_ids=["sk-u"],
+    )
+    await ks.async_set_island_key("old-island-key")
+
+    await ks.save(
+        api_key="api-key-upd",
+        public_key_hex=pub_hex,
+        private_key_pem=_pem(priv),
+        signing_key_id="sk-u",
+        trusted_key_ids=["sk-u"],
+        island_key="new-island-key",
+    )
+
+    assert await ks.async_get_island_key() == "new-island-key"
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
