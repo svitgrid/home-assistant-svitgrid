@@ -33,6 +33,8 @@ class PairingClaimed:
     """Pairing has been claimed by a mobile user."""
     household_id: str
     preset_id: str | None
+    island: bool = False
+    cloud_ingest: bool = True
 
 
 class PairingClient:
@@ -72,6 +74,8 @@ class PairingClient:
                 return PairingClaimed(
                     household_id=body["householdId"],
                     preset_id=body.get("presetId"),
+                    island=bool(body.get("island", False)),
+                    cloud_ingest=bool(body.get("cloudIngest", True)),
                 )
             raise PairingError(f"unknown status: {body['status']}")
 
@@ -82,6 +86,8 @@ class PairingClient:
         public_key_hex: str,
         signing_key_id: str,
         inverter: dict[str, Any] | None = None,
+        island_key: str | None = None,
+        cloud_ingest_enabled: bool | None = None,
     ) -> dict[str, Any]:
         """POST /api/v1/ha-pairing/:secret/finalize — finalize. Returns
         {edgeDeviceId, hardwareId, apiKey, householdId, presetId, trustedKeys,
@@ -90,7 +96,10 @@ class PairingClient:
         `inverter` is set in manual-pair mode and carries the user-collected
         brand/model/phases/entityMap (matches HaPairingInverterSchema on the
         API side). Omitted in preset mode — the API looks up the preset
-        server-side from pairing.presetId."""
+        server-side from pairing.presetId.
+
+        `island_key` + `cloud_ingest_enabled` are included when the pairing is
+        island — the cloud relays them to the mobile app (Task 1 of SP2)."""
         url = f"{self._base}/api/v1/ha-pairing/{secret}/finalize"
         body: dict[str, Any] = {
             "secret": secret,
@@ -99,6 +108,10 @@ class PairingClient:
         }
         if inverter is not None:
             body["inverter"] = inverter
+        if island_key is not None:
+            body["islandKey"] = island_key
+        if cloud_ingest_enabled is not None:
+            body["cloudIngestEnabled"] = cloud_ingest_enabled
         async with self._session.post(url, json=body) as resp:
             if resp.status == 404:
                 raise PairingNotFound("pairing not found")
