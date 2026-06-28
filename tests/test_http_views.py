@@ -40,6 +40,15 @@ class _FakeRequest:
     def __init__(self, app, query=None):
         self.app = {"hass": app}
         self.query = query if query is not None else {}
+        # Simulate an authenticated HA session so _authorize passes.
+        self._data: dict = {"ha_authenticated": True}
+        self.headers: dict = {}  # No X-Island-Key header
+
+    def get(self, key, default=None):  # noqa: D102
+        return self._data.get(key, default)
+
+    def __getitem__(self, key):  # noqa: D105
+        return self._data[key]
 
 
 @pytest.mark.asyncio
