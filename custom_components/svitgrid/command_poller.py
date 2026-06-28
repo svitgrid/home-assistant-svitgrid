@@ -21,6 +21,7 @@ from homeassistant.config_entries import ConfigEntry
 
 from .api_client import CommandAckFailed, DeviceEvicted, DeviceStopped, SvitgridApiClient
 from .cloud_endpoint_handler import is_allowed_api_base, probe_endpoint_auth
+from .command_auth import verify_signed_command
 from .const import (
     ADD_TRUSTED_KEY_COMMAND,
     COMMAND_POLL_CEILING_S,
@@ -30,7 +31,7 @@ from .const import (
     SET_CLOUD_ENDPOINT_COMMAND,
 )
 from .keystore import SvitgridKeystore
-from .signing import sign_payload, verify_payload
+from .signing import sign_payload
 
 if TYPE_CHECKING:
     from .executors.base import BaseExecutor
@@ -293,18 +294,13 @@ async def process_command(
         _LOGGER.warning("Skipping unsigned non-internal command %s", cmd_id)
         return
 
-    admin_pub_hex = trusted_public_keys_hex.get(sig_key_id)
-    if not admin_pub_hex:
+    if not verify_signed_command(trusted_public_keys_hex, sig_key_id, signed_event_data, sig):
         _LOGGER.warning(
-            "Skipping command %s — signingKeyId %s not in trusted keys (cache has %d)",
+            "Skipping command %s — signingKeyId %s not in trusted keys or signature verification failed (cache has %d)",
             cmd_id,
             sig_key_id,
             len(trusted_public_keys_hex),
         )
-        return
-
-    if not verify_payload(signed_event_data, sig, admin_pub_hex):
-        _LOGGER.warning("Skipping command %s — admin signature verification failed", cmd_id)
         return
 
     # === Arm 2: Dispatchable commands ===
