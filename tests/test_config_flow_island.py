@@ -417,6 +417,75 @@ async def test_setup_entry_seeds_keystore_with_island_key(hass: HomeAssistant) -
     assert stored == island_key, f"Expected {island_key!r} in keystore, got {stored!r}"
 
 
+# ---------------------------------------------------------------------------
+# cloud_ingest source fix: local value must win, not finalize response field
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_island_cloud_ingest_true_wins_when_response_missing_field(
+    hass: HomeAssistant,
+) -> None:
+    """Island claim says cloud_ingest=True, finalize response omits cloudIngest.
+
+    The current buggy code reads _final_payload.get("cloudIngest", False) which
+    defaults to False when the field is absent → wrong.  The fix reads the
+    locally-computed cloud_ingest from _claimed_status → True.
+    """
+    # Finalize response deliberately OMITS cloudIngest to expose the bug.
+    finalize_resp = {**_FINALIZE_RESPONSE_BASE}  # no cloudIngest key
+    claimed = PairingClaimed(household_id="h-ci1", preset_id=None, island=True, cloud_ingest=True)
+    flow, _mock_client = _make_flow(hass, claimed_status=claimed, mock_finalize_return=finalize_resp)
+
+    with patch("custom_components.svitgrid.config_flow.generate_island_key", return_value="ik-ci1"):
+        result = await flow.async_step_pair_finalize()
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    # Local value (cloud_ingest=True) must win — not the absent response field.
+    assert result["data"].get("cloud_ingest_enabled") is True
+
+
+@pytest.mark.asyncio
+async def test_island_cloud_ingest_false_wins_over_contradicting_response(
+    hass: HomeAssistant,
+) -> None:
+    """Island claim says cloud_ingest=False, finalize response has cloudIngest=True.
+
+    The current buggy code reads cloudIngest from the response → True (wrong).
+    The fix reads from _claimed_status.cloud_ingest → False (correct).
+    """
+    # Finalize response contradicts the user's choice: cloudIngest=True.
+    finalize_resp = {**_FINALIZE_RESPONSE_BASE, "cloudIngest": True}
+    claimed = PairingClaimed(household_id="h-ci2", preset_id=None, island=True, cloud_ingest=False)
+    flow, _mock_client = _make_flow(hass, claimed_status=claimed, mock_finalize_return=finalize_resp)
+
+    with patch("custom_components.svitgrid.config_flow.generate_island_key", return_value="ik-ci2"):
+        result = await flow.async_step_pair_finalize()
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    # Local value (cloud_ingest=False) must win — not the contradicting response.
+    assert result["data"].get("cloud_ingest_enabled") is False
+
+
+@pytest.mark.asyncio
+async def test_non_island_cloud_ingest_key_is_absent(hass: HomeAssistant) -> None:
+    """Non-island finalize must NOT write cloud_ingest_enabled at all (key absent).
+
+    Absent → True downstream (fail-open for relay pairings).  The current buggy
+    code always writes False, which would wrongly suppress cloud ingest for relay
+    entries.
+    """
+    finalize_resp = {**_FINALIZE_RESPONSE_BASE}
+    claimed = PairingClaimed(household_id="h-ci3", preset_id=None, island=False, cloud_ingest=True)
+    flow, _mock_client = _make_flow(hass, claimed_status=claimed, mock_finalize_return=finalize_resp)
+
+    result = await flow.async_step_pair_finalize()
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    # The key must be ABSENT (not just falsy) so downstream defaults to True.
+    assert "cloud_ingest_enabled" not in result["data"]
+
+
 @pytest.mark.asyncio
 async def test_setup_entry_non_island_keystore_island_key_is_none(hass: HomeAssistant) -> None:
     """Non-island async_setup_entry must NOT write an island key to the keystore."""

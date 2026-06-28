@@ -72,7 +72,7 @@ class SvitgridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     @callback
     def async_get_options_flow(
         config_entry: config_entries.ConfigEntry,
-    ) -> "SvitgridOptionsFlow":
+    ) -> SvitgridOptionsFlow:
         """Expose the 'Configure' button so users can edit sensor mappings."""
         return SvitgridOptionsFlow(config_entry)
 
@@ -445,9 +445,20 @@ class SvitgridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 "pv_strings": self._final_payload.get("pvStrings"),
                 # Phase 2-advanced: write-command recipes for YamlDispatcher.
                 "commands": self._final_payload.get("commands") or [],
-                # SP2: island-mode cloud-sync flag (False for non-island;
-                # read by async_setup_entry to gate cloud ingest).
-                "cloud_ingest_enabled": bool(self._final_payload.get("cloudIngest", False)),
+                # SP2: island-mode cloud-sync flag.
+                # Source: self._claimed_status.cloud_ingest (the user's choice
+                # from the /status poll response, relayed via PairingClaimed).
+                # NOT _final_payload: the cloud API carries this field as
+                # "cloudIngestEnabled" (not "cloudIngest"), so .get("cloudIngest")
+                # is always absent — it would always default to False regardless of
+                # the user's actual selection.  The local variable is canonical.
+                # Non-island pairings omit the key entirely so async_setup_entry
+                # defaults to True (fail-open; relay entries keep ingesting).
+                **(
+                    {"cloud_ingest_enabled": bool(self._claimed_status.cloud_ingest)}
+                    if (self._claimed_status is not None and self._claimed_status.island)
+                    else {}
+                ),
                 # SP2 keystore-population fix: stash the generated island key so
                 # async_setup_entry can seed the keystore blob with it.
                 # async_set_island_key at finalize-time is a no-op for fresh
