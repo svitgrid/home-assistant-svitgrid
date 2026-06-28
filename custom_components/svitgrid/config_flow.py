@@ -308,14 +308,29 @@ class SvitgridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 "model_id": hc.get("modelId"),
                 "logger_serial": hc.get("loggerSerial"),
             }
-            # No spec is loaded here (loading one needs an authenticated
-            # GET /register-specs round-trip we don't have at flow time), so
-            # the checker falls back to its default probe address. Good enough
-            # to prove the inverter answers on ip:port.
+            # Fetch the model's register spec so the reachability check can
+            # probe a REAL register (e.g. battery SOC at address 588) instead
+            # of the generic fallback register 1 that Deye inverters don't
+            # implement.  The public GET /api/v1/register-specs/:modelId
+            # endpoint requires no auth.  If the fetch fails for any reason
+            # spec stays None and the checker falls back gracefully.
             from .harvest.reachability import check_inverter_reachable
+            from .harvest.register_spec import RegisterSpec
+
+            spec = None
+            try:
+                _spec_session = aiohttp_client.async_get_clientsession(self.hass)
+                _spec_api = SvitgridApiClient(_spec_session, api_base=DEFAULT_API_BASE)
+                spec_dict = await _spec_api.get_register_spec(
+                    self._harvest_config["model_id"]
+                )
+                if spec_dict:
+                    spec = RegisterSpec.from_dict(spec_dict)
+            except Exception:  # noqa: BLE001 — spec fetch is best-effort
+                spec = None
 
             reachable = await check_inverter_reachable(
-                self.hass, self._harvest_config
+                self.hass, self._harvest_config, spec=spec
             )
             if not reachable:
                 return self.async_show_form(

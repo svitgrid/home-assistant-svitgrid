@@ -97,11 +97,21 @@ async def check_inverter_reachable(
 
     try:
         result = await transport.read_word(hass, probe_spec, cfg, unit_id, address)
-        return result is not None
-    except Exception:
-        _LOGGER.debug(
-            "reachability check failed for %s:%s",
+        if result is None:
+            _LOGGER.warning(
+                "reachability check returned None for %s:%s (address=%s) — inverter unreachable",
+                harvest_config.get("ip"),
+                harvest_config.get("port"),
+                address,
+            )
+            return False
+        return True
+    except Exception as exc:  # noqa: BLE001
+        _LOGGER.warning(
+            "reachability check raised for %s:%s (address=%s): %s",
             harvest_config.get("ip"),
             harvest_config.get("port"),
+            address,
+            exc,
         )
         return False
