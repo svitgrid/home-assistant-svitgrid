@@ -10,7 +10,7 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 
 from .api_client import DeviceEvicted, ReadingRejected
-from .const import BACKFILL_CAP_S, INGEST_BATCH_MAX, READINGS_INTERVAL_S, SENDER_TICK_S
+from .const import BACKFILL_CAP_S, CADENCE_DEFAULT_INTERVAL_S, INGEST_BATCH_MAX, SENDER_TICK_S
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -18,7 +18,7 @@ _LOGGER = logging.getLogger(__name__)
 @dataclass
 class Cadence:
     """Shared produce-cadence the sender updates and the publisher reads."""
-    interval_s: int = READINGS_INTERVAL_S
+    interval_s: int = CADENCE_DEFAULT_INTERVAL_S
 
 
 def _now_iso() -> str:

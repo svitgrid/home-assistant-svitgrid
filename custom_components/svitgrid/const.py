@@ -4,6 +4,12 @@ DOMAIN = "svitgrid"
 
 # Timing (seconds)
 READINGS_INTERVAL_S = 10
+# Initial Cadence interval before the server's first ingest response. Set to the
+# 5-min idle cadence so the harvester aligns with an edge device's idle ingest
+# (poll-cadence.ts idle = ingestIntervalMs 300_000) from the first sleep — no
+# initial fast burst. The server still tunes cadence.interval_s on each push;
+# the immediate first poll + eager drain keep first-ingest instant regardless.
+CADENCE_DEFAULT_INTERVAL_S = 300
 COMMAND_POLL_INTERVAL_S = 5
 # Upper bound for the server-driven command-poll cadence (10 min). MQTT-wake
 # delivers commands instantly; the HTTP poll is the slow fallback, so the

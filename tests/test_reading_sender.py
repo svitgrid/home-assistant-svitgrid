@@ -275,3 +275,11 @@ async def test_sender_fallback_sleep_when_store_lacks_wait_for_data(tmp_path):
         with contextlib.suppress(asyncio.CancelledError, Exception):
             await sender_task
     # If we reach here without exception, the fallback works
+
+
+def test_cadence_default_is_five_minutes():
+    """Cadence starts at the 5-min idle cadence (edge-aligned) before the
+    server's first ingest response — no initial fast burst."""
+    from custom_components.svitgrid.reading_sender import Cadence
+
+    assert Cadence().interval_s == 300
