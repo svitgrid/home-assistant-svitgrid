@@ -4,11 +4,17 @@ When the pairing is island (PairingClaimed.island=True):
   - generate_island_key() is called → key is stored via async_set_island_key
   - cloud_ingest_enabled is written to entry.data
   - the finalize POST body includes islandKey + cloudIngestEnabled
+  - island_key is stashed in entry.data["island_key"]
 
 When the pairing is NOT island:
   - no island key is generated
   - no islandKey in the finalize POST body (regression guard)
   - cloud_ingest_enabled not set (or False) in entry.data
+
+Keystore-population fix (gap closed in this PR):
+  - After async_setup_entry, keystore.async_get_island_key() returns the key
+    stored in entry.data["island_key"] (proves the add-on holds the key even
+    when async_set_island_key was a no-op for a fresh install).
 """
 from __future__ import annotations
 
@@ -18,10 +24,13 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric import ec
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.svitgrid.config_flow import SvitgridConfigFlow
+from custom_components.svitgrid.const import DOMAIN
 from custom_components.svitgrid.keystore import SvitgridKeystore
 from custom_components.svitgrid.pairing_client import PairingClaimed
+from custom_components.svitgrid.reading_store import ReadingStore
 from custom_components.svitgrid.signing import generate_keypair, serialize_private_key
 
 # ---------------------------------------------------------------------------
@@ -316,3 +325,132 @@ async def test_island_full_flow_finalize_body_has_island_key(
 
     assert captured_kwargs.get("island_key") == "captured-island-key"
     assert captured_kwargs.get("cloud_ingest_enabled") is True
+
+
+# ---------------------------------------------------------------------------
+# Keystore-population fix: entry.data["island_key"] + async_setup_entry
+# ---------------------------------------------------------------------------
+
+_ACTIVE_LIFECYCLE = {"state": "active", "reason": None, "since": None}
+
+_BASE_ENTRY_DATA = {
+    "api_base": "https://api.example.com",
+    "api_key": "test-api-key",
+    "edge_device_id": "ed-island-01",
+    "household_id": "h-island",
+    "signing_key_id": "ha-island-sk",
+    "private_key_pem": "-----BEGIN PRIVATE KEY-----\nFAKE\n-----END PRIVATE KEY-----\n",
+    "public_key_hex": "04" + "a" * 128,
+    "trusted_keys": [{"keyId": "ha-home-01", "publicKeyHex": "04" + "b" * 128}],
+    "inverters": [
+        {
+            "inverter_id": "ha-xyz",
+            "entity_map": {"batterySoc": "sensor.soc"},
+            "command_recipes": [],
+            "command_config": {},
+            "brand": "Deye",
+            "model": "SG04LP3",
+            "phases": 3,
+            "has_battery": True,
+            "pv_strings": 2,
+            "preset_id": None,
+        }
+    ],
+    "cloud_ingest_enabled": False,
+}
+
+
+@pytest.mark.asyncio
+async def test_finalize_island_entry_data_contains_island_key(hass: HomeAssistant) -> None:
+    """Island finalize must stash the generated key in entry.data['island_key']."""
+    finalize_resp = {**_FINALIZE_RESPONSE_BASE, "island": True, "cloudIngest": True}
+    claimed = PairingClaimed(household_id="h-island", preset_id=None, island=True, cloud_ingest=True)
+    flow, _mock_client = _make_flow(hass, claimed_status=claimed, mock_finalize_return=finalize_resp)
+
+    fake_key = "stash-test-island-key"
+    with patch("custom_components.svitgrid.config_flow.generate_island_key", return_value=fake_key):
+        result = await flow.async_step_pair_finalize()
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert result["data"].get("island_key") == fake_key
+
+
+@pytest.mark.asyncio
+async def test_setup_entry_seeds_keystore_with_island_key(hass: HomeAssistant) -> None:
+    """After async_setup_entry, keystore.async_get_island_key() returns the key
+    from entry.data['island_key'] — proving the add-on holds the key even when
+    async_set_island_key at finalize-time was a no-op (fresh install, empty blob)."""
+    from custom_components.svitgrid import async_setup_entry
+
+    island_key = "setup-entry-island-key-xyz"
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        version=2,
+        title="Svitgrid (island test)",
+        data={**_BASE_ENTRY_DATA, "island_key": island_key},
+        entry_id="entry-island-ks",
+    )
+    entry.add_to_hass(hass)
+
+    with (
+        patch.object(ReadingStore, "get_lifecycle", AsyncMock(return_value=_ACTIVE_LIFECYCLE)),
+        patch.object(ReadingStore, "prune_inverters_not_in", AsyncMock(return_value=0)),
+        patch("custom_components.svitgrid.run_readings_loop", return_value=None),
+        patch("custom_components.svitgrid.run_command_loop", return_value=None),
+        patch("custom_components.svitgrid.run_mqtt_wake_loop", return_value=None),
+        patch("custom_components.svitgrid.run_sender_loop", return_value=None),
+        patch("custom_components.svitgrid.register_views"),
+        patch("custom_components.svitgrid.register_panel", new_callable=AsyncMock),
+        patch("custom_components.svitgrid.remove_panel"),
+        patch.object(
+            hass.config_entries, "async_forward_entry_setups", AsyncMock(return_value=True)
+        ),
+        patch("custom_components.svitgrid.SvitgridApiClient"),
+        patch("custom_components.svitgrid.refresh_entry_inverters", AsyncMock(return_value=([], False))),
+    ):
+        ok = await async_setup_entry(hass, entry)
+        await hass.async_block_till_done()
+
+    assert ok is True
+    ks = SvitgridKeystore(hass)
+    stored = await ks.async_get_island_key()
+    assert stored == island_key, f"Expected {island_key!r} in keystore, got {stored!r}"
+
+
+@pytest.mark.asyncio
+async def test_setup_entry_non_island_keystore_island_key_is_none(hass: HomeAssistant) -> None:
+    """Non-island async_setup_entry must NOT write an island key to the keystore."""
+    from custom_components.svitgrid import async_setup_entry
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        version=2,
+        title="Svitgrid (non-island test)",
+        data={**_BASE_ENTRY_DATA},  # no island_key field
+        entry_id="entry-noisle-ks",
+    )
+    entry.add_to_hass(hass)
+
+    with (
+        patch.object(ReadingStore, "get_lifecycle", AsyncMock(return_value=_ACTIVE_LIFECYCLE)),
+        patch.object(ReadingStore, "prune_inverters_not_in", AsyncMock(return_value=0)),
+        patch("custom_components.svitgrid.run_readings_loop", return_value=None),
+        patch("custom_components.svitgrid.run_command_loop", return_value=None),
+        patch("custom_components.svitgrid.run_mqtt_wake_loop", return_value=None),
+        patch("custom_components.svitgrid.run_sender_loop", return_value=None),
+        patch("custom_components.svitgrid.register_views"),
+        patch("custom_components.svitgrid.register_panel", new_callable=AsyncMock),
+        patch("custom_components.svitgrid.remove_panel"),
+        patch.object(
+            hass.config_entries, "async_forward_entry_setups", AsyncMock(return_value=True)
+        ),
+        patch("custom_components.svitgrid.SvitgridApiClient"),
+        patch("custom_components.svitgrid.refresh_entry_inverters", AsyncMock(return_value=([], False))),
+    ):
+        ok = await async_setup_entry(hass, entry)
+        await hass.async_block_till_done()
+
+    assert ok is True
+    ks = SvitgridKeystore(hass)
+    stored = await ks.async_get_island_key()
+    assert stored is None, f"Expected None in keystore for non-island, got {stored!r}"

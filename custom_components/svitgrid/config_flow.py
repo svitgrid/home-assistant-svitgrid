@@ -98,6 +98,10 @@ class SvitgridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         # generate the island key, and include it in the POST body.
         self._pairing_client: PairingClient | None = None
         self._claimed_status: PairingClaimed | None = None
+        # The generated island key (set during island pairings only). Stored as
+        # instance state so async_create_entry can include it in entry.data even
+        # though the variable is local to the finalize block above.
+        self._island_key: str | None = None
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """First step — present Pair vs Manual vs direct-harvest."""
@@ -311,6 +315,14 @@ class SvitgridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             cloud_ingest_enabled: bool | None = None
             if self._claimed_status.island:
                 island_key = generate_island_key()
+                # Stash on self so async_create_entry can include it in
+                # entry.data (the local var goes out of scope before that call).
+                self._island_key = island_key
+                # Best-effort write for re-pairings where the keystore blob
+                # already exists.  For fresh installs the blob doesn't exist
+                # yet (it's created in async_setup_entry), so this call is a
+                # no-op; the authoritative write happens in async_setup_entry
+                # via entry.data["island_key"] → keystore.save(island_key=…).
                 await SvitgridKeystore(self.hass).async_set_island_key(island_key)
                 cloud_ingest_enabled = self._claimed_status.cloud_ingest
 
@@ -436,6 +448,12 @@ class SvitgridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 # SP2: island-mode cloud-sync flag (False for non-island;
                 # read by async_setup_entry to gate cloud ingest).
                 "cloud_ingest_enabled": bool(self._final_payload.get("cloudIngest", False)),
+                # SP2 keystore-population fix: stash the generated island key so
+                # async_setup_entry can seed the keystore blob with it.
+                # async_set_island_key at finalize-time is a no-op for fresh
+                # installs (blob doesn't exist yet); entry.data is the durable
+                # hand-off channel.  Only written for island pairings.
+                **( {"island_key": self._island_key} if self._island_key else {} ),
             },
         )
 

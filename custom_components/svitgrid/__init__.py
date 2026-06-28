@@ -452,6 +452,41 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     activity = ActivityTracker()
     inverters = _inverters_from_entry(entry)
 
+    # Seed the keystore blob from entry data.
+    # Purpose 1 (keystore-population fix, SP2): if entry.data["island_key"] is
+    #   set (island pairing), write it into the keystore blob.  At config-flow
+    #   finalize time the keystore blob didn't exist yet (fresh install), so the
+    #   async_set_island_key call there was a no-op.  This is the authoritative
+    #   write that closes the gap: after async_setup_entry completes,
+    #   keystore.async_get_island_key() reliably returns the generated key.
+    # Purpose 2 (island auth, SP1): http_views.py reads
+    #   hass.data[DOMAIN]["keystore"] to validate X-Island-Key.  Storing the
+    #   keystore instance here makes that lookup work for config-entry paths
+    #   (the YAML path stores it too, but the entry path historically did not).
+    # ORDER: keystore.save() must run BEFORE any call to async_set_island_key so
+    #   the blob exists.  save() accepts island_key=None (non-island), in which
+    #   case it preserves whatever island_key was already stored in the blob.
+    keystore = SvitgridKeystore(hass)
+    _trusted_keys_raw = data.get("trusted_keys") or []
+    _trusted_key_ids = [tk["keyId"] for tk in _trusted_keys_raw]
+    _trusted_public_keys_hex = {
+        tk["keyId"]: tk["publicKeyHex"]
+        for tk in _trusted_keys_raw
+        if "publicKeyHex" in tk
+    }
+    await keystore.save(
+        api_key=data["api_key"],
+        public_key_hex=data["public_key_hex"],
+        private_key_pem=data["private_key_pem"],
+        signing_key_id=data["signing_key_id"],
+        trusted_key_ids=_trusted_key_ids,
+        trusted_public_keys_hex=_trusted_public_keys_hex,
+        # Explicit pass: non-None writes the island key; None preserves existing.
+        island_key=data.get("island_key"),
+    )
+    hass.data.setdefault(DOMAIN, {})
+    hass.data[DOMAIN]["keystore"] = keystore
+
     if not inverters:
         _LOGGER.warning(
             "Config entry %s has no inverters configured; nothing to publish.",
