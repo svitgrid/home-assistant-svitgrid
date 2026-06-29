@@ -300,15 +300,19 @@ def test_sell_to_grid_smart_deactivates_after_hysteresis():
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-def test_lower_consumption_activate_when_soc_low():
+def test_lower_consumption_skips_device_control_when_soc_low():
+    """lower_consumption actions are smart-device-only; island WriteExecutor can't
+    perform them → skip:device_control_unavailable instead of fake-activate."""
     event = {
         "mode": "lower_consumption",
         "schedule": _in_window_schedule(),
         "config": {"socThreshold": 30},
     }
     result = evaluate_event(event, {"batterySoc": 20}, _idle(), _NOW, TZ)
-    assert result.action == "activate"
-    assert result.new_state["status"] == "active"
+    assert result.action == "skip"
+    assert result.skip_reason == "device_control_unavailable"
+    # State stays idle — no spurious activate→deactivate lifecycle
+    assert result.new_state.get("status", "idle") == "idle"
 
 
 def test_lower_consumption_hold_when_active_and_soc_still_low():
@@ -349,7 +353,9 @@ def test_consume_from_sun_starts_sustain_when_conditions_met():
     assert "conditionMetSince" in result.new_state
 
 
-def test_consume_from_sun_activates_after_sustain():
+def test_consume_from_sun_skips_device_control_when_sustain_elapsed():
+    """consume_from_sun actions are smart-device-only; island WriteExecutor can't
+    perform them → skip:device_control_unavailable instead of fake-activate."""
     event = {
         "mode": "consume_from_sun",
         "schedule": _in_window_schedule(),
@@ -359,8 +365,10 @@ def test_consume_from_sun_activates_after_sustain():
     state = {"status": "pending_condition", "conditionMetSince": _ago(10)}
     reading = {"batterySoc": 95, "pvPower": 1200, "batteryPower": 0}
     result = evaluate_event(event, reading, state, _NOW, TZ)
-    assert result.action == "activate"
-    assert result.new_state["status"] == "active"
+    assert result.action == "skip"
+    assert result.skip_reason == "device_control_unavailable"
+    # State reset to idle — no spurious activate→deactivate lifecycle
+    assert result.new_state.get("status", "idle") == "idle"
 
 
 def test_consume_from_sun_holds_during_sustain():
@@ -747,3 +755,93 @@ def test_custom_deactivates_after_release_sustain():
     state = _active(conditionLostSince=_ago(3))
     result = evaluate_event(event, reading, state, _NOW, TZ)
     assert result.action == "deactivate"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Review-fix wave tests
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def test_one_holds_unknown_condition_type_returns_false():
+    """Unknown/future condition type → _one_holds is fail-closed (False), not fail-open.
+
+    A cloud condition type not yet in _CLOUD_CONDITION_TYPES would pass the
+    top-level guard, reach _one_holds, and must NOT automatically 'hold'.
+    This prevents a future unknown type from always activating.
+    """
+    from custom_components.svitgrid.harvest.event_evaluator import _one_holds
+
+    unknown = {"type": "future_ai_condition", "param": 42}
+    signals = {"batterySoc": 80, "pvPowerW": 1000, "loadPowerW": 500}
+    # fail-closed: unknown type → False regardless of held state
+    assert _one_holds(unknown, signals, False) is False
+    assert _one_holds(unknown, signals, True) is False
+
+
+def test_custom_unknown_condition_type_does_not_activate():
+    """Custom event with an unrecognized condition type never activates."""
+    event = {
+        "mode": "custom",
+        "schedule": _in_window_schedule(),
+        "config": {
+            "customConditions": [{"type": "unknown_future_type", "someParam": True}],
+            "customActions": [{"command": "set_work_mode", "payload": {"workMode": 0}}],
+            "sustainMinutes": 0,
+        },
+    }
+    reading = {"batterySoc": 80, "pvPower": 0, "loadPower": 500, "gridPower": 0}
+    # First call: condition never holds → stays idle (no start_sustain)
+    r1 = evaluate_event(event, reading, _idle(), _NOW, TZ)
+    assert r1.action != "activate"
+    assert r1.new_state.get("status", "idle") == "idle"
+
+
+def test_battery_maintenance_completed_redispatches_solar_sell():
+    """When completed=True and still in-window, hold is returned and set_solar_sell{0}
+    is re-dispatched every tick to keep solar-sell suppressed.
+
+    Matches TS evaluateBatteryMaintenanceCharge lines 1814-1841: step 3
+    ('Always: set_solar_sell {solarSell:0}') runs BEFORE the SOC≥99 completed
+    check, so re-dispatch happens unconditionally in-window even post-completion.
+    """
+    event = {
+        "mode": "battery_maintenance",
+        "schedule": _in_window_schedule(),
+        "config": {"gridFallbackHour": 20},  # 20:00 Kyiv, not reached at 15:00
+    }
+    reading = {"batterySoc": 99}
+    # State already marks completed from a previous tick
+    state = _active(completed=True, maintenancePriorSolarSell=False)
+    result = evaluate_event(event, reading, state, _NOW, TZ)
+    assert result.action == "hold"
+    assert result.new_state.get("completed") is True
+    cmd_names = [c[0] for c in result.commands]
+    assert "set_solar_sell" in cmd_names
+    solar_sell_cmd = next(c for c in result.commands if c[0] == "set_solar_sell")
+    assert solar_sell_cmd[1]["solarSell"] == 0
+    # Grid-charge NOT dispatched (SOC >= 99 → early return before fallback logic)
+    assert "set_battery_charge" not in cmd_names
+
+
+def test_sell_to_grid_smart_reactivates_after_pv_recovery():
+    """ON-edge recovery: pending_condition + conditionMetSince > 2min + PV back above
+    threshold → activate (mirrors the tested OFF-edge hysteresis).
+
+    State machine: active→(pv drops)→deactivate→pending_condition→(pv recovers
+    + 2min sustain)→activate.
+    """
+    event = {
+        "mode": "sell_to_grid",
+        "schedule": _in_window_schedule(),
+        "config": {"sellMode": "smart", "pvThresholdW": 500},
+    }
+    state = {
+        "status": "pending_condition",
+        "conditionMetSince": _ago(3),  # 3 min elapsed → ON hysteresis met
+        "previousWorkMode": 2,
+    }
+    result = evaluate_event(event, {"pvPower": 1200}, state, _NOW, TZ)
+    assert result.action == "activate"
+    assert result.new_state["status"] == "active"
+    cmds = dict(result.commands)
+    assert cmds["set_work_mode"]["workMode"] == 0

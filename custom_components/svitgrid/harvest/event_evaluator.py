@@ -358,8 +358,10 @@ def _one_holds(condition: dict, signals: dict, held: bool) -> bool:
         if gp is None:
             return False
         return bool(gp) if condition.get("state") == "up" else not bool(gp)
-    # Cloud-only types are pre-filtered; should never reach here
-    return True
+    # Cloud-only types are pre-filtered; an unrecognised type must be fail-closed
+    # so a future cloud condition type not yet listed in _CLOUD_CONDITION_TYPES
+    # does NOT accidentally pass the guard and always-activate.
+    return False
 
 
 def _evaluate_conditions(conditions: list, signals: dict, held: bool) -> bool:
@@ -705,12 +707,14 @@ def _eval_sell_to_grid(
 def _eval_lower_consumption(
     event: dict, reading: dict, exec_state: dict, new_state: dict, now_utc: datetime,
 ) -> EvaluatorDecision:
-    """batterySoc < socThreshold → activate; SOC recovers → deactivate.
+    """batterySoc < socThreshold → would activate, but device-control actions
+    (turn off smart loads) are outside the island WriteExecutor's capability.
+    Returns skip:device_control_unavailable instead of a fake-activate with empty
+    commands, so no spurious activate→deactivate lifecycle is created.
 
-    Forecast gate from the TS is STRIPPED locally.
-    In the HA context, the smart-device commands (turn off loads) are emitted
-    as an empty command list — the scheduler/dispatcher chain owns device-level
-    dispatch. State tracking still works correctly.
+    The event will be hidden from the island event-creation UI in a later mobile
+    task (consume_from_sun has the same deferral).
+
     TS lines 693-782.
     """
     config = event.get("config") or {}
@@ -720,9 +724,13 @@ def _eval_lower_consumption(
     soc_below = soc < threshold
 
     if soc_below and status != "active":
-        new_state["status"] = "active"
-        new_state["lastActivatedAt"] = now_utc.isoformat()
-        return EvaluatorDecision(action="activate", commands=[], new_state=new_state)
+        # State stays idle — no spurious lifecycle
+        return EvaluatorDecision(
+            action="skip",
+            commands=[],
+            skip_reason="device_control_unavailable",
+            new_state=new_state,
+        )
 
     if not soc_below and status == "active":
         new_state["status"] = "idle"
@@ -737,6 +745,15 @@ def _eval_consume_from_sun(
     event: dict, reading: dict, exec_state: dict, new_state: dict, now_utc: datetime,
 ) -> EvaluatorDecision:
     """PV + SOC threshold with minDurationMinutes hysteresis on both edges.
+
+    When conditions are met and the sustain period elapses, this mode would
+    activate smart-device controls (e.g. turn on high-load appliances) which
+    are outside the island WriteExecutor's capability.  Returns
+    skip:device_control_unavailable instead of a fake-activate with empty
+    commands, so no spurious activate→deactivate lifecycle is created.
+
+    The event will be hidden from the island event-creation UI in a later
+    mobile task (lower_consumption has the same deferral).
 
     TS uses pvVoltage as ON gate (curtailment-proof); locally we use pvPower
     (available from HA sensors). The config field is solarFloorW / minPvThresholdW.
@@ -772,10 +789,15 @@ def _eval_consume_from_sun(
         cms_ms = _iso_to_ms(exec_state.get("conditionMetSince"))
         elapsed_min = ((now_ms - cms_ms) / 60_000.0) if cms_ms is not None else 0.0
         if elapsed_min >= min_duration:
-            new_state["status"] = "active"
-            new_state["lastActivatedAt"] = now_utc.isoformat()
-            new_state.pop("conditionLostSince", None)
-            return EvaluatorDecision(action="activate", commands=[], new_state=new_state)
+            # Reset to idle — device_control_unavailable, no spurious lifecycle
+            new_state["status"] = "idle"
+            new_state["conditionMetSince"] = None
+            return EvaluatorDecision(
+                action="skip",
+                commands=[],
+                skip_reason="device_control_unavailable",
+                new_state=new_state,
+            )
         return EvaluatorDecision(action="hold", commands=[], new_state=new_state)
 
     # active
