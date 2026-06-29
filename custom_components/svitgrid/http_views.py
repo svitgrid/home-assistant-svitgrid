@@ -250,8 +250,227 @@ class SvitgridCommandsView(HomeAssistantView):
         return self.json({"ok": True, "result": result})
 
 
+class SvitgridEventsView(HomeAssistantView):
+    """GET/POST /api/svitgrid/events — island-key read, signed-write for calendar events.
+
+    Auth:
+    - GET: island key OR authenticated HA session.
+    - POST: island key ONLY + admin ECDSA signature over the event body.
+
+    POST body: {event, signingKeyId, signedEventData, signature}.
+    Binding: ``event`` (top-level) must equal ``signedEventData`` exactly.
+    The ``signedEventData`` copy is authoritative — it is stored, not
+    the top-level ``event``.
+
+    Error shape mirrors SvitgridCommandsView: ``{"error": "<code>"}``.
+    """
+
+    url = "/api/svitgrid/events"
+    name = "api:svitgrid:events"
+    requires_auth = False
+
+    @staticmethod
+    def _json_error(status: int, error: str, **extra) -> web.Response:
+        body = json.dumps({"error": error, **extra})
+        return web.Response(status=status, text=body, content_type="application/json")
+
+    @staticmethod
+    async def _get_keystore(hass):
+        return hass.data.get(DOMAIN, {}).get("keystore")
+
+    @staticmethod
+    async def _get_event_store(hass):
+        return hass.data.get(DOMAIN, {}).get("event_store")
+
+    async def get(self, request) -> web.Response:  # noqa: D102
+        hass = request.app["hass"]
+        keystore = await self._get_keystore(hass)
+        island_key: str | None = (
+            await keystore.async_get_island_key() if keystore is not None else None
+        )
+        if not island_request_authorized(request, island_key):
+            return self._json_error(401, "unauthorized")
+
+        event_store = await self._get_event_store(hass)
+        if event_store is None:
+            return self.json({"events": []})
+        events = await event_store.async_list_events()
+        return self.json({"events": events})
+
+    async def post(self, request) -> web.Response:  # noqa: D102
+        hass = request.app["hass"]
+
+        # --- Auth: island key ONLY ---
+        keystore = await self._get_keystore(hass)
+        island_key: str | None = (
+            await keystore.async_get_island_key() if keystore is not None else None
+        )
+        if not island_key_present_and_valid(request, island_key):
+            return self._json_error(401, "unauthorized")
+
+        # --- Parse body ---
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001
+            return self._json_error(400, "bad_request")
+
+        signing_key_id = body.get("signingKeyId")
+        signed_event_data = body.get("signedEventData")
+        signature = body.get("signature")
+        event = body.get("event")
+
+        if not signing_key_id or signed_event_data is None or not signature or event is None:
+            return self._json_error(400, "bad_request")
+
+        # --- Verify admin signature ---
+        keystore_state = await keystore.load() if keystore is not None else None
+        trusted_public_keys_hex: dict[str, str] = (
+            keystore_state.trusted_public_keys_hex if keystore_state is not None else {}
+        )
+        if not verify_signed_command(
+            trusted_public_keys_hex, signing_key_id, signed_event_data, signature
+        ):
+            return self._json_error(403, "signature_invalid")
+
+        # --- Binding: top-level event must equal the signed copy ---
+        if event != signed_event_data:
+            return self._json_error(403, "event_mismatch")
+
+        # --- Store the signed copy (authoritative source) ---
+        event_store = await self._get_event_store(hass)
+        if event_store is None:
+            return self._json_error(503, "event_store_unavailable")
+
+        await event_store.async_upsert_event(signed_event_data)
+        return self.json({"ok": True, "event": signed_event_data})
+
+
+class SvitgridEventDetailView(HomeAssistantView):
+    """PUT/DELETE /api/svitgrid/events/{event_id} — island-key + admin signature.
+
+    Auth: island key ONLY (no HA session bypass) + admin ECDSA signature.
+
+    PUT body: {event, signingKeyId, signedEventData, signature}.
+    Binding: ``event`` must equal ``signedEventData`` exactly.
+    ``signedEventData`` is stored (authoritative source).
+
+    DELETE body: {signingKeyId, signedEventData, signature}.
+    ``signedEventData`` must contain ``event_id`` matching the URL segment.
+
+    Error shape mirrors SvitgridCommandsView: ``{"error": "<code>"}``.
+    """
+
+    url = "/api/svitgrid/events/{event_id}"
+    name = "api:svitgrid:event_detail"
+    requires_auth = False
+
+    @staticmethod
+    def _json_error(status: int, error: str, **extra) -> web.Response:
+        body = json.dumps({"error": error, **extra})
+        return web.Response(status=status, text=body, content_type="application/json")
+
+    @staticmethod
+    async def _get_keystore(hass):
+        return hass.data.get(DOMAIN, {}).get("keystore")
+
+    @staticmethod
+    async def _get_event_store(hass):
+        return hass.data.get(DOMAIN, {}).get("event_store")
+
+    async def _check_island_key(self, request, hass) -> tuple[bool, object]:
+        """Return (authorized, keystore). Checks island key ONLY (no session bypass)."""
+        keystore = await self._get_keystore(hass)
+        island_key: str | None = (
+            await keystore.async_get_island_key() if keystore is not None else None
+        )
+        return island_key_present_and_valid(request, island_key), keystore
+
+    async def _verify_signature(self, keystore, signing_key_id, signed_event_data, signature) -> bool:
+        keystore_state = await keystore.load() if keystore is not None else None
+        trusted_public_keys_hex: dict[str, str] = (
+            keystore_state.trusted_public_keys_hex if keystore_state is not None else {}
+        )
+        return verify_signed_command(
+            trusted_public_keys_hex, signing_key_id, signed_event_data, signature
+        )
+
+    async def put(self, request, event_id: str) -> web.Response:  # noqa: D102
+        hass = request.app["hass"]
+
+        authorized, keystore = await self._check_island_key(request, hass)
+        if not authorized:
+            return self._json_error(401, "unauthorized")
+
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001
+            return self._json_error(400, "bad_request")
+
+        signing_key_id = body.get("signingKeyId")
+        signed_event_data = body.get("signedEventData")
+        signature = body.get("signature")
+        event = body.get("event")
+
+        if not signing_key_id or signed_event_data is None or not signature or event is None:
+            return self._json_error(400, "bad_request")
+
+        if not await self._verify_signature(keystore, signing_key_id, signed_event_data, signature):
+            return self._json_error(403, "signature_invalid")
+
+        if event != signed_event_data:
+            return self._json_error(403, "event_mismatch")
+
+        event_store = await self._get_event_store(hass)
+        if event_store is None:
+            return self._json_error(503, "event_store_unavailable")
+
+        await event_store.async_upsert_event(signed_event_data)
+        return self.json({"ok": True, "event": signed_event_data})
+
+    async def delete(self, request, event_id: str) -> web.Response:  # noqa: D102
+        hass = request.app["hass"]
+
+        authorized, keystore = await self._check_island_key(request, hass)
+        if not authorized:
+            return self._json_error(401, "unauthorized")
+
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001
+            return self._json_error(400, "bad_request")
+
+        signing_key_id = body.get("signingKeyId")
+        signed_event_data = body.get("signedEventData")
+        signature = body.get("signature")
+
+        if not signing_key_id or signed_event_data is None or not signature:
+            return self._json_error(400, "bad_request")
+
+        if not await self._verify_signature(keystore, signing_key_id, signed_event_data, signature):
+            return self._json_error(403, "signature_invalid")
+
+        # --- Binding: signed event_id must match URL event_id ---
+        signed_id = signed_event_data.get("event_id") if isinstance(signed_event_data, dict) else None
+        if signed_id != event_id:
+            return self._json_error(403, "event_mismatch")
+
+        event_store = await self._get_event_store(hass)
+        if event_store is None:
+            return self._json_error(503, "event_store_unavailable")
+
+        deleted = await event_store.async_delete_event(event_id)
+        return self.json({"ok": True, "deleted": deleted})
+
+
 def register_views(hass: HomeAssistant, store) -> None:
-    for view in (SvitgridLiveView(store), SvitgridTodayView(store),
-                 SvitgridHistoryView(store), SvitgridSyncStatusView(store),
-                 SvitgridHealthView(store), SvitgridCommandsView()):
+    for view in (
+        SvitgridLiveView(store),
+        SvitgridTodayView(store),
+        SvitgridHistoryView(store),
+        SvitgridSyncStatusView(store),
+        SvitgridHealthView(store),
+        SvitgridCommandsView(),
+        SvitgridEventsView(),
+        SvitgridEventDetailView(),
+    ):
         hass.http.register_view(view)
