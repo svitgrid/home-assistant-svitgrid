@@ -41,10 +41,12 @@ from .const import (
 from .executors import create_executor
 from .executors.yaml_dispatcher import YamlDispatcher
 from .harvest.engine import run_direct_harvest_loop
+from .harvest.event_scheduler_loop import run_event_scheduler_loop
 from .harvest.register_spec import RegisterSpec
 from .harvest.spec_cache import load_spec
 from .harvest.write_executor import WriteExecutor
 from .http_views import register_views
+from .island_event_store import IslandEventStore
 from .keystore import SvitgridKeystore
 from .lifecycle import DEPROVISIONED, LifecycleState
 from .mqtt_wake import run_loop as run_mqtt_wake_loop
@@ -499,20 +501,32 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     sender_task = None
     cancel_rollup = None
     lifecycle = None
+    # Hoisted so it is accessible outside the `if inverters:` block (used when
+    # spawning the island event scheduler in the `if loops_active:` block below).
+    cloud_ingest_enabled = entry.data.get(
+        "cloud_ingest_enabled",
+        entry.options.get("cloud_ingest_enabled", True),
+    )
 
     if inverters:
         active_ids = {inv["inverter_id"] for inv in inverters}
-        # Read the cloud-sync flag: data wins over options; default True when
-        # absent in both so existing entries (no flag) continue to ingest.
-        cloud_ingest_enabled = entry.data.get(
-            "cloud_ingest_enabled",
-            entry.options.get("cloud_ingest_enabled", True),
-        )
         store, cadence, sender_task, cancel_rollup, lifecycle = await _start_local_store(
             hass, api_client, api_key, activity, active_ids=active_ids,
             cloud_ingest_enabled=cloud_ingest_enabled,
         )
         await register_panel(hass)
+
+        # Island event store — always constructed so Task 2's SvitgridEventsView
+        # (which reads hass.data[DOMAIN]["event_store"]) is always populated.
+        # Shares the same DB directory as the readings store; the directory was
+        # already created by _start_local_store above.
+        import os  # noqa: PLC0415  (local import keeps module top-of-file clean)
+        _db_dir = hass.config.path(READINGS_DB_SUBDIR)
+        event_store = IslandEventStore(
+            os.path.join(_db_dir, "island_events.db"), hass=hass
+        )
+        hass.data.setdefault(DOMAIN, {})
+        hass.data[DOMAIN]["event_store"] = event_store
 
     # Only deprovisioned (terminal) skips all loops. Paused devices still start
     # loops so the command poller can detect an operator re-enable. The
@@ -542,6 +556,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     command_task = None
     mqtt_wake_task = None
+    scheduler_task = None
 
     if loops_active:
         for inv in inverters:
@@ -642,6 +657,27 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             ),
             name="svitgrid_mqtt_wake",
         )
+
+        # Island event scheduler — spawned ONLY in pure island mode (cloud-sync off).
+        # With cloud_ingest_enabled=True the cloud engine handles calendar events;
+        # running both would double-fire commands.
+        if not cloud_ingest_enabled and store is not None:
+            event_store = hass.data.get(DOMAIN, {}).get("event_store")
+            if event_store is not None:
+                scheduler_task = hass.async_create_background_task(
+                    run_event_scheduler_loop(
+                        hass=hass,
+                        store=store,
+                        event_store=event_store,
+                        # executor_for is the dict's bound .get method — captures
+                        # executors_by_inverter by reference so any updates made
+                        # during setup are visible to the running loop.
+                        executor_for=executors_by_inverter.get,
+                        tz=hass.config.time_zone,
+                    ),
+                    name="svitgrid_event_scheduler",
+                )
+                _LOGGER.info("Island event scheduler started (pure island mode)")
     elif lifecycle is not None:
         _LOGGER.warning(
             "Svitgrid device is %s (reason=%s); readings/command/wake loops not "
@@ -655,6 +691,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "readings_tasks": readings_tasks,
         "command_task": command_task,
         "mqtt_wake_task": mqtt_wake_task,
+        "scheduler_task": scheduler_task,
         "executors_by_inverter": executors_by_inverter,
         "activity": activity,
         "entry_data": dict(data),
@@ -684,7 +721,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     for task in (state.get("readings_tasks") or {}).values():
         if task and not task.done():
             task.cancel()
-    for key in ("command_task", "mqtt_wake_task", "sender_task"):
+    for key in ("command_task", "mqtt_wake_task", "sender_task", "scheduler_task"):
         task = state.get(key)
         if task and not task.done():
             task.cancel()
