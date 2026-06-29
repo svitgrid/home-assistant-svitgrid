@@ -250,24 +250,8 @@ class SvitgridCommandsView(HomeAssistantView):
         return self.json({"ok": True, "result": result})
 
 
-class SvitgridEventsView(HomeAssistantView):
-    """GET/POST /api/svitgrid/events — island-key read, signed-write for calendar events.
-
-    Auth:
-    - GET: island key OR authenticated HA session.
-    - POST: island key ONLY + admin ECDSA signature over the event body.
-
-    POST body: {event, signingKeyId, signedEventData, signature}.
-    Binding: ``event`` (top-level) must equal ``signedEventData`` exactly.
-    The ``signedEventData`` copy is authoritative — it is stored, not
-    the top-level ``event``.
-
-    Error shape mirrors SvitgridCommandsView: ``{"error": "<code>"}``.
-    """
-
-    url = "/api/svitgrid/events"
-    name = "api:svitgrid:events"
-    requires_auth = False
+class _IslandEventViewMixin:
+    """Shared helpers for event views to avoid duplication."""
 
     @staticmethod
     def _json_error(status: int, error: str, **extra) -> web.Response:
@@ -281,6 +265,27 @@ class SvitgridEventsView(HomeAssistantView):
     @staticmethod
     async def _get_event_store(hass):
         return hass.data.get(DOMAIN, {}).get("event_store")
+
+
+class SvitgridEventsView(_IslandEventViewMixin, HomeAssistantView):
+    """GET/POST /api/svitgrid/events — island-key read, signed-write for calendar events.
+
+    Auth:
+    - GET: island key OR authenticated HA session.
+    - POST: island key ONLY + admin ECDSA signature over the event body.
+
+    POST body: {event, signingKeyId, signedEventData, signature}.
+    Binding: ``event`` (top-level) must equal ``signedEventData`` exactly.
+    ``signedEventData`` must be a dict; non-dict is rejected with 400.
+    The ``signedEventData`` copy is authoritative — it is stored, not
+    the top-level ``event``.
+
+    Error shape mirrors SvitgridCommandsView: ``{"error": "<code>"}``.
+    """
+
+    url = "/api/svitgrid/events"
+    name = "api:svitgrid:events"
+    requires_auth = False
 
     async def get(self, request) -> web.Response:  # noqa: D102
         hass = request.app["hass"]
@@ -322,6 +327,10 @@ class SvitgridEventsView(HomeAssistantView):
         if not signing_key_id or signed_event_data is None or not signature or event is None:
             return self._json_error(400, "bad_request")
 
+        # --- Guard: signedEventData must be a dict (before signature verification) ---
+        if not isinstance(signed_event_data, dict):
+            return self._json_error(400, "bad_request")
+
         # --- Verify admin signature ---
         keystore_state = await keystore.load() if keystore is not None else None
         trusted_public_keys_hex: dict[str, str] = (
@@ -345,13 +354,15 @@ class SvitgridEventsView(HomeAssistantView):
         return self.json({"ok": True, "event": signed_event_data})
 
 
-class SvitgridEventDetailView(HomeAssistantView):
+class SvitgridEventDetailView(_IslandEventViewMixin, HomeAssistantView):
     """PUT/DELETE /api/svitgrid/events/{event_id} — island-key + admin signature.
 
     Auth: island key ONLY (no HA session bypass) + admin ECDSA signature.
 
     PUT body: {event, signingKeyId, signedEventData, signature}.
-    Binding: ``event`` must equal ``signedEventData`` exactly.
+    Binding: ``event`` must equal ``signedEventData`` exactly AND
+    ``signedEventData["id"]`` must match the URL ``event_id``.
+    ``signedEventData`` must be a dict; non-dict is rejected with 400.
     ``signedEventData`` is stored (authoritative source).
 
     DELETE body: {signingKeyId, signedEventData, signature}.
@@ -363,19 +374,6 @@ class SvitgridEventDetailView(HomeAssistantView):
     url = "/api/svitgrid/events/{event_id}"
     name = "api:svitgrid:event_detail"
     requires_auth = False
-
-    @staticmethod
-    def _json_error(status: int, error: str, **extra) -> web.Response:
-        body = json.dumps({"error": error, **extra})
-        return web.Response(status=status, text=body, content_type="application/json")
-
-    @staticmethod
-    async def _get_keystore(hass):
-        return hass.data.get(DOMAIN, {}).get("keystore")
-
-    @staticmethod
-    async def _get_event_store(hass):
-        return hass.data.get(DOMAIN, {}).get("event_store")
 
     async def _check_island_key(self, request, hass) -> tuple[bool, object]:
         """Return (authorized, keystore). Checks island key ONLY (no session bypass)."""
@@ -414,10 +412,19 @@ class SvitgridEventDetailView(HomeAssistantView):
         if not signing_key_id or signed_event_data is None or not signature or event is None:
             return self._json_error(400, "bad_request")
 
+        # --- Guard: signedEventData must be a dict (before signature verification) ---
+        if not isinstance(signed_event_data, dict):
+            return self._json_error(400, "bad_request")
+
         if not await self._verify_signature(keystore, signing_key_id, signed_event_data, signature):
             return self._json_error(403, "signature_invalid")
 
+        # --- Binding: top-level event must equal the signed copy ---
         if event != signed_event_data:
+            return self._json_error(403, "event_mismatch")
+
+        # --- Binding: signed event id must match URL event_id ---
+        if signed_event_data.get("id") != event_id:
             return self._json_error(403, "event_mismatch")
 
         event_store = await self._get_event_store(hass)

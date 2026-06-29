@@ -72,9 +72,10 @@ class _FakeRequest:
         island_key_header: str | None = None,
         body: dict | None = None,
         raise_json: bool = False,
+        authenticated: bool = False,
     ) -> None:
         self.app = {"hass": hass_obj}
-        self._data: dict = {}
+        self._data: dict = {"ha_authenticated": authenticated}
         self.headers = _FakeHeaders()
         if island_key_header is not None:
             self.headers["x-island-key"] = island_key_header
@@ -678,3 +679,112 @@ async def test_delete_missing_required_field_returns_400(hass):
     assert resp.status == 400
     data = json.loads(resp.body)
     assert data["error"] == "bad_request"
+
+
+# ---------------------------------------------------------------------------
+# Review-fix wave: new tests (written RED, then turned GREEN by implementation)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_put_url_id_mismatch_returns_403(hass):
+    """PUT to /events/ev-123 with signed body id=ev-456 → 403 event_mismatch.
+
+    Mirrors DELETE's URL-binding: the signed event's 'id' must match the URL
+    segment even when top-level event == signedEventData (signature passes).
+    """
+    private_key, pub_hex = generate_keypair()
+    key_id = "admin-key-1"
+    trusted = {key_id: pub_hex}
+    _install_keystore(hass, trusted_public_keys_hex=trusted)
+    event_store = _install_event_store(hass)
+
+    # Signed event has id "ev-different" but URL says EVENT_ID ("ev-test-001")
+    different_event = _make_event(event_id="ev-different")
+    body = _make_signed_write_body(private_key, key_id, different_event)
+
+    view = SvitgridEventDetailView()
+    request = _FakeRequest(hass, island_key_header=ISLAND_KEY, body=body)
+    resp = await view.put(request, event_id=EVENT_ID)  # URL says ev-test-001
+
+    assert resp.status == 403
+    data = json.loads(resp.body)
+    assert data["error"] == "event_mismatch"
+    assert event_store.upsert_calls == []
+
+
+@pytest.mark.asyncio
+async def test_post_non_dict_signed_event_data_returns_400(hass):
+    """POST with non-dict signedEventData → 400 bad_request (not 403).
+
+    Aligns with SvitgridCommandsView which guards isinstance before bind.
+    """
+    private_key, pub_hex = generate_keypair()
+    key_id = "admin-key-1"
+    trusted = {key_id: pub_hex}
+    _install_keystore(hass, trusted_public_keys_hex=trusted)
+    event_store = _install_event_store(hass)
+
+    # signedEventData is a string, not a dict
+    body = {
+        "event": {"id": EVENT_ID},
+        "signingKeyId": key_id,
+        "signedEventData": "not-a-dict",
+        "signature": "any",
+    }
+    view = SvitgridEventsView()
+    request = _FakeRequest(hass, island_key_header=ISLAND_KEY, body=body)
+    resp = await view.post(request)
+
+    assert resp.status == 400
+    data = json.loads(resp.body)
+    assert data["error"] == "bad_request"
+    assert event_store.upsert_calls == []
+
+
+@pytest.mark.asyncio
+async def test_put_non_dict_signed_event_data_returns_400(hass):
+    """PUT with non-dict signedEventData → 400 bad_request (not 403)."""
+    private_key, pub_hex = generate_keypair()
+    key_id = "admin-key-1"
+    trusted = {key_id: pub_hex}
+    _install_keystore(hass, trusted_public_keys_hex=trusted)
+    event_store = _install_event_store(hass)
+
+    body = {
+        "event": {"id": EVENT_ID},
+        "signingKeyId": key_id,
+        "signedEventData": 42,
+        "signature": "any",
+    }
+    view = SvitgridEventDetailView()
+    request = _FakeRequest(hass, island_key_header=ISLAND_KEY, body=body)
+    resp = await view.put(request, event_id=EVENT_ID)
+
+    assert resp.status == 400
+    data = json.loads(resp.body)
+    assert data["error"] == "bad_request"
+    assert event_store.upsert_calls == []
+
+
+@pytest.mark.asyncio
+async def test_get_with_ha_session_no_key_returns_200(hass):
+    """GET with authenticated HA session and no X-Island-Key → 200 + events list.
+
+    Verifies the session branch of island_request_authorized is exercised on
+    the events GET path (all previous GET tests used the island-key branch).
+    """
+    event = _make_event()
+    _install_keystore(hass)
+    _install_event_store(hass, initial_events=[event])
+
+    view = SvitgridEventsView()
+    # authenticated=True sets ha_authenticated=True; no island key header
+    request = _FakeRequest(hass, authenticated=True)
+    resp = await view.get(request)
+
+    assert resp.status == 200
+    data = json.loads(resp.body)
+    assert "events" in data
+    assert len(data["events"]) == 1
+    assert data["events"][0]["id"] == EVENT_ID
