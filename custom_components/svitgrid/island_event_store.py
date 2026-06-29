@@ -4,10 +4,11 @@ Mirrors the ReadingStore connection/executor pattern: sync ``_*_sync`` core
 methods that open → operate → close the connection, plus async wrappers that
 run them in the HA thread-pool executor so the event loop never blocks on I/O.
 
-Unlike ReadingStore, IslandEventStore does NOT depend on HomeAssistant — it
-accepts a plain ``db_path`` string so it can be instantiated and tested without
-a hass fixture.  Async wrappers use ``asyncio.get_event_loop().run_in_executor``
-(or the equivalent) rather than ``hass.async_add_executor_job``.
+When *hass* is provided, async wrappers delegate to
+``hass.async_add_executor_job`` (HA's bounded, lifecycle-managed pool) — the
+same pattern used by ``reading_store.py``.  When *hass* is ``None`` (e.g. in
+unit tests that construct the store without a hass fixture), the wrappers fall
+back to ``asyncio.get_running_loop().run_in_executor(None, ...)``.
 """
 from __future__ import annotations
 
@@ -15,7 +16,10 @@ import asyncio
 import json
 import sqlite3
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from homeassistant.core import HomeAssistant
 
 # Tracks db_paths whose schema has already been created in this process.
 _INITIALIZED: set[str] = set()
@@ -65,12 +69,14 @@ class IslandEventStore:
     """SQLite-backed store for island-mode calendar events.
 
     ``db_path`` is the path to the SQLite file (use ``:memory:`` for tests).
-    No HomeAssistant dependency — the async wrappers use
-    ``asyncio.get_event_loop().run_in_executor`` instead.
+    Pass *hass* to use HA's bounded ``async_add_executor_job`` pool; omit it
+    (or pass ``None``) to fall back to
+    ``asyncio.get_running_loop().run_in_executor`` for standalone use in tests.
     """
 
-    def __init__(self, db_path: str) -> None:
+    def __init__(self, db_path: str, hass: HomeAssistant | None = None) -> None:
         self._db_path = db_path
+        self._hass = hass
 
     # ── sync core ─────────────────────────────────────────────────────────────
 
@@ -155,25 +161,46 @@ class IslandEventStore:
     # ── async wrappers ────────────────────────────────────────────────────────
 
     async def async_upsert_event(self, event: dict[str, Any]) -> None:
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, self._upsert_event_sync, event)
+        if self._hass is not None:
+            await self._hass.async_add_executor_job(self._upsert_event_sync, event)
+        else:
+            await asyncio.get_running_loop().run_in_executor(
+                None, self._upsert_event_sync, event
+            )
 
     async def async_delete_event(self, event_id: str) -> bool:
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, self._delete_event_sync, event_id)
+        if self._hass is not None:
+            return await self._hass.async_add_executor_job(
+                self._delete_event_sync, event_id
+            )
+        return await asyncio.get_running_loop().run_in_executor(
+            None, self._delete_event_sync, event_id
+        )
 
     async def async_list_events(self) -> list[dict[str, Any]]:
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, self._list_events_sync)
+        if self._hass is not None:
+            return await self._hass.async_add_executor_job(self._list_events_sync)
+        return await asyncio.get_running_loop().run_in_executor(
+            None, self._list_events_sync
+        )
 
     async def async_get_event(self, event_id: str) -> dict[str, Any] | None:
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, self._get_event_sync, event_id)
+        if self._hass is not None:
+            return await self._hass.async_add_executor_job(
+                self._get_event_sync, event_id
+            )
+        return await asyncio.get_running_loop().run_in_executor(
+            None, self._get_event_sync, event_id
+        )
 
     async def async_set_execution_state(
         self, event_id: str, state: dict[str, Any]
     ) -> None:
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(
-            None, self._set_execution_state_sync, event_id, state
-        )
+        if self._hass is not None:
+            await self._hass.async_add_executor_job(
+                self._set_execution_state_sync, event_id, state
+            )
+        else:
+            await asyncio.get_running_loop().run_in_executor(
+                None, self._set_execution_state_sync, event_id, state
+            )

@@ -129,6 +129,19 @@ def test_list_events_merges_execution_state(tmp_path):
     assert rows["evt-2"]["executionState"] == {}
 
 
+# ── COALESCE preservation ──────────────────────────────────────────────────────
+
+def test_upsert_preserves_existing_execution_state(tmp_path):
+    """Re-upserting event metadata must NOT wipe in-flight execution state."""
+    store = _store(tmp_path)
+    store._upsert_event_sync({"id": "evt-1", "type": "tou"})
+    store._set_execution_state_sync("evt-1", {"status": "running"})
+    store._upsert_event_sync({"id": "evt-1", "type": "sell_to_grid"})  # re-upsert metadata
+    row = store._get_event_sync("evt-1")
+    assert row["executionState"] == {"status": "running"}  # preserved by COALESCE
+    assert row["type"] == "sell_to_grid"                    # metadata updated
+
+
 # ── async wrappers ─────────────────────────────────────────────────────────────
 
 
