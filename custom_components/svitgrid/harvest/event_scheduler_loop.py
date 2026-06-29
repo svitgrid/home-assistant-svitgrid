@@ -28,7 +28,7 @@ from .event_evaluator import evaluate_event
 
 _LOGGER = logging.getLogger(__name__)
 
-_DEFAULT_INTERVAL_S = 60
+_DEFAULT_INTERVAL_S = 15
 
 
 async def _tick(
@@ -132,7 +132,13 @@ async def run_event_scheduler_loop(
                    bound method), so writes reach the per-inverter WriteExecutor or
                    YamlDispatcher — the same path the command poller uses.
     tz           : IANA timezone string from hass.config.time_zone.
-    interval_s   : Tick cadence in seconds (default 60).
+    interval_s   : Tick cadence in seconds (default 15).
+
+                   The tick interval bounds activation latency — with a 1-min
+                   sustain gate the effective minimum activation latency is
+                   ~1-2× interval_s.  Lower interval_s (e.g. 15 s, the
+                   default) for responsive gen-force/outage handling.  This is
+                   the knob to tune if local automations feel sluggish.
 
     GATED: spawned ONLY when cloud_ingest_enabled=False.  With cloud-sync ON
     the cloud engine handles events; double-fire must not occur.

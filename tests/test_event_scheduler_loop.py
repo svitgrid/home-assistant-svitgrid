@@ -477,3 +477,76 @@ async def test_setup_entry_cloud_ingest_false_scheduler_spawned_and_event_store_
     assert event_store in all_args, (
         "run_event_scheduler_loop must receive the event_store from hass.data"
     )
+
+
+@pytest.mark.asyncio
+async def test_unload_entry_removes_event_store_from_hass_data(
+    hass, enable_custom_integrations
+):
+    """async_unload_entry must remove 'event_store' from hass.data[DOMAIN] so the
+    SQLite handle is released on a final unload. A subsequent async_setup_entry
+    must be able to re-create it (reload path must not break)."""
+    import asyncio as _asyncio
+
+    from custom_components.svitgrid import async_setup_entry, async_unload_entry
+    from custom_components.svitgrid.const import DOMAIN
+
+    entry = _make_entry(cloud_ingest_enabled=False, entry_id="entry-unload-cleanup")
+    entry.add_to_hass(hass)
+
+    async def _never_return(**kwargs):
+        await _asyncio.Event().wait()
+
+    with (
+        patch("custom_components.svitgrid.run_readings_loop", new_callable=AsyncMock),
+        patch(
+            "custom_components.svitgrid.run_direct_harvest_loop", side_effect=_never_return
+        ),
+        patch(
+            "custom_components.svitgrid.run_command_loop", side_effect=_never_return
+        ),
+        patch(
+            "custom_components.svitgrid.run_mqtt_wake_loop", side_effect=_never_return
+        ),
+        patch("custom_components.svitgrid.run_sender_loop", new_callable=AsyncMock),
+        patch(
+            "custom_components.svitgrid.run_event_scheduler_loop", new_callable=AsyncMock
+        ),
+        patch("custom_components.svitgrid.register_views"),
+        patch("custom_components.svitgrid.register_panel", new_callable=AsyncMock),
+        patch("custom_components.svitgrid.remove_panel"),
+        patch.object(
+            hass.config_entries, "async_forward_entry_setups", AsyncMock(return_value=True)
+        ),
+        patch.object(
+            hass.config_entries, "async_unload_platforms", AsyncMock(return_value=True)
+        ),
+        patch("custom_components.svitgrid.SvitgridApiClient") as mock_cls,
+    ):
+        client = mock_cls.return_value
+        client.get_register_spec = AsyncMock(return_value=dict(_MINIMAL_SPEC))
+        client.get_preset = AsyncMock(return_value=None)
+
+        ok = await async_setup_entry(hass, entry)
+        await hass.async_block_till_done()
+
+    assert ok is True
+    # Verify event_store was populated during setup
+    assert hass.data.get(DOMAIN, {}).get("event_store") is not None, (
+        "event_store must be in hass.data[DOMAIN] after setup"
+    )
+
+    with (
+        patch("custom_components.svitgrid.remove_panel"),
+        patch.object(
+            hass.config_entries, "async_unload_platforms", AsyncMock(return_value=True)
+        ),
+    ):
+        ok = await async_unload_entry(hass, entry)
+        await hass.async_block_till_done()
+
+    assert ok is True
+    # event_store must be removed from hass.data[DOMAIN] after unload
+    assert hass.data.get(DOMAIN, {}).get("event_store") is None, (
+        "event_store must be removed from hass.data[DOMAIN] after async_unload_entry"
+    )

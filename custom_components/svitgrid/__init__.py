@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from types import SimpleNamespace
 
 import voluptuous as vol
@@ -80,7 +81,6 @@ async def _start_local_store(
     When the persisted lifecycle is not active (paused/deprovisioned), the
     sender loop and rollup timer are NOT started; their slots are returned as
     None. Views/panel registration is always performed by the caller path."""
-    import os
     from datetime import UTC, datetime, timedelta
 
     from homeassistant.helpers.event import async_track_time_interval
@@ -498,6 +498,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     readings_tasks: dict[str, asyncio.Task] = {}
     executors_by_inverter: dict[str, YamlDispatcher] = {}
     store = None
+    event_store = None
     sender_task = None
     cancel_rollup = None
     lifecycle = None
@@ -520,7 +521,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # (which reads hass.data[DOMAIN]["event_store"]) is always populated.
         # Shares the same DB directory as the readings store; the directory was
         # already created by _start_local_store above.
-        import os  # noqa: PLC0415  (local import keeps module top-of-file clean)
         _db_dir = hass.config.path(READINGS_DB_SUBDIR)
         event_store = IslandEventStore(
             os.path.join(_db_dir, "island_events.db"), hass=hass
@@ -661,23 +661,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # Island event scheduler — spawned ONLY in pure island mode (cloud-sync off).
         # With cloud_ingest_enabled=True the cloud engine handles calendar events;
         # running both would double-fire commands.
-        if not cloud_ingest_enabled and store is not None:
-            event_store = hass.data.get(DOMAIN, {}).get("event_store")
-            if event_store is not None:
-                scheduler_task = hass.async_create_background_task(
-                    run_event_scheduler_loop(
-                        hass=hass,
-                        store=store,
-                        event_store=event_store,
-                        # executor_for is the dict's bound .get method — captures
-                        # executors_by_inverter by reference so any updates made
-                        # during setup are visible to the running loop.
-                        executor_for=executors_by_inverter.get,
-                        tz=hass.config.time_zone,
-                    ),
-                    name="svitgrid_event_scheduler",
-                )
-                _LOGGER.info("Island event scheduler started (pure island mode)")
+        if not cloud_ingest_enabled and store is not None and event_store is not None:
+            scheduler_task = hass.async_create_background_task(
+                run_event_scheduler_loop(
+                    hass=hass,
+                    store=store,
+                    event_store=event_store,
+                    # executor_for is the dict's bound .get method — captures
+                    # executors_by_inverter by reference so any updates made
+                    # during setup are visible to the running loop.
+                    executor_for=executors_by_inverter.get,
+                    tz=hass.config.time_zone,
+                ),
+                name="svitgrid_event_scheduler",
+            )
+            _LOGGER.info("Island event scheduler started (pure island mode)")
     elif lifecycle is not None:
         _LOGGER.warning(
             "Svitgrid device is %s (reason=%s); readings/command/wake loops not "
@@ -728,4 +726,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     cancel_rollup = state.get("cancel_rollup")
     if cancel_rollup:
         cancel_rollup()
+    # Release the IslandEventStore (and its SQLite handle) on final unload.
+    # A subsequent async_setup_entry re-creates it, so the reload path is safe.
+    hass.data.get(DOMAIN, {}).pop("event_store", None)
     return True
