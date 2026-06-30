@@ -165,7 +165,10 @@ DISPATCHABLE_COMMANDS = frozenset({
 # Pairing flow
 PAIRING_POLL_INTERVAL_S = 2          # HA polls /status this often
 PAIRING_MAX_POLL_DURATION_S = 300    # Stop polling after this; matches server TTL
-DEFAULT_API_BASE = "https://api-staging.svitgrid.app"
+# Prod is the canonical environment (2026-06-30 cutover). New installs pair
+# against prod; existing installs keep their stored api_base and are moved by
+# the server-issued set_cloud_endpoint command (see cloud_endpoint_handler).
+DEFAULT_API_BASE = "https://api.svitgrid.app"
 
 # ── Local readings store (Sub-project 1) ──────────────────────────────
 READINGS_DB_SUBDIR = "svitgrid"

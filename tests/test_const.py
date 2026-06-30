@@ -69,3 +69,11 @@ def test_default_api_base_is_in_allow_list():
     )
     from custom_components.svitgrid.const import DEFAULT_API_BASE
     assert is_allowed_api_base(DEFAULT_API_BASE)
+
+
+def test_default_api_base_is_prod():
+    """Prod is the canonical environment — new installs must pair against
+    prod, not staging. Existing installs keep their stored api_base and are
+    moved by the server-issued set_cloud_endpoint command."""
+    from custom_components.svitgrid.const import DEFAULT_API_BASE
+    assert DEFAULT_API_BASE == "https://api.svitgrid.app"

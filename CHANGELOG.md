@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.1 — 2026-06-30
+
+### Changed
+- Default `api_base` for new installs is now `https://api.svitgrid.app` (prod), promoted from staging as part of the platform's 100%-to-prod cutover. Existing installs keep their stored value and are moved by the server-issued `set_cloud_endpoint` command (prod is already on the endpoint allow-list).
+
 ## 0.10.0 — 2026-06-28
 
 ### Added
