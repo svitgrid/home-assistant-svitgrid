@@ -400,6 +400,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 keystore=keystore,
                 trusted_public_keys_hex=trusted_public_keys_hex,
                 executor_version="0.2.0",
+                integration_version=read_installed_version(Path(__file__).parent),
                 executors_by_inverter=({inverter_id: executor} if executor else {}),
                 interval_s=command_interval,
                 lifecycle=lifecycle,
