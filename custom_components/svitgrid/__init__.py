@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from pathlib import Path
 from types import SimpleNamespace
 
 import voluptuous as vol
@@ -30,6 +31,7 @@ from .cloud_endpoint_handler import probe_endpoint_auth
 from .command_poller import run_loop as run_command_loop
 from .const import (
     COMMAND_POLL_INTERVAL_S,
+    CONF_AUTO_UPDATE,
     DOMAIN,
     HOURLY_RETENTION_S,
     RAW_RETENTION_S,
@@ -56,6 +58,7 @@ from .preset_refresh import refresh_entry_inverters
 from .reading_sender import Cadence, run_sender_loop
 from .reading_store import ReadingStore
 from .readings_publisher import run_loop as run_readings_loop
+from .update import SvitgridUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -683,6 +686,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             lifecycle.state, lifecycle.reason, entry.entry_id,
         )
 
+    update_coordinator = SvitgridUpdateCoordinator(
+        hass,
+        session=aiohttp_client.async_get_clientsession(hass),
+        install_dir=Path(__file__).parent,
+        activity=activity,
+        get_auto_update=lambda: entry.options.get(CONF_AUTO_UPDATE, True),
+    )
+
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = {
         "api_client": api_client,
@@ -697,9 +708,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "sender_task": sender_task,
         "cancel_rollup": cancel_rollup,
         "lifecycle": lifecycle,
+        "update_coordinator": update_coordinator,
     }
     await hass.config_entries.async_forward_entry_setups(
-        entry, ["sensor", "binary_sensor"]
+        entry, ["sensor", "binary_sensor", "update"]
+    )
+    hass.async_create_background_task(
+        update_coordinator.async_refresh(), name="svitgrid_update_first_check"
     )
     _LOGGER.info(
         "Svitgrid started from config entry %s with %d inverter(s)",
@@ -711,7 +726,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Cancel background tasks when the user removes the integration."""
-    await hass.config_entries.async_unload_platforms(entry, ["sensor", "binary_sensor"])
+    await hass.config_entries.async_unload_platforms(
+        entry, ["sensor", "binary_sensor", "update"]
+    )
     remove_panel(hass)
     state = hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
     if state is None:
