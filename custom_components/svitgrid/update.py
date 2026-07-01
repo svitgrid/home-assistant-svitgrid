@@ -78,7 +78,12 @@ class SvitgridUpdateCoordinator(DataUpdateCoordinator[ReleaseInfo | None]):
         return (dt_util.utcnow() - last).total_seconds() < RESTART_GUARD_WINDOW_S
 
     async def install(self, release: ReleaseInfo) -> None:
-        """Download + swap files, then restart HA to load the new code."""
+        """Download + swap files, then restart HA to load the new code.
+
+        Single-flight: a concurrent auto- or manual-install is a no-op (the
+        check-then-set is atomic on HA's single-threaded event loop)."""
+        if self._installing:
+            return
         self._installing = True
         try:
             _LOGGER.info("Installing svitgrid update %s", release.version)

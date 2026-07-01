@@ -101,3 +101,17 @@ async def test_no_install_when_already_latest(hass):
     ):
         await coord._async_update_data()
     m_apply.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_install_is_single_flight(hass):
+    coord = _coordinator(hass, installed="0.10.1", auto_update=True)
+    coord._installing = True  # simulate an install already running
+    release = ReleaseInfo("v0.11.0", "0.11.0", "http://zip")
+    with (
+        patch("custom_components.svitgrid.update.apply_update", AsyncMock()) as m_apply,
+        patch.object(type(hass.services), "async_call", AsyncMock()) as m_restart,
+    ):
+        await coord.install(release)
+    m_apply.assert_not_awaited()
+    m_restart.assert_not_awaited()
