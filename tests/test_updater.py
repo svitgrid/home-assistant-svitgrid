@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import zipfile
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -103,5 +104,32 @@ async def test_apply_update_invalid_zip_leaves_live_dir_untouched(tmp_path: Path
     with pytest.raises(UpdateValidationError):
         await apply_update(session, "http://zip", install_dir)
 
+    assert json.loads((install_dir / "manifest.json").read_text())["version"] == "0.10.1"
+    assert (install_dir / "sentinel.py").read_text() == "# 0.10.1\n"
+
+
+@pytest.mark.asyncio
+async def test_apply_update_restores_backup_on_swap_failure(tmp_path, monkeypatch):
+    _write_integration(tmp_path, "0.10.1")
+    install_dir = tmp_path / "custom_components" / "svitgrid"
+    session = _mock_get(200, read_body=_zipball_bytes("0.11.0"))
+
+    import custom_components.svitgrid.updater as updater_mod
+
+    real_replace = os.replace
+    calls = {"n": 0}
+
+    def flaky_replace(src, dst):
+        calls["n"] += 1
+        if calls["n"] == 2:  # the incoming -> install_dir swap
+            raise OSError("boom")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(updater_mod.os, "replace", flaky_replace)
+
+    with pytest.raises(OSError):
+        await apply_update(session, "http://zip", install_dir)
+
+    # The live dir must be restored to the original version, not left missing.
     assert json.loads((install_dir / "manifest.json").read_text())["version"] == "0.10.1"
     assert (install_dir / "sentinel.py").read_text() == "# 0.10.1\n"

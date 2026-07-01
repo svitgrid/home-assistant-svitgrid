@@ -7,6 +7,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+import os
 import shutil
 import zipfile
 from dataclasses import dataclass
@@ -83,17 +84,26 @@ async def apply_update(session: Any, zip_url: str, install_dir: Path) -> str:
         source = _find_package_dir(staging)  # raises UpdateValidationError if absent
         new_version = read_installed_version(source)
 
-        # Point of no return: back up then swap. Restore on failure.
+        # Stage the validated package as a sibling of install_dir so the swap
+        # uses same-filesystem atomic renames (no multi-file copy window during
+        # which install_dir would be half-populated or missing).
+        incoming = install_dir.parent / "svitgrid.incoming"
+        if incoming.exists():
+            shutil.rmtree(incoming)
+        shutil.copytree(source, incoming)
+
+        # Back up the current install, then swap via two atomic renames.
+        # If the second rename fails, restore the backup so install_dir is
+        # never left missing.
         if backup.exists():
             shutil.rmtree(backup)
-        shutil.copytree(install_dir, backup)
+        os.replace(install_dir, backup)        # atomic: live -> backup
         try:
-            shutil.rmtree(install_dir)
-            shutil.copytree(source, install_dir)
+            os.replace(incoming, install_dir)  # atomic: new -> live
         except Exception:
-            shutil.rmtree(install_dir, ignore_errors=True)
-            shutil.copytree(backup, install_dir)
+            os.replace(backup, install_dir)    # restore live
             raise
         return new_version
     finally:
         shutil.rmtree(staging, ignore_errors=True)
+        shutil.rmtree(install_dir.parent / "svitgrid.incoming", ignore_errors=True)
