@@ -9,6 +9,7 @@ from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path
 
+from awesomeversion import AwesomeVersion
 from homeassistant.components.update import UpdateEntity, UpdateEntityFeature
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -26,9 +27,26 @@ from .const import (
     RESTART_GUARD_WINDOW_S,
     UPDATE_CHECK_INTERVAL_S,
 )
-from .updater import ReleaseInfo, apply_update, fetch_latest_release, read_installed_version
+from .updater import (
+    ReleaseInfo,
+    apply_update_bytes,
+    fetch_latest_release,
+    fetch_release_zip,
+    read_installed_version,
+)
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _is_newer(candidate: str, current: str) -> bool:
+    """True iff `candidate` is a strictly newer version than `current`.
+    Conservative: returns False if either version can't be parsed, so a
+    malformed tag/manifest can never trigger an install/restart loop."""
+    try:
+        return AwesomeVersion(candidate) > AwesomeVersion(current)
+    except Exception:  # noqa: BLE001
+        _LOGGER.debug("version compare failed: %s vs %s", candidate, current, exc_info=True)
+        return False
 
 
 class SvitgridUpdateCoordinator(DataUpdateCoordinator[ReleaseInfo | None]):
@@ -45,6 +63,9 @@ class SvitgridUpdateCoordinator(DataUpdateCoordinator[ReleaseInfo | None]):
         )
         self._session = session
         self._install_dir = install_dir
+        # OUTSIDE custom_components/ so the staging tree and retained backup
+        # are never scanned by HA's integration loader.
+        self._work_dir = Path(hass.config.path(".svitgrid_update"))
         self._activity = activity
         self._get_auto_update = get_auto_update
         self._installing = False
@@ -60,7 +81,7 @@ class SvitgridUpdateCoordinator(DataUpdateCoordinator[ReleaseInfo | None]):
         return release
 
     async def _maybe_auto_install(self, release: ReleaseInfo) -> None:
-        if release.version == self.installed_version:
+        if not _is_newer(release.version, self.installed_version):
             return
         if not self._get_auto_update():
             return
@@ -78,18 +99,29 @@ class SvitgridUpdateCoordinator(DataUpdateCoordinator[ReleaseInfo | None]):
         return (dt_util.utcnow() - last).total_seconds() < RESTART_GUARD_WINDOW_S
 
     async def install(self, release: ReleaseInfo) -> None:
-        """Download + swap files, then restart HA to load the new code.
-
-        Single-flight: a concurrent auto- or manual-install is a no-op (the
-        check-then-set is atomic on HA's single-threaded event loop)."""
+        """Download + swap files (off the event loop), then restart HA to load
+        the new code. Single-flight; restarts only if the installed version
+        actually advanced (guards against a tag/manifest-mismatch restart loop)."""
         if self._installing:
             return
         self._installing = True
         try:
+            prev = self.installed_version
             _LOGGER.info("Installing svitgrid update %s", release.version)
-            new_version = await apply_update(self._session, release.zip_url, self._install_dir)
+            raw = await fetch_release_zip(self._session, release.zip_url)
+            new_version = await self.hass.async_add_executor_job(
+                apply_update_bytes, raw, self._install_dir, self._work_dir
+            )
             self.installed_version = new_version
-            await self.hass.services.async_call("homeassistant", "restart")
+            if _is_newer(new_version, prev):
+                await self.hass.services.async_call("homeassistant", "restart")
+            else:
+                _LOGGER.warning(
+                    "Installed version %s is not newer than %s; skipping restart "
+                    "to avoid a restart loop",
+                    new_version,
+                    prev,
+                )
         finally:
             self._installing = False
 

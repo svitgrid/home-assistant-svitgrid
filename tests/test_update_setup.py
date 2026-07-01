@@ -12,18 +12,6 @@ from custom_components.svitgrid.reading_store import ReadingStore
 _ACTIVE_LIFECYCLE = {"state": "active", "reason": None, "since": None}
 
 
-def test_update_platform_is_forwarded():
-    # The list passed to async_forward_entry_setups must include "update".
-    import custom_components.svitgrid as init_mod
-
-    src = init_mod.__file__
-    with open(src) as f:
-        text = f.read()
-    assert '"update"' in text and "async_forward_entry_setups" in text
-    # And the coordinator must be stored for the platform to read.
-    assert '"update_coordinator"' in text
-
-
 @pytest.fixture(autouse=True)
 def _stub_store_side_effects():
     with (

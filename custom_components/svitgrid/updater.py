@@ -63,47 +63,57 @@ def _find_package_dir(extracted_root: Path) -> Path:
     raise UpdateValidationError("archive has no custom_components/svitgrid/manifest.json")
 
 
-async def apply_update(session: Any, zip_url: str, install_dir: Path) -> str:
-    """Download `zip_url`, validate it, back up the current install_dir to a
-    sibling `svitgrid.bak`, and atomically swap in the new files. Returns the
-    newly-installed version. Raises UpdateValidationError (live dir untouched)
-    if the archive is invalid; restores from backup on a later failure."""
+async def fetch_release_zip(session: Any, zip_url: str) -> bytes:
+    """Download the release archive. Raises UpdateValidationError on non-200."""
     async with session.get(zip_url, headers=_HEADERS) as resp:
         if resp.status != 200:
             raise UpdateValidationError(f"download failed: status={resp.status}")
-        raw = await resp.read()
+        return await resp.read()
 
-    staging = install_dir.parent / "svitgrid.new"
-    backup = install_dir.parent / "svitgrid.bak"
-    if staging.exists():
-        shutil.rmtree(staging)
+
+def _safe_extract(zf: zipfile.ZipFile, dest: Path) -> None:
+    """Extract, guarding against zip-slip (entries escaping dest)."""
+    dest_root = dest.resolve()
+    for name in zf.namelist():
+        target = (dest / name).resolve()
+        if target != dest_root and dest_root not in target.parents:
+            raise UpdateValidationError(f"unsafe archive entry: {name}")
+    zf.extractall(dest)
+
+
+def apply_update_bytes(raw: bytes, install_dir: Path, work_dir: Path) -> str:
+    """Validate the archive in `raw` and atomically swap it into install_dir.
+
+    `work_dir` MUST be outside HA's custom_components/ — it holds the staging
+    tree and the retained backup, so no manifest-bearing scratch dir is left
+    where HA scans for integrations. Same-filesystem os.replace makes the swap
+    atomic. Pure/sync — the caller offloads it to an executor. Raises
+    UpdateValidationError (live dir untouched) on an invalid archive; restores
+    from backup on a later failure. Returns the newly-installed version."""
+    work_dir.mkdir(parents=True, exist_ok=True)
+    staging = work_dir / "svitgrid.new"
+    incoming = work_dir / "svitgrid.incoming"
+    backup = work_dir / "svitgrid.bak"
+    for tmp in (staging, incoming):
+        if tmp.exists():
+            shutil.rmtree(tmp)
     staging.mkdir(parents=True)
     try:
         with zipfile.ZipFile(io.BytesIO(raw)) as zf:
-            zf.extractall(staging)
+            _safe_extract(zf, staging)
         source = _find_package_dir(staging)  # raises UpdateValidationError if absent
         new_version = read_installed_version(source)
 
-        # Stage the validated package as a sibling of install_dir so the swap
-        # uses same-filesystem atomic renames (no multi-file copy window during
-        # which install_dir would be half-populated or missing).
-        incoming = install_dir.parent / "svitgrid.incoming"
-        if incoming.exists():
-            shutil.rmtree(incoming)
         shutil.copytree(source, incoming)
-
-        # Back up the current install, then swap via two atomic renames.
-        # If the second rename fails, restore the backup so install_dir is
-        # never left missing.
         if backup.exists():
             shutil.rmtree(backup)
-        os.replace(install_dir, backup)        # atomic: live -> backup
+        os.replace(install_dir, backup)  # atomic: live -> backup
         try:
             os.replace(incoming, install_dir)  # atomic: new -> live
         except Exception:
-            os.replace(backup, install_dir)    # restore live
+            os.replace(backup, install_dir)  # restore live
             raise
         return new_version
     finally:
         shutil.rmtree(staging, ignore_errors=True)
-        shutil.rmtree(install_dir.parent / "svitgrid.incoming", ignore_errors=True)
+        shutil.rmtree(incoming, ignore_errors=True)
