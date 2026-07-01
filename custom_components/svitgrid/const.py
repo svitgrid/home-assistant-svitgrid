@@ -194,3 +194,10 @@ DAILY_COUNTER_FIELDS = frozenset({
     "dailyGeneratorEnergy", "dailyLossesEnergy",
 })
 PEAK_FIELDS = frozenset({"pvPower", "loadPower"})
+
+# ── auto-update ────────────────────────────────────────────────────────
+GITHUB_REPO = "svitgrid/home-assistant-svitgrid"
+GITHUB_LATEST_RELEASE_URL = (
+    f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+)
+GITHUB_USER_AGENT = "svitgrid-ha-integration"
