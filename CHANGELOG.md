@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- Automatic updates: the integration now keeps itself on the latest GitHub release
+  and restarts Home Assistant to apply it. Toggle it off under
+  Settings → Devices & Services → Svitgrid → Configure → Settings.
+
 ## 0.10.1 — 2026-06-30
 
 ### Changed
