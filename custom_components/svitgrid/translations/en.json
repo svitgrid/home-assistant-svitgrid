@@ -81,7 +81,8 @@
         "menu_options": {
           "add_inverter": "Add another inverter",
           "edit_inverter": "Edit sensor mappings",
-          "remove_inverter": "Remove an inverter"
+          "remove_inverter": "Remove an inverter",
+          "settings": "Automatic updates"
         }
       },
       "add_inverter": {
@@ -155,6 +156,13 @@
         "description": "Select the inverter to remove. This only removes it from Home Assistant — the inverter remains in your Svitgrid account.",
         "data": {
           "inverter_id": "Inverter to remove"
+        }
+      },
+      "settings": {
+        "title": "Automatic updates",
+        "description": "When on, Svitgrid installs new releases automatically and restarts Home Assistant to apply them.",
+        "data": {
+          "auto_update": "Automatically install updates"
         }
       }
     },
