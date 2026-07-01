@@ -201,3 +201,7 @@ GITHUB_LATEST_RELEASE_URL = (
     f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 )
 GITHUB_USER_AGENT = "svitgrid-ha-integration"
+
+UPDATE_CHECK_INTERVAL_S = 12 * 3600  # how often to poll GitHub for a new release
+RESTART_GUARD_WINDOW_S = 60          # defer auto-restart if a command ran this recently
+CONF_AUTO_UPDATE = "auto_update"     # entry-options key; default True
