@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import time
 
 from .decoder import RawRegisters
 from .register_spec import RegisterSpec
@@ -62,6 +63,10 @@ async def read_raw(hass, spec: RegisterSpec, cfg: dict) -> RawRegisters:
     raise ValueError(f"unsupported protocol: {spec.protocol}")
 
 
+_SOLARMAN_CONNECT_ATTEMPTS = 3
+_SOLARMAN_CONNECT_BACKOFF = 0.5  # seconds between connection-setup retries
+
+
 def _read_solarman(cfg: dict, ranges: list[tuple[int, int, int, str]]) -> RawRegisters:
     """Open one Solarman V5 connection and read all *ranges*.
 
@@ -70,18 +75,60 @@ def _read_solarman(cfg: dict, ranges: list[tuple[int, int, int, str]]) -> RawReg
       kwargs: port, mb_slave_id, socket_timeout, auto_reconnect, verbose, …
     Read method: read_holding_registers(register_addr, quantity) → list[int]
     (positional names; keyword-argument style also accepted)
+
+    Resilient against flaky loggers:
+    - Connection setup is retried up to _SOLARMAN_CONNECT_ATTEMPTS times with
+      short backoff, catching connection-class errors (OSError, ConnectionError,
+      BrokenPipeError, pysolarmanv5.NoSocketAvailableError when available).
+    - Each range read is retried once (with a fresh client) on any exception.
+      If the retry also fails, the range is skipped; partial results accumulate.
+    - Raises RuntimeError when zero registers were read across all ranges so
+      the calling loop can still back off for a truly dead logger.
     """
     from pysolarmanv5 import PySolarmanV5  # lazy import — not needed by other modules
 
+    # Import pysolarmanv5-specific connection error defensively; fall back to OSError.
+    try:
+        from pysolarmanv5 import NoSocketAvailableError as _NoSocketAvailableError  # type: ignore[attr-defined]
+    except (ImportError, AttributeError):
+        _NoSocketAvailableError = OSError  # type: ignore[assignment,misc]
+
+    _connect_errors = (OSError, ConnectionError, BrokenPipeError, _NoSocketAvailableError)
+
+    def _make_client():
+        return PySolarmanV5(
+            cfg["ip"],
+            int(cfg["logger_serial"]),
+            port=int(cfg.get("port", 8899)),
+            mb_slave_id=int(cfg.get("slave_id", 1)),
+            socket_timeout=8,
+            auto_reconnect=True,
+        )
+
+    # --- Connection-setup retry ---
+    sm = None
+    last_err: Exception | None = None
+    for attempt in range(_SOLARMAN_CONNECT_ATTEMPTS):
+        try:
+            sm = _make_client()
+            break
+        except _connect_errors as exc:
+            last_err = exc
+            _LOGGER.debug(
+                "solarman: connect attempt %d/%d failed: %s",
+                attempt + 1,
+                _SOLARMAN_CONNECT_ATTEMPTS,
+                exc,
+            )
+            if attempt < _SOLARMAN_CONNECT_ATTEMPTS - 1:
+                time.sleep(_SOLARMAN_CONNECT_BACKOFF)
+
+    if sm is None:
+        raise RuntimeError(
+            f"solarman: failed to connect after {_SOLARMAN_CONNECT_ATTEMPTS} attempts: {last_err}"
+        )
+
     out: RawRegisters = {}
-    sm = PySolarmanV5(
-        cfg["ip"],
-        int(cfg["logger_serial"]),
-        port=int(cfg.get("port", 8899)),
-        mb_slave_id=int(cfg.get("slave_id", 1)),
-        socket_timeout=8,
-        auto_reconnect=False,
-    )
     try:
         for unit_id, start, count, fc in ranges:
             if fc != "FC03":
@@ -90,13 +137,41 @@ def _read_solarman(cfg: dict, ranges: list[tuple[int, int, int, str]]) -> RawReg
                     fc,
                     start,
                 )
-            words = sm.read_holding_registers(register_addr=start, quantity=count)
+            # --- Per-range read with one retry on any transient failure ---
+            try:
+                words = sm.read_holding_registers(register_addr=start, quantity=count)
+            except Exception as exc:
+                _LOGGER.debug(
+                    "solarman: addr=%s count=%s read failed (%s); reconnecting and retrying once",
+                    start,
+                    count,
+                    exc,
+                )
+                with contextlib.suppress(Exception):
+                    sm.disconnect()
+                try:
+                    sm = _make_client()
+                    words = sm.read_holding_registers(register_addr=start, quantity=count)
+                except Exception as exc2:
+                    _LOGGER.debug(
+                        "solarman: addr=%s count=%s retry failed (%s); skipping range",
+                        start,
+                        count,
+                        exc2,
+                    )
+                    continue
+
             slot = out.setdefault(unit_id, {})
             for i, w in enumerate(words):
                 slot[start + i] = w
     finally:
         with contextlib.suppress(Exception):
             sm.disconnect()
+
+    if not out:
+        raise RuntimeError(
+            "solarman: all ranges failed — logger unreachable or no registers read"
+        )
     return out
 
 

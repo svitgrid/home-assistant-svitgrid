@@ -91,14 +91,14 @@ def test_read_solarman_assembles_raw_registers(monkeypatch):
         ranges = [(1, 100, 2, "FC03")]
         result = _read_solarman(cfg, ranges)
 
-    # Constructor called with ip + serial as positionals
+    # Constructor called with ip + serial as positionals; auto_reconnect=True since 2026-07-01
     FakeClass.assert_called_once_with(
         "192.168.1.1",
         123456789,
         port=8899,
         mb_slave_id=1,
         socket_timeout=8,
-        auto_reconnect=False,
+        auto_reconnect=True,
     )
     # read called with positional-style kwargs
     fake_instance.read_holding_registers.assert_called_once_with(
@@ -113,6 +113,114 @@ def test_read_solarman_assembles_raw_registers(monkeypatch):
 # ---------------------------------------------------------------------------
 # _read_modbus — happy path via monkeypatched stub
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# _read_solarman — resilience: partial success, per-range retry, all-fail, setup retry
+# ---------------------------------------------------------------------------
+
+def _fake_solarman_module(fake_instance=None, ctor_side_effect=None):
+    """Return a (fake_mod, FakeClass) pair for patching pysolarmanv5."""
+    if fake_instance is None:
+        fake_instance = MagicMock()
+    if ctor_side_effect is not None:
+        FakeClass = MagicMock(side_effect=ctor_side_effect)
+    else:
+        FakeClass = MagicMock(return_value=fake_instance)
+    fake_mod = types.ModuleType("pysolarmanv5")
+    fake_mod.PySolarmanV5 = FakeClass  # type: ignore[attr-defined]
+    return fake_mod, FakeClass, fake_instance
+
+
+def test_read_solarman_partial_success_skips_failing_range():
+    """(a) Some ranges raise, others succeed → partial RawRegisters returned, no exception."""
+    from unittest.mock import patch
+    from custom_components.svitgrid.harvest.transport import _read_solarman
+
+    fake_instance = MagicMock()
+
+    def _read_side_effect(*, register_addr, quantity):
+        if register_addr == 100:
+            return [0xAB]
+        raise OSError("logger hiccup")
+
+    fake_instance.read_holding_registers.side_effect = _read_side_effect
+    fake_mod, _, _ = _fake_solarman_module(fake_instance=fake_instance)
+
+    with patch.dict(sys.modules, {"pysolarmanv5": fake_mod}), patch("time.sleep"):
+        cfg = {"ip": "192.168.1.1", "logger_serial": "123", "port": "8899", "slave_id": "1"}
+        result = _read_solarman(cfg, [(1, 100, 1, "FC03"), (1, 200, 1, "FC03")])
+
+    # addr 100 succeeded; addr 200 failed both attempts and was skipped
+    assert result == {1: {100: 0xAB}}
+
+
+def test_read_solarman_range_retry_succeeds_on_reconnect():
+    """(b) A range fails on first read but succeeds on retry → registers present."""
+    from unittest.mock import patch
+    from custom_components.svitgrid.harvest.transport import _read_solarman
+
+    fake_instance = MagicMock()
+    call_count = {"n": 0}
+
+    def _read_side_effect(*, register_addr, quantity):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise ConnectionError("broken pipe")
+        return [0xBB]
+
+    fake_instance.read_holding_registers.side_effect = _read_side_effect
+    fake_mod, _, _ = _fake_solarman_module(fake_instance=fake_instance)
+
+    with patch.dict(sys.modules, {"pysolarmanv5": fake_mod}), patch("time.sleep"):
+        cfg = {"ip": "192.168.1.1", "logger_serial": "123", "port": "8899", "slave_id": "1"}
+        result = _read_solarman(cfg, [(1, 100, 1, "FC03")])
+
+    # First attempt raised; retry succeeded
+    assert result == {1: {100: 0xBB}}
+    assert call_count["n"] == 2
+
+
+def test_read_solarman_all_ranges_fail_raises():
+    """(c) Every range raises on both attempts → _read_solarman raises (zero registers)."""
+    import pytest
+    from unittest.mock import patch
+    from custom_components.svitgrid.harvest.transport import _read_solarman
+
+    fake_instance = MagicMock()
+    fake_instance.read_holding_registers.side_effect = OSError("logger dead")
+    fake_mod, _, _ = _fake_solarman_module(fake_instance=fake_instance)
+
+    with patch.dict(sys.modules, {"pysolarmanv5": fake_mod}), patch("time.sleep"):
+        cfg = {"ip": "192.168.1.1", "logger_serial": "123", "port": "8899", "slave_id": "1"}
+        with pytest.raises(Exception):
+            _read_solarman(cfg, [(1, 100, 1, "FC03"), (1, 200, 1, "FC03")])
+
+
+def test_read_solarman_connection_setup_retry_succeeds():
+    """(d) Constructor raises the first 2 attempts then succeeds → registers read normally."""
+    from unittest.mock import patch
+    from custom_components.svitgrid.harvest.transport import _read_solarman
+
+    fake_instance = MagicMock()
+    fake_instance.read_holding_registers.return_value = [0xCC]
+    ctor_count = {"n": 0}
+
+    def _ctor_side_effect(*args, **kwargs):
+        ctor_count["n"] += 1
+        if ctor_count["n"] < 3:
+            raise OSError("connection refused")
+        return fake_instance
+
+    fake_mod, FakeClass, _ = _fake_solarman_module(ctor_side_effect=_ctor_side_effect)
+
+    with patch.dict(sys.modules, {"pysolarmanv5": fake_mod}), patch("time.sleep") as mock_sleep:
+        cfg = {"ip": "192.168.1.1", "logger_serial": "123", "port": "8899", "slave_id": "1"}
+        result = _read_solarman(cfg, [(1, 100, 1, "FC03")])
+
+    assert result == {1: {100: 0xCC}}
+    assert ctor_count["n"] == 3  # failed twice, succeeded on third attempt
+    assert mock_sleep.call_count >= 2  # backoff called between failed attempts
+
 
 def test_read_modbus_assembles_raw_registers(monkeypatch):
     """Stub ModbusTcpClient; assert RawRegisters maps addr->word correctly."""
