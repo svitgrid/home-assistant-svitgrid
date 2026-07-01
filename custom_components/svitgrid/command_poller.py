@@ -446,6 +446,7 @@ async def run_loop(
     keystore: SvitgridKeystore | None,
     trusted_public_keys_hex: dict[str, str] | None = None,
     executor_version: str = "0.2.0",
+    integration_version: str | None = None,
     executors_by_inverter: dict[str, "BaseExecutor"] | None = None,
     interval_s: int = COMMAND_POLL_INTERVAL_S,
     entry_data: dict | None = None,
@@ -500,7 +501,9 @@ async def run_loop(
                     trusted_key_ids=list(trusted_public_keys_hex.keys()),
                     trusted_public_keys_hex=dict(trusted_public_keys_hex),
                 )
-            resp = await api_client.poll_commands(api_key=state.api_key)
+            resp = await api_client.poll_commands(
+                api_key=state.api_key, integration_version=integration_version
+            )
             next_interval_s = _next_poll_interval_s(resp, interval_s)
             for command in resp.get("commands", []):
                 if activity is not None:

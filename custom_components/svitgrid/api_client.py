@@ -141,9 +141,14 @@ class SvitgridApiClient:
                 raise DeviceStopped(str(body.get("stoppedReason") or "unknown"))
             return body
 
-    async def poll_commands(self, api_key: str) -> dict[str, Any]:
+    async def poll_commands(
+        self, api_key: str, integration_version: str | None = None
+    ) -> dict[str, Any]:
         url = f"{self._base}/api/v3/executors/commands"
-        async with self._session.get(url, headers={"x-api-key": api_key}) as resp:
+        headers = {"x-api-key": api_key}
+        if integration_version:
+            headers["x-integration-version"] = integration_version
+        async with self._session.get(url, headers=headers) as resp:
             if resp.status == 410:
                 raise DeviceEvicted(await _err(resp))
             if resp.status >= 400:

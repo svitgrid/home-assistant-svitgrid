@@ -59,6 +59,7 @@ from .reading_sender import Cadence, run_sender_loop
 from .reading_store import ReadingStore
 from .readings_publisher import run_loop as run_readings_loop
 from .update import SvitgridUpdateCoordinator
+from .updater import read_installed_version
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -650,6 +651,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 lifecycle=lifecycle,
                 store=store,
                 entry=entry,
+                integration_version=read_installed_version(Path(__file__).parent),
             ),
             name="svitgrid_command_poller",
         )
