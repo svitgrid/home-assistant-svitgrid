@@ -36,6 +36,7 @@ from homeassistant.helpers.selector import (
 
 from .api_client import SvitgridApiClient
 from .const import (
+    CONF_AUTO_UPDATE,
     DEFAULT_API_BASE,
     DOMAIN,
     MAPPABLE_FIELDS,
@@ -515,7 +516,7 @@ class SvitgridOptionsFlow(config_entries.OptionsFlow):
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         return self.async_show_menu(
             step_id="init",
-            menu_options=["add_inverter", "edit_inverter", "remove_inverter"],
+            menu_options=["add_inverter", "edit_inverter", "remove_inverter", "settings"],
         )
 
     def _inverters(self) -> list[dict[str, Any]]:
@@ -643,3 +644,15 @@ class SvitgridOptionsFlow(config_entries.OptionsFlow):
         return self.async_show_form(
             step_id="remove_inverter",
             data_schema=vol.Schema({vol.Required("inverter_id"): SelectSelector(SelectSelectorConfig(options=options))}))
+
+    # ── settings: auto-update opt-out ─────────────────────────────────────
+    async def async_step_settings(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+        if user_input is not None:
+            return self.async_create_entry(
+                title="", data={CONF_AUTO_UPDATE: bool(user_input[CONF_AUTO_UPDATE])}
+            )
+        current = self._entry.options.get(CONF_AUTO_UPDATE, True)
+        schema = vol.Schema({
+            vol.Required(CONF_AUTO_UPDATE, default=current): BooleanSelector(),
+        })
+        return self.async_show_form(step_id="settings", data_schema=schema)
