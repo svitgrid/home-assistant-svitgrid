@@ -80,6 +80,19 @@ def test_aggregate_includes_tier3_losses_and_loadfreq():
     assert 49.0 <= agg["avgs"]["loadFrequency"] <= 51.0  # averaged (INSTANTANEOUS_FIELDS)
 
 
+def test_aggregate_includes_daily_generator_runtime():
+    """dailyGeneratorRuntime (harvested for 1-phase Deye/Sunsynk models with a
+    generator port, register 83 per register-specs/*.json) must survive into
+    the daily energy roll-up like the other DAILY_COUNTER_FIELDS — mobile's
+    generator-detail screen sums it across monthlyDailyStatsProvider rows."""
+    from custom_components.svitgrid import rollup
+    rows = [{"payload": {"dailyGeneratorRuntime": 1.5, "dailyGeneratorEnergy": 2.0}},
+            {"payload": {"dailyGeneratorRuntime": 2.5, "dailyGeneratorEnergy": 2.0}}]
+    agg = rollup.aggregate(rows)
+    assert agg["energy"]["dailyGeneratorRuntime"] == 2.5   # max over the day
+    assert agg["energy"]["dailyGeneratorEnergy"] == 2.0
+
+
 def test_prune_drops_old_raw_keeps_daily(tmp_path):
     store = ReadingStore(None, str(tmp_path / "readings.db"))
     store._append_sync({"inverterId": "inv-1", "timestamp": "2026-05-01T10:00:00Z",

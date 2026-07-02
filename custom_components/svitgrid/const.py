@@ -200,6 +200,12 @@ DAILY_COUNTER_FIELDS = frozenset({
     "dailyPvEnergy", "dailyGridImportEnergy", "dailyGridExportEnergy",
     "dailyLoadEnergy", "dailyBatteryChargeEnergy", "dailyBatteryDischargeEnergy",
     "dailyGeneratorEnergy", "dailyLossesEnergy",
+    # Harvested (SP-B direct-Modbus) for 1-phase Deye/Sunsynk models whose
+    # register spec defines a generator-runtime register (address 83, see
+    # packages/inverter_protocol/register-specs/*.json) — without this in
+    # DAILY_COUNTER_FIELDS, rollup.aggregate() silently drops the decoded
+    # field before it reaches readings_daily.energy.
+    "dailyGeneratorRuntime",
 })
 PEAK_FIELDS = frozenset({"pvPower", "loadPower"})
 
