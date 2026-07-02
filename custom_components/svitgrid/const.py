@@ -139,11 +139,19 @@ REVOKE_TRUSTED_KEY_COMMAND = "revoke_trusted_key"
 # trust boundary, and the command can only retarget the integration to
 # a Svitgrid-controlled endpoint.
 SET_CLOUD_ENDPOINT_COMMAND = "set_cloud_endpoint"
+# Island mode switch — flip cloud_ingest_enabled + seed the island key.
+# Internal (no admin signature required) — the command is RBAC-gated at
+# the API level (household owner/admin + paid entitlement); the command
+# channel itself is the trust boundary here.
+ENABLE_ISLAND_COMMAND = "enable_island"
+DISABLE_ISLAND_COMMAND = "disable_island"
 
 INTERNAL_COMMANDS = frozenset({
     ADD_TRUSTED_KEY_COMMAND,
     REVOKE_TRUSTED_KEY_COMMAND,
     SET_CLOUD_ENDPOINT_COMMAND,
+    ENABLE_ISLAND_COMMAND,
+    DISABLE_ISLAND_COMMAND,
 })
 
 # Inverter-control commands dispatched to the configured executor.

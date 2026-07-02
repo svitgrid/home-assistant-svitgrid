@@ -26,7 +26,9 @@ from .const import (
     ADD_TRUSTED_KEY_COMMAND,
     COMMAND_POLL_CEILING_S,
     COMMAND_POLL_INTERVAL_S,
+    DISABLE_ISLAND_COMMAND,
     DISPATCHABLE_COMMANDS,
+    ENABLE_ISLAND_COMMAND,
     REVOKE_TRUSTED_KEY_COMMAND,
     SET_CLOUD_ENDPOINT_COMMAND,
 )
@@ -283,6 +285,81 @@ async def process_command(
                 "done. cmd_id=%s url=%s manual recovery required.",
                 cmd_id, url,
             )
+        return
+
+    # === Arm 1d: enable_island / disable_island ===
+    # Trusted via the command channel (RBAC-gated at the API level — household
+    # owner/admin + paid entitlement); no ECDSA admin-signature required.
+    # enable_island: seed the island key + set cloud_ingest_enabled=False + reload.
+    # disable_island: set cloud_ingest_enabled=True + reload; island key retained.
+    if cmd_type in (ENABLE_ISLAND_COMMAND, DISABLE_ISLAND_COMMAND):
+        if hass is None or entry is None:
+            _LOGGER.warning(
+                "%s rejected — no ConfigEntry (YAML install?). cmd_id=%s",
+                cmd_type,
+                cmd_id,
+            )
+            await _send_signed_ack(
+                api_client=api_client,
+                api_key=api_key,
+                command_id=cmd_id,
+                success=False,
+                rejected=True,
+                reason="yaml_config_no_entry",
+                our_private_key=our_private_key,
+                our_signing_key_id=our_signing_key_id,
+                executor_version=executor_version,
+            )
+            return
+
+        payload = command.get("payload") or {}
+
+        if cmd_type == ENABLE_ISLAND_COMMAND:
+            island_key = payload.get("islandKey")
+            if not island_key:
+                _LOGGER.warning(
+                    "enable_island rejected — missing/empty islandKey. cmd_id=%s",
+                    cmd_id,
+                )
+                await _send_signed_ack(
+                    api_client=api_client,
+                    api_key=api_key,
+                    command_id=cmd_id,
+                    success=False,
+                    rejected=True,
+                    reason="missing_island_key",
+                    our_private_key=our_private_key,
+                    our_signing_key_id=our_signing_key_id,
+                    executor_version=executor_version,
+                )
+                return
+
+            if keystore is not None:
+                await keystore.async_set_island_key(island_key)
+
+            cloud_ingest = False
+        else:
+            # disable_island — island key intentionally retained in keystore
+            cloud_ingest = True
+
+        new_data = {**entry.data, "cloud_ingest_enabled": cloud_ingest}
+        hass.config_entries.async_update_entry(entry, data=new_data)
+        _LOGGER.info(
+            "%s: cloud_ingest_enabled -> %s, reloading entry. cmd_id=%s",
+            cmd_type,
+            cloud_ingest,
+            cmd_id,
+        )
+        hass.async_create_task(hass.config_entries.async_reload(entry.entry_id))
+        await _send_signed_ack(
+            api_client=api_client,
+            api_key=api_key,
+            command_id=cmd_id,
+            success=True,
+            our_private_key=our_private_key,
+            our_signing_key_id=our_signing_key_id,
+            executor_version=executor_version,
+        )
         return
 
     # === Arms 2 and 3 require a verified admin signature ===
