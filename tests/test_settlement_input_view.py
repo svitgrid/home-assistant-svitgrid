@@ -2,8 +2,8 @@
 
 Endpoint returns LocalDateHourBucket[] (per-hour import/export energy,
 household-local bucketed) for a requested inverter+month. Wire contract must
-match the cloud settlement's LocalDateHourBucket{localDate, hour, importKwh,
-exportKwh} (services/api/src/tariffs/hourly-aggregation.ts).
+match the cloud settlement's LocalDateHourBucket{localDate, hourOfDay,
+importKwh, exportKwh} (services/api/src/tariffs/hourly-aggregation.ts:73-78).
 
 Spec: docs/superpowers/plans/2026-07-02-island-hourly-energy.md, Task 2.
 """
@@ -123,9 +123,9 @@ async def test_settlement_input_returns_local_date_hour_buckets(hass):
     buckets = body["buckets"]
     assert len(buckets) == 2
 
-    b0 = next(b for b in buckets if b["hour"] == 0)
-    b1 = next(b for b in buckets if b["hour"] == 1)
-    assert set(b0.keys()) == {"localDate", "hour", "importKwh", "exportKwh"}
+    b0 = next(b for b in buckets if b["hourOfDay"] == 0)
+    b1 = next(b for b in buckets if b["hourOfDay"] == 1)
+    assert set(b0.keys()) == {"localDate", "hourOfDay", "importKwh", "exportKwh"}
     assert b0["localDate"] == "2026-07-02"
     assert b0["importKwh"] == 1.0
     assert b0["exportKwh"] == 0.2
@@ -163,7 +163,7 @@ async def test_settlement_input_uses_configured_local_tz(hass):
     buckets = body["buckets"]
     assert len(buckets) == 1
     assert buckets[0]["localDate"] == "2026-07-02"
-    assert buckets[0]["hour"] == 1
+    assert buckets[0]["hourOfDay"] == 1
     assert buckets[0]["importKwh"] == 4.0
 
 
@@ -226,3 +226,31 @@ async def test_settlement_input_defaults_month_to_current_when_missing(hass):
     resp = await view.get(request)
     assert resp.status == 200
     assert store.args[1] == _today()[:7]
+
+
+# ---------------------------------------------------------------------------
+# Malformed month -> 400 (the real _month_bounds raises ValueError, which the
+# endpoint maps to HTTP 400 rather than a 500)
+# ---------------------------------------------------------------------------
+
+
+class _RaisingStore:
+    """Store whose month fetch raises ValueError for a malformed month, exactly
+    like the real ReadingStore._month_bounds does."""
+
+    async def month_hourly_range_live(self, inverter_id, month):
+        raise ValueError(f"malformed month: {month!r}")
+
+
+@pytest.mark.asyncio
+async def test_settlement_input_malformed_month_returns_400(hass):
+    _install_keystore(hass)
+    hass.config.time_zone = "UTC"
+    view = SvitgridSettlementInputView(_RaisingStore())
+    request = _FakeRequest(
+        hass,
+        island_key_header=ISLAND_KEY,
+        query={"inverter_id": "inv-1", "month": "foo"},
+    )
+    resp = await view.get(request)
+    assert resp.status == 400

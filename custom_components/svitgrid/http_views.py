@@ -544,9 +544,10 @@ class SvitgridSettlementInputView(_BaseView):
     Query params: ``inverter_id`` (required by the caller; defaults to "" if
     omitted), ``month`` ('YYYY-MM', defaults to the current UTC month).
 
-    Response: ``{"inverter_id", "buckets": [{"localDate", "hour",
+    Response: ``{"inverter_id", "buckets": [{"localDate", "hourOfDay",
     "importKwh", "exportKwh"}, ...]}`` — the wire shape matches the cloud
-    settlement's ``LocalDateHourBucket``.
+    settlement's ``LocalDateHourBucket`` (``hourOfDay``, not ``hour``; see
+    ``services/api/src/tariffs/hourly-aggregation.ts``).
 
     Flow: fetch the month's UTC hourly energy rows (sealed + today-live,
     via ``store.month_hourly_range_live``) → bucket to household-local
@@ -568,13 +569,17 @@ class SvitgridSettlementInputView(_BaseView):
         month = q.get("month", _current_month())
         tz_name = request.app["hass"].config.time_zone
 
-        hourly_rows = await self._store.month_hourly_range_live(inverter_id, month)
+        try:
+            hourly_rows = await self._store.month_hourly_range_live(inverter_id, month)
+        except ValueError:
+            # Malformed month (e.g. "foo") — _month_bounds can't parse it.
+            return web.Response(status=400)
         local_rows = to_local_hour_rows(hourly_rows, tz_name)
         deltas = per_hour_deltas(local_rows)
         buckets = [
             {
                 "localDate": r["local_date"],
-                "hour": r["hour"],
+                "hourOfDay": r["hour"],
                 "importKwh": r["importKwh"],
                 "exportKwh": r["exportKwh"],
             }

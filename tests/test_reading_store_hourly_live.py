@@ -121,3 +121,19 @@ def test_hourly_range_live_includes_subsecond_last_second_of_day(tmp_path):
     result = store._hourly_range_live_sync("inv-1", "2026-06-24")
     assert [b["hour"] for b in result] == ["2026-06-24T23:00:00Z"]
     assert result[0]["sample_count"] == 1
+
+
+def test_month_bounds_valid_month(tmp_path):
+    store = _store(tmp_path)
+    assert store._month_bounds("2026-02") == ("2026-02-01", "2026-02-28")
+    assert store._month_bounds("2024-02") == ("2024-02-01", "2024-02-29")  # leap year
+
+
+def test_month_bounds_malformed_month_raises_valueerror(tmp_path):
+    """Malformed month must raise ValueError (endpoint maps it to HTTP 400),
+    never crash with an unhandled error."""
+    import pytest
+    store = _store(tmp_path)
+    for bad in ("foo", "2026-13", "2026-00", "", "2026"):
+        with pytest.raises(ValueError):
+            store._month_bounds(bad)

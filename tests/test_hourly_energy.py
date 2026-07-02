@@ -214,6 +214,23 @@ def test_to_local_hour_rows_dst_fallback_duplicate_later_wins():
     assert dup_rows[0]["export_cum"] == 2.5
 
 
+def test_to_local_hour_rows_dst_spring_forward_skipped_hour_absent():
+    # 2026-03-29 is Ukraine's DST spring-forward transition (last Sunday of
+    # March). At 01:00 UTC the local clock jumps 03:00 EET(+2) -> 04:00
+    # EEST(+3), so local hour 3 never exists. The mapping must degrade
+    # gracefully: UTC 00/01/02:00Z -> local hours 2/4/5, hour 3 simply
+    # absent, no crash and correctly ordered.
+    rows = [
+        _hourly_row("2026-03-29T00:00:00Z", import_energy=1.0),
+        _hourly_row("2026-03-29T01:00:00Z", import_energy=2.0),
+        _hourly_row("2026-03-29T02:00:00Z", import_energy=3.0),
+    ]
+    out = to_local_hour_rows(rows, "Europe/Kyiv")
+    hours = [r["hour"] for r in out]
+    assert hours == [2, 4, 5]  # sorted, no skipped hour 3, no crash
+    assert all(r["local_date"] == "2026-03-29" for r in out)
+
+
 def test_to_local_hour_rows_dst_fallback_duplicate_order_independent():
     # Same as above but input rows given in reverse (descending hour_start)
     # order -- output must still pick the later UTC row deterministically,

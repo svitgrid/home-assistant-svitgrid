@@ -509,9 +509,18 @@ class ReadingStore:
             conn.close()
 
     def _month_bounds(self, month: str) -> tuple[str, str]:
-        """Return (start_day, end_day) inclusive, both 'YYYY-MM-DD', for a 'YYYY-MM' month."""
+        """Return (start_day, end_day) inclusive, both 'YYYY-MM-DD', for a 'YYYY-MM' month.
+
+        Raises ValueError for a malformed *month* (bad shape, non-numeric, or
+        month out of 1..12); the endpoint maps that to HTTP 400.
+        """
         import calendar
-        year, mon = int(month[:4]), int(month[5:7])
+        try:
+            year, mon = int(month[:4]), int(month[5:7])
+        except (ValueError, TypeError) as err:
+            raise ValueError(f"malformed month: {month!r}") from err
+        if not 1 <= mon <= 12:
+            raise ValueError(f"month out of range: {month!r}")
         start_day = f"{year:04d}-{mon:02d}-01"
         last_day = calendar.monthrange(year, mon)[1]
         end_day = f"{year:04d}-{mon:02d}-{last_day:02d}"
