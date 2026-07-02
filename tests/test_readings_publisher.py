@@ -233,12 +233,12 @@ async def test_publisher_clamps_extreme_intervals(monkeypatch):
 @pytest.mark.asyncio
 async def test_publisher_clamps_negative_or_tiny_intervals(monkeypatch):
     """A negative cadence (-5) is < 120 → active branch; the post-append sleep
-    must be clamped UP to the 10s floor (never a tight sub-second loop)."""
+    must be clamped UP to the 5s floor (never a tight sub-second loop)."""
     cadence = Cadence(interval_s=-5)
     sleeps = await _run_with_sleep_capture(
         monkeypatch, _mock_hass_one_iter(), _RecordingStore(), cadence
     )
-    assert sleeps == [10.0]  # 10s floor
+    assert sleeps == [5.0]  # 5s floor
 
 
 # ── Phase 2 T10b: sample aggregation for idle (>=120s intervals) ──────

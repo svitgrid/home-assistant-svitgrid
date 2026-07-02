@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 # Sane bounds for the server-driven cadence. Floor prevents a misbehaving
 # server from spinning us in a 1ms tight loop; ceiling prevents the same
 # server from silently parking us for hours on end.
-_INTERVAL_FLOOR_S = 10
+_INTERVAL_FLOOR_S = 5
 _INTERVAL_CEILING_S = 30 * 60
 # Default when the response is missing ingestIntervalMs (old server, network
 # error). 60s = active-session cadence; safer than the legacy 10s and never

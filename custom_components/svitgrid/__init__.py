@@ -278,6 +278,18 @@ def _migrate_v1_to_v2(data: dict) -> dict:
     return new
 
 
+def _initial_cadence_seconds(entry_data: dict) -> int:
+    """Clamp the persisted harvest interval into the harvest clamp bounds."""
+    from .readings_publisher import _INTERVAL_FLOOR_S, _INTERVAL_CEILING_S
+    from .const import CADENCE_DEFAULT_INTERVAL_S
+    raw = entry_data.get("harvest_interval_seconds", CADENCE_DEFAULT_INTERVAL_S)
+    try:
+        v = int(raw)
+    except (TypeError, ValueError):
+        return CADENCE_DEFAULT_INTERVAL_S
+    return max(_INTERVAL_FLOOR_S, min(_INTERVAL_CEILING_S, v))
+
+
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Migrate v1 (scalar single-inverter) entries to v2 (inverters list)."""
     if entry.version >= 2:
@@ -520,6 +532,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             hass, api_client, api_key, activity, active_ids=active_ids,
             cloud_ingest_enabled=cloud_ingest_enabled,
         )
+        cadence.interval_s = _initial_cadence_seconds(dict(entry.data))
+        hass.data.setdefault(DOMAIN, {})
+        hass.data[DOMAIN]["cadence"] = cadence
+        hass.data[DOMAIN]["cadence_entry_id"] = entry.entry_id
         await register_panel(hass)
 
         # Island event store — always constructed so Task 2's SvitgridEventsView
