@@ -38,6 +38,10 @@ class _FakeStore:
         return [{"day": "2026-06-23", "sample_count": 5,
                  "avgs": {}, "peaks": {}, "energy": {}}]
 
+    async def history_range_live(self, inverter_id, start, end):
+        return [{"day": "2026-06-23", "sample_count": 5,
+                 "avgs": {}, "peaks": {}, "energy": {}}]
+
     async def hourly_range(self, inverter_id, day):
         return []
 

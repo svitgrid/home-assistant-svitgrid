@@ -428,6 +428,75 @@ class ReadingStore:
         finally:
             conn.close()
 
+    def _history_range_live_sync(self, inverter_id: str, start_day: str,
+                                 end_day: str, now_iso: str | None = None) -> list[dict]:
+        """Sealed ``readings_daily`` rows for days < today, plus today aggregated
+        live from ``readings_raw`` (if today falls within [start_day, end_day]).
+
+        Mirrors ``_rollup_sync``'s aggregation exactly: group today's raw rows
+        by hour → ``rollup.aggregate`` per hour → ``rollup.merge_hourly`` → daily
+        bucket ``{"day": today, "sample_count", "avgs", "peaks", "energy"}``.
+        Result is sorted by day.  ``now_iso`` defaults to the real UTC clock;
+        tests pass an explicit value to pin "today".
+        """
+        from datetime import datetime, timedelta, timezone
+        from . import rollup as _r
+
+        if now_iso is None:
+            now_iso = datetime.now(timezone.utc).isoformat()
+        today = self._day_of(now_iso)
+
+        # Yesterday = last completed day for the sealed query upper bound.
+        try:
+            today_dt = datetime.strptime(today, "%Y-%m-%d")
+            yesterday = (today_dt - timedelta(days=1)).strftime("%Y-%m-%d")
+        except ValueError:
+            yesterday = today
+
+        conn = _connect(self._db_path)
+        try:
+            result: list[dict] = []
+
+            # 1. Sealed prior days: start_day..min(end_day, yesterday)
+            sealed_end = min(end_day, yesterday)
+            if sealed_end >= start_day:
+                cur = conn.execute(
+                    "SELECT day, sample_count, avgs, peaks, energy "
+                    "FROM readings_daily "
+                    "WHERE inverter_id = ? AND day >= ? AND day <= ? ORDER BY day",
+                    (inverter_id, start_day, sealed_end))
+                for r in cur.fetchall():
+                    result.append({
+                        "day": r["day"],
+                        "sample_count": r["sample_count"],
+                        "avgs": json.loads(r["avgs"]),
+                        "peaks": json.loads(r["peaks"]),
+                        "energy": json.loads(r["energy"]),
+                    })
+
+            # 2. Today's live bucket (only if today is within the requested range)
+            if start_day <= today <= end_day:
+                day_start = today + "T00:00:00Z"
+                day_end   = today + "T23:59:59Z"
+                cur = conn.execute(
+                    "SELECT ts, payload FROM readings_raw "
+                    "WHERE inverter_id = ? AND ts >= ? AND ts <= ? ORDER BY ts",
+                    (inverter_id, day_start, day_end))
+                buckets: dict[str, list[dict]] = {}
+                for r in cur.fetchall():
+                    hour = self._hour_of(r["ts"])
+                    buckets.setdefault(hour, []).append(
+                        {"payload": json.loads(r["payload"])})
+                if buckets:
+                    hour_aggs = [_r.aggregate(buckets[h]) for h in sorted(buckets)]
+                    daily_agg = _r.merge_hourly(hour_aggs)
+                    result.append({"day": today, **daily_agg})
+
+            result.sort(key=lambda r: r["day"])
+            return result
+        finally:
+            conn.close()
+
     def _sync_status_sync(self) -> dict:
         conn = _connect(self._db_path)
         try:
@@ -558,6 +627,11 @@ class ReadingStore:
                             end_day: str) -> list[dict]:
         return await self._hass.async_add_executor_job(
             self._history_range_sync, inverter_id, start_day, end_day)
+
+    async def history_range_live(self, inverter_id: str, start_day: str,
+                                 end_day: str) -> list[dict]:
+        return await self._hass.async_add_executor_job(
+            self._history_range_live_sync, inverter_id, start_day, end_day)
 
     async def hourly_range(self, inverter_id: str, day: str) -> list[dict]:
         return await self._hass.async_add_executor_job(

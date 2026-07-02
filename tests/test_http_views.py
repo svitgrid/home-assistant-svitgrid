@@ -28,6 +28,11 @@ class _FakeStore:
         self.history_args = (inverter_id, start, end)
         return [{"day": "2026-06-23", "sample_count": 5, "avgs": {}, "peaks": {}, "energy": {}}]
 
+    async def history_range_live(self, inverter_id, start, end):
+        # The daily branch now routes through the live path (sealed prior + today live).
+        self.history_args = (inverter_id, start, end)
+        return [{"day": "2026-06-23", "sample_count": 5, "avgs": {}, "peaks": {}, "energy": {}}]
+
     async def hourly_range(self, inverter_id, day):
         self.hourly_args = (inverter_id, day)
         return [
