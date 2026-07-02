@@ -469,6 +469,59 @@ class SvitgridEventDetailView(_IslandEventViewMixin, HomeAssistantView):
         return self.json({"ok": True, "deleted": deleted})
 
 
+_CADENCE_PRESETS = {5, 15, 30, 60, 300}
+
+
+class SvitgridCadenceView(_BaseView):
+    """GET/PUT /api/svitgrid/cadence — island-key-authed harvest cadence control.
+
+    GET returns ``{"intervalSeconds": int}`` for the current cadence.
+    PUT ``{"intervalSeconds": int}`` validates against ``_CADENCE_PRESETS``,
+    updates the shared ``Cadence`` holder, and persists via
+    ``hass.config_entries.async_update_entry``.
+
+    Auth: island key OR authenticated HA session (via ``_BaseView._authorize``).
+    Returns 404 if the cadence holder is absent (integration not fully set up).
+    """
+
+    url = "/api/svitgrid/cadence"
+    name = "api:svitgrid:cadence"
+
+    def _cadence(self, request):
+        return request.app["hass"].data.get(DOMAIN, {}).get("cadence")
+
+    async def get(self, request):  # noqa: D102
+        if not await self._authorize(request):
+            return web.Response(status=401)
+        cadence = self._cadence(request)
+        if cadence is None:
+            return web.Response(status=404)
+        return self.json({"intervalSeconds": int(cadence.interval_s)})
+
+    async def put(self, request):  # noqa: D102
+        if not await self._authorize(request):
+            return web.Response(status=401)
+        try:
+            body = await request.json()
+            seconds = int(body["intervalSeconds"])
+        except (ValueError, KeyError, TypeError):
+            return web.Response(status=400)
+        if seconds not in _CADENCE_PRESETS:
+            return web.Response(status=400)
+        hass = request.app["hass"]
+        cadence = self._cadence(request)
+        if cadence is None:
+            return web.Response(status=404)
+        cadence.interval_s = seconds
+        entry_id = hass.data.get(DOMAIN, {}).get("cadence_entry_id")
+        entry = hass.config_entries.async_get_entry(entry_id) if entry_id else None
+        if entry is not None:
+            hass.config_entries.async_update_entry(
+                entry, data={**entry.data, "harvest_interval_seconds": seconds}
+            )
+        return self.json({"intervalSeconds": seconds})
+
+
 def register_views(hass: HomeAssistant, store) -> None:
     for view in (
         SvitgridLiveView(store),
@@ -479,5 +532,6 @@ def register_views(hass: HomeAssistant, store) -> None:
         SvitgridCommandsView(),
         SvitgridEventsView(),
         SvitgridEventDetailView(),
+        SvitgridCadenceView(store),
     ):
         hass.http.register_view(view)
