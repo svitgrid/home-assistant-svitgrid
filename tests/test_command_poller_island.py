@@ -58,14 +58,23 @@ def _make_hass_entry(entry_data: dict | None = None):
 async def test_enable_island_seeds_keystore_updates_entry_and_acks_success():
     """enable_island with a valid islandKey:
     - calls keystore.async_set_island_key('K')
+    - ACKs success=True BEFORE applying the config change + reload
     - calls hass.config_entries.async_update_entry with cloud_ingest_enabled=False
     - schedules a reload via hass.async_create_task
-    - ACKs success=True
     """
     priv, _pub_hex = generate_keypair()
     api_client = _make_api_client()
     keystore = _make_keystore()
     hass, entry = _make_hass_entry()
+
+    # Record relative ordering of the ACK vs the entry-apply/reload. The reload
+    # tears down the poller task, so the success ACK MUST be sent first.
+    call_order: list[str] = []
+    api_client.ack_command.side_effect = lambda *a, **k: call_order.append("ack")
+    hass.config_entries.async_update_entry.side_effect = (
+        lambda *a, **k: call_order.append("update")
+    )
+    hass.async_create_task.side_effect = lambda *a, **k: call_order.append("reload")
 
     await process_command(
         command={
@@ -102,6 +111,11 @@ async def test_enable_island_seeds_keystore_updates_entry_and_acks_success():
     body = api_client.ack_command.await_args.kwargs["body"]
     assert body["success"] is True, f"Expected success ACK, got: {body}"
 
+    # ACK must precede the entry apply + reload (reload cancels the poller task).
+    assert call_order == ["ack", "update", "reload"], (
+        f"Success ACK must be sent BEFORE apply+reload, got: {call_order}"
+    )
+
 
 # ---------------------------------------------------------------------------
 # disable_island happy path
@@ -111,15 +125,22 @@ async def test_enable_island_seeds_keystore_updates_entry_and_acks_success():
 @pytest.mark.asyncio
 async def test_disable_island_sets_cloud_ingest_true_keeps_key_and_acks():
     """disable_island:
-    - calls hass.config_entries.async_update_entry with cloud_ingest_enabled=True
     - does NOT call keystore.async_set_island_key (island key retained)
+    - ACKs success=True BEFORE applying the config change + reload
+    - calls hass.config_entries.async_update_entry with cloud_ingest_enabled=True
     - schedules a reload
-    - ACKs success=True
     """
     priv, _pub_hex = generate_keypair()
     api_client = _make_api_client()
     keystore = _make_keystore()
     hass, entry = _make_hass_entry({"cloud_ingest_enabled": False, "island_key": "old-key"})
+
+    call_order: list[str] = []
+    api_client.ack_command.side_effect = lambda *a, **k: call_order.append("ack")
+    hass.config_entries.async_update_entry.side_effect = (
+        lambda *a, **k: call_order.append("update")
+    )
+    hass.async_create_task.side_effect = lambda *a, **k: call_order.append("reload")
 
     await process_command(
         command={
@@ -155,6 +176,11 @@ async def test_disable_island_sets_cloud_ingest_true_keeps_key_and_acks():
     api_client.ack_command.assert_awaited_once()
     body = api_client.ack_command.await_args.kwargs["body"]
     assert body["success"] is True, f"Expected success ACK, got: {body}"
+
+    # ACK must precede the entry apply + reload (reload cancels the poller task).
+    assert call_order == ["ack", "update", "reload"], (
+        f"Success ACK must be sent BEFORE apply+reload, got: {call_order}"
+    )
 
 
 # ---------------------------------------------------------------------------

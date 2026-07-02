@@ -365,15 +365,15 @@ async def process_command(
             # disable_island — island key intentionally retained in keystore
             cloud_ingest = True
 
-        new_data = {**entry.data, "cloud_ingest_enabled": cloud_ingest}
-        hass.config_entries.async_update_entry(entry, data=new_data)
-        _LOGGER.info(
-            "%s: cloud_ingest_enabled -> %s, reloading entry. cmd_id=%s",
-            cmd_type,
-            cloud_ingest,
-            cmd_id,
-        )
-        hass.async_create_task(hass.config_entries.async_reload(entry.entry_id))
+        # ACK SUCCESS FIRST, THEN apply the config change + schedule the reload.
+        # The reload's unload step cancels THIS poller task (the one suspended
+        # at the ACK's network I/O); if we applied + reloaded first, the ACK
+        # would be aborted mid-flight and the command's status would stick in
+        # `delivered` forever. Same guard as set_cloud_endpoint (Arm 1c) — see
+        # "If apply came first, the reload would tear down the api_client
+        # mid-flight and the ACK would never reach the cloud". All reject-ACK
+        # guards above already returned early before any mutation, so reaching
+        # here means the apply is safe to promise.
         await _send_signed_ack(
             api_client=api_client,
             api_key=api_key,
@@ -383,6 +383,16 @@ async def process_command(
             our_signing_key_id=our_signing_key_id,
             executor_version=executor_version,
         )
+
+        new_data = {**entry.data, "cloud_ingest_enabled": cloud_ingest}
+        hass.config_entries.async_update_entry(entry, data=new_data)
+        _LOGGER.info(
+            "%s: cloud_ingest_enabled -> %s, reloading entry. cmd_id=%s",
+            cmd_type,
+            cloud_ingest,
+            cmd_id,
+        )
+        hass.async_create_task(hass.config_entries.async_reload(entry.entry_id))
         return
 
     # === Arms 2 and 3 require a verified admin signature ===
