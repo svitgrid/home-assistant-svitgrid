@@ -97,7 +97,7 @@ class SvitgridHistoryView(_BaseView):
             day = q.get("day", _today())
             return self.json({
                 "inverter_id": inverter_id,
-                "hours": await self._store.hourly_range(inverter_id, day),
+                "hours": await self._store.hourly_range_live(inverter_id, day),
             })
         start = q.get("start", _today())
         end = q.get("end", _today())

@@ -375,6 +375,45 @@ class ReadingStore:
         finally:
             conn.close()
 
+    def _hourly_range_live_sync(self, inverter_id: str, day: str) -> list[dict]:
+        """Compute hourly buckets on demand from readings_raw for *day*.
+
+        Unlike ``_hourly_range_sync`` (which reads the pre-sealed
+        ``readings_hourly`` table populated only every ROLLUP_INTERVAL_S and
+        only for COMPLETED hours), this groups the day's raw rows by hour and
+        aggregates each with ``rollup.aggregate`` — INCLUDING the current
+        in-progress hour.  A local HA box has ample compute for a day of raw
+        (a few thousand rows), so a fresh household still gets a Day chart
+        before the first rollup runs.
+
+        Returns the SAME shape as ``_hourly_range_sync``:
+        ``[{"hour", "sample_count", "avgs", "peaks", "energy"}]`` sorted by hour.
+        """
+        from . import rollup as _r
+        day_start = day + "T00:00:00Z"
+        day_end = day + "T23:59:59Z"
+        conn = _connect(self._db_path)
+        try:
+            cur = conn.execute(
+                "SELECT ts, payload FROM readings_raw "
+                "WHERE inverter_id = ? AND ts >= ? AND ts <= ? ORDER BY ts",
+                (inverter_id, day_start, day_end))
+            # Mirror _rollup_sync's bucket construction so the numbers match.
+            buckets: dict[str, list[dict]] = {}
+            for r in cur.fetchall():
+                hour = self._hour_of(r["ts"])
+                buckets.setdefault(hour, []).append(
+                    {"payload": json.loads(r["payload"])})
+            result = []
+            for hour in sorted(buckets):
+                agg = _r.aggregate(buckets[hour])
+                result.append({"hour": hour, "sample_count": agg["sample_count"],
+                               "avgs": agg["avgs"], "peaks": agg["peaks"],
+                               "energy": agg["energy"]})
+            return result
+        finally:
+            conn.close()
+
     def _history_range_sync(self, inverter_id: str, start_day: str,
                             end_day: str) -> list[dict]:
         conn = _connect(self._db_path)
@@ -523,6 +562,10 @@ class ReadingStore:
     async def hourly_range(self, inverter_id: str, day: str) -> list[dict]:
         return await self._hass.async_add_executor_job(
             self._hourly_range_sync, inverter_id, day)
+
+    async def hourly_range_live(self, inverter_id: str, day: str) -> list[dict]:
+        return await self._hass.async_add_executor_job(
+            self._hourly_range_live_sync, inverter_id, day)
 
     async def sync_status(self) -> dict:
         return await self._hass.async_add_executor_job(self._sync_status_sync)

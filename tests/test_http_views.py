@@ -35,6 +35,14 @@ class _FakeStore:
             {"hour": "2026-06-20T10:00:00Z", "sample_count": 12, "avgs": {}, "peaks": {}, "energy": {}},
         ]
 
+    async def hourly_range_live(self, inverter_id, day):
+        # The history view's hourly branch now computes buckets live from raw.
+        self.hourly_args = (inverter_id, day)
+        return [
+            {"hour": "2026-06-20T09:00:00Z", "sample_count": 10, "avgs": {}, "peaks": {}, "energy": {}},
+            {"hour": "2026-06-20T10:00:00Z", "sample_count": 12, "avgs": {}, "peaks": {}, "energy": {}},
+        ]
+
 
 class _FakeRequest:
     def __init__(self, app, query=None):
