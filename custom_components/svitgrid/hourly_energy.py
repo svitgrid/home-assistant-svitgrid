@@ -23,6 +23,9 @@ No I/O; pure functions only.
 
 from __future__ import annotations
 
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 
 def _accumulate_track(rows: list[dict], cum_field: str, out_field: str) -> dict[tuple, float]:
     """Compute per-(local_date, hour) deltas for a single cumulative track.
@@ -114,3 +117,52 @@ def per_hour_deltas(hours: list[dict]) -> list[dict]:
         )
 
     return out
+
+
+def to_local_hour_rows(hourly_rows: list[dict], tz_name: str) -> list[dict]:
+    """Map UTC-bucketed hourly energy rows to household-local (date, hour) rows.
+
+    This is the glue between the store's UTC hourly buckets and
+    ``per_hour_deltas``'s local-date/hour input contract.
+
+    Args:
+        hourly_rows: rows of {"hour_start": "YYYY-MM-DDTHH:00:00Z" (UTC),
+            "energy": {"dailyGridImportEnergy": float|None,
+                       "dailyGridExportEnergy": float|None}}. Need not be
+            pre-sorted. Extra keys are ignored.
+        tz_name: an IANA timezone name -- the household-local tz (typically
+            ``hass.config.time_zone``).
+
+    Returns:
+        Rows of {"local_date": "YYYY-MM-DD", "hour": 0..23, "import_cum",
+        "export_cum"} -- exactly the input shape ``per_hour_deltas``
+        expects. A missing/None cumulative is preserved as None (never
+        coerced to 0 here; that coercion belongs to ``per_hour_deltas``).
+
+    DST fall-back handling: at a fall-back transition the local wall clock
+    repeats an hour, so two distinct UTC ``hour_start`` values can map to
+    the SAME local (local_date, hour). These are cumulative counters, so
+    summing duplicates would fabricate energy. Instead the row from the
+    LATER UTC ``hour_start`` wins: rows are processed in ascending
+    ``hour_start`` order into a dict keyed by (local_date, hour), so a
+    later duplicate deterministically overwrites the earlier one.
+    """
+    tz = ZoneInfo(tz_name)
+    sorted_rows = sorted(hourly_rows, key=lambda r: r["hour_start"])
+
+    by_key: dict[tuple[str, int], dict] = {}
+    for row in sorted_rows:
+        utc_dt = datetime.fromisoformat(row["hour_start"].replace("Z", "+00:00"))
+        local_dt = utc_dt.astimezone(tz)
+        local_date = local_dt.strftime("%Y-%m-%d")
+        hour = local_dt.hour
+
+        energy = row.get("energy") or {}
+        by_key[(local_date, hour)] = {
+            "local_date": local_date,
+            "hour": hour,
+            "import_cum": energy.get("dailyGridImportEnergy"),
+            "export_cum": energy.get("dailyGridExportEnergy"),
+        }
+
+    return sorted(by_key.values(), key=lambda r: (r["local_date"], r["hour"]))

@@ -29,6 +29,7 @@ from homeassistant.core import HomeAssistant
 
 from .command_auth import verify_signed_command
 from .const import DOMAIN
+from .hourly_energy import per_hour_deltas, to_local_hour_rows
 from .island_auth import island_key_present_and_valid, island_request_authorized
 
 _LOGGER = logging.getLogger(__name__)
@@ -38,6 +39,10 @@ _DEDUPE_TTL_S = 300  # 5 minutes
 
 def _today() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%d")
+
+
+def _current_month() -> str:
+    return datetime.now(UTC).strftime("%Y-%m")
 
 
 class _BaseView(HomeAssistantView):
@@ -532,6 +537,52 @@ class SvitgridCadenceView(_BaseView):
         return self.json({"intervalSeconds": seconds})
 
 
+class SvitgridSettlementInputView(_BaseView):
+    """GET /api/svitgrid/settlement-input — per-hour import/export energy,
+    household-local bucketed, for financial settlement calculations.
+
+    Query params: ``inverter_id`` (required by the caller; defaults to "" if
+    omitted), ``month`` ('YYYY-MM', defaults to the current UTC month).
+
+    Response: ``{"inverter_id", "buckets": [{"localDate", "hour",
+    "importKwh", "exportKwh"}, ...]}`` — the wire shape matches the cloud
+    settlement's ``LocalDateHourBucket``.
+
+    Flow: fetch the month's UTC hourly energy rows (sealed + today-live,
+    via ``store.month_hourly_range_live``) → bucket to household-local
+    date/hour (``to_local_hour_rows``, using ``hass.config.time_zone``) →
+    compute per-hour deltas from the cumulative counters
+    (``per_hour_deltas``).
+
+    Auth: island key OR authenticated HA session (``_BaseView._authorize``).
+    """
+
+    url = "/api/svitgrid/settlement-input"
+    name = "api:svitgrid:settlement-input"
+
+    async def get(self, request):
+        if not await self._authorize(request):
+            return web.Response(status=401)
+        q = request.query
+        inverter_id = q.get("inverter_id", "")
+        month = q.get("month", _current_month())
+        tz_name = request.app["hass"].config.time_zone
+
+        hourly_rows = await self._store.month_hourly_range_live(inverter_id, month)
+        local_rows = to_local_hour_rows(hourly_rows, tz_name)
+        deltas = per_hour_deltas(local_rows)
+        buckets = [
+            {
+                "localDate": r["local_date"],
+                "hour": r["hour"],
+                "importKwh": r["importKwh"],
+                "exportKwh": r["exportKwh"],
+            }
+            for r in deltas
+        ]
+        return self.json({"inverter_id": inverter_id, "buckets": buckets})
+
+
 def register_views(hass: HomeAssistant, store) -> None:
     for view in (
         SvitgridLiveView(store),
@@ -543,6 +594,7 @@ def register_views(hass: HomeAssistant, store) -> None:
         SvitgridEventsView(),
         SvitgridEventDetailView(),
         SvitgridCadenceView(store),
+        SvitgridSettlementInputView(store),
     ):
         # View routes are GLOBAL to hass.http and PERSIST across config-entry
         # reloads, but the _views_registered guard in hass.data[DOMAIN] is

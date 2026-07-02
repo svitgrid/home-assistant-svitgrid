@@ -508,6 +508,85 @@ class ReadingStore:
         finally:
             conn.close()
 
+    def _month_bounds(self, month: str) -> tuple[str, str]:
+        """Return (start_day, end_day) inclusive, both 'YYYY-MM-DD', for a 'YYYY-MM' month."""
+        import calendar
+        year, mon = int(month[:4]), int(month[5:7])
+        start_day = f"{year:04d}-{mon:02d}-01"
+        last_day = calendar.monthrange(year, mon)[1]
+        end_day = f"{year:04d}-{mon:02d}-{last_day:02d}"
+        return start_day, end_day
+
+    def _month_hourly_range_live_sync(self, inverter_id: str, month: str,
+                                      now_iso: str | None = None) -> list[dict]:
+        """Sealed ``readings_hourly`` rows for the month's hours before today,
+        plus today's hourly buckets computed live from ``readings_raw`` (if
+        today falls within the requested month).
+
+        Mirrors ``_history_range_live_sync``'s sealed-prior + live-today
+        union pattern, but spans a whole month of HOURS rather than a range
+        of DAYS: sealed rows already covering earlier hours of today (the
+        rollup seals completed hours regardless of day boundary) are
+        excluded and fully superseded by the live recompute for today, so
+        today is never double-counted.
+
+        Returns rows shaped like ``readings_hourly``:
+        ``[{"hour_start", "sample_count", "avgs", "peaks", "energy"}]``,
+        sorted by ``hour_start``. ``now_iso`` defaults to the real UTC
+        clock; tests pass an explicit value to pin "today".
+        """
+        from datetime import datetime, timedelta, timezone
+
+        if now_iso is None:
+            now_iso = datetime.now(timezone.utc).isoformat()
+        today = self._day_of(now_iso)
+
+        start_day, end_day = self._month_bounds(month)
+        month_start = start_day + "T00:00:00Z"
+        month_end_exclusive = (
+            datetime.strptime(end_day, "%Y-%m-%d") + timedelta(days=1)
+        ).strftime("%Y-%m-%d") + "T00:00:00Z"
+        today_start = today + "T00:00:00Z"
+
+        result: list[dict] = []
+
+        # 1. Sealed hours strictly before today, within the month range.
+        sealed_upper = min(month_end_exclusive, today_start)
+        if sealed_upper > month_start:
+            conn = _connect(self._db_path)
+            try:
+                cur = conn.execute(
+                    "SELECT hour_start, sample_count, avgs, peaks, energy "
+                    "FROM readings_hourly "
+                    "WHERE inverter_id = ? AND hour_start >= ? AND hour_start < ? "
+                    "ORDER BY hour_start",
+                    (inverter_id, month_start, sealed_upper))
+                for r in cur.fetchall():
+                    result.append({
+                        "hour_start": r["hour_start"],
+                        "sample_count": r["sample_count"],
+                        "avgs": json.loads(r["avgs"]),
+                        "peaks": json.loads(r["peaks"]),
+                        "energy": json.loads(r["energy"]),
+                    })
+            finally:
+                conn.close()
+
+        # 2. Today's hourly buckets, computed live -- only if today is
+        # within the requested month.
+        if start_day <= today <= end_day:
+            for row in self._hourly_range_live_sync(inverter_id, today):
+                result.append({
+                    "hour_start": row["hour"],
+                    "sample_count": row["sample_count"],
+                    "avgs": row["avgs"],
+                    "peaks": row["peaks"],
+                    "energy": row["energy"],
+                })
+
+        result.sort(key=lambda r: r["hour_start"])
+        return result
+
     def _sync_status_sync(self) -> dict:
         conn = _connect(self._db_path)
         try:
@@ -651,6 +730,10 @@ class ReadingStore:
     async def hourly_range_live(self, inverter_id: str, day: str) -> list[dict]:
         return await self._hass.async_add_executor_job(
             self._hourly_range_live_sync, inverter_id, day)
+
+    async def month_hourly_range_live(self, inverter_id: str, month: str) -> list[dict]:
+        return await self._hass.async_add_executor_job(
+            self._month_hourly_range_live_sync, inverter_id, month)
 
     async def sync_status(self) -> dict:
         return await self._hass.async_add_executor_job(self._sync_status_sync)
