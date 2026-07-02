@@ -334,8 +334,31 @@ async def process_command(
                 )
                 return
 
-            if keystore is not None:
-                await keystore.async_set_island_key(island_key)
+            # Without a keystore we cannot seed the island key. Applying the
+            # cloud_ingest flip + reload anyway would bring the add-on up with
+            # cloud-ingest OFF and NO island key → every island API call 401s
+            # while the app believes island is active (unrecoverable without a
+            # re-send). Reject BEFORE mutating entry so nothing half-applies.
+            if keystore is None:
+                _LOGGER.warning(
+                    "enable_island rejected — keystore unavailable, cannot seed "
+                    "island key. cmd_id=%s",
+                    cmd_id,
+                )
+                await _send_signed_ack(
+                    api_client=api_client,
+                    api_key=api_key,
+                    command_id=cmd_id,
+                    success=False,
+                    rejected=True,
+                    reason="keystore_unavailable",
+                    our_private_key=our_private_key,
+                    our_signing_key_id=our_signing_key_id,
+                    executor_version=executor_version,
+                )
+                return
+
+            await keystore.async_set_island_key(island_key)
 
             cloud_ingest = False
         else:

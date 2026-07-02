@@ -1,8 +1,8 @@
 """Tests for enable_island / disable_island command handlers (Task 1).
 
 These are "special" internal commands — trusted via the command channel
-(no ECDSA admin-signature required), handled in Arm 1c/1d alongside
-set_cloud_endpoint.
+(no ECDSA admin-signature required), handled in Arm 1d alongside
+set_cloud_endpoint (Arm 1c).
 
 Assertions:
 - enable_island: keystore.async_set_island_key seeded, entry updated with
@@ -10,6 +10,7 @@ Assertions:
 - disable_island: entry updated with cloud_ingest_enabled=True, keystore
   island_key NOT cleared, success ACK.
 - enable_island hass/entry None -> rejected ACK, no crash, no keystore write.
+- enable_island keystore None -> rejected ACK, entry NOT mutated, no reload.
 - enable_island missing/empty islandKey -> rejected ACK.
 """
 
@@ -88,8 +89,7 @@ async def test_enable_island_seeds_keystore_updates_entry_and_acks_success():
 
     # Entry updated with cloud_ingest_enabled=False
     hass.config_entries.async_update_entry.assert_called_once()
-    update_call = hass.config_entries.async_update_entry.call_args
-    updated_data = update_call.kwargs.get("data") or update_call.args[1]
+    updated_data = hass.config_entries.async_update_entry.call_args.kwargs["data"]
     assert updated_data.get("cloud_ingest_enabled") is False, (
         f"Expected cloud_ingest_enabled=False in update, got: {updated_data}"
     )
@@ -143,8 +143,7 @@ async def test_disable_island_sets_cloud_ingest_true_keeps_key_and_acks():
 
     # Entry updated with cloud_ingest_enabled=True
     hass.config_entries.async_update_entry.assert_called_once()
-    update_call = hass.config_entries.async_update_entry.call_args
-    updated_data = update_call.kwargs.get("data") or update_call.args[1]
+    updated_data = hass.config_entries.async_update_entry.call_args.kwargs["data"]
     assert updated_data.get("cloud_ingest_enabled") is True, (
         f"Expected cloud_ingest_enabled=True in update, got: {updated_data}"
     )
@@ -260,6 +259,42 @@ async def test_enable_island_rejects_when_island_key_missing():
     assert body["success"] is False
     assert body["rejected"] is True
     keystore.async_set_island_key.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_enable_island_rejects_when_keystore_none_before_mutating_entry():
+    """hass+entry valid but keystore None → rejected ACK; entry must NOT be
+    mutated and no reload scheduled (otherwise the add-on comes up with
+    cloud-ingest OFF and no island key → every island call 401s)."""
+    priv, _pub_hex = generate_keypair()
+    api_client = _make_api_client()
+    hass, entry = _make_hass_entry()
+
+    await process_command(
+        command={
+            "commandId": "c-no-keystore",
+            "command": "enable_island",
+            "payload": {"islandKey": "K", "cloudIngest": False},
+        },
+        api_client=api_client,
+        api_key="k",
+        trusted_public_keys_hex={},
+        our_private_key=priv,
+        our_signing_key_id="ours",
+        executor_version="0.3.0",
+        keystore=None,
+        hass=hass,
+        entry=entry,
+    )
+
+    api_client.ack_command.assert_awaited_once()
+    body = api_client.ack_command.await_args.kwargs["body"]
+    assert body["success"] is False, "Must not ack success without a keystore"
+    assert body["rejected"] is True
+    assert body["reason"] == "keystore_unavailable"
+    # Entry must be untouched — no half-applied cloud_ingest flip, no reload
+    hass.config_entries.async_update_entry.assert_not_called()
+    hass.async_create_task.assert_not_called()
 
 
 @pytest.mark.asyncio
