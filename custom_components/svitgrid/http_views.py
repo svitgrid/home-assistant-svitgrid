@@ -19,6 +19,7 @@ Auth logic (``_BaseView._authorize``):
 from __future__ import annotations
 
 import json
+import logging
 import time
 from datetime import UTC, datetime
 
@@ -29,6 +30,8 @@ from homeassistant.core import HomeAssistant
 from .command_auth import verify_signed_command
 from .const import DOMAIN
 from .island_auth import island_key_present_and_valid, island_request_authorized
+
+_LOGGER = logging.getLogger(__name__)
 
 _DEDUPE_TTL_S = 300  # 5 minutes
 
@@ -516,6 +519,13 @@ class SvitgridCadenceView(_BaseView):
         entry_id = hass.data.get(DOMAIN, {}).get("cadence_entry_id")
         entry = hass.config_entries.async_get_entry(entry_id) if entry_id else None
         if entry is not None:
+            # The in-memory cadence holder is already updated above and the
+            # harvest loop reads it live every tick, so this update needs NO
+            # entry reload. Flag it so the update listener (_async_reload_entry)
+            # skips the reload — otherwise every cadence change would reload the
+            # entry and re-run setup (which historically bricked the harvest
+            # loop on the panel/view re-register path).
+            hass.data.setdefault(DOMAIN, {})["_cadence_only_update"] = True
             hass.config_entries.async_update_entry(
                 entry, data={**entry.data, "harvest_interval_seconds": seconds}
             )
@@ -534,4 +544,18 @@ def register_views(hass: HomeAssistant, store) -> None:
         SvitgridEventDetailView(),
         SvitgridCadenceView(store),
     ):
-        hass.http.register_view(view)
+        # View routes are GLOBAL to hass.http and PERSIST across config-entry
+        # reloads, but the _views_registered guard in hass.data[DOMAIN] is
+        # cleared on unload. On a reload we re-enter here with the guard gone
+        # and the routes still present, so aiohttp raises RuntimeError
+        # ("Added route will never be executed, method GET is already
+        # registered"). Swallow that — the existing route already serves.
+        try:
+            hass.http.register_view(view)
+        except RuntimeError as err:
+            if "already registered" not in str(err):
+                raise
+            _LOGGER.debug(
+                "Reusing already-registered view %s: %s",
+                type(view).__name__, err,
+            )

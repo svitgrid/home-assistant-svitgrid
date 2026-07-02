@@ -232,7 +232,14 @@ async def apply_cloud_endpoint_change(
 
 
 async def _async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Update listener: reload the entry so a new entity_map takes effect."""
+    """Update listener: reload the entry so a new entity_map takes effect.
+
+    A cadence-only change (flagged by the cadence PUT handler) is applied to the
+    in-memory holder directly and needs no reload — reloading would re-run setup
+    unnecessarily. The flag is consumed (popped) so any later non-cadence update
+    still reloads."""
+    if hass.data.get(DOMAIN, {}).pop("_cadence_only_update", False):
+        return
     await hass.config_entries.async_reload(entry.entry_id)
 
 
