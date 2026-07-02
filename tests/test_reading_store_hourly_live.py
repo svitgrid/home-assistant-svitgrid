@@ -110,3 +110,14 @@ def test_hourly_range_live_includes_end_of_day_boundary(tmp_path):
 def test_hourly_range_live_empty_day_returns_empty(tmp_path):
     store = _store(tmp_path)
     assert store._hourly_range_live_sync("inv-1", "2026-06-24") == []
+
+
+def test_hourly_range_live_includes_subsecond_last_second_of_day(tmp_path):
+    """A reading at 23:59:59.743Z (sub-second, string > T23:59:59Z) must still be
+    bucketed into the 23:00 hour — regression for the exclusive next-day bound."""
+    store = _store(tmp_path)
+    store._append_sync({"inverterId": "inv-1", "timestamp": "2026-06-24T23:59:59.743115Z",
+                        "pvPower": 3.0})
+    result = store._hourly_range_live_sync("inv-1", "2026-06-24")
+    assert [b["hour"] for b in result] == ["2026-06-24T23:00:00Z"]
+    assert result[0]["sample_count"] == 1

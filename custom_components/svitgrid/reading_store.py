@@ -389,15 +389,21 @@ class ReadingStore:
         Returns the SAME shape as ``_hourly_range_sync``:
         ``[{"hour", "sample_count", "avgs", "peaks", "energy"}]`` sorted by hour.
         """
+        from datetime import datetime, timedelta
         from . import rollup as _r
         day_start = day + "T00:00:00Z"
-        day_end = day + "T23:59:59Z"
+        # Exclusive next-day-midnight bound: our readings carry sub-second ts
+        # (e.g. "...T23:59:59.743Z"), so a string "<= T23:59:59Z" bound would drop
+        # the last second of the day. Use ts < next_day_start.
+        next_day_start = (
+            datetime.strptime(day, "%Y-%m-%d") + timedelta(days=1)
+        ).strftime("%Y-%m-%d") + "T00:00:00Z"
         conn = _connect(self._db_path)
         try:
             cur = conn.execute(
                 "SELECT ts, payload FROM readings_raw "
-                "WHERE inverter_id = ? AND ts >= ? AND ts <= ? ORDER BY ts",
-                (inverter_id, day_start, day_end))
+                "WHERE inverter_id = ? AND ts >= ? AND ts < ? ORDER BY ts",
+                (inverter_id, day_start, next_day_start))
             # Mirror _rollup_sync's bucket construction so the numbers match.
             buckets: dict[str, list[dict]] = {}
             for r in cur.fetchall():
@@ -447,6 +453,7 @@ class ReadingStore:
         today = self._day_of(now_iso)
 
         # Yesterday = last completed day for the sealed query upper bound.
+        today_dt: datetime | None = None
         try:
             today_dt = datetime.strptime(today, "%Y-%m-%d")
             yesterday = (today_dt - timedelta(days=1)).strftime("%Y-%m-%d")
@@ -475,13 +482,17 @@ class ReadingStore:
                     })
 
             # 2. Today's live bucket (only if today is within the requested range)
-            if start_day <= today <= end_day:
+            if today_dt is not None and start_day <= today <= end_day:
                 day_start = today + "T00:00:00Z"
-                day_end   = today + "T23:59:59Z"
+                # Exclusive next-day-midnight bound: our readings carry sub-second
+                # ts (e.g. "...T23:59:59.743Z"), so a string "<= T23:59:59Z" bound
+                # would drop the last second of the day. Use ts < next_day_start.
+                next_day_start = (
+                    today_dt + timedelta(days=1)).strftime("%Y-%m-%d") + "T00:00:00Z"
                 cur = conn.execute(
                     "SELECT ts, payload FROM readings_raw "
-                    "WHERE inverter_id = ? AND ts >= ? AND ts <= ? ORDER BY ts",
-                    (inverter_id, day_start, day_end))
+                    "WHERE inverter_id = ? AND ts >= ? AND ts < ? ORDER BY ts",
+                    (inverter_id, day_start, next_day_start))
                 buckets: dict[str, list[dict]] = {}
                 for r in cur.fetchall():
                     hour = self._hour_of(r["ts"])

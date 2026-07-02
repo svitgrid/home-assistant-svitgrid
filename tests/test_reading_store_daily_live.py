@@ -204,6 +204,70 @@ def test_history_range_live_ignores_other_inverters(tmp_path):
     assert result[0]["avgs"]["pvPower"] == 100.0
 
 
+# ── no double-count when a sealed row exists for TODAY ─────────────────────────
+
+def test_history_range_live_today_not_double_counted(tmp_path):
+    """A sealed readings_daily row for TODAY plus today's raw → today appears
+    EXACTLY ONCE (from the live raw path), never doubled from the sealed row."""
+    store = _store(tmp_path)
+    inv = "inv-1"
+    today = "2026-06-26"
+    now_iso = "2026-06-26T11:00:00Z"
+
+    # A stale sealed row for today (as if a mid-day rollup ran earlier).
+    _insert_daily(store, inv, today, {
+        "sample_count": 1,
+        "avgs": {"pvPower": 100.0},
+        "peaks": {"pvPower": 100.0},
+        "energy": {"dailyPvEnergy": 0.1},
+    })
+    # Fresher raw for today — the live path must supersede the stale sealed row.
+    today_readings = [
+        {"inverterId": inv, "timestamp": "2026-06-26T09:00:00Z",
+         "pvPower": 700.0, "dailyPvEnergy": 1.0},
+        {"inverterId": inv, "timestamp": "2026-06-26T10:00:00Z",
+         "pvPower": 1100.0, "dailyPvEnergy": 2.0},
+    ]
+    for r in today_readings:
+        store._append_sync(r)
+
+    result = store._history_range_live_sync(inv, today, today, now_iso=now_iso)
+
+    today_rows = [r for r in result if r["day"] == today]
+    assert len(today_rows) == 1  # exactly once, not doubled
+
+    # And it is the LIVE value (sample_count 2), not the stale sealed value (1).
+    exp = _rollup.merge_hourly([
+        _rollup.aggregate([{"payload": today_readings[0]}]),
+        _rollup.aggregate([{"payload": today_readings[1]}]),
+    ])
+    assert today_rows[0]["sample_count"] == exp["sample_count"] == 2
+    assert today_rows[0]["energy"] == exp["energy"]
+
+
+# ── sub-second last-second-of-day reading must be included ─────────────────────
+
+def test_history_range_live_includes_subsecond_last_second_of_day(tmp_path):
+    """A reading at 23:59:59.743Z (sub-second, string > T23:59:59Z) must still
+    be counted in today's live aggregate — regression for the exclusive bound."""
+    store = _store(tmp_path)
+    inv = "inv-1"
+    today = "2026-06-26"
+    now_iso = "2026-06-26T23:59:59.900000Z"
+
+    readings = [
+        {"inverterId": inv, "timestamp": "2026-06-26T09:00:00Z", "pvPower": 500.0},
+        {"inverterId": inv, "timestamp": "2026-06-26T23:59:59.743115Z", "pvPower": 12.0},
+    ]
+    for r in readings:
+        store._append_sync(r)
+
+    result = store._history_range_live_sync(inv, today, today, now_iso=now_iso)
+    assert len(result) == 1
+    # Both readings counted (the 23:59:59.743 one would be dropped by a <= T23:59:59Z bound).
+    assert result[0]["sample_count"] == 2
+
+
 # ── today not yet in daily table (rollup not yet run) ─────────────────────────
 
 def test_history_range_live_today_absent_from_sealed_table(tmp_path):
