@@ -65,6 +65,11 @@ async def read_raw(hass, spec: RegisterSpec, cfg: dict) -> RawRegisters:
 
 _SOLARMAN_CONNECT_ATTEMPTS = 3
 _SOLARMAN_CONNECT_BACKOFF = 0.5  # seconds between connection-setup retries
+# Per-range read timeout. Healthy Solarman reads return in ~0.2s, so a short
+# timeout doesn't affect them — but on a flaky logger it lets a failing range
+# bail fast (vs. an 8s stall) so the whole poll finishes in time to honour a
+# short harvest cadence instead of grinding for minutes.
+_SOLARMAN_SOCKET_TIMEOUT_S = 3
 
 
 def _read_solarman(cfg: dict, ranges: list[tuple[int, int, int, str]]) -> RawRegisters:
@@ -101,7 +106,7 @@ def _read_solarman(cfg: dict, ranges: list[tuple[int, int, int, str]]) -> RawReg
             int(cfg["logger_serial"]),
             port=int(cfg.get("port", 8899)),
             mb_slave_id=int(cfg.get("slave_id", 1)),
-            socket_timeout=8,
+            socket_timeout=_SOLARMAN_SOCKET_TIMEOUT_S,
             auto_reconnect=True,
         )
 
