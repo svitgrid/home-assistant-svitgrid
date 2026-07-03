@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import json
 import os
 import sys
 import types
@@ -191,6 +192,9 @@ async def test_delete_revokes_key():
     ks.update_trusted_keys_hex.assert_awaited_once()
     saved = ks.update_trusted_keys_hex.await_args.args[0]
     assert key_id not in saved
+    body = json.loads(resp.text)
+    assert body["ok"] is True
+    assert body["revoked"] is True
 
 
 @pytest.mark.asyncio
@@ -201,6 +205,11 @@ async def test_delete_unknown_id_is_ok_false():
     req = _Req({"X-Island-Key": "island-abc"}, {}, hass)
     resp = await view.delete(req, "nope")
     assert resp.status == 200
+    ks.update_trusted_keys_hex.assert_not_awaited()
+    body = json.loads(resp.text)
+    assert body["ok"] is True
+    assert body["revoked"] is False
+    assert isinstance(body["trustedKeyIds"], list)
 
 
 @pytest.mark.asyncio
