@@ -231,6 +231,11 @@ class ReadingStore:
     def _day_of(self, ts: str) -> str:
         return ts[:10]               # "2026-06-24"
 
+    def _five_min_of(self, ts: str) -> str:
+        # Floor a UTC ISO timestamp to its 5-minute bucket start.
+        # "2026-06-24T10:17:30Z" → "2026-06-24T10:15:00Z"
+        return ts[:14] + f"{(int(ts[14:16]) // 5) * 5:02d}:00Z"
+
     def _rollup_sync(self, now_iso: str) -> dict[str, int]:
         from . import rollup as _r
         cur_hour = self._hour_of(now_iso)
@@ -414,6 +419,50 @@ class ReadingStore:
             for hour in sorted(buckets):
                 agg = _r.aggregate(buckets[hour])
                 result.append({"hour": hour, "sample_count": agg["sample_count"],
+                               "avgs": agg["avgs"], "peaks": agg["peaks"],
+                               "energy": agg["energy"]})
+            return result
+        finally:
+            conn.close()
+
+    def _five_min_range_live_sync(self, inverter_id: str, day: str) -> list[dict]:
+        """Compute 5-minute buckets on demand from readings_raw for *day*.
+
+        Same as ``_hourly_range_live_sync`` but at 5-minute resolution, so the
+        island Day charts get ~288 fine-grained points/day (matching the
+        cloud's 5-minute buckets) instead of 24 coarse hourly ones — including
+        the current in-progress 5-minute bucket. readings_raw is retained 14
+        days, so this covers any Day view within that window; older days have
+        only hourly aggregates and use the hourly path.
+
+        Returns the SAME shape/keys as ``_hourly_range_live_sync``
+        (``[{"hour", "sample_count", "avgs", "peaks", "energy"}]`` sorted), so
+        the mobile bucket mapper is reused unchanged; the ``"hour"`` field
+        carries the 5-minute bucket start (kept named ``"hour"`` for wire
+        compatibility with the hourly path).
+        """
+        from datetime import datetime, timedelta
+        from . import rollup as _r
+        day_start = day + "T00:00:00Z"
+        # Exclusive next-day bound (readings carry sub-second ts).
+        next_day_start = (
+            datetime.strptime(day, "%Y-%m-%d") + timedelta(days=1)
+        ).strftime("%Y-%m-%d") + "T00:00:00Z"
+        conn = _connect(self._db_path)
+        try:
+            cur = conn.execute(
+                "SELECT ts, payload FROM readings_raw "
+                "WHERE inverter_id = ? AND ts >= ? AND ts < ? ORDER BY ts",
+                (inverter_id, day_start, next_day_start))
+            buckets: dict[str, list[dict]] = {}
+            for r in cur.fetchall():
+                bucket = self._five_min_of(r["ts"])
+                buckets.setdefault(bucket, []).append(
+                    {"payload": json.loads(r["payload"])})
+            result = []
+            for bucket in sorted(buckets):
+                agg = _r.aggregate(buckets[bucket])
+                result.append({"hour": bucket, "sample_count": agg["sample_count"],
                                "avgs": agg["avgs"], "peaks": agg["peaks"],
                                "energy": agg["energy"]})
             return result
@@ -739,6 +788,10 @@ class ReadingStore:
     async def hourly_range_live(self, inverter_id: str, day: str) -> list[dict]:
         return await self._hass.async_add_executor_job(
             self._hourly_range_live_sync, inverter_id, day)
+
+    async def five_min_range_live(self, inverter_id: str, day: str) -> list[dict]:
+        return await self._hass.async_add_executor_job(
+            self._five_min_range_live_sync, inverter_id, day)
 
     async def month_hourly_range_live(self, inverter_id: str, month: str) -> list[dict]:
         return await self._hass.async_add_executor_job(

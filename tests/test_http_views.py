@@ -48,6 +48,13 @@ class _FakeStore:
             {"hour": "2026-06-20T10:00:00Z", "sample_count": 12, "avgs": {}, "peaks": {}, "energy": {}},
         ]
 
+    async def five_min_range_live(self, inverter_id, day):
+        self.five_min_args = (inverter_id, day)
+        return [
+            {"hour": "2026-06-20T09:00:00Z", "sample_count": 3, "avgs": {}, "peaks": {}, "energy": {}},
+            {"hour": "2026-06-20T09:05:00Z", "sample_count": 4, "avgs": {}, "peaks": {}, "energy": {}},
+        ]
+
 
 class _FakeRequest:
     def __init__(self, app, query=None):
@@ -148,6 +155,26 @@ async def test_history_view_hourly_defaults_day_to_today(hass):
     today = _today()
     assert store.hourly_args == ("inv-1", today)
     assert b"hours" in resp.body
+
+
+@pytest.mark.asyncio
+async def test_history_view_5min_granularity_returns_fine_buckets(hass):
+    store = _FakeStore()
+    view = SvitgridHistoryView(store)
+    request = _FakeRequest(hass, query={
+        "inverter_id": "inv-9",
+        "granularity": "5min",
+        "day": "2026-06-20",
+    })
+    resp = await view.get(request)
+    assert resp.status == 200
+    assert store.five_min_args == ("inv-9", "2026-06-20")
+    # Same {hours: [...]} wire shape as the hourly path (mobile reuses it).
+    assert b"hours" in resp.body
+    assert b"2026-06-20T09:05:00Z" in resp.body
+    # Did NOT fall through to the hourly or daily branch.
+    assert store.hourly_args is None
+    assert store.history_args is None
 
 
 @pytest.mark.asyncio

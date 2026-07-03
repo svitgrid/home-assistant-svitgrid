@@ -104,6 +104,14 @@ class SvitgridHistoryView(_BaseView):
                 "inverter_id": inverter_id,
                 "hours": await self._store.hourly_range_live(inverter_id, day),
             })
+        if q.get("granularity") == "5min":
+            # Fine-grained (5-minute) buckets for the Day charts, computed live
+            # from readings_raw (14-day retention). Same wire shape as hourly.
+            day = q.get("day", _today())
+            return self.json({
+                "inverter_id": inverter_id,
+                "hours": await self._store.five_min_range_live(inverter_id, day),
+            })
         start = q.get("start", _today())
         end = q.get("end", _today())
         return self.json({
