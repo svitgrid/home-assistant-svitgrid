@@ -177,3 +177,39 @@ async def test_post_rejects_keyid_mismatch():
     resp = await view.post(req)
     assert resp.status == 400
     ks.update_trusted_keys_hex.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_delete_revokes_key():
+    http_views = _load_views()
+    _, pub_hex, key_id = _make_key()
+    hass, ks = _hass_with("island-abc", {key_id: pub_hex})
+    view = http_views.SvitgridTrustKeyDetailView()
+    req = _Req({"X-Island-Key": "island-abc"}, {}, hass)
+    resp = await view.delete(req, key_id)
+    assert resp.status == 200
+    ks.update_trusted_keys_hex.assert_awaited_once()
+    saved = ks.update_trusted_keys_hex.await_args.args[0]
+    assert key_id not in saved
+
+
+@pytest.mark.asyncio
+async def test_delete_unknown_id_is_ok_false():
+    http_views = _load_views()
+    hass, ks = _hass_with("island-abc", {})
+    view = http_views.SvitgridTrustKeyDetailView()
+    req = _Req({"X-Island-Key": "island-abc"}, {}, hass)
+    resp = await view.delete(req, "nope")
+    assert resp.status == 200
+
+
+@pytest.mark.asyncio
+async def test_delete_rejects_without_island_key():
+    http_views = _load_views()
+    _, pub_hex, key_id = _make_key()
+    hass, ks = _hass_with("island-abc", {key_id: pub_hex})
+    view = http_views.SvitgridTrustKeyDetailView()
+    req = _Req({}, {}, hass)
+    resp = await view.delete(req, key_id)
+    assert resp.status == 401
+    ks.update_trusted_keys_hex.assert_not_awaited()

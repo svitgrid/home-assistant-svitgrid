@@ -330,6 +330,41 @@ class SvitgridTrustKeyView(HomeAssistantView):
         return self.json({"ok": True, "trustedKeyIds": sorted(trusted.keys())})
 
 
+class SvitgridTrustKeyDetailView(HomeAssistantView):
+    """DELETE /api/svitgrid/trust-key/{signing_key_id} — island-key-authed
+    revoke (no self-signature: a lost/compromised key must be removable
+    without holding it).
+    """
+
+    url = "/api/svitgrid/trust-key/{signing_key_id}"
+    name = "api:svitgrid:trust_key_detail"
+    requires_auth = False
+
+    @staticmethod
+    def _json_error(status: int, error: str, **extra) -> web.Response:
+        return web.Response(
+            status=status,
+            text=json.dumps({"error": error, **extra}),
+            content_type="application/json",
+        )
+
+    async def delete(self, request, signing_key_id: str) -> web.Response:  # noqa: D102
+        hass = request.app["hass"]
+        keystore = hass.data.get(DOMAIN, {}).get("keystore")
+        island_key: str | None = (
+            await keystore.async_get_island_key() if keystore is not None else None
+        )
+        if not island_key_present_and_valid(request, island_key):
+            return self._json_error(401, "unauthorized")
+
+        state = await keystore.load()
+        trusted = dict(state.trusted_public_keys_hex) if state is not None else {}
+        revoked = trusted.pop(signing_key_id, None) is not None
+        if revoked:
+            await keystore.update_trusted_keys_hex(trusted)
+        return self.json({"ok": True, "revoked": revoked, "trustedKeyIds": sorted(trusted.keys())})
+
+
 class _IslandEventViewMixin:
     """Shared helpers for event views to avoid duplication."""
 
@@ -669,6 +704,7 @@ def register_views(hass: HomeAssistant, store) -> None:
         SvitgridHealthView(store),
         SvitgridCommandsView(),
         SvitgridTrustKeyView(),
+        SvitgridTrustKeyDetailView(),
         SvitgridEventsView(),
         SvitgridEventDetailView(),
         SvitgridCadenceView(store),
