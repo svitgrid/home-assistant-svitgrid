@@ -72,3 +72,23 @@ def test_five_min_range_live_excludes_other_days(tmp_path):
                         "timestamp": "2026-06-25T00:02:00Z", "pvPower": 200.0})
     result = store._five_min_range_live_sync("inv-1", "2026-06-24")
     assert [b["hour"] for b in result] == ["2026-06-24T23:55:00Z"]
+
+
+def test_bucket_includes_per_phase_grid_voltage(tmp_path):
+    """Per-phase grid voltage (gridVoltageL1..L3) must survive aggregation into
+    the buckets — otherwise the island Grid Voltage Day chart has no data.
+    Raw readings carry them but rollup.aggregate only averages
+    INSTANTANEOUS_FIELDS, which historically omitted grid voltage.
+    """
+    store = _store(tmp_path)
+    store._append_sync({"inverterId": "inv-1", "timestamp": "2026-06-24T10:01:00Z",
+                        "pvPower": 100.0, "gridVoltageL1": 230.0,
+                        "gridVoltageL2": 231.0, "gridVoltageL3": 229.0})
+    store._append_sync({"inverterId": "inv-1", "timestamp": "2026-06-24T10:03:00Z",
+                        "pvPower": 120.0, "gridVoltageL1": 232.0,
+                        "gridVoltageL2": 233.0, "gridVoltageL3": 231.0})
+    avgs = store._five_min_range_live_sync("inv-1", "2026-06-24")[0]["avgs"]
+    assert "gridVoltageL1" in avgs
+    assert "gridVoltageL2" in avgs
+    assert "gridVoltageL3" in avgs
+    assert avgs["gridVoltageL1"] == 231.0  # (230 + 232) / 2

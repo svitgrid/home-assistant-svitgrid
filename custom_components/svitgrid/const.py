@@ -202,6 +202,11 @@ INSTANTANEOUS_FIELDS = frozenset({
     "batterySoc", "batteryPower", "batteryVoltage", "batteryCurrent",
     "batteryTemperature", "gridPower", "gridFrequency", "loadPower",
     "pvPower", "inverterTemperature", "loadFrequency",
+    # Per-phase grid voltage — averaged into buckets so the dashboard Grid
+    # Voltage chart has data in island mode (the mobile bucket mapper folds
+    # these into `phaseVoltages`). Without them here, rollup.aggregate()
+    # silently drops grid voltage even though the raw readings carry it.
+    "gridVoltageL1", "gridVoltageL2", "gridVoltageL3",
 })
 DAILY_COUNTER_FIELDS = frozenset({
     "dailyPvEnergy", "dailyGridImportEnergy", "dailyGridExportEnergy",
