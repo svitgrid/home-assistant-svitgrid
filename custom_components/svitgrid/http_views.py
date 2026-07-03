@@ -31,6 +31,7 @@ from .command_auth import verify_signed_command
 from .const import DOMAIN
 from .hourly_energy import per_hour_deltas, to_local_hour_rows
 from .island_auth import island_key_present_and_valid, island_request_authorized
+from .signing import compute_key_id, public_key_from_hex, verify_payload
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -264,6 +265,69 @@ class SvitgridCommandsView(HomeAssistantView):
             self._seen_commands[command_id] = now
 
         return self.json({"ok": True, "result": result})
+
+
+class SvitgridTrustKeyView(HomeAssistantView):
+    """POST /api/svitgrid/trust-key — island-key + proof-of-possession → add a
+    trusted admin key over the LAN (island-native, no cloud). TOFU: the island
+    key is the LAN root of trust.
+    """
+
+    url = "/api/svitgrid/trust-key"
+    name = "api:svitgrid:trust_key"
+    requires_auth = False
+
+    @staticmethod
+    def _json_error(status: int, error: str, **extra) -> web.Response:
+        return web.Response(
+            status=status,
+            text=json.dumps({"error": error, **extra}),
+            content_type="application/json",
+        )
+
+    async def post(self, request) -> web.Response:  # noqa: D102
+        hass = request.app["hass"]
+        keystore = hass.data.get(DOMAIN, {}).get("keystore")
+        island_key: str | None = (
+            await keystore.async_get_island_key() if keystore is not None else None
+        )
+        if not island_key_present_and_valid(request, island_key):
+            return self._json_error(401, "unauthorized")
+
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001
+            return self._json_error(400, "bad_request")
+
+        signing_key_id = body.get("signingKeyId")
+        public_key_hex = body.get("publicKeyHex")
+        signature = body.get("signature")
+        if not signing_key_id or not public_key_hex or not signature:
+            return self._json_error(400, "bad_request")
+
+        # Validate EC point shape.
+        try:
+            public_key_from_hex(public_key_hex)
+        except Exception:  # noqa: BLE001
+            return self._json_error(400, "bad_public_key")
+
+        # keyId must be the fingerprint of the submitted public key.
+        if signing_key_id != compute_key_id(public_key_hex):
+            return self._json_error(400, "key_id_mismatch")
+
+        # Proof of possession: request self-signed by the key being added.
+        if not verify_payload(
+            {"signingKeyId": signing_key_id, "publicKeyHex": public_key_hex},
+            signature,
+            public_key_hex,
+        ):
+            return self._json_error(403, "signature_invalid")
+
+        state = await keystore.load()
+        trusted = dict(state.trusted_public_keys_hex) if state is not None else {}
+        trusted[signing_key_id] = public_key_hex
+        await keystore.update_trusted_keys_hex(trusted)
+        return self.json({"ok": True, "trustedKeyIds": sorted(trusted.keys())})
 
 
 class _IslandEventViewMixin:
@@ -604,6 +668,7 @@ def register_views(hass: HomeAssistant, store) -> None:
         SvitgridSyncStatusView(store),
         SvitgridHealthView(store),
         SvitgridCommandsView(),
+        SvitgridTrustKeyView(),
         SvitgridEventsView(),
         SvitgridEventDetailView(),
         SvitgridCadenceView(store),

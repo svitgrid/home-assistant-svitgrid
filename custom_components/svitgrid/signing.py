@@ -28,6 +28,7 @@ Canonical JSON rules (from TS):
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import math
 
@@ -101,6 +102,13 @@ def public_key_from_hex(hex_str: str) -> ec.EllipticCurvePublicKey:
     x = int.from_bytes(raw[1:33], "big")
     y = int.from_bytes(raw[33:65], "big")
     return ec.EllipticCurvePublicNumbers(x, y, ec.SECP256R1()).public_key()
+
+
+def compute_key_id(public_key_hex: str) -> str:
+    """Fingerprint used as signingKeyId. Byte-identical to the mobile app's
+    CommandSigner.computeKeyId: hex-lowercase SHA-256 of the uncompressed
+    EC point bytes (0x04 || x || y)."""
+    return hashlib.sha256(bytes.fromhex(public_key_hex)).hexdigest()
 
 
 def sign_payload(payload: object, private_key: ec.EllipticCurvePrivateKey) -> str:
