@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import copy
 import logging
 
 _LOGGER = logging.getLogger(__name__)
@@ -26,15 +27,23 @@ async def probe_modbus_reachable(host: str, port: int) -> bool:
 
 
 async def apply_harvest_config_change(hass, entry, conn: dict) -> None:
-    """Update ip/port/slave_id on the entry's single harvest_config, reload."""
-    inverters = list(entry.data.get("inverters", []))
-    for inv in inverters:
+    """Update ip/port/slave_id on the entry's single harvest_config, reload.
+
+    Builds `new_data` from a deep copy of `entry.data` so the mutation below
+    never touches the objects `entry.data` still references. A shallow
+    `list(...)` copy shares the inner `harvest_config` dicts with
+    `entry.data` — mutating them in place makes `new_data == entry.data` by
+    the time `async_update_entry` runs, and Home Assistant treats an
+    unchanged `data=` as a no-op, silently dropping the persisted change
+    (reverts to the old connection on next restart).
+    """
+    new_data = copy.deepcopy(entry.data)
+    for inv in new_data.get("inverters", []):
         hc = inv.get("harvest_config")
         if hc:
             hc["ip"] = conn["ip"]
             hc["port"] = conn["port"]
             hc["slave_id"] = conn["slaveId"]
             break
-    new_data = {**entry.data, "inverters": inverters}
     hass.config_entries.async_update_entry(entry, data=new_data)
     hass.async_create_task(hass.config_entries.async_reload(entry.entry_id))
