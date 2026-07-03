@@ -145,6 +145,12 @@ SET_CLOUD_ENDPOINT_COMMAND = "set_cloud_endpoint"
 # channel itself is the trust boundary here.
 ENABLE_ISLAND_COMMAND = "enable_island"
 DISABLE_ISLAND_COMMAND = "disable_island"
+# Direct-Modbus harvest connection change (SP-D follow-up) — updates
+# ip/port/slaveId on a harvest_config entry. Internal (no admin signature
+# required) — RBAC-gated at the API level (household owner/admin), same
+# trust posture as set_cloud_endpoint/enable_island. Command-poller probes
+# the new endpoint's TCP reachability before applying (fail-closed).
+SET_HARVEST_CONFIG_COMMAND = "set_harvest_config"
 
 INTERNAL_COMMANDS = frozenset({
     ADD_TRUSTED_KEY_COMMAND,
@@ -152,6 +158,7 @@ INTERNAL_COMMANDS = frozenset({
     SET_CLOUD_ENDPOINT_COMMAND,
     ENABLE_ISLAND_COMMAND,
     DISABLE_ISLAND_COMMAND,
+    SET_HARVEST_CONFIG_COMMAND,
 })
 
 # Inverter-control commands dispatched to the configured executor.

@@ -31,7 +31,9 @@ from .const import (
     ENABLE_ISLAND_COMMAND,
     REVOKE_TRUSTED_KEY_COMMAND,
     SET_CLOUD_ENDPOINT_COMMAND,
+    SET_HARVEST_CONFIG_COMMAND,
 )
+from .harvest_config_apply import apply_harvest_config_change, probe_modbus_reachable
 from .keystore import SvitgridKeystore
 from .signing import sign_payload
 
@@ -284,6 +286,85 @@ async def process_command(
                 "integration still on old endpoint, cloud thinks migration "
                 "done. cmd_id=%s url=%s manual recovery required.",
                 cmd_id, url,
+            )
+        return
+
+    # === Arm 1c-bis: set_harvest_config (SP-D follow-up) ===
+    # Internal (no admin signature required) — RBAC-gated at the API level
+    # (household owner/admin); the command channel itself is the trust
+    # boundary, same posture as set_cloud_endpoint/enable_island. Connection
+    # fields only (ip/port/slaveId) — no register reads.
+    #
+    # Ordering (mirrors Arm 1c's set_cloud_endpoint):
+    #   no ConfigEntry → reject → probe new ip:port → reject on probe-fail →
+    #   ACK success THEN apply. ACK must go out BEFORE the apply/reload —
+    # otherwise the reload tears down the api_client mid-flight and the ACK
+    # never reaches the cloud, leaving cmd.status stuck in `delivered` forever
+    # (same race as Arm 1c / Arm 1d).
+    if cmd_type == SET_HARVEST_CONFIG_COMMAND:
+        payload = command.get("payload") or {}
+        ip, port = payload.get("ip"), payload.get("port")
+
+        if hass is None or entry is None:
+            _LOGGER.warning(
+                "set_harvest_config rejected — no ConfigEntry (YAML install?). "
+                "cmd_id=%s", cmd_id,
+            )
+            await _send_signed_ack(
+                api_client=api_client,
+                api_key=api_key,
+                command_id=cmd_id,
+                success=False,
+                rejected=True,
+                reason="yaml_config_no_entry",
+                our_private_key=our_private_key,
+                our_signing_key_id=our_signing_key_id,
+                executor_version=executor_version,
+            )
+            return
+
+        if not await probe_modbus_reachable(ip, port):
+            _LOGGER.error(
+                "set_harvest_config probe failed — %s:%s not reachable. "
+                "Change rejected. cmd_id=%s", ip, port, cmd_id,
+            )
+            await _send_signed_ack(
+                api_client=api_client,
+                api_key=api_key,
+                command_id=cmd_id,
+                success=False,
+                rejected=True,
+                reason="probe_failed",
+                our_private_key=our_private_key,
+                our_signing_key_id=our_signing_key_id,
+                executor_version=executor_version,
+            )
+            return
+
+        # Probe succeeded — ACK SUCCESS FIRST, THEN apply + reload.
+        await _send_signed_ack(
+            api_client=api_client,
+            api_key=api_key,
+            command_id=cmd_id,
+            success=True,
+            result={"appliedConn": payload},
+            our_private_key=our_private_key,
+            our_signing_key_id=our_signing_key_id,
+            executor_version=executor_version,
+        )
+
+        try:
+            await apply_harvest_config_change(hass, entry, payload)
+        except Exception:
+            # ACK already sent as success — cloud audit log says the change
+            # succeeded, but the local apply just failed. Operator must
+            # reconcile manually. Distinctive log message for grep-based
+            # recovery: "set_harvest_config apply failed".
+            _LOGGER.exception(
+                "set_harvest_config apply failed AFTER successful ACK — "
+                "integration still on old connection, cloud thinks change "
+                "applied. cmd_id=%s conn=%s manual recovery required.",
+                cmd_id, payload,
             )
         return
 
