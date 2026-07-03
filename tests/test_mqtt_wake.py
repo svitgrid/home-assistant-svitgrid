@@ -243,6 +243,50 @@ async def test_token_mint_failure_backs_off(paho_fake, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_client_torn_down_before_backoff_sleep(paho_fake, token_payload, monkeypatch):
+    """On a failed connect, the paho client's network loop MUST be stopped
+    BEFORE the backoff sleep.
+
+    Regression: previously `loop_stop()`/`disconnect()` lived in a `finally`
+    that ran AFTER the `except` block's `await asyncio.sleep(backoff)`, so
+    paho's `connect_async`/`loop_start` network thread kept auto-reconnecting
+    to a dead broker for the ENTIRE backoff window — flooding the log with
+    `on_disconnect rc=7` every few seconds (observed 2026-07-03 against the
+    torn-down staging broker). The client must be torn down before we sleep.
+    """
+    from custom_components.svitgrid import mqtt_wake
+
+    # Make the CONNECT handshake time out fast (we never trigger on_connect).
+    monkeypatch.setattr(mqtt_wake, "CONNECT_TIMEOUT_S", 0.02)
+
+    loop_stopped_at_sleep: list[bool] = []
+
+    async def _record_sleep(delay):
+        # Capture whether the paho client was already torn down at the moment
+        # we enter the backoff sleep. (Do not actually sleep.)
+        client = paho_fake.instances[-1] if paho_fake.instances else None
+        loop_stopped_at_sleep.append(bool(client is not None and client.loop_stopped))
+
+    monkeypatch.setattr(asyncio, "sleep", _record_sleep)
+
+    api = MagicMock()
+    api.get_mqtt_token = AsyncMock(return_value=token_payload)
+    hass = _mock_hass_stops_after(1)  # one failing iteration
+    wake_event = asyncio.Event()
+
+    # Never trigger_connect → the CONNECT wait times out → except → backoff.
+    await mqtt_wake.run_loop(
+        hass=hass, api_client=api, api_key="k", wake_event=wake_event,
+    )
+
+    assert loop_stopped_at_sleep, "expected a backoff sleep after the connect timeout"
+    assert loop_stopped_at_sleep[0] is True, (
+        "paho client network loop must be stopped BEFORE backing off, "
+        "otherwise it reconnect-floods the dead broker during the whole backoff"
+    )
+
+
+@pytest.mark.asyncio
 async def test_returns_silently_if_paho_unavailable(monkeypatch, token_payload):
     """No paho-mqtt installed → log error and return without crashing."""
     # Ensure paho is NOT importable.

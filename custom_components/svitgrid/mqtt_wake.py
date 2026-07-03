@@ -50,6 +50,23 @@ BACKOFF_MAX_S = 300
 CONNECT_TIMEOUT_S = 15
 
 
+def _teardown_client(client: Any) -> None:
+    """Stop paho's network thread and disconnect. Idempotent; never raises.
+
+    MUST be called before any backoff sleep: paho's ``connect_async`` +
+    ``loop_start`` spawns a network thread that auto-reconnects on its own,
+    so a client left running during backoff floods the log with
+    ``on_disconnect`` events against an unreachable broker.
+    """
+    if client is None:
+        return
+    try:
+        client.loop_stop()
+        client.disconnect()
+    except Exception:  # noqa: BLE001
+        _LOGGER.debug("MQTT cleanup error (non-fatal)", exc_info=True)
+
+
 async def run_loop(
     *,
     hass: HomeAssistant,
@@ -111,7 +128,10 @@ async def run_loop(
                 loop.call_soon_threadsafe(wake_event.set)
 
             def _on_disconnect(_c, _u, rc):
-                _LOGGER.info("MQTT disconnected rc=%s", rc)
+                # DEBUG, not INFO: against an unreachable broker paho fires
+                # this repeatedly. The user-visible signal is the single
+                # "reconnecting"/"backing off" line logged below.
+                _LOGGER.debug("MQTT disconnected rc=%s", rc)
                 loop.call_soon_threadsafe(disconnected.set)
 
             client.on_connect = _on_connect
@@ -145,21 +165,22 @@ async def run_loop(
                 _LOGGER.info("MQTT lost connection; reconnecting with fresh token")
             except asyncio.TimeoutError:
                 _LOGGER.info("MQTT token re-mint due; reconnecting")
-        except Exception:  # noqa: BLE001
-            _LOGGER.exception(
-                "MQTT wake-bell failed; backing off %ss before retry", backoff_s,
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            # Stop the paho network thread BEFORE sleeping — otherwise it
+            # keeps auto-reconnecting to the broker for the whole backoff
+            # window, flooding the log with rc=7 disconnects (observed
+            # 2026-07-03 against the torn-down staging broker).
+            _teardown_client(client)
+            client = None
+            _LOGGER.warning(
+                "MQTT wake-bell failed (%s); backing off %ss before retry",
+                exc, backoff_s,
             )
-            try:
-                await asyncio.sleep(backoff_s)
-            except asyncio.CancelledError:
-                raise
+            await asyncio.sleep(backoff_s)
             backoff_s = min(backoff_s * 2, BACKOFF_MAX_S)
         finally:
-            if client is not None:
-                try:
-                    client.loop_stop()
-                    client.disconnect()
-                except Exception:  # noqa: BLE001
-                    _LOGGER.debug("MQTT cleanup error (non-fatal)", exc_info=True)
+            _teardown_client(client)
 
     _LOGGER.info("MQTT wake-bell loop stopped")
