@@ -10,6 +10,7 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 
 from .api_client import DeviceEvicted, ReadingRejected
+from .battery_sign import flip_battery_sign
 from .const import BACKFILL_CAP_S, CADENCE_DEFAULT_INTERVAL_S, INGEST_BATCH_MAX, SENDER_TICK_S
 
 _LOGGER = logging.getLogger(__name__)
@@ -28,9 +29,16 @@ def _now_iso() -> str:
 async def drain_once(
     *, store, api_client, api_key: str, now_iso: str, cadence: Cadence,
     batch_max: int = INGEST_BATCH_MAX, cap_s: int = BACKFILL_CAP_S,
-    lifecycle=None,
+    lifecycle=None, discharge_positive_ids: set[str] | None = None,
 ) -> int:
-    """Drain at most one batch. Returns number of rows marked 'sent'."""
+    """Drain at most one batch. Returns number of rows marked 'sent'.
+
+    ``discharge_positive_ids`` names inverters whose battery power we normalized
+    to Svitgrid's charge-positive convention at capture (HA Solarman). We
+    re-invert those before upload so the cloud keeps receiving the raw
+    discharge-positive value its `home_assistant_solarman` handler negates —
+    the server contract is unchanged. See battery_sign.py.
+    """
     # Age out anything beyond the backfill cap so it never clogs the queue.
     await _maybe(store.skip_aged(now_iso, cap_s))
 
@@ -38,8 +46,12 @@ async def drain_once(
     if not rows:
         return 0
 
+    flip_ids = discharge_positive_ids or set()
     keys = [(r["inverter_id"], r["ts"]) for r in rows]
-    readings = [r["payload"] for r in rows]
+    readings = [
+        flip_battery_sign(r["payload"]) if r["inverter_id"] in flip_ids else r["payload"]
+        for r in rows
+    ]
 
     try:
         body = await api_client.push_readings_batch(api_key=api_key, readings=readings)
@@ -91,12 +103,14 @@ async def drain_once(
 async def run_sender_loop(
     *, hass: HomeAssistant, store, api_client, api_key: str, cadence: Cadence,
     tick_s: int = SENDER_TICK_S, lifecycle=None,
+    discharge_positive_ids: set[str] | None = None,
 ) -> None:
     wait_for_data = getattr(store, "wait_for_data", None)
     while not hass.is_stopping and (lifecycle is None or lifecycle.active):
         try:
             await drain_once(store=store, api_client=api_client, api_key=api_key,
-                             now_iso=_now_iso(), cadence=cadence, lifecycle=lifecycle)
+                             now_iso=_now_iso(), cadence=cadence, lifecycle=lifecycle,
+                             discharge_positive_ids=discharge_positive_ids)
         except Exception:  # never let the sender loop die
             _LOGGER.exception("sender drain failed")
         # Use the store's data-available event when present so a fresh reading

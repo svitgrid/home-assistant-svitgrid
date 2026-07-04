@@ -26,6 +26,7 @@ from homeassistant.helpers.typing import ConfigType
 
 from .activity import ActivityTracker
 from .api_client import SvitgridApiClient
+from .battery_sign import preset_is_discharge_positive
 from .bootstrap import run_first_time
 from .cloud_endpoint_handler import probe_endpoint_auth
 from .command_poller import run_loop as run_command_loop
@@ -66,7 +67,7 @@ _LOGGER = logging.getLogger(__name__)
 
 async def _start_local_store(
     hass: HomeAssistant, api_client, api_key: str, activity=None, active_ids=None,
-    cloud_ingest_enabled: bool = True,
+    cloud_ingest_enabled: bool = True, discharge_positive_ids=None,
 ):
     """Create the per-entry local store, seed the shared lifecycle holder from
     persisted state, register the read views once, and (only when the device is
@@ -142,6 +143,7 @@ async def _start_local_store(
             run_sender_loop(
                 hass=hass, store=store, api_client=api_client,
                 api_key=api_key, cadence=cadence, lifecycle=lifecycle,
+                discharge_positive_ids=discharge_positive_ids,
             ),
             name="svitgrid_reading_sender",
         )
@@ -535,9 +537,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     if inverters:
         active_ids = {inv["inverter_id"] for inv in inverters}
+        # Inverters whose battery power we normalize to Svitgrid's charge-positive
+        # convention at capture (HA Solarman) — the sender re-inverts these before
+        # upload so the server's existing negation is unchanged. See battery_sign.py.
+        discharge_positive_ids = {
+            inv["inverter_id"] for inv in inverters
+            if preset_is_discharge_positive(inv.get("preset_id"))
+        }
         store, cadence, sender_task, cancel_rollup, lifecycle = await _start_local_store(
             hass, api_client, api_key, activity, active_ids=active_ids,
             cloud_ingest_enabled=cloud_ingest_enabled,
+            discharge_positive_ids=discharge_positive_ids,
         )
         cadence.interval_s = _initial_cadence_seconds(dict(entry.data))
         hass.data.setdefault(DOMAIN, {})
@@ -650,6 +660,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         entity_map=entity_map,
                         activity=activity,
                         lifecycle=lifecycle,
+                        discharge_positive=preset_is_discharge_positive(
+                            inv.get("preset_id")
+                        ),
                     ),
                     name=f"svitgrid_readings_{inverter_id}",
                 )

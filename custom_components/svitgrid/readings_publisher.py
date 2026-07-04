@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 
 from homeassistant.core import HomeAssistant
 
+from .battery_sign import flip_battery_sign
 from .const import CORE_PAYLOAD_FIELDS, READING_SOURCE
 
 if TYPE_CHECKING:
@@ -102,10 +103,17 @@ def assemble_payload(*, inverter_id: str, fields: dict[str, Any]) -> dict[str, A
 
 
 def build_reading_payload(
-    *, hass: HomeAssistant, inverter_id: str, entity_map: dict[str, str]
+    *, hass: HomeAssistant, inverter_id: str, entity_map: dict[str, str],
+    discharge_positive: bool = False,
 ) -> dict[str, Any]:
     """Build a single reading payload. Fields whose mapped entity is
     missing / unavailable / non-numeric are omitted (not sent as null or 0).
+
+    ``discharge_positive`` marks an inverter whose source sensor reports battery
+    power as discharge-positive (HA Solarman). When set, `batteryPower` is
+    negated so the stored payload — and the panel that reads it — uses
+    Svitgrid's charge-positive convention. The sender re-inverts before upload
+    (see battery_sign.py).
     """
     fields: dict[str, Any] = {}
     for field, entity_id in entity_map.items():
@@ -119,7 +127,10 @@ def build_reading_payload(
             fields[field] = float(raw)
         except (TypeError, ValueError):
             continue
-    return assemble_payload(inverter_id=inverter_id, fields=fields)
+    payload = assemble_payload(inverter_id=inverter_id, fields=fields)
+    if discharge_positive:
+        payload = flip_battery_sign(payload)
+    return payload
 
 
 def gate_payload(payload: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
@@ -208,6 +219,7 @@ async def run_loop(
     entity_map: dict[str, str],
     activity: Any = None,  # ActivityTracker; None acceptable for older callers
     lifecycle: Any = None,  # LifecycleState; None = no lifecycle gating
+    discharge_positive: bool = False,  # HA-Solarman battery sign normalization
 ) -> None:
     """Long-running coroutine — capture-then-drain producer.
 
@@ -242,6 +254,7 @@ async def run_loop(
                 while elapsed < next_sleep_s and not hass.is_stopping:
                     samples.append(build_reading_payload(
                         hass=hass, inverter_id=inverter_id, entity_map=entity_map,
+                        discharge_positive=discharge_positive,
                     ))
                     await asyncio.sleep(_SAMPLE_TICK_S)
                     elapsed += _SAMPLE_TICK_S
@@ -272,6 +285,7 @@ async def run_loop(
                 # Active path — single snapshot, gate, then sleep.
                 payload = build_reading_payload(
                     hass=hass, inverter_id=inverter_id, entity_map=entity_map,
+                    discharge_positive=discharge_positive,
                 )
                 payload, missing = gate_payload(payload)
                 if missing:
