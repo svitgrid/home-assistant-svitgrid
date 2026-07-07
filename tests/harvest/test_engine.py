@@ -1,4 +1,5 @@
 """Tests for harvest/engine.py — poll_once + run_direct_harvest_loop."""
+
 from __future__ import annotations
 
 import asyncio
@@ -9,24 +10,35 @@ import pytest
 from custom_components.svitgrid.harvest import engine as eng
 from custom_components.svitgrid.harvest.register_spec import RegisterSpec
 
-SPEC = RegisterSpec.from_dict({
-    "modelId": "deye_sg04lp3", "version": 1, "protocol": "solarman_v5", "port": 8899,
-    "defaultSlaveId": 1, "flags": {"batteryPositiveIsDischarge": True},
-    "reads": [
-        {"field": "batterySoc", "address": 588},
-        {"field": "batteryPower", "address": 590, "signed": True},
-        {"field": "batteryVoltage", "address": 587, "scale": 0.01},
-        {"field": "gridPower", "address": 625, "signed": True},
-        {"field": "loadPower", "address": 653},
-        {"field": "pv1Power", "address": 672}, {"field": "pv2Power", "address": 673},
-    ],
-    "derivations": [
-        {"field": "batteryPower", "op": "builtin", "builtin": "battery_sign_normalize",
-         "inputs": ["batteryPower"]},
-        {"field": "totalPvPower", "op": "sum", "inputs": ["pv1Power", "pv2Power"]},
-    ],
-    "writes": [],
-})
+SPEC = RegisterSpec.from_dict(
+    {
+        "modelId": "deye_sg04lp3",
+        "version": 1,
+        "protocol": "solarman_v5",
+        "port": 8899,
+        "defaultSlaveId": 1,
+        "flags": {"batteryPositiveIsDischarge": True},
+        "reads": [
+            {"field": "batterySoc", "address": 588},
+            {"field": "batteryPower", "address": 590, "signed": True},
+            {"field": "batteryVoltage", "address": 587, "scale": 0.01},
+            {"field": "gridPower", "address": 625, "signed": True},
+            {"field": "loadPower", "address": 653},
+            {"field": "pv1Power", "address": 672},
+            {"field": "pv2Power", "address": 673},
+        ],
+        "derivations": [
+            {
+                "field": "batteryPower",
+                "op": "builtin",
+                "builtin": "battery_sign_normalize",
+                "inputs": ["batteryPower"],
+            },
+            {"field": "totalPvPower", "op": "sum", "inputs": ["pv1Power", "pv2Power"]},
+        ],
+        "writes": [],
+    }
+)
 
 
 @pytest.mark.asyncio
@@ -34,13 +46,18 @@ async def test_poll_once_appends_payload(hass, monkeypatch):
     raw = {1: {588: 78, 590: 1500, 587: 5230, 625: 64536, 653: 1800, 672: 1500, 673: 800}}
     monkeypatch.setattr(eng, "read_raw", AsyncMock(return_value=raw))
     store = type("S", (), {"append": AsyncMock()})()
-    returned = await eng.poll_once(hass=hass, spec=SPEC, cfg={"ip": "x", "logger_serial": "1"},
-                                   inverter_id="inv-1", store=store)
+    returned = await eng.poll_once(
+        hass=hass,
+        spec=SPEC,
+        cfg={"ip": "x", "logger_serial": "1"},
+        inverter_id="inv-1",
+        store=store,
+    )
     assert returned is not None
     store.append.assert_awaited_once()
     # The returned value IS the payload dict that was appended.
     assert returned["batterySoc"] == 78.0
-    assert returned["batteryPower"] == -1500.0   # sign-normalized
+    assert returned["batteryPower"] == -1500.0  # sign-normalized
     assert returned["gridPower"] == -1000.0
     assert returned["pvPower"] == 2300.0
     assert returned["pvPower1"] == 1500.0 and returned["pvPower2"] == 800.0
@@ -51,8 +68,13 @@ async def test_poll_once_gated_when_required_missing(hass, monkeypatch):
     # only batterySoc present → CORE_PAYLOAD_FIELDS missing → gated, not appended
     monkeypatch.setattr(eng, "read_raw", AsyncMock(return_value={1: {588: 50}}))
     store = type("S", (), {"append": AsyncMock()})()
-    result = await eng.poll_once(hass=hass, spec=SPEC, cfg={"ip": "x", "logger_serial": "1"},
-                                 inverter_id="inv-1", store=store)
+    result = await eng.poll_once(
+        hass=hass,
+        spec=SPEC,
+        cfg={"ip": "x", "logger_serial": "1"},
+        inverter_id="inv-1",
+        store=store,
+    )
     assert result is None
     store.append.assert_not_awaited()
 

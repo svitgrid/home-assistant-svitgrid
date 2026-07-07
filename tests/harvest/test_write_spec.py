@@ -2,6 +2,7 @@
 
 Tests run RED before implementation, GREEN after.
 """
+
 import pytest
 
 from custom_components.svitgrid.harvest.register_spec import (
@@ -80,6 +81,7 @@ BASE_SPEC: dict = {
 # FieldWrite.from_dict
 # ---------------------------------------------------------------------------
 
+
 class TestFieldWriteFromDict:
     def test_simple_full_word(self):
         fw = FieldWrite.from_dict(SIMPLE_WRITE_JSON["fields"][0])
@@ -125,6 +127,7 @@ class TestFieldWriteFromDict:
 # SlotSpec.from_dict
 # ---------------------------------------------------------------------------
 
+
 class TestSlotSpecFromDict:
     def test_parses_slot(self):
         ss = SlotSpec.from_dict(SLOT_WRITE_JSON["slot"])
@@ -148,6 +151,7 @@ class TestSlotSpecFromDict:
 # ---------------------------------------------------------------------------
 # WriteCommand.from_dict
 # ---------------------------------------------------------------------------
+
 
 class TestWriteCommandFromDict:
     def test_simple_command(self):
@@ -182,6 +186,7 @@ class TestWriteCommandFromDict:
 # RegisterSpec.writes
 # ---------------------------------------------------------------------------
 
+
 class TestRegisterSpecWrites:
     def test_writes_empty_by_default(self):
         spec = RegisterSpec.from_dict(BASE_SPEC)
@@ -211,6 +216,7 @@ class TestRegisterSpecWrites:
 # ---------------------------------------------------------------------------
 # validate() — write checks
 # ---------------------------------------------------------------------------
+
 
 class TestValidateWrites:
     def _spec(self, writes):
@@ -248,7 +254,7 @@ class TestValidateWrites:
             "command": "set_tou_slot",
             "fields": [{"payloadField": "startTime", "base": 148}],
             "slot": {
-                "indexField": "",   # empty = missing
+                "indexField": "",  # empty = missing
                 "count": 6,
                 "stride": 2,
                 "endViaNextSlotStart": False,
@@ -321,6 +327,7 @@ class TestValidateWrites:
         # Call the helper directly — from_dict enforces non-empty payloadField via KeyError
         problems: list[str] = []
         from custom_components.svitgrid.harvest.register_spec import _validate_field_write
+
         problems.extend(_validate_field_write(wc.command, fw, "top-level"))
         problems.extend(_validate_field_write(wc.command, slot_fw, "slot"))
         assert any("payload_field" in p for p in problems)

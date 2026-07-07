@@ -3,6 +3,7 @@
 Reuses the existing store/cadence/sender/gate pipeline from readings_publisher.
 Single-snapshot-per-tick cadence only (no idle aggregation — spec §3.4).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -75,13 +76,14 @@ async def run_direct_harvest_loop(
         try:
             spec = getattr(spec_holder, "spec", None)
             if spec is None:
-                _LOGGER.debug(
-                    "harvest %s: spec not ready yet, skipping tick", inverter_id
-                )
+                _LOGGER.debug("harvest %s: spec not ready yet, skipping tick", inverter_id)
             else:
                 payload = await poll_once(
-                    hass=hass, spec=spec, cfg=cfg,
-                    inverter_id=inverter_id, store=store,
+                    hass=hass,
+                    spec=spec,
+                    cfg=cfg,
+                    inverter_id=inverter_id,
+                    store=store,
                 )
                 if payload is not None and activity is not None:
                     # Mirror the entity run_loop call: sample_count=1, period_sec

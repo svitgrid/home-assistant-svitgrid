@@ -113,7 +113,20 @@ async def run_loop(
             client.username_pw_set(username="edge-device", password=token_data["token"])
             client.tls_set()  # default system trust store
 
-            def _on_connect(_c, _u, _flags, rc):
+            # Bind the per-iteration client/topic/events as default args so each
+            # callback closes over *this* iteration's objects (the client is torn
+            # down before the loop repeats, but binding removes any latent race
+            # and satisfies flake8-bugbear B023).
+            def _on_connect(
+                _c,
+                _u,
+                _flags,
+                rc,
+                client=client,
+                topic=topic,
+                connected=connected,
+                disconnected=disconnected,
+            ):
                 if rc == 0:
                     client.subscribe(topic, qos=1)
                     loop.call_soon_threadsafe(connected.set)
@@ -122,12 +135,11 @@ async def run_loop(
                     loop.call_soon_threadsafe(disconnected.set)
 
             def _on_message(_c, _u, msg):
-                _LOGGER.debug("MQTT wake-bell topic=%s payload=%s",
-                              msg.topic, msg.payload[:32])
+                _LOGGER.debug("MQTT wake-bell topic=%s payload=%s", msg.topic, msg.payload[:32])
                 # Thread-safe set from paho's network thread → asyncio loop.
                 loop.call_soon_threadsafe(wake_event.set)
 
-            def _on_disconnect(_c, _u, rc):
+            def _on_disconnect(_c, _u, rc, disconnected=disconnected):
                 # DEBUG, not INFO: against an unreachable broker paho fires
                 # this repeatedly. The user-visible signal is the single
                 # "reconnecting"/"backing off" line logged below.
@@ -146,24 +158,25 @@ async def run_loop(
 
             try:
                 await asyncio.wait_for(connected.wait(), timeout=CONNECT_TIMEOUT_S)
-            except asyncio.TimeoutError as exc:
-                raise ConnectionError(
-                    f"MQTT CONNECT timeout after {CONNECT_TIMEOUT_S}s"
-                ) from exc
+            except TimeoutError as exc:
+                raise ConnectionError(f"MQTT CONNECT timeout after {CONNECT_TIMEOUT_S}s") from exc
 
             backoff_s = BACKOFF_INITIAL_S  # reset on successful connect
             _LOGGER.info(
                 "MQTT wake-bell active: broker=%s:%s topic=%s",
-                host, port, topic,
+                host,
+                port,
+                topic,
             )
 
             # Hold until disconnected OR remint time.
             try:
                 await asyncio.wait_for(
-                    disconnected.wait(), timeout=TOKEN_REMINT_INTERVAL_S,
+                    disconnected.wait(),
+                    timeout=TOKEN_REMINT_INTERVAL_S,
                 )
                 _LOGGER.info("MQTT lost connection; reconnecting with fresh token")
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 _LOGGER.info("MQTT token re-mint due; reconnecting")
         except asyncio.CancelledError:
             raise
@@ -176,7 +189,8 @@ async def run_loop(
             client = None
             _LOGGER.warning(
                 "MQTT wake-bell failed (%s); backing off %ss before retry",
-                exc, backoff_s,
+                exc,
+                backoff_s,
             )
             await asyncio.sleep(backoff_s)
             backoff_s = min(backoff_s * 2, BACKOFF_MAX_S)

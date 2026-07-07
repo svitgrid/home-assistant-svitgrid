@@ -1,4 +1,5 @@
 """HTTP client for the /ha-pairing/* cloud endpoints."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -31,6 +32,7 @@ class PairingPending:
 @dataclass
 class PairingClaimed:
     """Pairing has been claimed by a mobile user."""
+
     household_id: str
     preset_id: str | None
     island: bool = False
@@ -45,9 +47,7 @@ class PairingClient:
         self._session = session
         self._base = api_base.rstrip("/")
 
-    async def start(
-        self, *, public_key_hex: str, signing_key_id: str
-    ) -> dict[str, Any]:
+    async def start(self, *, public_key_hex: str, signing_key_id: str) -> dict[str, Any]:
         """POST /api/v1/ha-pairing/start — initiate. Returns {secret, code, expiresIn}."""
         url = f"{self._base}/api/v1/ha-pairing/start"
         async with self._session.post(

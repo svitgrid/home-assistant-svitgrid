@@ -1,7 +1,7 @@
 """Tests for the Svitgrid config flow."""
+
 from __future__ import annotations
 
-import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -24,17 +24,21 @@ async def test_user_step_shows_menu(hass: HomeAssistant, enable_custom_integrati
 
 
 @pytest.mark.asyncio
-async def test_pair_step_calls_start_and_shows_code(hass: HomeAssistant, enable_custom_integrations) -> None:
+async def test_pair_step_calls_start_and_shows_code(
+    hass: HomeAssistant, enable_custom_integrations
+) -> None:
     """Selecting Pair calls /ha-pairing/start and shows the 6-char code."""
     with patch(
         "custom_components.svitgrid.config_flow.PairingClient",
     ) as mock_client_cls:
         mock_client = mock_client_cls.return_value
-        mock_client.start = AsyncMock(return_value={
-            "secret": "secret-abc-def" * 4,
-            "code": "7K9PA2",
-            "expiresIn": 300,
-        })
+        mock_client.start = AsyncMock(
+            return_value={
+                "secret": "secret-abc-def" * 4,
+                "code": "7K9PA2",
+                "expiresIn": 300,
+            }
+        )
         # Block status forever so we stay on the waiting screen
         mock_client.get_status = AsyncMock(side_effect=Exception("don't poll yet"))
 
@@ -52,36 +56,52 @@ async def test_pair_step_calls_start_and_shows_code(hass: HomeAssistant, enable_
 @pytest.mark.asyncio
 async def test_pair_finalize_creates_entry(hass: HomeAssistant, enable_custom_integrations) -> None:
     """When polling returns claimed, finalize runs and an entry is created."""
-    from custom_components.svitgrid.pairing_client import PairingClaimed
     from cryptography.hazmat.primitives.asymmetric import ec
+
+    from custom_components.svitgrid.pairing_client import PairingClaimed
 
     fake_priv = ec.generate_private_key(ec.SECP256R1())
 
     async def _instant_sleep(_: float) -> None:
         """Replace asyncio.sleep with a no-op so the poll loop runs immediately."""
 
-    with patch(
-        "custom_components.svitgrid.config_flow.PairingClient",
-    ) as mock_client_cls, patch(
-        "custom_components.svitgrid.config_flow.generate_keypair",
-        return_value=(fake_priv, "04" + "a" * 128),
-    ), patch(
-        "custom_components.svitgrid.config_flow.asyncio.sleep",
-        side_effect=_instant_sleep,
+    with (
+        patch(
+            "custom_components.svitgrid.config_flow.PairingClient",
+        ) as mock_client_cls,
+        patch(
+            "custom_components.svitgrid.config_flow.generate_keypair",
+            return_value=(fake_priv, "04" + "a" * 128),
+        ),
+        patch(
+            "custom_components.svitgrid.config_flow.asyncio.sleep",
+            side_effect=_instant_sleep,
+        ),
     ):
-
         mock_client = mock_client_cls.return_value
-        mock_client.start = AsyncMock(return_value={
-            "secret": "secret-1", "code": "7K9PA2", "expiresIn": 300,
-        })
-        mock_client.get_status = AsyncMock(return_value=PairingClaimed(
-            household_id="h-abc", preset_id=None,
-        ))
-        mock_client.finalize = AsyncMock(return_value={
-            "edgeDeviceId": "ed-1", "hardwareId": "ha-xyz",
-            "apiKey": "test-key", "householdId": "h-abc", "presetId": None,
-            "trustedKeys": [{"keyId": "ha-home-01", "publicKeyHex": "04" + "a" * 128}],
-        })
+        mock_client.start = AsyncMock(
+            return_value={
+                "secret": "secret-1",
+                "code": "7K9PA2",
+                "expiresIn": 300,
+            }
+        )
+        mock_client.get_status = AsyncMock(
+            return_value=PairingClaimed(
+                household_id="h-abc",
+                preset_id=None,
+            )
+        )
+        mock_client.finalize = AsyncMock(
+            return_value={
+                "edgeDeviceId": "ed-1",
+                "hardwareId": "ha-xyz",
+                "apiKey": "test-key",
+                "householdId": "h-abc",
+                "presetId": None,
+                "trustedKeys": [{"keyId": "ha-home-01", "publicKeyHex": "04" + "a" * 128}],
+            }
+        )
 
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": config_entries.SOURCE_USER}
@@ -97,50 +117,68 @@ async def test_pair_finalize_creates_entry(hass: HomeAssistant, enable_custom_in
         assert entries[0].data["household_id"] == "h-abc"
 
 
-async def test_pair_finalize_persists_preset_fields(hass: HomeAssistant, enable_custom_integrations) -> None:
+async def test_pair_finalize_persists_preset_fields(
+    hass: HomeAssistant, enable_custom_integrations
+) -> None:
     """Phase 2: when /finalize returns a preset's entityMap + brand metadata,
     those land in the config entry so async_setup_entry can boot the
     readings publisher with a working mapping."""
-    from custom_components.svitgrid.pairing_client import PairingClaimed
     from cryptography.hazmat.primitives.asymmetric import ec
+
+    from custom_components.svitgrid.pairing_client import PairingClaimed
 
     fake_priv = ec.generate_private_key(ec.SECP256R1())
 
     async def _instant_sleep(_: float) -> None:
         pass
 
-    with patch(
-        "custom_components.svitgrid.config_flow.PairingClient",
-    ) as mock_client_cls, patch(
-        "custom_components.svitgrid.config_flow.generate_keypair",
-        return_value=(fake_priv, "04" + "a" * 128),
-    ), patch(
-        "custom_components.svitgrid.config_flow.asyncio.sleep",
-        side_effect=_instant_sleep,
+    with (
+        patch(
+            "custom_components.svitgrid.config_flow.PairingClient",
+        ) as mock_client_cls,
+        patch(
+            "custom_components.svitgrid.config_flow.generate_keypair",
+            return_value=(fake_priv, "04" + "a" * 128),
+        ),
+        patch(
+            "custom_components.svitgrid.config_flow.asyncio.sleep",
+            side_effect=_instant_sleep,
+        ),
     ):
         mock_client = mock_client_cls.return_value
-        mock_client.start = AsyncMock(return_value={
-            "secret": "secret-2", "code": "ABCD12", "expiresIn": 300,
-        })
-        mock_client.get_status = AsyncMock(return_value=PairingClaimed(
-            household_id="h-deye", preset_id="deye-sg04lp3-solarman-v1",
-        ))
-        mock_client.finalize = AsyncMock(return_value={
-            "edgeDeviceId": "ed-2", "hardwareId": "ha-deye-001",
-            "apiKey": "deye-key", "householdId": "h-deye",
-            "presetId": "deye-sg04lp3-solarman-v1",
-            "trustedKeys": [{"keyId": "ha-home-01", "publicKeyHex": "04" + "a" * 128}],
-            # Phase 2 fields from /finalize response:
-            "entityMap": {
-                "batterySoc": "sensor.inverter_battery",
-                "loadPower": "sensor.inverter_load_power",
-            },
-            "brand": "Deye",
-            "model": "SG04LP3",
-            "phases": 3,
-            "hasBattery": True,
-            "pvStrings": 2,
-        })
+        mock_client.start = AsyncMock(
+            return_value={
+                "secret": "secret-2",
+                "code": "ABCD12",
+                "expiresIn": 300,
+            }
+        )
+        mock_client.get_status = AsyncMock(
+            return_value=PairingClaimed(
+                household_id="h-deye",
+                preset_id="deye-sg04lp3-solarman-v1",
+            )
+        )
+        mock_client.finalize = AsyncMock(
+            return_value={
+                "edgeDeviceId": "ed-2",
+                "hardwareId": "ha-deye-001",
+                "apiKey": "deye-key",
+                "householdId": "h-deye",
+                "presetId": "deye-sg04lp3-solarman-v1",
+                "trustedKeys": [{"keyId": "ha-home-01", "publicKeyHex": "04" + "a" * 128}],
+                # Phase 2 fields from /finalize response:
+                "entityMap": {
+                    "batterySoc": "sensor.inverter_battery",
+                    "loadPower": "sensor.inverter_load_power",
+                },
+                "brand": "Deye",
+                "model": "SG04LP3",
+                "phases": 3,
+                "hasBattery": True,
+                "pvStrings": 2,
+            }
+        )
 
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": config_entries.SOURCE_USER}
@@ -168,7 +206,9 @@ async def test_pair_finalize_persists_preset_fields(hass: HomeAssistant, enable_
         assert data["pv_strings"] == 2
 
 
-async def test_pair_finalize_populates_inverters_list(hass: HomeAssistant, enable_custom_integrations) -> None:
+async def test_pair_finalize_populates_inverters_list(
+    hass: HomeAssistant, enable_custom_integrations
+) -> None:
     """Regression: a finalized pairing MUST produce an entry whose
     `inverters` list is non-empty, so the readings publisher actually starts.
 
@@ -176,49 +216,69 @@ async def test_pair_finalize_populates_inverters_list(hass: HomeAssistant, enabl
     finalize only writes the flat entity_map, `_inverters_from_entry` returns
     [] and async_setup_entry logs "no inverters configured; nothing to publish"
     (the cause of forslim@gmail.com's stuck onboarding, 2026-06-03)."""
+    from cryptography.hazmat.primitives.asymmetric import ec
+
     from custom_components.svitgrid import _inverters_from_entry
     from custom_components.svitgrid.pairing_client import PairingClaimed
-    from cryptography.hazmat.primitives.asymmetric import ec
 
     fake_priv = ec.generate_private_key(ec.SECP256R1())
 
     async def _instant_sleep(_: float) -> None:
         pass
 
-    with patch(
-        "custom_components.svitgrid.config_flow.PairingClient",
-    ) as mock_client_cls, patch(
-        "custom_components.svitgrid.config_flow.generate_keypair",
-        return_value=(fake_priv, "04" + "a" * 128),
-    ), patch(
-        "custom_components.svitgrid.config_flow.asyncio.sleep",
-        side_effect=_instant_sleep,
-    ), patch(
-        # We assert the created entry's shape, not its runtime; skip the real
-        # setup so background tasks (command poller / mqtt wake) don't fire.
-        "custom_components.svitgrid.async_setup_entry",
-        AsyncMock(return_value=True),
+    with (
+        patch(
+            "custom_components.svitgrid.config_flow.PairingClient",
+        ) as mock_client_cls,
+        patch(
+            "custom_components.svitgrid.config_flow.generate_keypair",
+            return_value=(fake_priv, "04" + "a" * 128),
+        ),
+        patch(
+            "custom_components.svitgrid.config_flow.asyncio.sleep",
+            side_effect=_instant_sleep,
+        ),
+        patch(
+            # We assert the created entry's shape, not its runtime; skip the real
+            # setup so background tasks (command poller / mqtt wake) don't fire.
+            "custom_components.svitgrid.async_setup_entry",
+            AsyncMock(return_value=True),
+        ),
     ):
         mock_client = mock_client_cls.return_value
-        mock_client.start = AsyncMock(return_value={
-            "secret": "secret-inv", "code": "INVLST", "expiresIn": 300,
-        })
-        mock_client.get_status = AsyncMock(return_value=PairingClaimed(
-            household_id="h-deye", preset_id="deye-sg03lp1-solarman-v1",
-        ))
-        mock_client.finalize = AsyncMock(return_value={
-            "edgeDeviceId": "ed-9", "hardwareId": "ha-9f99",
-            "apiKey": "k9", "householdId": "h-deye",
-            "presetId": "deye-sg03lp1-solarman-v1",
-            "trustedKeys": [{"keyId": "ha-home-01", "publicKeyHex": "04" + "a" * 128}],
-            "entityMap": {
-                "batterySoc": "sensor.inverter_battery",
-                "loadPower": "sensor.inverter_load_power",
-            },
-            "brand": "Deye", "model": "SG03LP1", "phases": 1,
-            "hasBattery": True, "pvStrings": 2,
-            "commands": [],
-        })
+        mock_client.start = AsyncMock(
+            return_value={
+                "secret": "secret-inv",
+                "code": "INVLST",
+                "expiresIn": 300,
+            }
+        )
+        mock_client.get_status = AsyncMock(
+            return_value=PairingClaimed(
+                household_id="h-deye",
+                preset_id="deye-sg03lp1-solarman-v1",
+            )
+        )
+        mock_client.finalize = AsyncMock(
+            return_value={
+                "edgeDeviceId": "ed-9",
+                "hardwareId": "ha-9f99",
+                "apiKey": "k9",
+                "householdId": "h-deye",
+                "presetId": "deye-sg03lp1-solarman-v1",
+                "trustedKeys": [{"keyId": "ha-home-01", "publicKeyHex": "04" + "a" * 128}],
+                "entityMap": {
+                    "batterySoc": "sensor.inverter_battery",
+                    "loadPower": "sensor.inverter_load_power",
+                },
+                "brand": "Deye",
+                "model": "SG03LP1",
+                "phases": 1,
+                "hasBattery": True,
+                "pvStrings": 2,
+                "commands": [],
+            }
+        )
 
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": config_entries.SOURCE_USER}
@@ -249,41 +309,64 @@ async def test_pair_finalize_populates_inverters_list(hass: HomeAssistant, enabl
         assert resolved[0]["inverter_id"] == "ha-9f99"
 
 
-async def test_pair_finalize_phase_1_compat_when_no_preset(hass: HomeAssistant, enable_custom_integrations) -> None:
+async def test_pair_finalize_phase_1_compat_when_no_preset(
+    hass: HomeAssistant, enable_custom_integrations
+) -> None:
     """When /finalize returns no preset fields (Phase 1 add-on or unknown
     presetId), the entry's new fields default to None/empty so
     async_setup_entry can still load."""
-    from custom_components.svitgrid.pairing_client import PairingClaimed
     from cryptography.hazmat.primitives.asymmetric import ec
+
+    from custom_components.svitgrid.pairing_client import PairingClaimed
 
     fake_priv = ec.generate_private_key(ec.SECP256R1())
 
     async def _instant_sleep(_: float) -> None:
         pass
 
-    with patch(
-        "custom_components.svitgrid.config_flow.PairingClient",
-    ) as mock_client_cls, patch(
-        "custom_components.svitgrid.config_flow.generate_keypair",
-        return_value=(fake_priv, "04" + "a" * 128),
-    ), patch(
-        "custom_components.svitgrid.config_flow.asyncio.sleep",
-        side_effect=_instant_sleep,
+    with (
+        patch(
+            "custom_components.svitgrid.config_flow.PairingClient",
+        ) as mock_client_cls,
+        patch(
+            "custom_components.svitgrid.config_flow.generate_keypair",
+            return_value=(fake_priv, "04" + "a" * 128),
+        ),
+        patch(
+            "custom_components.svitgrid.config_flow.asyncio.sleep",
+            side_effect=_instant_sleep,
+        ),
     ):
         mock_client = mock_client_cls.return_value
-        mock_client.start = AsyncMock(return_value={
-            "secret": "s3", "code": "BAREPP", "expiresIn": 300,
-        })
-        mock_client.get_status = AsyncMock(return_value=PairingClaimed(
-            household_id="h-bare", preset_id=None,
-        ))
-        mock_client.finalize = AsyncMock(return_value={
-            "edgeDeviceId": "ed-3", "hardwareId": "ha-bare-001",
-            "apiKey": "bare-key", "householdId": "h-bare", "presetId": None,
-            "trustedKeys": [{"keyId": "ha-home-01", "publicKeyHex": "04" + "a" * 128}],
-            "entityMap": None, "brand": None, "model": None,
-            "phases": None, "hasBattery": None, "pvStrings": None,
-        })
+        mock_client.start = AsyncMock(
+            return_value={
+                "secret": "s3",
+                "code": "BAREPP",
+                "expiresIn": 300,
+            }
+        )
+        mock_client.get_status = AsyncMock(
+            return_value=PairingClaimed(
+                household_id="h-bare",
+                preset_id=None,
+            )
+        )
+        mock_client.finalize = AsyncMock(
+            return_value={
+                "edgeDeviceId": "ed-3",
+                "hardwareId": "ha-bare-001",
+                "apiKey": "bare-key",
+                "householdId": "h-bare",
+                "presetId": None,
+                "trustedKeys": [{"keyId": "ha-home-01", "publicKeyHex": "04" + "a" * 128}],
+                "entityMap": None,
+                "brand": None,
+                "model": None,
+                "phases": None,
+                "hasBattery": None,
+                "pvStrings": None,
+            }
+        )
 
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": config_entries.SOURCE_USER}
@@ -311,7 +394,9 @@ def test_manual_fields_derive_from_mappable_source():
 
 
 @pytest.mark.asyncio
-async def test_options_flow_shows_init_form(hass: HomeAssistant, enable_custom_integrations) -> None:
+async def test_options_flow_shows_init_form(
+    hass: HomeAssistant, enable_custom_integrations
+) -> None:
     """Clicking Configure now renders the add/edit/remove menu (not a flat form)."""
     from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -327,7 +412,9 @@ async def test_options_flow_shows_init_form(hass: HomeAssistant, enable_custom_i
 
 
 @pytest.mark.asyncio
-async def test_options_flow_saves_and_drops_blanks(hass: HomeAssistant, enable_custom_integrations) -> None:
+async def test_options_flow_saves_and_drops_blanks(
+    hass: HomeAssistant, enable_custom_integrations
+) -> None:
     """edit_inverter step writes the cleaned entity_map (blank selectors dropped)
     directly into entry.data["inverters"] for the selected inverter.
 
@@ -336,6 +423,7 @@ async def test_options_flow_saves_and_drops_blanks(hass: HomeAssistant, enable_c
     delivers cleared optional selectors in real usage.
     """
     from pytest_homeassistant_custom_component.common import MockConfigEntry
+
     from custom_components.svitgrid.config_flow import SvitgridOptionsFlow
 
     inv_id = "ha-aaa"
@@ -343,12 +431,28 @@ async def test_options_flow_saves_and_drops_blanks(hass: HomeAssistant, enable_c
         domain=DOMAIN,
         version=2,
         data={
-            "api_base": "https://api.test", "api_key": "k", "edge_device_id": "e1",
-            "household_id": "hh1", "signing_key_id": "sk", "private_key_pem": "pem",
-            "public_key_hex": "pub", "trusted_keys": [],
-            "inverters": [{"inverter_id": inv_id, "entity_map": {"batterySoc": "sensor.old_soc"},
-                           "command_recipes": [], "command_config": {}, "brand": "Deye",
-                           "model": "X", "phases": 3, "has_battery": True, "pv_strings": 2, "preset_id": None}],
+            "api_base": "https://api.test",
+            "api_key": "k",
+            "edge_device_id": "e1",
+            "household_id": "hh1",
+            "signing_key_id": "sk",
+            "private_key_pem": "pem",
+            "public_key_hex": "pub",
+            "trusted_keys": [],
+            "inverters": [
+                {
+                    "inverter_id": inv_id,
+                    "entity_map": {"batterySoc": "sensor.old_soc"},
+                    "command_recipes": [],
+                    "command_config": {},
+                    "brand": "Deye",
+                    "model": "X",
+                    "phases": 3,
+                    "has_battery": True,
+                    "pv_strings": 2,
+                    "preset_id": None,
+                }
+            ],
         },
     )
     entry.add_to_hass(hass)
@@ -365,11 +469,13 @@ async def test_options_flow_saves_and_drops_blanks(hass: HomeAssistant, enable_c
     assert result["step_id"] == "edit_inverter"
 
     # Step 2: submit remapped sensors (loadPower absent → dropped)
-    result = await flow.async_step_edit_inverter({
-        "batterySoc": "sensor.new_soc",
-        "gridPower": "sensor.grid",
-        # loadPower absent → dropped by cleaned = {k: v for k, v in … if v}
-    })
+    result = await flow.async_step_edit_inverter(
+        {
+            "batterySoc": "sensor.new_soc",
+            "gridPower": "sensor.grid",
+            # loadPower absent → dropped by cleaned = {k: v for k, v in … if v}
+        }
+    )
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
     updated_inv = next(i for i in entry.data["inverters"] if i["inverter_id"] == inv_id)
@@ -381,7 +487,9 @@ async def test_options_flow_saves_and_drops_blanks(hass: HomeAssistant, enable_c
 
 
 @pytest.mark.asyncio
-async def test_options_flow_rejects_empty_map(hass: HomeAssistant, enable_custom_integrations) -> None:
+async def test_options_flow_rejects_empty_map(
+    hass: HomeAssistant, enable_custom_integrations
+) -> None:
     """edit_inverter re-shows the form with an error when no entities are selected
     and leaves the inverter's entity_map untouched.
 
@@ -390,6 +498,7 @@ async def test_options_flow_rejects_empty_map(hass: HomeAssistant, enable_custom
     user_input dict is what HA delivers when every optional selector is cleared.
     """
     from pytest_homeassistant_custom_component.common import MockConfigEntry
+
     from custom_components.svitgrid.config_flow import SvitgridOptionsFlow
 
     inv_id = "ha-aaa"
@@ -398,12 +507,28 @@ async def test_options_flow_rejects_empty_map(hass: HomeAssistant, enable_custom
         domain=DOMAIN,
         version=2,
         data={
-            "api_base": "https://api.test", "api_key": "k", "edge_device_id": "e1",
-            "household_id": "hh1", "signing_key_id": "sk", "private_key_pem": "pem",
-            "public_key_hex": "pub", "trusted_keys": [],
-            "inverters": [{"inverter_id": inv_id, "entity_map": original_map,
-                           "command_recipes": [], "command_config": {}, "brand": "Deye",
-                           "model": "X", "phases": 3, "has_battery": True, "pv_strings": 2, "preset_id": None}],
+            "api_base": "https://api.test",
+            "api_key": "k",
+            "edge_device_id": "e1",
+            "household_id": "hh1",
+            "signing_key_id": "sk",
+            "private_key_pem": "pem",
+            "public_key_hex": "pub",
+            "trusted_keys": [],
+            "inverters": [
+                {
+                    "inverter_id": inv_id,
+                    "entity_map": original_map,
+                    "command_recipes": [],
+                    "command_config": {},
+                    "brand": "Deye",
+                    "model": "X",
+                    "phases": 3,
+                    "has_battery": True,
+                    "pv_strings": 2,
+                    "preset_id": None,
+                }
+            ],
         },
     )
     entry.add_to_hass(hass)

@@ -16,6 +16,7 @@ Auth logic (``_BaseView._authorize``):
   ``island_request_authorized``, which accepts either an authenticated HA
   session *or* a matching ``X-Island-Key`` header.
 """
+
 from __future__ import annotations
 
 import json
@@ -101,24 +102,30 @@ class SvitgridHistoryView(_BaseView):
         inverter_id = q.get("inverter_id", "")
         if q.get("granularity") == "hourly":
             day = q.get("day", _today())
-            return self.json({
-                "inverter_id": inverter_id,
-                "hours": await self._store.hourly_range_live(inverter_id, day),
-            })
+            return self.json(
+                {
+                    "inverter_id": inverter_id,
+                    "hours": await self._store.hourly_range_live(inverter_id, day),
+                }
+            )
         if q.get("granularity") == "5min":
             # Fine-grained (5-minute) buckets for the Day charts, computed live
             # from readings_raw (14-day retention). Same wire shape as hourly.
             day = q.get("day", _today())
-            return self.json({
-                "inverter_id": inverter_id,
-                "hours": await self._store.five_min_range_live(inverter_id, day),
-            })
+            return self.json(
+                {
+                    "inverter_id": inverter_id,
+                    "hours": await self._store.five_min_range_live(inverter_id, day),
+                }
+            )
         start = q.get("start", _today())
         end = q.get("end", _today())
-        return self.json({
-            "inverter_id": inverter_id,
-            "days": await self._store.history_range_live(inverter_id, start, end),
-        })
+        return self.json(
+            {
+                "inverter_id": inverter_id,
+                "days": await self._store.history_range_live(inverter_id, start, end),
+            }
+        )
 
 
 class SvitgridSyncStatusView(_BaseView):
@@ -217,7 +224,13 @@ class SvitgridCommandsView(HomeAssistantView):
         command_id: str | None = body.get("commandId")
 
         # Required: command, payload (may be {}), signingKeyId, signedEventData, signature
-        if not command or payload is None or not signing_key_id or signed_event_data is None or not signature:
+        if (
+            not command
+            or payload is None
+            or not signing_key_id
+            or signed_event_data is None
+            or not signature
+        ):
             return self._json_error(400, "bad_request")
 
         # --- Verify admin signature ---
@@ -225,7 +238,9 @@ class SvitgridCommandsView(HomeAssistantView):
         trusted_public_keys_hex: dict[str, str] = (
             keystore_state.trusted_public_keys_hex if keystore_state is not None else {}
         )
-        if not verify_signed_command(trusted_public_keys_hex, signing_key_id, signed_event_data, signature):
+        if not verify_signed_command(
+            trusted_public_keys_hex, signing_key_id, signed_event_data, signature
+        ):
             return self._json_error(403, "signature_invalid")
 
         # --- Binding: ensure top-level command+payload match what was signed ---
@@ -233,7 +248,11 @@ class SvitgridCommandsView(HomeAssistantView):
             return self._json_error(400, "bad_request")
         signed_command = signed_event_data.get("command")
         signed_payload = signed_event_data.get("payload")
-        if not signed_command or not isinstance(signed_command, str) or not isinstance(signed_payload, dict):
+        if (
+            not signed_command
+            or not isinstance(signed_command, str)
+            or not isinstance(signed_payload, dict)
+        ):
             return self._json_error(400, "bad_request")
         if command != signed_command or payload != signed_payload:
             return self._json_error(403, "command_mismatch")
@@ -498,7 +517,9 @@ class SvitgridEventDetailView(_IslandEventViewMixin, HomeAssistantView):
         )
         return island_key_present_and_valid(request, island_key), keystore
 
-    async def _verify_signature(self, keystore, signing_key_id, signed_event_data, signature) -> bool:
+    async def _verify_signature(
+        self, keystore, signing_key_id, signed_event_data, signature
+    ) -> bool:
         keystore_state = await keystore.load() if keystore is not None else None
         trusted_public_keys_hex: dict[str, str] = (
             keystore_state.trusted_public_keys_hex if keystore_state is not None else {}
@@ -572,7 +593,9 @@ class SvitgridEventDetailView(_IslandEventViewMixin, HomeAssistantView):
             return self._json_error(403, "signature_invalid")
 
         # --- Binding: signed event_id must match URL event_id ---
-        signed_id = signed_event_data.get("event_id") if isinstance(signed_event_data, dict) else None
+        signed_id = (
+            signed_event_data.get("event_id") if isinstance(signed_event_data, dict) else None
+        )
         if signed_id != event_id:
             return self._json_error(403, "event_mismatch")
 
@@ -723,5 +746,6 @@ def register_views(hass: HomeAssistant, store) -> None:
                 raise
             _LOGGER.debug(
                 "Reusing already-registered view %s: %s",
-                type(view).__name__, err,
+                type(view).__name__,
+                err,
             )

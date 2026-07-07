@@ -15,9 +15,8 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from cryptography.hazmat.primitives.asymmetric import ec
-from homeassistant.core import HomeAssistant
-
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant
 
 from .api_client import CommandAckFailed, DeviceEvicted, DeviceStopped, SvitgridApiClient
 from .cloud_endpoint_handler import is_allowed_api_base, probe_endpoint_auth
@@ -64,6 +63,7 @@ async def apply_cloud_endpoint_change(hass, entry, url):
 
     return await _real(hass, entry, url)
 
+
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -103,9 +103,9 @@ async def process_command(
     our_signing_key_id: str,
     executor_version: str,
     keystore: SvitgridKeystore | None,
-    executors_by_inverter: dict[str, "BaseExecutor"] | None = None,
+    executors_by_inverter: dict[str, BaseExecutor] | None = None,
     hass: HomeAssistant | None = None,
-    entry: "ConfigEntry | None" = None,
+    entry: ConfigEntry | None = None,
 ) -> None:
     """Process one polled command. Three dispatch arms:
       1. Internal trust commands (add_trusted_key, revoke_trusted_key) —
@@ -192,7 +192,8 @@ async def process_command(
         url = payload.get("url")
         if not is_allowed_api_base(url):
             _LOGGER.warning(
-                "set_cloud_endpoint rejected — url not in allow-list: %r", url,
+                "set_cloud_endpoint rejected — url not in allow-list: %r",
+                url,
             )
             await _send_signed_ack(
                 api_client=api_client,
@@ -213,8 +214,9 @@ async def process_command(
         # instructing the user to update the YAML config manually.
         if hass is None or entry is None:
             _LOGGER.warning(
-                "set_cloud_endpoint rejected — no ConfigEntry (YAML install?). "
-                "cmd_id=%s url=%s", cmd_id, url,
+                "set_cloud_endpoint rejected — no ConfigEntry (YAML install?). cmd_id=%s url=%s",
+                cmd_id,
+                url,
             )
             await _send_signed_ack(
                 api_client=api_client,
@@ -235,14 +237,13 @@ async def process_command(
         from homeassistant.helpers import aiohttp_client  # noqa: PLC0415
 
         session = aiohttp_client.async_get_clientsession(hass)
-        probe_ok = await probe_endpoint_auth(
-            session, api_key=api_key, new_api_base=url
-        )
+        probe_ok = await probe_endpoint_auth(session, api_key=api_key, new_api_base=url)
         if not probe_ok:
             _LOGGER.error(
                 "set_cloud_endpoint probe failed — new endpoint %s did not "
                 "accept our api_key. Migration rejected. cmd_id=%s",
-                url, cmd_id,
+                url,
+                cmd_id,
             )
             await _send_signed_ack(
                 api_client=api_client,
@@ -285,7 +286,8 @@ async def process_command(
                 "set_cloud_endpoint apply failed AFTER successful ACK — "
                 "integration still on old endpoint, cloud thinks migration "
                 "done. cmd_id=%s url=%s manual recovery required.",
-                cmd_id, url,
+                cmd_id,
+                url,
             )
         return
 
@@ -307,8 +309,8 @@ async def process_command(
 
         if hass is None or entry is None:
             _LOGGER.warning(
-                "set_harvest_config rejected — no ConfigEntry (YAML install?). "
-                "cmd_id=%s", cmd_id,
+                "set_harvest_config rejected — no ConfigEntry (YAML install?). cmd_id=%s",
+                cmd_id,
             )
             await _send_signed_ack(
                 api_client=api_client,
@@ -325,8 +327,10 @@ async def process_command(
 
         if not await probe_modbus_reachable(ip, port):
             _LOGGER.error(
-                "set_harvest_config probe failed — %s:%s not reachable. "
-                "Change rejected. cmd_id=%s", ip, port, cmd_id,
+                "set_harvest_config probe failed — %s:%s not reachable. Change rejected. cmd_id=%s",
+                ip,
+                port,
+                cmd_id,
             )
             await _send_signed_ack(
                 api_client=api_client,
@@ -364,7 +368,8 @@ async def process_command(
                 "set_harvest_config apply failed AFTER successful ACK — "
                 "integration still on old connection, cloud thinks change "
                 "applied. cmd_id=%s conn=%s manual recovery required.",
-                cmd_id, payload,
+                cmd_id,
+                payload,
             )
         return
 
@@ -488,7 +493,9 @@ async def process_command(
     if not sig_key_id or sig_key_id not in trusted_public_keys_hex:
         _LOGGER.warning(
             "Skipping command %s — signingKeyId %s not in trusted keys (cache has %d)",
-            cmd_id, sig_key_id, len(trusted_public_keys_hex),
+            cmd_id,
+            sig_key_id,
+            len(trusted_public_keys_hex),
         )
         return
 
@@ -532,7 +539,8 @@ async def process_command(
             result = await executor.dispatch(cmd_type, payload)
         except NotImplementedError as err:
             _LOGGER.info(
-                "Executor doesn't support %s — ACKing as unsupported", cmd_type,
+                "Executor doesn't support %s — ACKing as unsupported",
+                cmd_type,
             )
             await _send_signed_ack(
                 api_client=api_client,
@@ -638,14 +646,14 @@ async def run_loop(
     trusted_public_keys_hex: dict[str, str] | None = None,
     executor_version: str = "0.2.0",
     integration_version: str | None = None,
-    executors_by_inverter: dict[str, "BaseExecutor"] | None = None,
+    executors_by_inverter: dict[str, BaseExecutor] | None = None,
     interval_s: int = COMMAND_POLL_INTERVAL_S,
     entry_data: dict | None = None,
     wake_event: asyncio.Event | None = None,
     activity: Any = None,  # ActivityTracker; None acceptable
     lifecycle: Any = None,  # LifecycleState; None acceptable (keeps existing callers working)
     store: Any = None,  # store with async set_lifecycle; None acceptable
-    entry: "ConfigEntry | None" = None,
+    entry: ConfigEntry | None = None,
 ) -> None:
     """Polling coroutine. Exits when hass.is_stopping becomes True.
 

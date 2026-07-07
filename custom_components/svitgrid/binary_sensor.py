@@ -1,4 +1,5 @@
 """Problem binary_sensor reflecting device lifecycle (deprovision reaction)."""
+
 from __future__ import annotations
 
 import logging
@@ -61,7 +62,9 @@ async def async_setup_entry(
 ) -> None:
     state = hass.data.get(DOMAIN, {}).get(entry.entry_id)
     if not state or "activity" not in state:
-        _LOGGER.warning("Svitgrid binary_sensor setup: no activity tracker for entry %s", entry.entry_id)
+        _LOGGER.warning(
+            "Svitgrid binary_sensor setup: no activity tracker for entry %s", entry.entry_id
+        )
         return
     activity: ActivityTracker = state["activity"]
     from . import _inverters_from_entry  # local import avoids a circular import
@@ -69,8 +72,6 @@ async def async_setup_entry(
     entities: list[BinarySensorEntity] = []
     for inv in _inverters_from_entry(entry):
         inverter_id = inv["inverter_id"]
-        label = f'{inv.get("brand") or "Svitgrid"} {inv.get("model") or ""}'.strip()
-        entities.append(
-            SvitgridProblemBinarySensor(activity, entry.entry_id, inverter_id, label)
-        )
+        label = f"{inv.get('brand') or 'Svitgrid'} {inv.get('model') or ''}".strip()
+        entities.append(SvitgridProblemBinarySensor(activity, entry.entry_id, inverter_id, label))
     async_add_entities(entities)

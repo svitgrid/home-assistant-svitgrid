@@ -1,15 +1,18 @@
 from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from custom_components.svitgrid.panel import register_panel, remove_panel
+
 from custom_components.svitgrid.const import DOMAIN
+from custom_components.svitgrid.panel import register_panel, remove_panel
 
 
 @pytest.mark.asyncio
 async def test_register_panel_serves_module_and_registers(hass):
     hass.http = MagicMock()
     hass.http.async_register_static_paths = AsyncMock()
-    with patch("custom_components.svitgrid.panel.panel_custom.async_register_panel",
-               new_callable=AsyncMock) as reg:
+    with patch(
+        "custom_components.svitgrid.panel.panel_custom.async_register_panel", new_callable=AsyncMock
+    ) as reg:
         await register_panel(hass)
     # static path registered for the JS module
     sp_call = hass.http.async_register_static_paths.await_args.args[0][0]
@@ -29,8 +32,9 @@ async def test_register_panel_serves_module_and_registers(hass):
 async def test_register_panel_is_idempotent(hass):
     hass.http = MagicMock()
     hass.http.async_register_static_paths = AsyncMock()
-    with patch("custom_components.svitgrid.panel.panel_custom.async_register_panel",
-               new_callable=AsyncMock) as reg:
+    with patch(
+        "custom_components.svitgrid.panel.panel_custom.async_register_panel", new_callable=AsyncMock
+    ) as reg:
         await register_panel(hass)
         await register_panel(hass)
     assert reg.await_count == 1

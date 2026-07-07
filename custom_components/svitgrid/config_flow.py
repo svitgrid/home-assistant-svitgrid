@@ -9,6 +9,7 @@ Two top-level branches:
                poll → finalize), with the collected metadata submitted
                in the /finalize body's `inverter:` field.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -117,9 +118,7 @@ class SvitgridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Manual entry point: collect inverter metadata first."""
         return await self.async_step_manual_meta()
 
-    async def async_step_manual_meta(
-        self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    async def async_step_manual_meta(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """Manual step 1 of 2: brand / model / phases / battery / pv-strings."""
         if user_input is not None:
             self._manual_inverter = {
@@ -128,24 +127,29 @@ class SvitgridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 "phases": int(user_input["phases"]),
                 "hasBattery": bool(user_input["has_battery"]),
                 "pvStrings": int(user_input["pv_strings"]),
-                "entityMap": {},   # filled in next step
-                "commands": [],    # read-only in manual mode
+                "entityMap": {},  # filled in next step
+                "commands": [],  # read-only in manual mode
             }
             return await self.async_step_manual_entities()
 
-        schema = vol.Schema({
-            vol.Required("brand"): TextSelector(TextSelectorConfig()),
-            vol.Required("model"): TextSelector(TextSelectorConfig()),
-            vol.Required("phases", default=3): SelectSelector(
-                SelectSelectorConfig(options=["1", "2", "3"]),
-            ),
-            vol.Required("has_battery", default=True): BooleanSelector(),
-            vol.Required("pv_strings", default=2): NumberSelector(
-                NumberSelectorConfig(
-                    min=1, max=8, step=1, mode=NumberSelectorMode.BOX,
+        schema = vol.Schema(
+            {
+                vol.Required("brand"): TextSelector(TextSelectorConfig()),
+                vol.Required("model"): TextSelector(TextSelectorConfig()),
+                vol.Required("phases", default=3): SelectSelector(
+                    SelectSelectorConfig(options=["1", "2", "3"]),
                 ),
-            ),
-        })
+                vol.Required("has_battery", default=True): BooleanSelector(),
+                vol.Required("pv_strings", default=2): NumberSelector(
+                    NumberSelectorConfig(
+                        min=1,
+                        max=8,
+                        step=1,
+                        mode=NumberSelectorMode.BOX,
+                    ),
+                ),
+            }
+        )
         return self.async_show_form(step_id="manual_meta", data_schema=schema)
 
     async def async_step_manual_entities(
@@ -157,9 +161,7 @@ class SvitgridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         nothing to send and the dashboard is permanently empty."""
         errors: dict[str, str] = {}
         if user_input is not None:
-            entity_map = {
-                field: eid for field, eid in user_input.items() if eid
-            }
+            entity_map = {field: eid for field, eid in user_input.items() if eid}
             if not entity_map:
                 errors["base"] = "no_entities_selected"
             else:
@@ -223,26 +225,36 @@ class SvitgridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 # poll-for-claim + finalize path as the preset / manual branch.
                 return await self.async_step_pair()
 
-        schema = vol.Schema({
-            vol.Required("protocol", default="solarman_v5"): SelectSelector(
-                SelectSelectorConfig(options=["solarman_v5", "modbus_tcp"]),
-            ),
-            vol.Required("ip"): TextSelector(TextSelectorConfig()),
-            vol.Required("port", default=8899): NumberSelector(
-                NumberSelectorConfig(
-                    min=1, max=65535, step=1, mode=NumberSelectorMode.BOX,
+        schema = vol.Schema(
+            {
+                vol.Required("protocol", default="solarman_v5"): SelectSelector(
+                    SelectSelectorConfig(options=["solarman_v5", "modbus_tcp"]),
                 ),
-            ),
-            vol.Required("slave_id", default=1): NumberSelector(
-                NumberSelectorConfig(
-                    min=1, max=247, step=1, mode=NumberSelectorMode.BOX,
+                vol.Required("ip"): TextSelector(TextSelectorConfig()),
+                vol.Required("port", default=8899): NumberSelector(
+                    NumberSelectorConfig(
+                        min=1,
+                        max=65535,
+                        step=1,
+                        mode=NumberSelectorMode.BOX,
+                    ),
                 ),
-            ),
-            vol.Required("model_id"): TextSelector(TextSelectorConfig()),
-            vol.Optional("logger_serial"): TextSelector(TextSelectorConfig()),
-        })
+                vol.Required("slave_id", default=1): NumberSelector(
+                    NumberSelectorConfig(
+                        min=1,
+                        max=247,
+                        step=1,
+                        mode=NumberSelectorMode.BOX,
+                    ),
+                ),
+                vol.Required("model_id"): TextSelector(TextSelectorConfig()),
+                vol.Optional("logger_serial"): TextSelector(TextSelectorConfig()),
+            }
+        )
         return self.async_show_form(
-            step_id="harvest_config", data_schema=schema, errors=errors,
+            step_id="harvest_config",
+            data_schema=schema,
+            errors=errors,
         )
 
     # ─── Pair branch (preset OR continuation of manual) ────────────────
@@ -272,9 +284,7 @@ class SvitgridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
             self._secret = start_result["secret"]
             self._code = start_result["code"]
-            self._pair_task = self.hass.async_create_task(
-                self._poll_for_claim(client)
-            )
+            self._pair_task = self.hass.async_create_task(self._poll_for_claim(client))
 
         if not self._pair_task.done():
             return self.async_show_progress(
@@ -297,7 +307,9 @@ class SvitgridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         return self.async_show_progress_done(next_step_id="pair_finalize")
 
-    async def async_step_pair_finalize(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+    async def async_step_pair_finalize(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
         """Polling saw 'claimed'; call /finalize (if not yet done), then create the entry.
 
         When _final_payload is None (normal path through _poll_for_claim), this method
@@ -373,24 +385,19 @@ class SvitgridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             try:
                 _spec_session = aiohttp_client.async_get_clientsession(self.hass)
                 _spec_api = SvitgridApiClient(_spec_session, api_base=DEFAULT_API_BASE)
-                spec_dict = await _spec_api.get_register_spec(
-                    self._harvest_config["model_id"]
-                )
+                spec_dict = await _spec_api.get_register_spec(self._harvest_config["model_id"])
                 if spec_dict:
                     spec = RegisterSpec.from_dict(spec_dict)
             except Exception:  # noqa: BLE001 — spec fetch is best-effort
                 spec = None
 
-            reachable = await check_inverter_reachable(
-                self.hass, self._harvest_config, spec=spec
-            )
+            reachable = await check_inverter_reachable(self.hass, self._harvest_config, spec=spec)
             if not reachable:
                 return self.async_show_form(
                     step_id="pair_finalize",
                     errors={"base": "cannot_reach_inverter"},
                     description_placeholders={
-                        "ip": f"{self._harvest_config['ip']}:"
-                        f"{self._harvest_config['port']}"
+                        "ip": f"{self._harvest_config['ip']}:{self._harvest_config['port']}"
                     },
                 )
 
@@ -468,7 +475,7 @@ class SvitgridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 # async_set_island_key at finalize-time is a no-op for fresh
                 # installs (blob doesn't exist yet); entry.data is the durable
                 # hand-off channel.  Only written for island pairings.
-                **( {"island_key": self._island_key} if self._island_key else {} ),
+                **({"island_key": self._island_key} if self._island_key else {}),
             },
         )
 
@@ -537,23 +544,32 @@ class SvitgridOptionsFlow(config_entries.OptionsFlow):
                 "pvStrings": int(user_input["pv_strings"]),
             }
             return await self.async_step_add_inverter_entities()
-        schema = vol.Schema({
-            vol.Required("brand"): TextSelector(TextSelectorConfig()),
-            vol.Required("model"): TextSelector(TextSelectorConfig()),
-            vol.Required("phases", default="3"): SelectSelector(SelectSelectorConfig(options=["1", "2", "3"])),
-            vol.Required("has_battery", default=True): BooleanSelector(),
-            vol.Required("pv_strings", default=2): NumberSelector(
-                NumberSelectorConfig(min=1, max=8, step=1, mode=NumberSelectorMode.BOX)),
-        })
+        schema = vol.Schema(
+            {
+                vol.Required("brand"): TextSelector(TextSelectorConfig()),
+                vol.Required("model"): TextSelector(TextSelectorConfig()),
+                vol.Required("phases", default="3"): SelectSelector(
+                    SelectSelectorConfig(options=["1", "2", "3"])
+                ),
+                vol.Required("has_battery", default=True): BooleanSelector(),
+                vol.Required("pv_strings", default=2): NumberSelector(
+                    NumberSelectorConfig(min=1, max=8, step=1, mode=NumberSelectorMode.BOX)
+                ),
+            }
+        )
         return self.async_show_form(step_id="add_inverter", data_schema=schema)
 
     # ── add: step 2 (map sensors + write targets, call API, append) ──────
-    async def async_step_add_inverter_entities(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+    async def async_step_add_inverter_entities(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
         errors: dict[str, str] = {}
         if user_input is not None:
             hub_name = user_input.get("hub_name", "solarman")
             slave_id = int(user_input.get("slave_id", 1))
-            entity_map = {f: eid for f, eid in user_input.items() if eid and f not in ("hub_name", "slave_id")}
+            entity_map = {
+                f: eid for f, eid in user_input.items() if eid and f not in ("hub_name", "slave_id")
+            }
             if not entity_map:
                 errors["base"] = "no_entities_selected"
             else:
@@ -570,17 +586,26 @@ class SvitgridOptionsFlow(config_entries.OptionsFlow):
                     _LOGGER.exception("add_inverter API call failed")
                     return self.async_abort(reason="cannot_connect")
                 inverters = self._inverters()
-                inverters.append({
-                    "inverter_id": resp["inverterId"],
-                    "entity_map": entity_map,
-                    "command_recipes": resp.get("commands") or [],
-                    # TODO: battery_voltage is hardcoded to a 48V nominal; make
-                    # configurable for 24V/12V systems (matches migration default).
-                    "command_config": {"hub_name": hub_name, "slave_id": slave_id, "battery_voltage": 52.8},
-                    "brand": resp.get("brand"), "model": resp.get("model"),
-                    "phases": resp.get("phases"), "has_battery": resp.get("hasBattery"),
-                    "pv_strings": resp.get("pvStrings"), "preset_id": resp.get("presetId"),
-                })
+                inverters.append(
+                    {
+                        "inverter_id": resp["inverterId"],
+                        "entity_map": entity_map,
+                        "command_recipes": resp.get("commands") or [],
+                        # TODO: battery_voltage is hardcoded to a 48V nominal; make
+                        # configurable for 24V/12V systems (matches migration default).
+                        "command_config": {
+                            "hub_name": hub_name,
+                            "slave_id": slave_id,
+                            "battery_voltage": 52.8,
+                        },
+                        "brand": resp.get("brand"),
+                        "model": resp.get("model"),
+                        "phases": resp.get("phases"),
+                        "has_battery": resp.get("hasBattery"),
+                        "pv_strings": resp.get("pvStrings"),
+                        "preset_id": resp.get("presetId"),
+                    }
+                )
                 self._persist_inverters(inverters)
                 # The data write in _persist_inverters already triggers the reload
                 # listener; return options unchanged so we don't reload twice or wipe
@@ -590,23 +615,46 @@ class SvitgridOptionsFlow(config_entries.OptionsFlow):
         schema_dict: dict[Any, Any] = {}
         for field, _label in _MANUAL_FIELDS:
             schema_dict[vol.Optional(field)] = EntitySelector(EntitySelectorConfig(domain="sensor"))
-        schema_dict[vol.Optional("hub_name", default="solarman")] = TextSelector(TextSelectorConfig())
+        schema_dict[vol.Optional("hub_name", default="solarman")] = TextSelector(
+            TextSelectorConfig()
+        )
         schema_dict[vol.Optional("slave_id", default=1)] = NumberSelector(
-            NumberSelectorConfig(min=1, max=247, step=1, mode=NumberSelectorMode.BOX))
+            NumberSelectorConfig(min=1, max=247, step=1, mode=NumberSelectorMode.BOX)
+        )
         return self.async_show_form(
-            step_id="add_inverter_entities", data_schema=vol.Schema(schema_dict), errors=errors)
+            step_id="add_inverter_entities", data_schema=vol.Schema(schema_dict), errors=errors
+        )
 
     # ── edit: pick inverter, then re-map (scoped to the selection) ───────
-    async def async_step_edit_inverter(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+    async def async_step_edit_inverter(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
         inverters = self._inverters()
-        if user_input is not None and "inverter_id" in user_input and self._edit_inverter_id is None:
+        if (
+            user_input is not None
+            and "inverter_id" in user_input
+            and self._edit_inverter_id is None
+        ):
             self._edit_inverter_id = user_input["inverter_id"]
             return await self.async_step_edit_inverter()
         if self._edit_inverter_id is None:
-            options = [{"value": i["inverter_id"], "label": f'{i.get("brand") or "?"} {i.get("model") or "?"} ({i["inverter_id"]})'} for i in inverters]
+            options = [
+                {
+                    "value": i["inverter_id"],
+                    "label": f"{i.get('brand') or '?'} {i.get('model') or '?'} ({i['inverter_id']})",
+                }
+                for i in inverters
+            ]
             return self.async_show_form(
                 step_id="edit_inverter",
-                data_schema=vol.Schema({vol.Required("inverter_id"): SelectSelector(SelectSelectorConfig(options=options))}))
+                data_schema=vol.Schema(
+                    {
+                        vol.Required("inverter_id"): SelectSelector(
+                            SelectSelectorConfig(options=options)
+                        )
+                    }
+                ),
+            )
         target = next((i for i in inverters if i["inverter_id"] == self._edit_inverter_id), None)
         if target is None:
             return self.async_abort(reason="inverter_not_found")
@@ -615,13 +663,20 @@ class SvitgridOptionsFlow(config_entries.OptionsFlow):
             cleaned = {f: eid for f, eid in user_input.items() if eid}
             if cleaned:
                 target["entity_map"] = cleaned
-                self._persist_inverters([target if i["inverter_id"] == self._edit_inverter_id else i for i in inverters])
+                self._persist_inverters(
+                    [target if i["inverter_id"] == self._edit_inverter_id else i for i in inverters]
+                )
                 # The data write in _persist_inverters already triggers the reload
                 # listener; return options unchanged so we don't reload twice or wipe
                 # existing options.
                 return self.async_create_entry(title="", data=dict(self._entry.options))
             errors["base"] = "no_entities_selected"
-        schema = vol.Schema({vol.Optional(field): EntitySelector(EntitySelectorConfig(domain="sensor")) for field, _ in _MANUAL_FIELDS})
+        schema = vol.Schema(
+            {
+                vol.Optional(field): EntitySelector(EntitySelectorConfig(domain="sensor"))
+                for field, _ in _MANUAL_FIELDS
+            }
+        )
         return self.async_show_form(
             step_id="edit_inverter",
             data_schema=self.add_suggested_values_to_schema(schema, target.get("entity_map") or {}),
@@ -629,7 +684,9 @@ class SvitgridOptionsFlow(config_entries.OptionsFlow):
         )
 
     # ── remove: pick inverter, drop from list (local only) ───────────────
-    async def async_step_remove_inverter(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+    async def async_step_remove_inverter(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
         inverters = self._inverters()
         if user_input is not None:
             remaining = [i for i in inverters if i["inverter_id"] != user_input["inverter_id"]]
@@ -640,10 +697,19 @@ class SvitgridOptionsFlow(config_entries.OptionsFlow):
             # listener; return options unchanged so we don't reload twice or wipe
             # existing options.
             return self.async_create_entry(title="", data=dict(self._entry.options))
-        options = [{"value": i["inverter_id"], "label": f'{i.get("brand") or "?"} {i.get("model") or "?"} ({i["inverter_id"]})'} for i in inverters]
+        options = [
+            {
+                "value": i["inverter_id"],
+                "label": f"{i.get('brand') or '?'} {i.get('model') or '?'} ({i['inverter_id']})",
+            }
+            for i in inverters
+        ]
         return self.async_show_form(
             step_id="remove_inverter",
-            data_schema=vol.Schema({vol.Required("inverter_id"): SelectSelector(SelectSelectorConfig(options=options))}))
+            data_schema=vol.Schema(
+                {vol.Required("inverter_id"): SelectSelector(SelectSelectorConfig(options=options))}
+            ),
+        )
 
     # ── settings: auto-update opt-out ─────────────────────────────────────
     async def async_step_settings(self, user_input: dict[str, Any] | None = None) -> FlowResult:
@@ -652,7 +718,9 @@ class SvitgridOptionsFlow(config_entries.OptionsFlow):
                 title="", data={CONF_AUTO_UPDATE: bool(user_input[CONF_AUTO_UPDATE])}
             )
         current = self._entry.options.get(CONF_AUTO_UPDATE, True)
-        schema = vol.Schema({
-            vol.Required(CONF_AUTO_UPDATE, default=current): BooleanSelector(),
-        })
+        schema = vol.Schema(
+            {
+                vol.Required(CONF_AUTO_UPDATE, default=current): BooleanSelector(),
+            }
+        )
         return self.async_show_form(step_id="settings", data_schema=schema)

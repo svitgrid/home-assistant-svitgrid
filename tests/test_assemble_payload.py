@@ -5,9 +5,15 @@ from custom_components.svitgrid.readings_publisher import assemble_payload
 
 
 def test_assembles_renames_and_aggregates():
-    payload = assemble_payload(inverter_id="inv-1", fields={
-        "batterySoc": 85.0, "pv1Power": 2000.0, "pv2Power": 1800.0, "gridPower": 500.0,
-    })
+    payload = assemble_payload(
+        inverter_id="inv-1",
+        fields={
+            "batterySoc": 85.0,
+            "pv1Power": 2000.0,
+            "pv2Power": 1800.0,
+            "gridPower": 500.0,
+        },
+    )
     assert payload["inverterId"] == "inv-1"
     assert payload["source"] == "edge"
     assert "timestamp" in payload
@@ -24,10 +30,17 @@ def test_no_pv_means_no_pvpower_key():
 
 
 def test_assembles_six_pv_strings():
-    payload = assemble_payload(inverter_id="i", fields={
-        "pv1Power": 1000.0, "pv2Power": 1000.0, "pv3Power": 1000.0,
-        "pv4Power": 1000.0, "pv5Power": 1000.0, "pv6Power": 1000.0,
-    })
+    payload = assemble_payload(
+        inverter_id="i",
+        fields={
+            "pv1Power": 1000.0,
+            "pv2Power": 1000.0,
+            "pv3Power": 1000.0,
+            "pv4Power": 1000.0,
+            "pv5Power": 1000.0,
+            "pv6Power": 1000.0,
+        },
+    )
     assert payload["pvPower"] == 6000.0  # all six summed
     assert payload["pvPower5"] == 1000.0 and payload["pvPower6"] == 1000.0
     assert "pv5Power" not in payload and "pv6Power" not in payload

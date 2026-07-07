@@ -8,6 +8,7 @@ homeassistant.helpers.http (value = "ha_authenticated"), confirmed against
 the installed HA package. A request is authenticated if
 request["ha_authenticated"] is truthy.
 """
+
 from __future__ import annotations
 
 import hmac as _hmac

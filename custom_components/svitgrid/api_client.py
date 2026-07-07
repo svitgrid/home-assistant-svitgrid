@@ -102,16 +102,12 @@ class SvitgridApiClient:
                 raise RateLimited(await _err(resp))
             raise BootstrapFailed(f"HTTP {resp.status}: {await _err(resp)}")
 
-    async def push_reading(
-        self, api_key: str, reading: dict[str, Any]
-    ) -> dict[str, Any] | None:
+    async def push_reading(self, api_key: str, reading: dict[str, Any]) -> dict[str, Any] | None:
         """POST one reading. Returns the parsed response body on 2xx, else None.
         The caller (readings_publisher) uses `ingestIntervalMs` from the body
         to drive its adaptive sleep cadence."""
         url = f"{self._base}/api/v1/ingest/reading"
-        async with self._session.post(
-            url, headers={"x-api-key": api_key}, json=reading
-        ) as resp:
+        async with self._session.post(url, headers={"x-api-key": api_key}, json=reading) as resp:
             if resp.status >= 500:
                 # Transient (server outage / overload) — caller retries at the
                 # normal cadence.
@@ -126,9 +122,7 @@ class SvitgridApiClient:
                 # same payload won't help — raise so the caller backs off hard
                 # instead of hammering once per cadence tick.
                 body = await _err(resp)
-                _LOGGER.warning(
-                    "push_reading rejected: status=%s body=%s", resp.status, body
-                )
+                _LOGGER.warning("push_reading rejected: status=%s body=%s", resp.status, body)
                 raise ReadingRejected(resp.status, body)
             try:
                 body = await resp.json()
@@ -181,12 +175,12 @@ class SvitgridApiClient:
         # from x-api-key. Use a placeholder so the route matches.
         url = f"{self._base}/api/v3/edge-devices/_/mqtt-token"
         async with self._session.post(
-            url, headers={"x-api-key": api_key}, json={},
+            url,
+            headers={"x-api-key": api_key},
+            json={},
         ) as resp:
             if resp.status >= 400:
-                raise SvitgridApiError(
-                    f"mqtt-token failed: HTTP {resp.status}: {await _err(resp)}"
-                )
+                raise SvitgridApiError(f"mqtt-token failed: HTTP {resp.status}: {await _err(resp)}")
             return await resp.json()
 
     async def ack_command(self, api_key: str, command_id: str, body: dict[str, Any]) -> None:
@@ -266,7 +260,9 @@ class SvitgridApiClient:
         url = f"{self._base}/api/v1/ha/inverters"
         async with self._session.post(url, headers={"x-api-key": api_key}, json=body) as resp:
             if resp.status >= 400:
-                raise SvitgridApiError(f"add_inverter failed: HTTP {resp.status}: {await _err(resp)}")
+                raise SvitgridApiError(
+                    f"add_inverter failed: HTTP {resp.status}: {await _err(resp)}"
+                )
             return await resp.json()
 
 

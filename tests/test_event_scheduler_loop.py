@@ -12,6 +12,7 @@ Covers:
   6. No reading for an event's inverter → event skipped, no dispatch.
   7. Per-event error isolation: one bad event does not kill the tick for others.
 """
+
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -136,7 +137,9 @@ async def test_tick2_guard_not_dispatched_when_already_active():
     from custom_components.svitgrid.harvest.event_scheduler_loop import _tick
 
     # Start with status=active (as if tick 1 already ran and persisted it)
-    event = _make_use_battery_event(exec_state={"status": "active", "lastActivatedAt": "2026-06-29T10:00:00+00:00"})
+    event = _make_use_battery_event(
+        exec_state={"status": "active", "lastActivatedAt": "2026-06-29T10:00:00+00:00"}
+    )
     event_store = FakeEventStore([event])
     store = FakeStore([_reading_at()])
 
@@ -149,7 +152,9 @@ async def test_tick2_guard_not_dispatched_when_already_active():
     await _tick(store, event_store, executor_for, "UTC", _NOW_IN_WINDOW)
 
     # Guard: already active → evaluator returns hold → no dispatch
-    assert mock_executor.dispatch.call_count == 0, "executor.dispatch must NOT be called when already active (guard)"
+    assert mock_executor.dispatch.call_count == 0, (
+        "executor.dispatch must NOT be called when already active (guard)"
+    )
 
     # State must still be persisted every tick (guard-survival — hysteresis bookkeeping)
     assert len(event_store.state_calls) == 1, "async_set_execution_state must be called every tick"
@@ -210,12 +215,16 @@ async def test_tick3_deactivate_when_out_of_window():
     await _tick(store, event_store, executor_for, "UTC", _NOW_OUT_WINDOW)
 
     # Out-of-window + active → deactivate (restore commands for use_battery mode)
-    assert mock_executor.dispatch.call_count >= 1, "restore commands must be dispatched on deactivate"
+    assert mock_executor.dispatch.call_count >= 1, (
+        "restore commands must be dispatched on deactivate"
+    )
 
     # State must be persisted — status reset to idle
     assert len(event_store.state_calls) == 1
     _evt_id, persisted = event_store.state_calls[0]
-    assert persisted.get("status") == "idle", "execution state must be reset to idle after deactivate"
+    assert persisted.get("status") == "idle", (
+        "execution state must be reset to idle after deactivate"
+    )
 
 
 @pytest.mark.asyncio
@@ -302,7 +311,9 @@ async def test_tick_per_event_error_isolation():
         await _tick(store, event_store, executor_for, "UTC", _NOW_IN_WINDOW)
 
     # Good event must still be processed despite the bad one failing
-    assert mock_executor.dispatch.call_count >= 1, "good event must still dispatch after bad event error"
+    assert mock_executor.dispatch.call_count >= 1, (
+        "good event must still dispatch after bad event error"
+    )
     good_state_calls = [c for c in event_store.state_calls if c[0] == "evt-good"]
     assert len(good_state_calls) == 1, "good event state must be persisted"
 
@@ -480,9 +491,7 @@ async def test_setup_entry_cloud_ingest_false_scheduler_spawned_and_event_store_
 
 
 @pytest.mark.asyncio
-async def test_unload_entry_removes_event_store_from_hass_data(
-    hass, enable_custom_integrations
-):
+async def test_unload_entry_removes_event_store_from_hass_data(hass, enable_custom_integrations):
     """async_unload_entry must remove 'event_store' from hass.data[DOMAIN] so the
     SQLite handle is released on a final unload. A subsequent async_setup_entry
     must be able to re-create it (reload path must not break)."""
@@ -499,28 +508,18 @@ async def test_unload_entry_removes_event_store_from_hass_data(
 
     with (
         patch("custom_components.svitgrid.run_readings_loop", new_callable=AsyncMock),
-        patch(
-            "custom_components.svitgrid.run_direct_harvest_loop", side_effect=_never_return
-        ),
-        patch(
-            "custom_components.svitgrid.run_command_loop", side_effect=_never_return
-        ),
-        patch(
-            "custom_components.svitgrid.run_mqtt_wake_loop", side_effect=_never_return
-        ),
+        patch("custom_components.svitgrid.run_direct_harvest_loop", side_effect=_never_return),
+        patch("custom_components.svitgrid.run_command_loop", side_effect=_never_return),
+        patch("custom_components.svitgrid.run_mqtt_wake_loop", side_effect=_never_return),
         patch("custom_components.svitgrid.run_sender_loop", new_callable=AsyncMock),
-        patch(
-            "custom_components.svitgrid.run_event_scheduler_loop", new_callable=AsyncMock
-        ),
+        patch("custom_components.svitgrid.run_event_scheduler_loop", new_callable=AsyncMock),
         patch("custom_components.svitgrid.register_views"),
         patch("custom_components.svitgrid.register_panel", new_callable=AsyncMock),
         patch("custom_components.svitgrid.remove_panel"),
         patch.object(
             hass.config_entries, "async_forward_entry_setups", AsyncMock(return_value=True)
         ),
-        patch.object(
-            hass.config_entries, "async_unload_platforms", AsyncMock(return_value=True)
-        ),
+        patch.object(hass.config_entries, "async_unload_platforms", AsyncMock(return_value=True)),
         patch("custom_components.svitgrid.SvitgridApiClient") as mock_cls,
     ):
         client = mock_cls.return_value
@@ -538,9 +537,7 @@ async def test_unload_entry_removes_event_store_from_hass_data(
 
     with (
         patch("custom_components.svitgrid.remove_panel"),
-        patch.object(
-            hass.config_entries, "async_unload_platforms", AsyncMock(return_value=True)
-        ),
+        patch.object(hass.config_entries, "async_unload_platforms", AsyncMock(return_value=True)),
     ):
         ok = await async_unload_entry(hass, entry)
         await hass.async_block_till_done()

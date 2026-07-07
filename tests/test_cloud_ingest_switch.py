@@ -118,9 +118,13 @@ async def test_cloud_ingest_disabled_skips_sender_but_runs_harvest(
 
     assert ok is True
     # Sender must NOT have been spawned in island (pure-offline) mode.
-    assert sender.call_count == 0, "run_sender_loop must not be called when cloud_ingest_enabled=False"
+    assert sender.call_count == 0, (
+        "run_sender_loop must not be called when cloud_ingest_enabled=False"
+    )
     # Harvest loop must still run — local-store writes are unaffected.
-    assert harvest.call_count == 1, "harvest loop must always run regardless of cloud_ingest_enabled"
+    assert harvest.call_count == 1, (
+        "harvest loop must always run regardless of cloud_ingest_enabled"
+    )
 
     # Confirm entry state: sender_task is None but rollup is present (store keeps running).
     entry_state = hass.data[DOMAIN][entry.entry_id]
@@ -163,7 +167,9 @@ async def test_cloud_ingest_absent_defaults_to_enabled(hass, enable_custom_integ
 
     assert ok is True
     # Default behavior (backward-compat): sender IS spawned when flag is absent.
-    assert sender.call_count == 1, "sender must be called when cloud_ingest_enabled is absent (default True)"
+    assert sender.call_count == 1, (
+        "sender must be called when cloud_ingest_enabled is absent (default True)"
+    )
     assert harvest.call_count == 1
 
     entry_state = hass.data[DOMAIN][entry.entry_id]

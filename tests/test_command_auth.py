@@ -3,6 +3,7 @@
 TDD: tests written before implementation so they will FAIL until
 command_auth.py exists with the correct logic.
 """
+
 from custom_components.svitgrid import signing
 from custom_components.svitgrid.command_auth import verify_signed_command
 

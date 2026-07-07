@@ -4,6 +4,7 @@ reads recipes from the preset's commands[] and calls HA services.
 Replaces the hardcoded SmgIiExecutor for the config-entry path. The
 SMG-II YAML / configuration.yaml path still uses SmgIiExecutor (no
 regression for the pilot)."""
+
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
@@ -11,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from custom_components.svitgrid.executors.yaml_dispatcher import (
+    DslEvalError,
     UnsupportedCommandError,
     YamlDispatcher,
 )
@@ -61,7 +63,8 @@ async def test_dispatches_set_battery_charge(hass):
     result = await d.dispatch("set_battery_charge", {"chargePowerLimitW": 2640})
 
     hass.services.async_call.assert_awaited_once_with(
-        "modbus", "write_register",
+        "modbus",
+        "write_register",
         {
             "hub": "solarman",
             "slave": 1,
@@ -79,7 +82,8 @@ async def test_dispatches_set_work_mode(hass):
     d = YamlDispatcher(hass=hass, commands=DEYE_COMMANDS, config=DEYE_CONFIG)
     result = await d.dispatch("set_work_mode", {"workMode": 2})
     hass.services.async_call.assert_awaited_once_with(
-        "modbus", "write_register",
+        "modbus",
+        "write_register",
         {"hub": "solarman", "slave": 1, "address": 142, "value": 2},
         blocking=True,
     )
@@ -106,13 +110,15 @@ async def test_missing_payload_field_raises_clean_error(hass):
 async def test_unsafe_dsl_in_preset_is_rejected_at_dispatch(hass):
     """Defense-in-depth: even if a preset slipped past CI validation,
     the dispatcher refuses to call dangerous DSL at runtime."""
-    malicious = [{
-        "id": "set_battery_charge",
-        "service": "modbus.write_register",
-        "args": {"value": "__import__('os').system('rm -rf /')"},
-    }]
+    malicious = [
+        {
+            "id": "set_battery_charge",
+            "service": "modbus.write_register",
+            "args": {"value": "__import__('os').system('rm -rf /')"},
+        }
+    ]
     d = YamlDispatcher(hass=hass, commands=malicious, config={})
-    with pytest.raises(Exception):  # DslEvalError or wrapped
+    with pytest.raises(DslEvalError):
         await d.dispatch("set_battery_charge", {})
     hass.services.async_call.assert_not_awaited()
 
@@ -143,6 +149,7 @@ async def test_dispatch_returns_descriptive_result(hass):
 # still work for the SMG-II path. Verify YamlDispatcher implements it as
 # a thin wrapper around dispatch() so command_poller (which still calls
 # set_battery_charge today) doesn't need an immediate refactor.
+
 
 @pytest.mark.asyncio
 async def test_legacy_set_battery_charge_method_routes_to_dispatch(hass):

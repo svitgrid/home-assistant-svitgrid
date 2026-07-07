@@ -1,4 +1,5 @@
 """Outbound buffer drain + adaptive-cadence holder (Sub-project 1)."""
+
 from __future__ import annotations
 
 import asyncio
@@ -19,6 +20,7 @@ _LOGGER = logging.getLogger(__name__)
 @dataclass
 class Cadence:
     """Shared produce-cadence the sender updates and the publisher reads."""
+
     interval_s: int = CADENCE_DEFAULT_INTERVAL_S
 
 
@@ -27,9 +29,16 @@ def _now_iso() -> str:
 
 
 async def drain_once(
-    *, store, api_client, api_key: str, now_iso: str, cadence: Cadence,
-    batch_max: int = INGEST_BATCH_MAX, cap_s: int = BACKFILL_CAP_S,
-    lifecycle=None, discharge_positive_ids: set[str] | None = None,
+    *,
+    store,
+    api_client,
+    api_key: str,
+    now_iso: str,
+    cadence: Cadence,
+    batch_max: int = INGEST_BATCH_MAX,
+    cap_s: int = BACKFILL_CAP_S,
+    lifecycle=None,
+    discharge_positive_ids: set[str] | None = None,
 ) -> int:
     """Drain at most one batch. Returns number of rows marked 'sent'.
 
@@ -71,7 +80,9 @@ async def drain_once(
     if isinstance(body, dict) and body.get("stopped"):
         _LOGGER.warning(
             "cloud reports device stopped (%s); leaving %d row(s) pending",
-            body.get("stoppedReason"), len(keys))
+            body.get("stoppedReason"),
+            len(keys),
+        )
         if lifecycle is not None:
             lifecycle.pause(str(body.get("stoppedReason") or "stopped"), now_iso)
             await _maybe(store.set_lifecycle(lifecycle.state, lifecycle.reason, lifecycle.since))
@@ -101,16 +112,28 @@ async def drain_once(
 
 
 async def run_sender_loop(
-    *, hass: HomeAssistant, store, api_client, api_key: str, cadence: Cadence,
-    tick_s: int = SENDER_TICK_S, lifecycle=None,
+    *,
+    hass: HomeAssistant,
+    store,
+    api_client,
+    api_key: str,
+    cadence: Cadence,
+    tick_s: int = SENDER_TICK_S,
+    lifecycle=None,
     discharge_positive_ids: set[str] | None = None,
 ) -> None:
     wait_for_data = getattr(store, "wait_for_data", None)
     while not hass.is_stopping and (lifecycle is None or lifecycle.active):
         try:
-            await drain_once(store=store, api_client=api_client, api_key=api_key,
-                             now_iso=_now_iso(), cadence=cadence, lifecycle=lifecycle,
-                             discharge_positive_ids=discharge_positive_ids)
+            await drain_once(
+                store=store,
+                api_client=api_client,
+                api_key=api_key,
+                now_iso=_now_iso(),
+                cadence=cadence,
+                lifecycle=lifecycle,
+                discharge_positive_ids=discharge_positive_ids,
+            )
         except Exception:  # never let the sender loop die
             _LOGGER.exception("sender drain failed")
         # Use the store's data-available event when present so a fresh reading

@@ -67,14 +67,14 @@ async def refresh_entry_inverters(
                         new_inv["merged_preset_version"] = preset.get("version")
                         changed = True
                         log(
-                            "added %d field mappings from preset %s v%s: %s"
-                            % (len(added), pid, preset.get("version"), ",".join(added))
+                            f"added {len(added)} field mappings from preset {pid} "
+                            f"v{preset.get('version')}: {','.join(added)}"
                         )
                     elif new_inv.get("merged_preset_version") != preset.get("version"):
                         # version advanced but nothing new to add — record so we don't re-merge each boot
                         new_inv["merged_preset_version"] = preset.get("version")
                         changed = True
             except Exception as err:  # fail-open
-                log("preset refresh skipped for %s: %s" % (pid, err))
+                log(f"preset refresh skipped for {pid}: {err}")
         out.append(new_inv)
     return out, changed

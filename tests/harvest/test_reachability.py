@@ -11,6 +11,7 @@ Coverage:
   5. When a RegisterSpec is supplied, probe address = spec.reads[0].address.
   6. When spec=None, probe address falls back to the module constant _PROBE_ADDRESS.
 """
+
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, patch
@@ -90,17 +91,19 @@ async def test_cfg_contains_ip_port_from_harvest_config():
 
 async def test_uses_spec_first_read_address_when_spec_provided():
     """When a spec with reads is given, probe address = spec.reads[0].address."""
-    spec = RegisterSpec.from_dict({
-        "modelId": "deye_sg04lp3",
-        "version": 1,
-        "protocol": "solarman_v5",
-        "port": 8899,
-        "defaultSlaveId": 1,
-        "flags": {},
-        "reads": [{"field": "batterySoc", "address": 588}],
-        "derivations": [],
-        "writes": [],
-    })
+    spec = RegisterSpec.from_dict(
+        {
+            "modelId": "deye_sg04lp3",
+            "version": 1,
+            "protocol": "solarman_v5",
+            "port": 8899,
+            "defaultSlaveId": 1,
+            "flags": {},
+            "reads": [{"field": "batterySoc", "address": 588}],
+            "derivations": [],
+            "writes": [],
+        }
+    )
     mock_rw = AsyncMock(return_value=80)
     with patch(f"{MODULE}.transport.read_word", mock_rw):
         result = await check_inverter_reachable(_HASS, _HARVEST_CFG, spec=spec)

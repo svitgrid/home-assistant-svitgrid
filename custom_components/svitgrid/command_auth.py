@@ -5,6 +5,7 @@ Factored out of command_poller.py's inline admin-signature gate so that
 both the cloud poller path and the LAN island path share a single,
 tested verification function.
 """
+
 from __future__ import annotations
 
 import logging

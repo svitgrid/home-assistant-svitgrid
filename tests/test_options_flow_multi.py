@@ -1,17 +1,41 @@
-import pytest
 from unittest.mock import AsyncMock, patch
+
+import pytest
+from pytest_homeassistant_custom_component.common import MockConfigEntry
+
 from custom_components.svitgrid.config_flow import SvitgridOptionsFlow
 from custom_components.svitgrid.const import DOMAIN
-from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 
 def _entry(hass):
-    e = MockConfigEntry(domain=DOMAIN, version=2, data={
-        "api_base": "https://api.test", "api_key": "k", "edge_device_id": "edge1",
-        "household_id": "hh1", "signing_key_id": "sk", "private_key_pem": "pem",
-        "public_key_hex": "pub", "trusted_keys": [],
-        "inverters": [{"inverter_id": "ha-aaa", "entity_map": {"batterySoc": "sensor.a"}, "command_recipes": [], "command_config": {}, "brand": "Deye", "model": "X", "phases": 3, "has_battery": True, "pv_strings": 2, "preset_id": None}],
-    })
+    e = MockConfigEntry(
+        domain=DOMAIN,
+        version=2,
+        data={
+            "api_base": "https://api.test",
+            "api_key": "k",
+            "edge_device_id": "edge1",
+            "household_id": "hh1",
+            "signing_key_id": "sk",
+            "private_key_pem": "pem",
+            "public_key_hex": "pub",
+            "trusted_keys": [],
+            "inverters": [
+                {
+                    "inverter_id": "ha-aaa",
+                    "entity_map": {"batterySoc": "sensor.a"},
+                    "command_recipes": [],
+                    "command_config": {},
+                    "brand": "Deye",
+                    "model": "X",
+                    "phases": 3,
+                    "has_battery": True,
+                    "pv_strings": 2,
+                    "preset_id": None,
+                }
+            ],
+        },
+    )
     e.add_to_hass(hass)
     return e
 
@@ -33,13 +57,25 @@ async def test_add_inverter_manual_calls_api_and_appends(hass):
 
     fake_client = AsyncMock()
     fake_client.add_inverter.return_value = {
-        "inverterId": "ha-bbb", "entityMap": {"batterySoc": "sensor.b"},
-        "brand": "Deye", "model": "Y", "phases": 1, "hasBattery": True, "pvStrings": 1,
-        "commands": [], "presetId": None,
+        "inverterId": "ha-bbb",
+        "entityMap": {"batterySoc": "sensor.b"},
+        "brand": "Deye",
+        "model": "Y",
+        "phases": 1,
+        "hasBattery": True,
+        "pvStrings": 1,
+        "commands": [],
+        "presetId": None,
     }
-    with patch("custom_components.svitgrid.config_flow.SvitgridApiClient", return_value=fake_client):
-        await flow.async_step_add_inverter({"brand": "Deye", "model": "Y", "phases": "1", "has_battery": True, "pv_strings": 1})
-        res = await flow.async_step_add_inverter_entities({"batterySoc": "sensor.b", "hub_name": "solarman", "slave_id": 1})
+    with patch(
+        "custom_components.svitgrid.config_flow.SvitgridApiClient", return_value=fake_client
+    ):
+        await flow.async_step_add_inverter(
+            {"brand": "Deye", "model": "Y", "phases": "1", "has_battery": True, "pv_strings": 1}
+        )
+        res = await flow.async_step_add_inverter_entities(
+            {"batterySoc": "sensor.b", "hub_name": "solarman", "slave_id": 1}
+        )
 
     fake_client.add_inverter.assert_awaited_once()
     invs = entry.data["inverters"]
@@ -52,7 +88,20 @@ async def test_add_inverter_manual_calls_api_and_appends(hass):
 async def test_remove_inverter_drops_from_list(hass):
     entry = _entry(hass)
     # seed a second inverter so removal leaves a non-empty list
-    invs = list(entry.data["inverters"]) + [{"inverter_id": "ha-bbb", "entity_map": {"batterySoc": "sensor.b"}, "command_recipes": [], "command_config": {}, "brand": "Deye", "model": "Y", "phases": 1, "has_battery": True, "pv_strings": 1, "preset_id": None}]
+    invs = list(entry.data["inverters"]) + [
+        {
+            "inverter_id": "ha-bbb",
+            "entity_map": {"batterySoc": "sensor.b"},
+            "command_recipes": [],
+            "command_config": {},
+            "brand": "Deye",
+            "model": "Y",
+            "phases": 1,
+            "has_battery": True,
+            "pv_strings": 1,
+            "preset_id": None,
+        }
+    ]
     hass.config_entries.async_update_entry(entry, data={**entry.data, "inverters": invs})
     flow = SvitgridOptionsFlow(entry)
     flow.hass = hass

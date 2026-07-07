@@ -346,7 +346,9 @@ async def _run_poller_capture_sleep(monkeypatch, hass, api, *, interval_s=None):
         sleeps.append(delay)
 
     monkeypatch.setattr(asyncio, "sleep", _record_sleep)
-    kwargs = dict(hass=hass, api_client=api, keystore=None, entry_data=_entry_data(), wake_event=None)
+    kwargs = dict(
+        hass=hass, api_client=api, keystore=None, entry_data=_entry_data(), wake_event=None
+    )
     if interval_s is not None:
         kwargs["interval_s"] = interval_s
     await poller_run_loop(**kwargs)
@@ -470,7 +472,7 @@ async def test_set_cloud_endpoint_success_path_acks_then_applies(hass):
     repoints us. Mirrors firmware D5's ack-restart-race fix. E-fix adds the
     probe step before the ACK so the ACK reflects truth."""
     from unittest.mock import AsyncMock, MagicMock, patch
-    from cryptography.hazmat.primitives import serialization
+
     from custom_components.svitgrid.command_poller import process_command
     from custom_components.svitgrid.signing import generate_keypair
 
@@ -481,19 +483,23 @@ async def test_set_cloud_endpoint_success_path_acks_then_applies(hass):
 
     async def record_ack(*args, **kwargs):
         call_order.append("ack")
+
     api_client.ack_command.side_effect = record_ack
 
     def record_apply(*args, **kwargs):
         call_order.append("apply")
 
-    with patch(
-        "custom_components.svitgrid.command_poller.probe_endpoint_auth",
-        new_callable=AsyncMock,
-        return_value=True,
-    ), patch(
-        "custom_components.svitgrid.command_poller.apply_cloud_endpoint_change",
-        side_effect=record_apply,
-    ) as mock_apply:
+    with (
+        patch(
+            "custom_components.svitgrid.command_poller.probe_endpoint_auth",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
+        patch(
+            "custom_components.svitgrid.command_poller.apply_cloud_endpoint_change",
+            side_effect=record_apply,
+        ) as mock_apply,
+    ):
         await process_command(
             command={
                 "commandId": "c1",
@@ -525,6 +531,7 @@ async def test_set_cloud_endpoint_success_path_acks_then_applies(hass):
 async def test_set_cloud_endpoint_rejects_disallowed_url(hass):
     """Disallowed URL: ACK as rejected, do NOT apply."""
     from unittest.mock import AsyncMock, MagicMock, patch
+
     from custom_components.svitgrid.command_poller import process_command
     from custom_components.svitgrid.signing import generate_keypair
 
@@ -564,6 +571,7 @@ async def test_set_cloud_endpoint_rejects_disallowed_url(hass):
 async def test_set_cloud_endpoint_missing_payload_url_is_rejected(hass):
     """Malformed command (no payload.url) — ACK rejected, no apply."""
     from unittest.mock import AsyncMock, MagicMock, patch
+
     from custom_components.svitgrid.command_poller import process_command
     from custom_components.svitgrid.signing import generate_keypair
 
@@ -601,13 +609,15 @@ async def test_set_cloud_endpoint_missing_payload_url_is_rejected(hass):
 
 @pytest.mark.asyncio
 async def test_set_cloud_endpoint_apply_failure_after_ack_is_swallowed_and_logged(
-    hass, caplog,
+    hass,
+    caplog,
 ):
     """If apply raises AFTER we've probed + ACKed success, swallow + log so
     the poller keeps running. The cloud already thinks the migration succeeded;
     operator must manually reconcile via grep of the distinctive log line."""
     import logging
     from unittest.mock import AsyncMock, MagicMock, patch
+
     from custom_components.svitgrid.command_poller import process_command
     from custom_components.svitgrid.signing import generate_keypair
 
@@ -615,14 +625,17 @@ async def test_set_cloud_endpoint_apply_failure_after_ack_is_swallowed_and_logge
     api_client = MagicMock()
     api_client.ack_command = AsyncMock()
 
-    with patch(
-        "custom_components.svitgrid.command_poller.probe_endpoint_auth",
-        new_callable=AsyncMock,
-        return_value=True,
-    ), patch(
-        "custom_components.svitgrid.command_poller.apply_cloud_endpoint_change",
-        side_effect=RuntimeError("boom"),
-    ) as mock_apply:
+    with (
+        patch(
+            "custom_components.svitgrid.command_poller.probe_endpoint_auth",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
+        patch(
+            "custom_components.svitgrid.command_poller.apply_cloud_endpoint_change",
+            side_effect=RuntimeError("boom"),
+        ) as mock_apply,
+    ):
         with caplog.at_level(logging.ERROR, logger="custom_components.svitgrid.command_poller"):
             # Should NOT raise — apply failure is swallowed.
             await process_command(
@@ -651,8 +664,7 @@ async def test_set_cloud_endpoint_apply_failure_after_ack_is_swallowed_and_logge
 
     # Distinctive error log for operator grep
     assert any(
-        "set_cloud_endpoint apply failed" in record.message
-        and record.levelno == logging.ERROR
+        "set_cloud_endpoint apply failed" in record.message and record.levelno == logging.ERROR
         for record in caplog.records
     ), f"Expected distinctive error log not found. Records: {[r.message for r in caplog.records]}"
 
@@ -667,6 +679,7 @@ async def test_set_cloud_endpoint_rejects_on_probe_failure(hass):
     """When probe_endpoint_auth returns False, Arm 1c must ACK rejected with
     reason='probe_failed' and must NOT call apply_cloud_endpoint_change."""
     from unittest.mock import AsyncMock, MagicMock, patch
+
     from custom_components.svitgrid.command_poller import process_command
     from custom_components.svitgrid.signing import generate_keypair
 
@@ -674,13 +687,16 @@ async def test_set_cloud_endpoint_rejects_on_probe_failure(hass):
     api_client = MagicMock()
     api_client.ack_command = AsyncMock()
 
-    with patch(
-        "custom_components.svitgrid.command_poller.probe_endpoint_auth",
-        new_callable=AsyncMock,
-        return_value=False,
-    ) as mock_probe, patch(
-        "custom_components.svitgrid.command_poller.apply_cloud_endpoint_change",
-    ) as mock_apply:
+    with (
+        patch(
+            "custom_components.svitgrid.command_poller.probe_endpoint_auth",
+            new_callable=AsyncMock,
+            return_value=False,
+        ) as mock_probe,
+        patch(
+            "custom_components.svitgrid.command_poller.apply_cloud_endpoint_change",
+        ) as mock_apply,
+    ):
         await process_command(
             command={
                 "commandId": "c-probe-fail",
@@ -715,6 +731,7 @@ async def test_set_cloud_endpoint_success_path_probes_before_acking(hass):
     """Restructured Arm 1c ordering: probe → ACK success → apply.
     When probe succeeds, ACK is sent with success=True and apply is called."""
     from unittest.mock import AsyncMock, MagicMock, patch
+
     from custom_components.svitgrid.command_poller import process_command
     from custom_components.svitgrid.signing import generate_keypair
 
@@ -735,13 +752,16 @@ async def test_set_cloud_endpoint_success_path_probes_before_acking(hass):
 
     api_client.ack_command.side_effect = record_ack
 
-    with patch(
-        "custom_components.svitgrid.command_poller.probe_endpoint_auth",
-        side_effect=record_probe,
-    ) as mock_probe, patch(
-        "custom_components.svitgrid.command_poller.apply_cloud_endpoint_change",
-        side_effect=record_apply,
-    ) as mock_apply:
+    with (
+        patch(
+            "custom_components.svitgrid.command_poller.probe_endpoint_auth",
+            side_effect=record_probe,
+        ) as mock_probe,
+        patch(
+            "custom_components.svitgrid.command_poller.apply_cloud_endpoint_change",
+            side_effect=record_apply,
+        ) as mock_apply,
+    ):
         await process_command(
             command={
                 "commandId": "c-probe-ok",
@@ -774,6 +794,7 @@ async def test_set_cloud_endpoint_rejects_when_no_hass_or_entry(hass):
     """YAML-config installs (no ConfigEntry) must ACK rejected, not success.
     Otherwise the cloud audit log lies about migration completion."""
     from unittest.mock import AsyncMock, MagicMock, patch
+
     from custom_components.svitgrid.command_poller import process_command
     from custom_components.svitgrid.signing import generate_keypair
 

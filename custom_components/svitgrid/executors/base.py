@@ -23,14 +23,10 @@ class BaseExecutor(ABC):
         payload. Raises on transport / write failures so the caller can
         surface as success=false, reason='executor_error: ...' in the ACK."""
 
-    async def dispatch(
-        self, command_name: str, payload: dict[str, Any]
-    ) -> dict[str, Any]:
+    async def dispatch(self, command_name: str, payload: dict[str, Any]) -> dict[str, Any]:
         """Generic dispatch entry point. Default impl supports only
         set_battery_charge (routes to the legacy method). Subclasses
         override for full multi-command support."""
         if command_name == "set_battery_charge":
             return await self.set_battery_charge(payload)
-        raise NotImplementedError(
-            f"Executor does not support command {command_name!r}"
-        )
+        raise NotImplementedError(f"Executor does not support command {command_name!r}")

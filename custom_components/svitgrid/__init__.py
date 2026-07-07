@@ -66,8 +66,13 @@ _LOGGER = logging.getLogger(__name__)
 
 
 async def _start_local_store(
-    hass: HomeAssistant, api_client, api_key: str, activity=None, active_ids=None,
-    cloud_ingest_enabled: bool = True, discharge_positive_ids=None,
+    hass: HomeAssistant,
+    api_client,
+    api_key: str,
+    activity=None,
+    active_ids=None,
+    cloud_ingest_enabled: bool = True,
+    discharge_positive_ids=None,
 ):
     """Create the per-entry local store, seed the shared lifecycle holder from
     persisted state, register the read views once, and (only when the device is
@@ -104,7 +109,8 @@ async def _start_local_store(
         if pruned:
             _LOGGER.info(
                 "Pruned %d orphaned readings_raw row(s) for inverters not in active config %s",
-                pruned, active_ids,
+                pruned,
+                active_ids,
             )
 
     cadence = Cadence()
@@ -141,8 +147,12 @@ async def _start_local_store(
     if cloud_ingest_enabled:
         sender_task = hass.async_create_background_task(
             run_sender_loop(
-                hass=hass, store=store, api_client=api_client,
-                api_key=api_key, cadence=cadence, lifecycle=lifecycle,
+                hass=hass,
+                store=store,
+                api_client=api_client,
+                api_key=api_key,
+                cadence=cadence,
+                lifecycle=lifecycle,
                 discharge_positive_ids=discharge_positive_ids,
             ),
             name="svitgrid_reading_sender",
@@ -203,7 +213,8 @@ async def apply_cloud_endpoint_change(
     current = entry.data.get("api_base")
     if current == new_api_base:
         _LOGGER.info(
-            "set_cloud_endpoint: already on %s, skipping reload", new_api_base,
+            "set_cloud_endpoint: already on %s, skipping reload",
+            new_api_base,
         )
         return True
 
@@ -217,7 +228,8 @@ async def apply_cloud_endpoint_change(
             "our api_key (HTTP non-200). Migration aborted; integration stays "
             "on %s. Ensure the target environment has the api_key registered "
             "and households/{id}/trustedDevices synced before retrying.",
-            new_api_base, current,
+            new_api_base,
+            current,
         )
         return False
 
@@ -225,11 +237,10 @@ async def apply_cloud_endpoint_change(
     hass.config_entries.async_update_entry(entry, data=new_data)
     _LOGGER.info(
         "set_cloud_endpoint: api_base %s -> %s, reloading entry",
-        current, new_api_base,
+        current,
+        new_api_base,
     )
-    hass.async_create_task(
-        hass.config_entries.async_reload(entry.entry_id)
-    )
+    hass.async_create_task(hass.config_entries.async_reload(entry.entry_id))
     return True
 
 
@@ -268,29 +279,40 @@ def _migrate_v1_to_v2(data: dict) -> dict:
     """Wrap legacy scalar fields into a single-element inverters list."""
     new = {
         k: data[k]
-        for k in ("api_base", "api_key", "edge_device_id", "household_id",
-                  "signing_key_id", "private_key_pem", "public_key_hex", "trusted_keys")
+        for k in (
+            "api_base",
+            "api_key",
+            "edge_device_id",
+            "household_id",
+            "signing_key_id",
+            "private_key_pem",
+            "public_key_hex",
+            "trusted_keys",
+        )
         if k in data
     }
-    new["inverters"] = [{
-        "inverter_id": data.get("hardware_id"),
-        "entity_map": data.get("entity_map") or {},
-        "command_recipes": data.get("commands") or [],
-        "command_config": {"hub_name": "solarman", "slave_id": 1, "battery_voltage": 52.8},
-        "brand": data.get("brand"),
-        "model": data.get("model"),
-        "phases": data.get("phases"),
-        "has_battery": data.get("has_battery"),
-        "pv_strings": data.get("pv_strings"),
-        "preset_id": data.get("preset_id"),
-    }]
+    new["inverters"] = [
+        {
+            "inverter_id": data.get("hardware_id"),
+            "entity_map": data.get("entity_map") or {},
+            "command_recipes": data.get("commands") or [],
+            "command_config": {"hub_name": "solarman", "slave_id": 1, "battery_voltage": 52.8},
+            "brand": data.get("brand"),
+            "model": data.get("model"),
+            "phases": data.get("phases"),
+            "has_battery": data.get("has_battery"),
+            "pv_strings": data.get("pv_strings"),
+            "preset_id": data.get("preset_id"),
+        }
+    ]
     return new
 
 
 def _initial_cadence_seconds(entry_data: dict) -> int:
     """Clamp the persisted harvest interval into the harvest clamp bounds."""
-    from .readings_publisher import _INTERVAL_FLOOR_S, _INTERVAL_CEILING_S
     from .const import CADENCE_DEFAULT_INTERVAL_S
+    from .readings_publisher import _INTERVAL_CEILING_S, _INTERVAL_FLOOR_S
+
     raw = entry_data.get("harvest_interval_seconds", CADENCE_DEFAULT_INTERVAL_S)
     try:
         v = int(raw)
@@ -305,7 +327,11 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         return True
     new_data = _migrate_v1_to_v2(dict(entry.data))
     hass.config_entries.async_update_entry(entry, data=new_data, version=2)
-    _LOGGER.info("Migrated Svitgrid entry %s to v2 (%d inverter(s))", entry.entry_id, len(new_data["inverters"]))
+    _LOGGER.info(
+        "Migrated Svitgrid entry %s to v2 (%d inverter(s))",
+        entry.entry_id,
+        len(new_data["inverters"]),
+    )
     return True
 
 
@@ -432,7 +458,8 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     else:
         _LOGGER.warning(
             "Svitgrid device is %s (reason=%s); readings/command loops not started.",
-            lifecycle.state, lifecycle.reason,
+            lifecycle.state,
+            lifecycle.reason,
         )
 
     async def _on_stop(_event: Event) -> None:
@@ -449,19 +476,21 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _on_stop)
 
     hass.data.setdefault(DOMAIN, {})
-    hass.data[DOMAIN].update({
-        "session": session,
-        "api_client": api_client,
-        "keystore": keystore,
-        "executor": executor,
-        "trusted_public_keys_hex": trusted_public_keys_hex,
-        "readings_task": readings_task,
-        "poller_task": poller_task,
-        "store": store,
-        "sender_task": sender_task,
-        "cancel_rollup": cancel_rollup,
-        "lifecycle": lifecycle,
-    })
+    hass.data[DOMAIN].update(
+        {
+            "session": session,
+            "api_client": api_client,
+            "keystore": keystore,
+            "executor": executor,
+            "trusted_public_keys_hex": trusted_public_keys_hex,
+            "readings_task": readings_task,
+            "poller_task": poller_task,
+            "store": store,
+            "sender_task": sender_task,
+            "cancel_rollup": cancel_rollup,
+            "lifecycle": lifecycle,
+        }
+    )
     _LOGGER.info("Svitgrid integration started (device_id=%s)", device_id)
     return True
 
@@ -498,9 +527,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _trusted_keys_raw = data.get("trusted_keys") or []
     _trusted_key_ids = [tk["keyId"] for tk in _trusted_keys_raw]
     _trusted_public_keys_hex = {
-        tk["keyId"]: tk["publicKeyHex"]
-        for tk in _trusted_keys_raw
-        if "publicKeyHex" in tk
+        tk["keyId"]: tk["publicKeyHex"] for tk in _trusted_keys_raw if "publicKeyHex" in tk
     }
     await keystore.save(
         api_key=data["api_key"],
@@ -541,11 +568,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # convention at capture (HA Solarman) — the sender re-inverts these before
         # upload so the server's existing negation is unchanged. See battery_sign.py.
         discharge_positive_ids = {
-            inv["inverter_id"] for inv in inverters
+            inv["inverter_id"]
+            for inv in inverters
             if preset_is_discharge_positive(inv.get("preset_id"))
         }
         store, cadence, sender_task, cancel_rollup, lifecycle = await _start_local_store(
-            hass, api_client, api_key, activity, active_ids=active_ids,
+            hass,
+            api_client,
+            api_key,
+            activity,
+            active_ids=active_ids,
             cloud_ingest_enabled=cloud_ingest_enabled,
             discharge_positive_ids=discharge_positive_ids,
         )
@@ -560,9 +592,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # Shares the same DB directory as the readings store; the directory was
         # already created by _start_local_store above.
         _db_dir = hass.config.path(READINGS_DB_SUBDIR)
-        event_store = IslandEventStore(
-            os.path.join(_db_dir, "island_events.db"), hass=hass
-        )
+        event_store = IslandEventStore(os.path.join(_db_dir, "island_events.db"), hass=hass)
         hass.data.setdefault(DOMAIN, {})
         hass.data[DOMAIN]["event_store"] = event_store
 
@@ -575,8 +605,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # publisher always uses the most up-to-date field mappings. Skip when
     # deprovisioned (no loops will start anyway). Fail-open: never blocks setup.
     if loops_active:
+
         async def _fetch_preset(pid):
             return await api_client.get_preset(pid)
+
         try:
             _inv_list = list(entry.data.get("inverters") or [])
             new_inverters, changed = await refresh_entry_inverters(
@@ -660,9 +692,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         entity_map=entity_map,
                         activity=activity,
                         lifecycle=lifecycle,
-                        discharge_positive=preset_is_discharge_positive(
-                            inv.get("preset_id")
-                        ),
+                        discharge_positive=preset_is_discharge_positive(inv.get("preset_id")),
                     ),
                     name=f"svitgrid_readings_{inverter_id}",
                 )
@@ -695,7 +725,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         mqtt_wake_task = hass.async_create_background_task(
             run_mqtt_wake_loop(
-                hass=hass, api_client=api_client, api_key=api_key, wake_event=wake_event,
+                hass=hass,
+                api_client=api_client,
+                api_key=api_key,
+                wake_event=wake_event,
             ),
             name="svitgrid_mqtt_wake",
         )
@@ -722,7 +755,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _LOGGER.warning(
             "Svitgrid device is %s (reason=%s); readings/command/wake loops not "
             "started for entry %s.",
-            lifecycle.state, lifecycle.reason, entry.entry_id,
+            lifecycle.state,
+            lifecycle.reason,
+            entry.entry_id,
         )
 
     update_coordinator = SvitgridUpdateCoordinator(
@@ -757,7 +792,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
     _LOGGER.info(
         "Svitgrid started from config entry %s with %d inverter(s)",
-        entry.entry_id, len(inverters),
+        entry.entry_id,
+        len(inverters),
     )
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
     return True
@@ -765,9 +801,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Cancel background tasks when the user removes the integration."""
-    await hass.config_entries.async_unload_platforms(
-        entry, ["sensor", "binary_sensor", "update"]
-    )
+    await hass.config_entries.async_unload_platforms(entry, ["sensor", "binary_sensor", "update"])
     remove_panel(hass)
     state = hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
     if state is None:

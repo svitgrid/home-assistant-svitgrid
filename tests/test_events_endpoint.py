@@ -12,6 +12,7 @@ Written BEFORE implementation (RED phase). Tests cover:
 - DELETE signed with correct event_id matching URL → 200 + removed
 - DELETE with event_id in signed payload mismatching URL → 403
 """
+
 from __future__ import annotations
 
 import json
@@ -625,7 +626,9 @@ async def test_delete_id_mismatch_signed_id_differs_from_url_id_returns_403(hass
 
     # Signed body claims to delete "ev-other-001" but URL says EVENT_ID
     body = _make_signed_delete_body(
-        private_key, key_id, EVENT_ID,
+        private_key,
+        key_id,
+        EVENT_ID,
         signed_event_id_override="ev-other-001",
     )
 

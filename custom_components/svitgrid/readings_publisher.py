@@ -103,7 +103,10 @@ def assemble_payload(*, inverter_id: str, fields: dict[str, Any]) -> dict[str, A
 
 
 def build_reading_payload(
-    *, hass: HomeAssistant, inverter_id: str, entity_map: dict[str, str],
+    *,
+    hass: HomeAssistant,
+    inverter_id: str,
+    entity_map: dict[str, str],
     discharge_positive: bool = False,
 ) -> dict[str, Any]:
     """Build a single reading payload. Fields whose mapped entity is
@@ -149,9 +152,7 @@ def gate_payload(payload: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
     return payload, missing
 
 
-def _aggregate_samples(
-    samples: list[dict[str, Any]], period_s: int
-) -> dict[str, Any]:
+def _aggregate_samples(samples: list[dict[str, Any]], period_s: int) -> dict[str, Any]:
     """Combine N reading payloads into one aggregated payload.
 
     Numeric fields are averaged across the samples that contain them
@@ -238,9 +239,10 @@ async def run_loop(
 
     Exits when `hass.is_stopping` becomes True."""
     _LOGGER.info(
-        "Readings publisher started (capture-then-drain; "
-        "floor=%ss, ceiling=%ss, aggregation>=%ss)",
-        _INTERVAL_FLOOR_S, _INTERVAL_CEILING_S, _AGGREGATION_THRESHOLD_S,
+        "Readings publisher started (capture-then-drain; floor=%ss, ceiling=%ss, aggregation>=%ss)",
+        _INTERVAL_FLOOR_S,
+        _INTERVAL_CEILING_S,
+        _AGGREGATION_THRESHOLD_S,
     )
     # Cadence carries across iterations. Initial value = clamped holder value.
     next_sleep_s = _clamp_interval(float(cadence.interval_s))
@@ -252,10 +254,14 @@ async def run_loop(
                 samples: list[dict[str, Any]] = []
                 elapsed = 0
                 while elapsed < next_sleep_s and not hass.is_stopping:
-                    samples.append(build_reading_payload(
-                        hass=hass, inverter_id=inverter_id, entity_map=entity_map,
-                        discharge_positive=discharge_positive,
-                    ))
+                    samples.append(
+                        build_reading_payload(
+                            hass=hass,
+                            inverter_id=inverter_id,
+                            entity_map=entity_map,
+                            discharge_positive=discharge_positive,
+                        )
+                    )
                     await asyncio.sleep(_SAMPLE_TICK_S)
                     elapsed += _SAMPLE_TICK_S
                 if samples:
@@ -284,7 +290,9 @@ async def run_loop(
             else:
                 # Active path — single snapshot, gate, then sleep.
                 payload = build_reading_payload(
-                    hass=hass, inverter_id=inverter_id, entity_map=entity_map,
+                    hass=hass,
+                    inverter_id=inverter_id,
+                    entity_map=entity_map,
                     discharge_positive=discharge_positive,
                 )
                 payload, missing = gate_payload(payload)

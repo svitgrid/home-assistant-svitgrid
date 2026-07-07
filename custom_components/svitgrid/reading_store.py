@@ -1,11 +1,12 @@
 """Durable local SQLite store for produced readings (Sub-project 1)."""
+
 from __future__ import annotations
 
 import asyncio
 import contextlib
 import json
 import sqlite3
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from homeassistant.core import HomeAssistant
@@ -84,10 +85,7 @@ def _median_gap_seconds(ts_list: list[str]) -> float | None:
     if len(parsed) < 2:
         return None
     # Gaps between consecutive entries (list is desc → older − newer yields positive).
-    gaps = [
-        abs((parsed[i] - parsed[i + 1]).total_seconds())
-        for i in range(len(parsed) - 1)
-    ]
+    gaps = [abs((parsed[i] - parsed[i + 1]).total_seconds()) for i in range(len(parsed) - 1)]
     # Median: sort and pick middle element (or average of two middle for even N).
     gaps_sorted = sorted(gaps)
     n = len(gaps_sorted)
@@ -171,6 +169,7 @@ class ReadingStore:
 
     def _cap_boundary(self, now_iso: str, cap_s: int) -> str:
         from datetime import datetime, timedelta
+
         now = datetime.fromisoformat(now_iso.replace("Z", "+00:00"))
         return (now - timedelta(seconds=cap_s)).isoformat().replace("+00:00", "Z")
 
@@ -226,10 +225,10 @@ class ReadingStore:
             conn.close()
 
     def _hour_of(self, ts: str) -> str:
-        return ts[:13] + ":00:00Z"   # "2026-06-24T10:..." → "2026-06-24T10:00:00Z"
+        return ts[:13] + ":00:00Z"  # "2026-06-24T10:..." → "2026-06-24T10:00:00Z"
 
     def _day_of(self, ts: str) -> str:
-        return ts[:10]               # "2026-06-24"
+        return ts[:10]  # "2026-06-24"
 
     def _five_min_of(self, ts: str) -> str:
         # Floor a UTC ISO timestamp to its 5-minute bucket start.
@@ -238,6 +237,7 @@ class ReadingStore:
 
     def _rollup_sync(self, now_iso: str) -> dict[str, int]:
         from . import rollup as _r
+
         cur_hour = self._hour_of(now_iso)
         cur_day = self._day_of(now_iso)
         conn = _connect(self._db_path)
@@ -245,59 +245,80 @@ class ReadingStore:
         try:
             # COMPLETED hours: group raw rows whose hour < current hour
             cur = conn.execute(
-                "SELECT inverter_id, ts, payload FROM readings_raw ORDER BY inverter_id, ts")
+                "SELECT inverter_id, ts, payload FROM readings_raw ORDER BY inverter_id, ts"
+            )
             buckets: dict[tuple[str, str], list[dict]] = {}
             for r in cur.fetchall():
                 hour = self._hour_of(r["ts"])
                 if hour >= cur_hour:
                     continue
                 buckets.setdefault((r["inverter_id"], hour), []).append(
-                    {"payload": json.loads(r["payload"])})
+                    {"payload": json.loads(r["payload"])}
+                )
             for (inv, hour), rows in buckets.items():
                 agg = _r.aggregate(rows)
                 conn.execute(
                     "INSERT OR REPLACE INTO readings_hourly "
                     "(inverter_id, hour_start, sample_count, avgs, peaks, energy) "
                     "VALUES (?,?,?,?,?,?)",
-                    (inv, hour, agg["sample_count"], json.dumps(agg["avgs"]),
-                     json.dumps(agg["peaks"]), json.dumps(agg["energy"])))
+                    (
+                        inv,
+                        hour,
+                        agg["sample_count"],
+                        json.dumps(agg["avgs"]),
+                        json.dumps(agg["peaks"]),
+                        json.dumps(agg["energy"]),
+                    ),
+                )
                 hours += 1
             # COMPLETED days: group hourly rows whose day < current day
             cur = conn.execute(
                 "SELECT inverter_id, hour_start, sample_count, avgs, peaks, energy "
-                "FROM readings_hourly")
+                "FROM readings_hourly"
+            )
             dbuckets: dict[tuple[str, str], list[dict]] = {}
             for r in cur.fetchall():
                 day = self._day_of(r["hour_start"])
                 if day >= cur_day:
                     continue
-                dbuckets.setdefault((r["inverter_id"], day), []).append({
-                    "sample_count": r["sample_count"],
-                    "avgs": json.loads(r["avgs"]), "peaks": json.loads(r["peaks"]),
-                    "energy": json.loads(r["energy"])})
+                dbuckets.setdefault((r["inverter_id"], day), []).append(
+                    {
+                        "sample_count": r["sample_count"],
+                        "avgs": json.loads(r["avgs"]),
+                        "peaks": json.loads(r["peaks"]),
+                        "energy": json.loads(r["energy"]),
+                    }
+                )
             for (inv, day), hrows in dbuckets.items():
                 agg = _r.merge_hourly(hrows)
                 conn.execute(
                     "INSERT OR REPLACE INTO readings_daily "
                     "(inverter_id, day, sample_count, avgs, peaks, energy) "
                     "VALUES (?,?,?,?,?,?)",
-                    (inv, day, agg["sample_count"], json.dumps(agg["avgs"]),
-                     json.dumps(agg["peaks"]), json.dumps(agg["energy"])))
+                    (
+                        inv,
+                        day,
+                        agg["sample_count"],
+                        json.dumps(agg["avgs"]),
+                        json.dumps(agg["peaks"]),
+                        json.dumps(agg["energy"]),
+                    ),
+                )
                 days += 1
             conn.commit()
             return {"hours": hours, "days": days}
         finally:
             conn.close()
 
-    def _prune_sync(self, now_iso: str, raw_retention_s: int,
-                    hourly_retention_s: int) -> dict[str, int]:
+    def _prune_sync(
+        self, now_iso: str, raw_retention_s: int, hourly_retention_s: int
+    ) -> dict[str, int]:
         raw_floor = self._cap_boundary(now_iso, raw_retention_s)
         hourly_floor = self._cap_boundary(now_iso, hourly_retention_s)
         conn = _connect(self._db_path)
         try:
             c1 = conn.execute("DELETE FROM readings_raw WHERE ts < ?", (raw_floor,))
-            c2 = conn.execute("DELETE FROM readings_hourly WHERE hour_start < ?",
-                              (hourly_floor,))
+            c2 = conn.execute("DELETE FROM readings_hourly WHERE hour_start < ?", (hourly_floor,))
             conn.commit()
             return {"raw": c1.rowcount, "hourly": c2.rowcount}
         finally:
@@ -309,25 +330,27 @@ class ReadingStore:
             cur = conn.execute(
                 "SELECT r.inverter_id, r.ts, r.payload FROM readings_raw r "
                 "JOIN (SELECT inverter_id, MAX(ts) mts FROM readings_raw GROUP BY inverter_id) m "
-                "ON r.inverter_id = m.inverter_id AND r.ts = m.mts")
+                "ON r.inverter_id = m.inverter_id AND r.ts = m.mts"
+            )
             rows = cur.fetchall()
             result = []
             for r in rows:
                 inverter_id = r["inverter_id"]
                 # Fetch up to 6 recent timestamps to compute the observed cadence.
                 ts_cur = conn.execute(
-                    "SELECT ts FROM readings_raw WHERE inverter_id = ? "
-                    "ORDER BY ts DESC LIMIT 6",
+                    "SELECT ts FROM readings_raw WHERE inverter_id = ? ORDER BY ts DESC LIMIT 6",
                     (inverter_id,),
                 )
                 ts_list = [row["ts"] for row in ts_cur.fetchall()]
                 interval_s = _median_gap_seconds(ts_list)
-                result.append({
-                    "inverterId": inverter_id,
-                    "ts": r["ts"],
-                    "payload": json.loads(r["payload"]),
-                    "intervalS": interval_s,
-                })
+                result.append(
+                    {
+                        "inverterId": inverter_id,
+                        "ts": r["ts"],
+                        "payload": json.loads(r["payload"]),
+                        "intervalS": interval_s,
+                    }
+                )
             return result
         finally:
             conn.close()
@@ -336,29 +359,45 @@ class ReadingStore:
         conn = _connect(self._db_path)
         try:
             cur = conn.execute(
-                "SELECT inverter_id, sample_count, peaks, energy FROM readings_daily "
-                "WHERE day = ?", (day,))
-            rows = [{"inverterId": r["inverter_id"], "sample_count": r["sample_count"],
-                     "peaks": json.loads(r["peaks"]), "energy": json.loads(r["energy"])}
-                    for r in cur.fetchall()]
+                "SELECT inverter_id, sample_count, peaks, energy FROM readings_daily WHERE day = ?",
+                (day,),
+            )
+            rows = [
+                {
+                    "inverterId": r["inverter_id"],
+                    "sample_count": r["sample_count"],
+                    "peaks": json.loads(r["peaks"]),
+                    "energy": json.loads(r["energy"]),
+                }
+                for r in cur.fetchall()
+            ]
             if rows:
                 return rows
             # Fallback: aggregate today's raw (daily row not rolled up yet).
             from datetime import datetime, timedelta  # noqa: I001
             from . import rollup as _r
+
             next_day = (datetime.strptime(day, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
             cur = conn.execute(
                 "SELECT inverter_id, payload FROM readings_raw WHERE ts >= ? AND ts < ?",
-                (day + "T00:00:00Z", next_day + "T00:00:00Z"))
+                (day + "T00:00:00Z", next_day + "T00:00:00Z"),
+            )
             buckets: dict[str, list[dict]] = {}
             for r in cur.fetchall():
                 buckets.setdefault(r["inverter_id"], []).append(
-                    {"payload": json.loads(r["payload"])})
+                    {"payload": json.loads(r["payload"])}
+                )
             out = []
             for inv, rws in buckets.items():
                 agg = _r.aggregate(rws)
-                out.append({"inverterId": inv, "sample_count": agg["sample_count"],
-                            "peaks": agg["peaks"], "energy": agg["energy"]})
+                out.append(
+                    {
+                        "inverterId": inv,
+                        "sample_count": agg["sample_count"],
+                        "peaks": agg["peaks"],
+                        "energy": agg["energy"],
+                    }
+                )
             return out
         finally:
             conn.close()
@@ -373,10 +412,18 @@ class ReadingStore:
                 "FROM readings_hourly "
                 "WHERE inverter_id = ? AND hour_start >= ? AND hour_start <= ? "
                 "ORDER BY hour_start",
-                (inverter_id, day_start, day_end))
-            return [{"hour": r["hour_start"], "sample_count": r["sample_count"],
-                     "avgs": json.loads(r["avgs"]), "peaks": json.loads(r["peaks"]),
-                     "energy": json.loads(r["energy"])} for r in cur.fetchall()]
+                (inverter_id, day_start, day_end),
+            )
+            return [
+                {
+                    "hour": r["hour_start"],
+                    "sample_count": r["sample_count"],
+                    "avgs": json.loads(r["avgs"]),
+                    "peaks": json.loads(r["peaks"]),
+                    "energy": json.loads(r["energy"]),
+                }
+                for r in cur.fetchall()
+            ]
         finally:
             conn.close()
 
@@ -395,32 +442,40 @@ class ReadingStore:
         ``[{"hour", "sample_count", "avgs", "peaks", "energy"}]`` sorted by hour.
         """
         from datetime import datetime, timedelta
+
         from . import rollup as _r
+
         day_start = day + "T00:00:00Z"
         # Exclusive next-day-midnight bound: our readings carry sub-second ts
         # (e.g. "...T23:59:59.743Z"), so a string "<= T23:59:59Z" bound would drop
         # the last second of the day. Use ts < next_day_start.
-        next_day_start = (
-            datetime.strptime(day, "%Y-%m-%d") + timedelta(days=1)
-        ).strftime("%Y-%m-%d") + "T00:00:00Z"
+        next_day_start = (datetime.strptime(day, "%Y-%m-%d") + timedelta(days=1)).strftime(
+            "%Y-%m-%d"
+        ) + "T00:00:00Z"
         conn = _connect(self._db_path)
         try:
             cur = conn.execute(
                 "SELECT ts, payload FROM readings_raw "
                 "WHERE inverter_id = ? AND ts >= ? AND ts < ? ORDER BY ts",
-                (inverter_id, day_start, next_day_start))
+                (inverter_id, day_start, next_day_start),
+            )
             # Mirror _rollup_sync's bucket construction so the numbers match.
             buckets: dict[str, list[dict]] = {}
             for r in cur.fetchall():
                 hour = self._hour_of(r["ts"])
-                buckets.setdefault(hour, []).append(
-                    {"payload": json.loads(r["payload"])})
+                buckets.setdefault(hour, []).append({"payload": json.loads(r["payload"])})
             result = []
             for hour in sorted(buckets):
                 agg = _r.aggregate(buckets[hour])
-                result.append({"hour": hour, "sample_count": agg["sample_count"],
-                               "avgs": agg["avgs"], "peaks": agg["peaks"],
-                               "energy": agg["energy"]})
+                result.append(
+                    {
+                        "hour": hour,
+                        "sample_count": agg["sample_count"],
+                        "avgs": agg["avgs"],
+                        "peaks": agg["peaks"],
+                        "energy": agg["energy"],
+                    }
+                )
             return result
         finally:
             conn.close()
@@ -442,49 +497,65 @@ class ReadingStore:
         compatibility with the hourly path).
         """
         from datetime import datetime, timedelta
+
         from . import rollup as _r
+
         day_start = day + "T00:00:00Z"
         # Exclusive next-day bound (readings carry sub-second ts).
-        next_day_start = (
-            datetime.strptime(day, "%Y-%m-%d") + timedelta(days=1)
-        ).strftime("%Y-%m-%d") + "T00:00:00Z"
+        next_day_start = (datetime.strptime(day, "%Y-%m-%d") + timedelta(days=1)).strftime(
+            "%Y-%m-%d"
+        ) + "T00:00:00Z"
         conn = _connect(self._db_path)
         try:
             cur = conn.execute(
                 "SELECT ts, payload FROM readings_raw "
                 "WHERE inverter_id = ? AND ts >= ? AND ts < ? ORDER BY ts",
-                (inverter_id, day_start, next_day_start))
+                (inverter_id, day_start, next_day_start),
+            )
             buckets: dict[str, list[dict]] = {}
             for r in cur.fetchall():
                 bucket = self._five_min_of(r["ts"])
-                buckets.setdefault(bucket, []).append(
-                    {"payload": json.loads(r["payload"])})
+                buckets.setdefault(bucket, []).append({"payload": json.loads(r["payload"])})
             result = []
             for bucket in sorted(buckets):
                 agg = _r.aggregate(buckets[bucket])
-                result.append({"hour": bucket, "sample_count": agg["sample_count"],
-                               "avgs": agg["avgs"], "peaks": agg["peaks"],
-                               "energy": agg["energy"]})
+                result.append(
+                    {
+                        "hour": bucket,
+                        "sample_count": agg["sample_count"],
+                        "avgs": agg["avgs"],
+                        "peaks": agg["peaks"],
+                        "energy": agg["energy"],
+                    }
+                )
             return result
         finally:
             conn.close()
 
-    def _history_range_sync(self, inverter_id: str, start_day: str,
-                            end_day: str) -> list[dict]:
+    def _history_range_sync(self, inverter_id: str, start_day: str, end_day: str) -> list[dict]:
         conn = _connect(self._db_path)
         try:
             cur = conn.execute(
                 "SELECT day, sample_count, avgs, peaks, energy FROM readings_daily "
                 "WHERE inverter_id = ? AND day >= ? AND day <= ? ORDER BY day",
-                (inverter_id, start_day, end_day))
-            return [{"day": r["day"], "sample_count": r["sample_count"],
-                     "avgs": json.loads(r["avgs"]), "peaks": json.loads(r["peaks"]),
-                     "energy": json.loads(r["energy"])} for r in cur.fetchall()]
+                (inverter_id, start_day, end_day),
+            )
+            return [
+                {
+                    "day": r["day"],
+                    "sample_count": r["sample_count"],
+                    "avgs": json.loads(r["avgs"]),
+                    "peaks": json.loads(r["peaks"]),
+                    "energy": json.loads(r["energy"]),
+                }
+                for r in cur.fetchall()
+            ]
         finally:
             conn.close()
 
-    def _history_range_live_sync(self, inverter_id: str, start_day: str,
-                                 end_day: str, now_iso: str | None = None) -> list[dict]:
+    def _history_range_live_sync(
+        self, inverter_id: str, start_day: str, end_day: str, now_iso: str | None = None
+    ) -> list[dict]:
         """Sealed ``readings_daily`` rows for days < today, plus today aggregated
         live from ``readings_raw`` (if today falls within [start_day, end_day]).
 
@@ -494,11 +565,12 @@ class ReadingStore:
         Result is sorted by day.  ``now_iso`` defaults to the real UTC clock;
         tests pass an explicit value to pin "today".
         """
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
+
         from . import rollup as _r
 
         if now_iso is None:
-            now_iso = datetime.now(timezone.utc).isoformat()
+            now_iso = datetime.now(UTC).isoformat()
         today = self._day_of(now_iso)
 
         # Yesterday = last completed day for the sealed query upper bound.
@@ -520,15 +592,18 @@ class ReadingStore:
                     "SELECT day, sample_count, avgs, peaks, energy "
                     "FROM readings_daily "
                     "WHERE inverter_id = ? AND day >= ? AND day <= ? ORDER BY day",
-                    (inverter_id, start_day, sealed_end))
+                    (inverter_id, start_day, sealed_end),
+                )
                 for r in cur.fetchall():
-                    result.append({
-                        "day": r["day"],
-                        "sample_count": r["sample_count"],
-                        "avgs": json.loads(r["avgs"]),
-                        "peaks": json.loads(r["peaks"]),
-                        "energy": json.loads(r["energy"]),
-                    })
+                    result.append(
+                        {
+                            "day": r["day"],
+                            "sample_count": r["sample_count"],
+                            "avgs": json.loads(r["avgs"]),
+                            "peaks": json.loads(r["peaks"]),
+                            "energy": json.loads(r["energy"]),
+                        }
+                    )
 
             # 2. Today's live bucket (only if today is within the requested range)
             if today_dt is not None and start_day <= today <= end_day:
@@ -536,17 +611,16 @@ class ReadingStore:
                 # Exclusive next-day-midnight bound: our readings carry sub-second
                 # ts (e.g. "...T23:59:59.743Z"), so a string "<= T23:59:59Z" bound
                 # would drop the last second of the day. Use ts < next_day_start.
-                next_day_start = (
-                    today_dt + timedelta(days=1)).strftime("%Y-%m-%d") + "T00:00:00Z"
+                next_day_start = (today_dt + timedelta(days=1)).strftime("%Y-%m-%d") + "T00:00:00Z"
                 cur = conn.execute(
                     "SELECT ts, payload FROM readings_raw "
                     "WHERE inverter_id = ? AND ts >= ? AND ts < ? ORDER BY ts",
-                    (inverter_id, day_start, next_day_start))
+                    (inverter_id, day_start, next_day_start),
+                )
                 buckets: dict[str, list[dict]] = {}
                 for r in cur.fetchall():
                     hour = self._hour_of(r["ts"])
-                    buckets.setdefault(hour, []).append(
-                        {"payload": json.loads(r["payload"])})
+                    buckets.setdefault(hour, []).append({"payload": json.loads(r["payload"])})
                 if buckets:
                     hour_aggs = [_r.aggregate(buckets[h]) for h in sorted(buckets)]
                     daily_agg = _r.merge_hourly(hour_aggs)
@@ -564,6 +638,7 @@ class ReadingStore:
         month out of 1..12); the endpoint maps that to HTTP 400.
         """
         import calendar
+
         try:
             year, mon = int(month[:4]), int(month[5:7])
         except (ValueError, TypeError) as err:
@@ -575,8 +650,9 @@ class ReadingStore:
         end_day = f"{year:04d}-{mon:02d}-{last_day:02d}"
         return start_day, end_day
 
-    def _month_hourly_range_live_sync(self, inverter_id: str, month: str,
-                                      now_iso: str | None = None) -> list[dict]:
+    def _month_hourly_range_live_sync(
+        self, inverter_id: str, month: str, now_iso: str | None = None
+    ) -> list[dict]:
         """Sealed ``readings_hourly`` rows for the month's hours before today,
         plus today's hourly buckets computed live from ``readings_raw`` (if
         today falls within the requested month).
@@ -593,17 +669,17 @@ class ReadingStore:
         sorted by ``hour_start``. ``now_iso`` defaults to the real UTC
         clock; tests pass an explicit value to pin "today".
         """
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
 
         if now_iso is None:
-            now_iso = datetime.now(timezone.utc).isoformat()
+            now_iso = datetime.now(UTC).isoformat()
         today = self._day_of(now_iso)
 
         start_day, end_day = self._month_bounds(month)
         month_start = start_day + "T00:00:00Z"
-        month_end_exclusive = (
-            datetime.strptime(end_day, "%Y-%m-%d") + timedelta(days=1)
-        ).strftime("%Y-%m-%d") + "T00:00:00Z"
+        month_end_exclusive = (datetime.strptime(end_day, "%Y-%m-%d") + timedelta(days=1)).strftime(
+            "%Y-%m-%d"
+        ) + "T00:00:00Z"
         today_start = today + "T00:00:00Z"
 
         result: list[dict] = []
@@ -618,15 +694,18 @@ class ReadingStore:
                     "FROM readings_hourly "
                     "WHERE inverter_id = ? AND hour_start >= ? AND hour_start < ? "
                     "ORDER BY hour_start",
-                    (inverter_id, month_start, sealed_upper))
+                    (inverter_id, month_start, sealed_upper),
+                )
                 for r in cur.fetchall():
-                    result.append({
-                        "hour_start": r["hour_start"],
-                        "sample_count": r["sample_count"],
-                        "avgs": json.loads(r["avgs"]),
-                        "peaks": json.loads(r["peaks"]),
-                        "energy": json.loads(r["energy"]),
-                    })
+                    result.append(
+                        {
+                            "hour_start": r["hour_start"],
+                            "sample_count": r["sample_count"],
+                            "avgs": json.loads(r["avgs"]),
+                            "peaks": json.loads(r["peaks"]),
+                            "energy": json.loads(r["energy"]),
+                        }
+                    )
             finally:
                 conn.close()
 
@@ -634,13 +713,15 @@ class ReadingStore:
         # within the requested month.
         if start_day <= today <= end_day:
             for row in self._hourly_range_live_sync(inverter_id, today):
-                result.append({
-                    "hour_start": row["hour"],
-                    "sample_count": row["sample_count"],
-                    "avgs": row["avgs"],
-                    "peaks": row["peaks"],
-                    "energy": row["energy"],
-                })
+                result.append(
+                    {
+                        "hour_start": row["hour"],
+                        "sample_count": row["sample_count"],
+                        "avgs": row["avgs"],
+                        "peaks": row["peaks"],
+                        "energy": row["energy"],
+                    }
+                )
 
         result.sort(key=lambda r: r["hour_start"])
         return result
@@ -648,10 +729,15 @@ class ReadingStore:
     def _sync_status_sync(self) -> dict:
         conn = _connect(self._db_path)
         try:
-            counts = {r["sync_state"]: r["c"] for r in conn.execute(
-                "SELECT sync_state, COUNT(*) c FROM readings_raw GROUP BY sync_state")}
+            counts = {
+                r["sync_state"]: r["c"]
+                for r in conn.execute(
+                    "SELECT sync_state, COUNT(*) c FROM readings_raw GROUP BY sync_state"
+                )
+            }
             row = conn.execute(
-                "SELECT MAX(ts) m FROM readings_raw WHERE sync_state='sent'").fetchone()
+                "SELECT MAX(ts) m FROM readings_raw WHERE sync_state='sent'"
+            ).fetchone()
             return {"counts": counts, "last_sent_ts": row["m"] if row else None}
         finally:
             conn.close()
@@ -677,9 +763,11 @@ class ReadingStore:
         try:
             conn.executemany(
                 "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
-                [("lifecycle_state", state),
-                 ("lifecycle_reason", reason or ""),
-                 ("lifecycle_since", since or "")],
+                [
+                    ("lifecycle_state", state),
+                    ("lifecycle_reason", reason or ""),
+                    ("lifecycle_since", since or ""),
+                ],
             )
             conn.commit()
         finally:
@@ -717,9 +805,7 @@ class ReadingStore:
             conn.close()
 
     async def prune_inverters_not_in(self, keep_ids: set) -> int:
-        return await self._hass.async_add_executor_job(
-            self._prune_inverters_not_in_sync, keep_ids
-        )
+        return await self._hass.async_add_executor_job(self._prune_inverters_not_in_sync, keep_ids)
 
     async def set_lifecycle(self, state: str, reason: str | None, since: str | None) -> None:
         await self._hass.async_add_executor_job(self._set_lifecycle_sync, state, reason, since)
@@ -734,14 +820,17 @@ class ReadingStore:
     async def rollup(self, now_iso: str) -> dict[str, int]:
         return await self._hass.async_add_executor_job(self._rollup_sync, now_iso)
 
-    async def prune(self, now_iso: str, raw_retention_s: int,
-                    hourly_retention_s: int) -> dict[str, int]:
+    async def prune(
+        self, now_iso: str, raw_retention_s: int, hourly_retention_s: int
+    ) -> dict[str, int]:
         return await self._hass.async_add_executor_job(
-            self._prune_sync, now_iso, raw_retention_s, hourly_retention_s)
+            self._prune_sync, now_iso, raw_retention_s, hourly_retention_s
+        )
 
     async def get_sendable(self, now_iso: str, cap_s: int, limit: int) -> list[dict]:
         return await self._hass.async_add_executor_job(
-            self._get_sendable_sync, now_iso, cap_s, limit)
+            self._get_sendable_sync, now_iso, cap_s, limit
+        )
 
     async def mark_sent(self, keys: list[tuple[str, str]]) -> None:
         await self._hass.async_add_executor_job(self._mark_sent_sync, keys)
@@ -758,9 +847,7 @@ class ReadingStore:
         self._signal_data_available()
 
     async def recent(self, inverter_id: str, limit: int) -> list[dict[str, Any]]:
-        return await self._hass.async_add_executor_job(
-            self._recent_sync, inverter_id, limit
-        )
+        return await self._hass.async_add_executor_job(self._recent_sync, inverter_id, limit)
 
     async def count_by_state(self) -> dict[str, int]:
         return await self._hass.async_add_executor_job(self._count_by_state_sync)
@@ -771,31 +858,35 @@ class ReadingStore:
     async def today_summary(self, day: str) -> list[dict]:
         return await self._hass.async_add_executor_job(self._today_summary_sync, day)
 
-    async def history_range(self, inverter_id: str, start_day: str,
-                            end_day: str) -> list[dict]:
+    async def history_range(self, inverter_id: str, start_day: str, end_day: str) -> list[dict]:
         return await self._hass.async_add_executor_job(
-            self._history_range_sync, inverter_id, start_day, end_day)
+            self._history_range_sync, inverter_id, start_day, end_day
+        )
 
-    async def history_range_live(self, inverter_id: str, start_day: str,
-                                 end_day: str) -> list[dict]:
+    async def history_range_live(
+        self, inverter_id: str, start_day: str, end_day: str
+    ) -> list[dict]:
         return await self._hass.async_add_executor_job(
-            self._history_range_live_sync, inverter_id, start_day, end_day)
+            self._history_range_live_sync, inverter_id, start_day, end_day
+        )
 
     async def hourly_range(self, inverter_id: str, day: str) -> list[dict]:
-        return await self._hass.async_add_executor_job(
-            self._hourly_range_sync, inverter_id, day)
+        return await self._hass.async_add_executor_job(self._hourly_range_sync, inverter_id, day)
 
     async def hourly_range_live(self, inverter_id: str, day: str) -> list[dict]:
         return await self._hass.async_add_executor_job(
-            self._hourly_range_live_sync, inverter_id, day)
+            self._hourly_range_live_sync, inverter_id, day
+        )
 
     async def five_min_range_live(self, inverter_id: str, day: str) -> list[dict]:
         return await self._hass.async_add_executor_job(
-            self._five_min_range_live_sync, inverter_id, day)
+            self._five_min_range_live_sync, inverter_id, day
+        )
 
     async def month_hourly_range_live(self, inverter_id: str, month: str) -> list[dict]:
         return await self._hass.async_add_executor_job(
-            self._month_hourly_range_live_sync, inverter_id, month)
+            self._month_hourly_range_live_sync, inverter_id, month
+        )
 
     async def sync_status(self) -> dict:
         return await self._hass.async_add_executor_job(self._sync_status_sync)

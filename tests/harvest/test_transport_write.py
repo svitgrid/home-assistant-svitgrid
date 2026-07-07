@@ -2,6 +2,7 @@
 
 TDD — tests written first.  Implementation to follow in transport.py.
 """
+
 from __future__ import annotations
 
 import sys
@@ -16,16 +17,26 @@ from custom_components.svitgrid.harvest.register_spec import RegisterSpec
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _spec(protocol="solarman_v5"):
-    return RegisterSpec.from_dict({
-        "modelId": "m", "version": 1, "protocol": protocol,
-        "port": 8899 if protocol == "solarman_v5" else 502,
-        "defaultSlaveId": 1, "flags": {}, "reads": [], "derivations": [], "writes": [],
-    })
+    return RegisterSpec.from_dict(
+        {
+            "modelId": "m",
+            "version": 1,
+            "protocol": protocol,
+            "port": 8899 if protocol == "solarman_v5" else 502,
+            "defaultSlaveId": 1,
+            "flags": {},
+            "reads": [],
+            "derivations": [],
+            "writes": [],
+        }
+    )
 
 
 class _FakeHass:
     """Minimal hass stub that runs executor jobs synchronously."""
+
     async def async_add_executor_job(self, func, *args):
         return func(*args)
 
@@ -33,6 +44,7 @@ class _FakeHass:
 # ---------------------------------------------------------------------------
 # _write_solarman — sync helper, happy path
 # ---------------------------------------------------------------------------
+
 
 def test_write_solarman_calls_write_holding_registers():
     """_write_solarman must call write_holding_registers once per (unit,addr,val)."""
@@ -50,9 +62,7 @@ def test_write_solarman_calls_write_holding_registers():
     with patch.dict(sys.modules, {"pysolarmanv5": fake_mod}):
         _write_solarman(cfg, writes)
 
-    fake_sm.write_holding_registers.assert_called_once_with(
-        register_addr=200, values=[0xABCD]
-    )
+    fake_sm.write_holding_registers.assert_called_once_with(register_addr=200, values=[0xABCD])
 
 
 def test_write_solarman_multiple_writes():
@@ -96,6 +106,7 @@ def test_write_solarman_calls_disconnect():
 # _write_modbus — sync helper, happy path + error
 # ---------------------------------------------------------------------------
 
+
 def _make_modbus_write_stubs(is_error: bool = False):
     fake_result = MagicMock()
     fake_result.isError.return_value = is_error
@@ -138,7 +149,10 @@ def test_write_modbus_raises_on_error():
     cfg = {"ip": "10.0.0.1", "port": "502"}
     writes = [(1, 300, 0x1234)]
 
-    with patch.dict(sys.modules, {"pymodbus": fake_pymodbus, "pymodbus.client": fake_client_mod}), pytest.raises(RuntimeError):
+    with (
+        patch.dict(sys.modules, {"pymodbus": fake_pymodbus, "pymodbus.client": fake_client_mod}),
+        pytest.raises(RuntimeError),
+    ):
         _write_modbus(cfg, writes)
 
 
@@ -158,6 +172,7 @@ def test_write_modbus_calls_close():
 # ---------------------------------------------------------------------------
 # write_registers — async dispatch
 # ---------------------------------------------------------------------------
+
 
 async def test_write_registers_dispatches_solarman():
     """write_registers dispatches to _write_solarman for solarman_v5 protocol."""
@@ -201,11 +216,19 @@ async def test_write_registers_raises_unsupported_protocol():
     hass = _FakeHass()
     spec = _spec("solarman_v5")
     # Patch protocol after creation
-    spec = RegisterSpec.from_dict({
-        "modelId": "m", "version": 1, "protocol": "unknown_proto",
-        "port": 502, "defaultSlaveId": 1, "flags": {},
-        "reads": [], "derivations": [], "writes": [],
-    })
+    spec = RegisterSpec.from_dict(
+        {
+            "modelId": "m",
+            "version": 1,
+            "protocol": "unknown_proto",
+            "port": 502,
+            "defaultSlaveId": 1,
+            "flags": {},
+            "reads": [],
+            "derivations": [],
+            "writes": [],
+        }
+    )
     with pytest.raises(ValueError, match="unsupported"):
         await transport.write_registers(hass, spec, {}, [(1, 0, 0)])
 
@@ -213,6 +236,7 @@ async def test_write_registers_raises_unsupported_protocol():
 # ---------------------------------------------------------------------------
 # read_word — async, reuses read client
 # ---------------------------------------------------------------------------
+
 
 async def test_read_word_solarman_returns_value():
     """read_word returns the register value for solarman_v5."""

@@ -12,8 +12,8 @@ from custom_components.svitgrid.reading_sender import Cadence, drain_once
 from custom_components.svitgrid.reading_store import ReadingStore
 from custom_components.svitgrid.readings_publisher import build_reading_payload
 
-
 # --- capture side -----------------------------------------------------------
+
 
 def test_capture_flips_battery_for_solarman(hass):
     # HA Solarman reports a CHARGING battery as a NEGATIVE value.
@@ -41,12 +41,22 @@ def test_capture_does_not_flip_without_convention(hass):
 
 # --- send side --------------------------------------------------------------
 
+
 class _SyncStore(ReadingStore):
-    async def skip_aged(self, now_iso, cap_s): return self._skip_aged_sync(now_iso, cap_s)
-    async def get_sendable(self, now_iso, cap_s, limit): return self._get_sendable_sync(now_iso, cap_s, limit)
-    async def mark_sent(self, keys): return self._mark_sent_sync(keys)
-    async def mark_failed(self, keys, now_iso): return self._mark_failed_sync(keys, now_iso)
-    async def set_lifecycle(self, *a): return None
+    async def skip_aged(self, now_iso, cap_s):
+        return self._skip_aged_sync(now_iso, cap_s)
+
+    async def get_sendable(self, now_iso, cap_s, limit):
+        return self._get_sendable_sync(now_iso, cap_s, limit)
+
+    async def mark_sent(self, keys):
+        return self._mark_sent_sync(keys)
+
+    async def mark_failed(self, keys, now_iso):
+        return self._mark_failed_sync(keys, now_iso)
+
+    async def set_lifecycle(self, *a):
+        return None
 
 
 class _FakeClient:
@@ -64,16 +74,28 @@ async def test_sender_reinverts_battery_for_solarman(tmp_path):
     store = _SyncStore(None, str(tmp_path / "readings.db"))
     now = "2026-07-04T12:00:00Z"
     # Local store holds Svitgrid convention (charge positive) after capture.
-    store._append_sync({"inverterId": "ha-solar", "timestamp": "2026-07-04T10:00:00Z", "batteryPower": 800.0})
-    store._append_sync({"inverterId": "ha-manual", "timestamp": "2026-07-04T10:00:01Z", "batteryPower": 800.0})
-    client = _FakeClient({"results": [
-        {"ok": True, "inverterId": "ha-solar"},
-        {"ok": True, "inverterId": "ha-manual"},
-    ]})
+    store._append_sync(
+        {"inverterId": "ha-solar", "timestamp": "2026-07-04T10:00:00Z", "batteryPower": 800.0}
+    )
+    store._append_sync(
+        {"inverterId": "ha-manual", "timestamp": "2026-07-04T10:00:01Z", "batteryPower": 800.0}
+    )
+    client = _FakeClient(
+        {
+            "results": [
+                {"ok": True, "inverterId": "ha-solar"},
+                {"ok": True, "inverterId": "ha-manual"},
+            ]
+        }
+    )
     cadence = Cadence(interval_s=10)
 
     sent = await drain_once(
-        store=store, api_client=client, api_key="k", now_iso=now, cadence=cadence,
+        store=store,
+        api_client=client,
+        api_key="k",
+        now_iso=now,
+        cadence=cadence,
         discharge_positive_ids={"ha-solar"},
     )
 
@@ -89,7 +111,9 @@ async def test_sender_reinverts_battery_for_solarman(tmp_path):
 async def test_sender_leaves_battery_when_no_solarman_ids(tmp_path):
     store = _SyncStore(None, str(tmp_path / "readings.db"))
     now = "2026-07-04T12:00:00Z"
-    store._append_sync({"inverterId": "ha-manual", "timestamp": "2026-07-04T10:00:00Z", "batteryPower": 500.0})
+    store._append_sync(
+        {"inverterId": "ha-manual", "timestamp": "2026-07-04T10:00:00Z", "batteryPower": 500.0}
+    )
     client = _FakeClient({"results": [{"ok": True, "inverterId": "ha-manual"}]})
     cadence = Cadence(interval_s=10)
 

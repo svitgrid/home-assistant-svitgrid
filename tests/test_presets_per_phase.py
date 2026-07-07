@@ -6,6 +6,7 @@ loadPowerL* scalars into those arrays at ingest, so the 3-phase hybrid
 presets must map all three groups — voltages alone (the pre-v4 state) only
 light up the voltage boxes, with no per-phase amps or load split.
 """
+
 from __future__ import annotations
 
 import pathlib

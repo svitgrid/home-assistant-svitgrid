@@ -1,16 +1,15 @@
 """Tests for ActivityTracker — the shared object that feeds the
 status/ingest/command sensors and the recent-events buffers."""
+
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-
-import pytest
+from datetime import UTC, datetime, timedelta
 
 from custom_components.svitgrid.activity import ActivityTracker
 
 
 def _now() -> datetime:
-    return datetime(2026, 5, 22, 14, 0, 0, tzinfo=timezone.utc)
+    return datetime(2026, 5, 22, 14, 0, 0, tzinfo=UTC)
 
 
 def test_initial_state_has_no_activity():
@@ -28,10 +27,14 @@ def test_initial_state_has_no_activity():
 
 def test_record_ingest_success_updates_status_count_and_buffer():
     t = ActivityTracker(now=_now)
-    t.record_ingest_success(sample_count=5, period_sec=300, summary={
-        "pvPower": 4200.0,
-        "loadPower": 1500.0,
-    })
+    t.record_ingest_success(
+        sample_count=5,
+        period_sec=300,
+        summary={
+            "pvPower": 4200.0,
+            "loadPower": 1500.0,
+        },
+    )
     assert t.status == "ok"
     assert t.last_ingest_at == _now()
     assert t.last_ingest_status == "ok"

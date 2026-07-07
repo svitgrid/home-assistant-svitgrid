@@ -1,4 +1,5 @@
 """Tests for IslandEventStore — local SQLite calendar-event store."""
+
 import pytest
 
 from custom_components.svitgrid.island_event_store import IslandEventStore
@@ -10,6 +11,7 @@ def _store(tmp_path):
 
 
 # ── upsert / list ──────────────────────────────────────────────────────────────
+
 
 def test_upsert_then_list_roundtrips_event(tmp_path):
     store = _store(tmp_path)
@@ -48,6 +50,7 @@ def test_upsert_multiple_events_all_listed(tmp_path):
 
 # ── delete ─────────────────────────────────────────────────────────────────────
 
+
 def test_delete_removes_event_and_returns_true(tmp_path):
     store = _store(tmp_path)
     store._upsert_event_sync({"id": "evt-1", "type": "tou"})
@@ -75,6 +78,7 @@ def test_delete_only_removes_target(tmp_path):
 
 # ── get_event ──────────────────────────────────────────────────────────────────
 
+
 def test_get_event_returns_event_dict(tmp_path):
     store = _store(tmp_path)
     store._upsert_event_sync({"id": "evt-1", "type": "tou", "value": 42})
@@ -98,6 +102,7 @@ def test_get_event_includes_execution_state(tmp_path):
 
 
 # ── set_execution_state ────────────────────────────────────────────────────────
+
 
 def test_set_execution_state_persists(tmp_path):
     store = _store(tmp_path)
@@ -131,6 +136,7 @@ def test_list_events_merges_execution_state(tmp_path):
 
 # ── COALESCE preservation ──────────────────────────────────────────────────────
 
+
 def test_upsert_preserves_existing_execution_state(tmp_path):
     """Re-upserting event metadata must NOT wipe in-flight execution state."""
     store = _store(tmp_path)
@@ -139,7 +145,7 @@ def test_upsert_preserves_existing_execution_state(tmp_path):
     store._upsert_event_sync({"id": "evt-1", "type": "sell_to_grid"})  # re-upsert metadata
     row = store._get_event_sync("evt-1")
     assert row["executionState"] == {"status": "running"}  # preserved by COALESCE
-    assert row["type"] == "sell_to_grid"                    # metadata updated
+    assert row["type"] == "sell_to_grid"  # metadata updated
 
 
 # ── async wrappers ─────────────────────────────────────────────────────────────

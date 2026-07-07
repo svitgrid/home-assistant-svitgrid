@@ -15,8 +15,7 @@ class _FakeStore:
         self.hourly_args = None
 
     async def live_snapshot(self):
-        return [{"inverterId": "inv-1", "ts": "2026-06-24T10:00:00Z",
-                 "payload": {"pvPower": 2.0}}]
+        return [{"inverterId": "inv-1", "ts": "2026-06-24T10:00:00Z", "payload": {"pvPower": 2.0}}]
 
     async def sync_status(self):
         return {"counts": {"sent": 3, "pending": 1}, "last_sent_ts": "2026-06-24T10:00:00Z"}
@@ -36,23 +35,59 @@ class _FakeStore:
     async def hourly_range(self, inverter_id, day):
         self.hourly_args = (inverter_id, day)
         return [
-            {"hour": "2026-06-20T09:00:00Z", "sample_count": 10, "avgs": {}, "peaks": {}, "energy": {}},
-            {"hour": "2026-06-20T10:00:00Z", "sample_count": 12, "avgs": {}, "peaks": {}, "energy": {}},
+            {
+                "hour": "2026-06-20T09:00:00Z",
+                "sample_count": 10,
+                "avgs": {},
+                "peaks": {},
+                "energy": {},
+            },
+            {
+                "hour": "2026-06-20T10:00:00Z",
+                "sample_count": 12,
+                "avgs": {},
+                "peaks": {},
+                "energy": {},
+            },
         ]
 
     async def hourly_range_live(self, inverter_id, day):
         # The history view's hourly branch now computes buckets live from raw.
         self.hourly_args = (inverter_id, day)
         return [
-            {"hour": "2026-06-20T09:00:00Z", "sample_count": 10, "avgs": {}, "peaks": {}, "energy": {}},
-            {"hour": "2026-06-20T10:00:00Z", "sample_count": 12, "avgs": {}, "peaks": {}, "energy": {}},
+            {
+                "hour": "2026-06-20T09:00:00Z",
+                "sample_count": 10,
+                "avgs": {},
+                "peaks": {},
+                "energy": {},
+            },
+            {
+                "hour": "2026-06-20T10:00:00Z",
+                "sample_count": 12,
+                "avgs": {},
+                "peaks": {},
+                "energy": {},
+            },
         ]
 
     async def five_min_range_live(self, inverter_id, day):
         self.five_min_args = (inverter_id, day)
         return [
-            {"hour": "2026-06-20T09:00:00Z", "sample_count": 3, "avgs": {}, "peaks": {}, "energy": {}},
-            {"hour": "2026-06-20T09:05:00Z", "sample_count": 4, "avgs": {}, "peaks": {}, "energy": {}},
+            {
+                "hour": "2026-06-20T09:00:00Z",
+                "sample_count": 3,
+                "avgs": {},
+                "peaks": {},
+                "energy": {},
+            },
+            {
+                "hour": "2026-06-20T09:05:00Z",
+                "sample_count": 4,
+                "avgs": {},
+                "peaks": {},
+                "energy": {},
+            },
         ]
 
 
@@ -92,11 +127,14 @@ async def test_sync_status_view_returns_counts(hass):
 async def test_history_view_passes_query_params(hass):
     store = _FakeStore()
     view = SvitgridHistoryView(store)
-    request = _FakeRequest(hass, query={
-        "inverter_id": "inv-9",
-        "start": "2026-06-20",
-        "end": "2026-06-22",
-    })
+    request = _FakeRequest(
+        hass,
+        query={
+            "inverter_id": "inv-9",
+            "start": "2026-06-20",
+            "end": "2026-06-22",
+        },
+    )
     resp = await view.get(request)
     assert resp.status == 200
     assert store.history_args == ("inv-9", "2026-06-20", "2026-06-22")
@@ -131,11 +169,14 @@ async def test_health_view_returns_lifecycle(hass):
 async def test_history_view_hourly_granularity_returns_hours(hass):
     store = _FakeStore()
     view = SvitgridHistoryView(store)
-    request = _FakeRequest(hass, query={
-        "inverter_id": "inv-9",
-        "granularity": "hourly",
-        "day": "2026-06-20",
-    })
+    request = _FakeRequest(
+        hass,
+        query={
+            "inverter_id": "inv-9",
+            "granularity": "hourly",
+            "day": "2026-06-20",
+        },
+    )
     resp = await view.get(request)
     assert resp.status == 200
     assert store.hourly_args == ("inv-9", "2026-06-20")
@@ -161,11 +202,14 @@ async def test_history_view_hourly_defaults_day_to_today(hass):
 async def test_history_view_5min_granularity_returns_fine_buckets(hass):
     store = _FakeStore()
     view = SvitgridHistoryView(store)
-    request = _FakeRequest(hass, query={
-        "inverter_id": "inv-9",
-        "granularity": "5min",
-        "day": "2026-06-20",
-    })
+    request = _FakeRequest(
+        hass,
+        query={
+            "inverter_id": "inv-9",
+            "granularity": "5min",
+            "day": "2026-06-20",
+        },
+    )
     resp = await view.get(request)
     assert resp.status == 200
     assert store.five_min_args == ("inv-9", "2026-06-20")
@@ -182,11 +226,14 @@ async def test_history_view_daily_path_unchanged_with_granularity_absent(hass):
     """Plain ?start=&end= (no granularity) still returns {days: ...} unchanged."""
     store = _FakeStore()
     view = SvitgridHistoryView(store)
-    request = _FakeRequest(hass, query={
-        "inverter_id": "inv-9",
-        "start": "2026-06-20",
-        "end": "2026-06-22",
-    })
+    request = _FakeRequest(
+        hass,
+        query={
+            "inverter_id": "inv-9",
+            "start": "2026-06-20",
+            "end": "2026-06-22",
+        },
+    )
     resp = await view.get(request)
     assert resp.status == 200
     assert store.history_args == ("inv-9", "2026-06-20", "2026-06-22")

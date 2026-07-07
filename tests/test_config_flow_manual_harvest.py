@@ -4,6 +4,7 @@ Verifies that ``async_step_user`` exposes ``harvest_config`` as a menu option
 and that selecting it reaches ``async_step_harvest_config`` (which shows the
 manual Modbus form).
 """
+
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, patch
@@ -65,11 +66,13 @@ async def test_harvest_config_form_submit_proceeds_to_pair(
         "custom_components.svitgrid.config_flow.PairingClient",
     ) as mock_client_cls:
         mock_client = mock_client_cls.return_value
-        mock_client.start = AsyncMock(return_value={
-            "secret": "secret-abc-def" * 4,
-            "code": "7K9PA2",
-            "expiresIn": 300,
-        })
+        mock_client.start = AsyncMock(
+            return_value={
+                "secret": "secret-abc-def" * 4,
+                "code": "7K9PA2",
+                "expiresIn": 300,
+            }
+        )
         mock_client.get_status = AsyncMock(side_effect=Exception("don't poll yet"))
 
         result = await hass.config_entries.flow.async_configure(

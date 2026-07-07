@@ -85,9 +85,7 @@ def test_new_day_resets_previous():
         _row("2026-07-02", 0, import_cum=2.0),
     ]
     out = per_hour_deltas(hours)
-    day_b_hour_0 = next(
-        r for r in out if r["local_date"] == "2026-07-02" and r["hour"] == 0
-    )
+    day_b_hour_0 = next(r for r in out if r["local_date"] == "2026-07-02" and r["hour"] == 0)
     # NOT -8.0 -- new local_date always resets the running previous
     assert day_b_hour_0["importKwh"] == 2.0
 
@@ -172,9 +170,7 @@ def test_to_local_hour_rows_utc_maps_straight_through():
         _hourly_row("2026-07-02T10:00:00Z", import_energy=3.0, export_energy=1.0),
     ]
     out = to_local_hour_rows(rows, "UTC")
-    assert out == [
-        {"local_date": "2026-07-02", "hour": 10, "import_cum": 3.0, "export_cum": 1.0}
-    ]
+    assert out == [{"local_date": "2026-07-02", "hour": 10, "import_cum": 3.0, "export_cum": 1.0}]
 
 
 def test_to_local_hour_rows_shifts_by_configured_local_tz():

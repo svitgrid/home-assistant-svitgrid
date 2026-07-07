@@ -7,6 +7,7 @@ hass.data[DOMAIN] right before async_update_entry; the update listener
 
 Written BEFORE implementation (RED phase).
 """
+
 from __future__ import annotations
 
 import json
@@ -14,7 +15,6 @@ import json
 import pytest
 
 from custom_components.svitgrid.const import DOMAIN
-
 
 # ---------------------------------------------------------------------------
 # Fakes (mirror test_http_views_cadence.py)

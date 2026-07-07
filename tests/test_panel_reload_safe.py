@@ -14,6 +14,7 @@ Exact exceptions (verified against the HA/aiohttp source in the venv):
 
 Written BEFORE implementation (RED phase).
 """
+
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -22,7 +23,6 @@ import pytest
 
 from custom_components.svitgrid.const import DOMAIN
 from custom_components.svitgrid.panel import _PANEL_FLAG, register_panel
-
 
 _DUP_ROUTE_ERR = RuntimeError(
     "Added route will never be executed, method GET is already registered"
@@ -36,9 +36,7 @@ async def test_register_panel_survives_already_registered_static_path_and_panel(
     present) must complete without raising and re-set the flag."""
     hass.http = MagicMock()
     # 1st call succeeds; 2nd call raises the aiohttp duplicate-route RuntimeError.
-    hass.http.async_register_static_paths = AsyncMock(
-        side_effect=[None, _DUP_ROUTE_ERR]
-    )
+    hass.http.async_register_static_paths = AsyncMock(side_effect=[None, _DUP_ROUTE_ERR])
     with patch(
         "custom_components.svitgrid.panel.panel_custom.async_register_panel",
         new_callable=AsyncMock,
@@ -59,15 +57,15 @@ async def test_register_panel_survives_already_registered_static_path_and_panel(
 async def test_register_panel_reraises_unexpected_static_path_error(hass):
     """A non-"already registered" error must still propagate (no bare except)."""
     hass.http = MagicMock()
-    hass.http.async_register_static_paths = AsyncMock(
-        side_effect=OSError("disk gone")
-    )
-    with patch(
-        "custom_components.svitgrid.panel.panel_custom.async_register_panel",
-        new_callable=AsyncMock,
+    hass.http.async_register_static_paths = AsyncMock(side_effect=OSError("disk gone"))
+    with (
+        patch(
+            "custom_components.svitgrid.panel.panel_custom.async_register_panel",
+            new_callable=AsyncMock,
+        ),
+        pytest.raises(OSError),
     ):
-        with pytest.raises(OSError):
-            await register_panel(hass)
+        await register_panel(hass)
 
 
 @pytest.mark.asyncio

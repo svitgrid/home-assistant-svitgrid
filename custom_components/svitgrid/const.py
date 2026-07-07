@@ -152,14 +152,16 @@ DISABLE_ISLAND_COMMAND = "disable_island"
 # the new endpoint's TCP reachability before applying (fail-closed).
 SET_HARVEST_CONFIG_COMMAND = "set_harvest_config"
 
-INTERNAL_COMMANDS = frozenset({
-    ADD_TRUSTED_KEY_COMMAND,
-    REVOKE_TRUSTED_KEY_COMMAND,
-    SET_CLOUD_ENDPOINT_COMMAND,
-    ENABLE_ISLAND_COMMAND,
-    DISABLE_ISLAND_COMMAND,
-    SET_HARVEST_CONFIG_COMMAND,
-})
+INTERNAL_COMMANDS = frozenset(
+    {
+        ADD_TRUSTED_KEY_COMMAND,
+        REVOKE_TRUSTED_KEY_COMMAND,
+        SET_CLOUD_ENDPOINT_COMMAND,
+        ENABLE_ISLAND_COMMAND,
+        DISABLE_ISLAND_COMMAND,
+        SET_HARVEST_CONFIG_COMMAND,
+    }
+)
 
 # Inverter-control commands dispatched to the configured executor.
 # P2A A5: expanded from {set_battery_charge} to cover all 4 commands the
@@ -167,19 +169,21 @@ INTERNAL_COMMANDS = frozenset({
 # If the preset has no recipe for one, dispatcher raises UnsupportedCommandError
 # and the poller ACKs as 'unsupported' (same outcome as before, but with
 # a clearer error message).
-DISPATCHABLE_COMMANDS = frozenset({
-    "set_battery_charge",
-    "set_work_mode",
-    "set_solar_sell",
-    "set_grid_charge_toggle",
-    "set_gen_force",
-    "set_gen_port_mode",
-    "set_sell_power_cap",
-})
+DISPATCHABLE_COMMANDS = frozenset(
+    {
+        "set_battery_charge",
+        "set_work_mode",
+        "set_solar_sell",
+        "set_grid_charge_toggle",
+        "set_gen_force",
+        "set_gen_port_mode",
+        "set_sell_power_cap",
+    }
+)
 
 # Pairing flow
-PAIRING_POLL_INTERVAL_S = 2          # HA polls /status this often
-PAIRING_MAX_POLL_DURATION_S = 300    # Stop polling after this; matches server TTL
+PAIRING_POLL_INTERVAL_S = 2  # HA polls /status this often
+PAIRING_MAX_POLL_DURATION_S = 300  # Stop polling after this; matches server TTL
 # Prod is the canonical environment (2026-06-30 cutover). New installs pair
 # against prod; existing installs keep their stored api_base and are moved by
 # the server-issued set_cloud_endpoint command (see cloud_endpoint_handler).
@@ -189,45 +193,62 @@ DEFAULT_API_BASE = "https://api.svitgrid.app"
 READINGS_DB_SUBDIR = "svitgrid"
 READINGS_DB_FILE = "readings.db"
 
-BACKFILL_CAP_S = 48 * 3600          # don't backfill readings older than this
-RAW_RETENTION_S = 14 * 86400        # prune raw rows older than 14 days
+BACKFILL_CAP_S = 48 * 3600  # don't backfill readings older than this
+RAW_RETENTION_S = 14 * 86400  # prune raw rows older than 14 days
 HOURLY_RETENTION_S = 2 * 365 * 86400  # prune hourly rows older than ~2 years
-SENDER_TICK_S = 5                   # sender wake interval when caught up
-ROLLUP_INTERVAL_S = 3600            # roll-up + prune cadence
-INGEST_BATCH_MAX = 50              # cloud batch endpoint cap
+SENDER_TICK_S = 5  # sender wake interval when caught up
+ROLLUP_INTERVAL_S = 3600  # roll-up + prune cadence
+INGEST_BATCH_MAX = 50  # cloud batch endpoint cap
 
 # Fields aggregated into long-term roll-ups. Raw rows keep the FULL payload
 # (every field) for RAW_RETENTION_S; only these are summarized for the long tail.
-INSTANTANEOUS_FIELDS = frozenset({
-    "batterySoc", "batteryPower", "batteryVoltage", "batteryCurrent",
-    "batteryTemperature", "gridPower", "gridFrequency", "loadPower",
-    "pvPower", "inverterTemperature", "loadFrequency",
-    # Per-phase grid voltage — averaged into buckets so the dashboard Grid
-    # Voltage chart has data in island mode (the mobile bucket mapper folds
-    # these into `phaseVoltages`). Without them here, rollup.aggregate()
-    # silently drops grid voltage even though the raw readings carry it.
-    "gridVoltageL1", "gridVoltageL2", "gridVoltageL3",
-})
-DAILY_COUNTER_FIELDS = frozenset({
-    "dailyPvEnergy", "dailyGridImportEnergy", "dailyGridExportEnergy",
-    "dailyLoadEnergy", "dailyBatteryChargeEnergy", "dailyBatteryDischargeEnergy",
-    "dailyGeneratorEnergy", "dailyLossesEnergy",
-    # Harvested (SP-B direct-Modbus) for 1-phase Deye/Sunsynk models whose
-    # register spec defines a generator-runtime register (address 83, see
-    # packages/inverter_protocol/register-specs/*.json) — without this in
-    # DAILY_COUNTER_FIELDS, rollup.aggregate() silently drops the decoded
-    # field before it reaches readings_daily.energy.
-    "dailyGeneratorRuntime",
-})
+INSTANTANEOUS_FIELDS = frozenset(
+    {
+        "batterySoc",
+        "batteryPower",
+        "batteryVoltage",
+        "batteryCurrent",
+        "batteryTemperature",
+        "gridPower",
+        "gridFrequency",
+        "loadPower",
+        "pvPower",
+        "inverterTemperature",
+        "loadFrequency",
+        # Per-phase grid voltage — averaged into buckets so the dashboard Grid
+        # Voltage chart has data in island mode (the mobile bucket mapper folds
+        # these into `phaseVoltages`). Without them here, rollup.aggregate()
+        # silently drops grid voltage even though the raw readings carry it.
+        "gridVoltageL1",
+        "gridVoltageL2",
+        "gridVoltageL3",
+    }
+)
+DAILY_COUNTER_FIELDS = frozenset(
+    {
+        "dailyPvEnergy",
+        "dailyGridImportEnergy",
+        "dailyGridExportEnergy",
+        "dailyLoadEnergy",
+        "dailyBatteryChargeEnergy",
+        "dailyBatteryDischargeEnergy",
+        "dailyGeneratorEnergy",
+        "dailyLossesEnergy",
+        # Harvested (SP-B direct-Modbus) for 1-phase Deye/Sunsynk models whose
+        # register spec defines a generator-runtime register (address 83, see
+        # packages/inverter_protocol/register-specs/*.json) — without this in
+        # DAILY_COUNTER_FIELDS, rollup.aggregate() silently drops the decoded
+        # field before it reaches readings_daily.energy.
+        "dailyGeneratorRuntime",
+    }
+)
 PEAK_FIELDS = frozenset({"pvPower", "loadPower"})
 
 # ── auto-update ────────────────────────────────────────────────────────
 GITHUB_REPO = "svitgrid/home-assistant-svitgrid"
-GITHUB_LATEST_RELEASE_URL = (
-    f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
-)
+GITHUB_LATEST_RELEASE_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 GITHUB_USER_AGENT = "svitgrid-ha-integration"
 
 UPDATE_CHECK_INTERVAL_S = 12 * 3600  # how often to poll GitHub for a new release
-RESTART_GUARD_WINDOW_S = 60          # defer auto-restart if a command ran this recently
-CONF_AUTO_UPDATE = "auto_update"     # entry-options key; default True
+RESTART_GUARD_WINDOW_S = 60  # defer auto-restart if a command ran this recently
+CONF_AUTO_UPDATE = "auto_update"  # entry-options key; default True

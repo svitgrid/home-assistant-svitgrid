@@ -4,6 +4,7 @@ Anenji support ships as data-only haPresets (no protocol code). These tests
 lock the two preset YAMLs' shape and prove the ESPHome preset's entity map
 drives a correct /ingest/reading payload through build_reading_payload.
 """
+
 from __future__ import annotations
 
 import pathlib

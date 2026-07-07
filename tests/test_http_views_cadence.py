@@ -2,6 +2,7 @@
 
 Written BEFORE implementation (RED phase).
 """
+
 from __future__ import annotations
 
 import json
@@ -75,8 +76,10 @@ class _FakeHass:
             self.data[DOMAIN]["cadence"] = cadence
         if cadence_entry_id is not None:
             self.data[DOMAIN]["cadence_entry_id"] = cadence_entry_id
-        self.config_entries = _FakeConfigEntries(entry) if entry is not None else _FakeConfigEntries(
-            _FakeConfigEntry("__none__", {})
+        self.config_entries = (
+            _FakeConfigEntries(entry)
+            if entry is not None
+            else _FakeConfigEntries(_FakeConfigEntry("__none__", {}))
         )
 
 

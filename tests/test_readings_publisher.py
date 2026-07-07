@@ -101,18 +101,29 @@ def test_build_payload_single_mppt_aggregates_to_pv1_total(hass):
 
 def test_gate_payload_defaults_pv_power_when_absent():
     payload = {
-        "inverterId": "inv-1", "timestamp": "t", "source": "edge",
-        "batterySoc": 80.0, "batteryPower": -200.0, "batteryVoltage": 52.0,
-        "gridPower": 100.0, "loadPower": 500.0,
+        "inverterId": "inv-1",
+        "timestamp": "t",
+        "source": "edge",
+        "batterySoc": 80.0,
+        "batteryPower": -200.0,
+        "batteryVoltage": 52.0,
+        "gridPower": 100.0,
+        "loadPower": 500.0,
     }
     finalized, missing = gate_payload(payload)
-    assert finalized["pvPower"] == 0.0   # no-solar system is allowed through
+    assert finalized["pvPower"] == 0.0  # no-solar system is allowed through
     assert missing == []
 
 
 def test_gate_payload_keeps_existing_pv_power():
-    payload = {"pvPower": 1200.0, "batterySoc": 80.0, "batteryPower": -200.0,
-               "batteryVoltage": 52.0, "gridPower": 100.0, "loadPower": 500.0}
+    payload = {
+        "pvPower": 1200.0,
+        "batterySoc": 80.0,
+        "batteryPower": -200.0,
+        "batteryVoltage": 52.0,
+        "gridPower": 100.0,
+        "loadPower": 500.0,
+    }
     finalized, missing = gate_payload(payload)
     assert finalized["pvPower"] == 1200.0
     assert missing == []
@@ -123,8 +134,7 @@ def test_gate_payload_reports_missing_core_fields_sorted():
     finalized, missing = gate_payload(payload)
     # pvPower defaulted, but the five core fields are absent.
     assert finalized["pvPower"] == 0.0
-    assert missing == ["batteryPower", "batterySoc", "batteryVoltage",
-                       "gridPower", "loadPower"]
+    assert missing == ["batteryPower", "batterySoc", "batteryVoltage", "gridPower", "loadPower"]
 
 
 # ── Phase 2 T10a: adaptive ingest cadence ─────────────────────────────
@@ -158,11 +168,19 @@ class _RecordingStore:
 def _mock_hass_one_iter() -> MagicMock:
     """hass mock that yields one publish iteration then signals stop."""
     hass = MagicMock()
-    hass.states.get = lambda eid: MagicMock(state="80") if "battery" in eid else (
-        MagicMock(state="1200") if "pv1" in eid else (
-            MagicMock(state="-200") if "battery_power" in eid else (
-                MagicMock(state="100") if "grid" in eid else (
-                    MagicMock(state="500") if "load" in eid else None
+    hass.states.get = lambda eid: (
+        MagicMock(state="80")
+        if "battery" in eid
+        else (
+            MagicMock(state="1200")
+            if "pv1" in eid
+            else (
+                MagicMock(state="-200")
+                if "battery_power" in eid
+                else (
+                    MagicMock(state="100")
+                    if "grid" in eid
+                    else (MagicMock(state="500") if "load" in eid else None)
                 )
             )
         )
@@ -220,9 +238,7 @@ async def test_publisher_clamps_extreme_intervals(monkeypatch):
     type(hass).is_stopping = property(_is_stopping)
 
     cadence = Cadence(interval_s=999_999_999)
-    sleeps = await _run_with_sleep_capture(
-        monkeypatch, hass, _RecordingStore(), cadence
-    )
+    sleeps = await _run_with_sleep_capture(monkeypatch, hass, _RecordingStore(), cadence)
     assert sleeps, "expected the idle-branch sampling sub-loop to sleep"
     # Idle path: sampling sub-sleeps are 60s; nothing freezes us at the
     # un-clamped 999_999_999s. Ceiling clamp keeps every sleep <= 1800.
@@ -255,12 +271,27 @@ from custom_components.svitgrid.readings_publisher import _aggregate_samples
 
 def test_aggregate_averages_numeric_fields():
     samples = [
-        {"inverterId": "inv-1", "timestamp": "t1", "source": "edge",
-         "batteryPower": -200.0, "loadPower": 500.0},
-        {"inverterId": "inv-1", "timestamp": "t2", "source": "edge",
-         "batteryPower": -100.0, "loadPower": 600.0},
-        {"inverterId": "inv-1", "timestamp": "t3", "source": "edge",
-         "batteryPower": -300.0, "loadPower": 550.0},
+        {
+            "inverterId": "inv-1",
+            "timestamp": "t1",
+            "source": "edge",
+            "batteryPower": -200.0,
+            "loadPower": 500.0,
+        },
+        {
+            "inverterId": "inv-1",
+            "timestamp": "t2",
+            "source": "edge",
+            "batteryPower": -100.0,
+            "loadPower": 600.0,
+        },
+        {
+            "inverterId": "inv-1",
+            "timestamp": "t3",
+            "source": "edge",
+            "batteryPower": -300.0,
+            "loadPower": 550.0,
+        },
     ]
     agg = _aggregate_samples(samples, period_s=180)
     # Numeric fields averaged
@@ -277,10 +308,8 @@ def test_aggregate_averages_numeric_fields():
 
 def test_aggregate_drops_fields_missing_from_all_samples():
     samples = [
-        {"inverterId": "inv-1", "timestamp": "t1", "source": "edge",
-         "batteryPower": -200.0},
-        {"inverterId": "inv-1", "timestamp": "t2", "source": "edge",
-         "loadPower": 500.0},
+        {"inverterId": "inv-1", "timestamp": "t1", "source": "edge", "batteryPower": -200.0},
+        {"inverterId": "inv-1", "timestamp": "t2", "source": "edge", "loadPower": 500.0},
     ]
     agg = _aggregate_samples(samples, period_s=60)
     # Each field averaged across samples that have it (not zero-filled).
@@ -289,8 +318,7 @@ def test_aggregate_drops_fields_missing_from_all_samples():
 
 
 def test_aggregate_single_sample_returns_it_unchanged_plus_metadata():
-    samples = [{"inverterId": "inv-1", "timestamp": "t1", "source": "edge",
-                "batteryPower": -200.0}]
+    samples = [{"inverterId": "inv-1", "timestamp": "t1", "source": "edge", "batteryPower": -200.0}]
     agg = _aggregate_samples(samples, period_s=60)
     assert agg["batteryPower"] == -200.0
     assert agg["sampleCount"] == 1
@@ -354,9 +382,9 @@ def _mock_hass_incomplete_one_iter() -> MagicMock:
             return MagicMock(state="100")
         if "load" in eid:
             return MagicMock(state="500")
-        if "battery" in eid:           # batterySoc entity → unavailable
+        if "battery" in eid:  # batterySoc entity → unavailable
             return MagicMock(state="unavailable")
-        return None                     # pv, batteryVoltage unmapped/missing
+        return None  # pv, batteryVoltage unmapped/missing
 
     hass.states.get = _get
     call_count = {"n": 0}
@@ -377,19 +405,19 @@ async def test_publisher_skips_post_when_core_field_missing(monkeypatch):
     kwargs = dict(_RUN_KWARGS, activity=activity)
 
     sleeps = []
+
     async def _record_sleep(delay):
         sleeps.append(delay)
+
     monkeypatch.setattr(asyncio, "sleep", _record_sleep)
 
-    await run_loop(
-        hass=_mock_hass_incomplete_one_iter(), store=store, cadence=cadence, **kwargs
-    )
+    await run_loop(hass=_mock_hass_incomplete_one_iter(), store=store, cadence=cadence, **kwargs)
 
-    assert store.appended == []                   # never captured junk
+    assert store.appended == []  # never captured junk
     activity.record_ingest_skipped.assert_called_once()
     _, ckwargs = activity.record_ingest_skipped.call_args
     assert "batterySoc" in ckwargs["missing_fields"]
-    assert sleeps == [60.0]                       # still slept the cadence interval
+    assert sleeps == [60.0]  # still slept the cadence interval
 
 
 @pytest.mark.asyncio
@@ -404,18 +432,20 @@ async def test_publisher_posts_when_no_solar_but_core_present(monkeypatch):
         if "battery_voltage" in eid:
             return MagicMock(state="52")
         if "battery" in eid:
-            return MagicMock(state="80")          # batterySoc
+            return MagicMock(state="80")  # batterySoc
         if "grid" in eid:
             return MagicMock(state="100")
         if "load" in eid:
             return MagicMock(state="500")
-        return None                               # no pv entity
+        return None  # no pv entity
 
     hass.states.get = _get
     cc = {"n": 0}
+
     def _is_stopping(_self):
         cc["n"] += 1
         return cc["n"] > 1
+
     type(hass).is_stopping = property(_is_stopping)
 
     store = _RecordingStore()
@@ -443,6 +473,7 @@ async def test_publisher_skips_aggregated_post_when_core_field_missing(monkeypat
     """Idle path (cadence>=120): the aggregated samples are incomplete
     (batterySoc is unavailable for every sample) → the aggregated reading is
     skipped, not captured as junk."""
+
     def _get(eid):
         if "battery_power" in eid:
             return MagicMock(state="-200")
@@ -501,9 +532,7 @@ async def test_run_loop_appends_to_store(monkeypatch):
     cadence = Cadence(interval_s=60)
     monkeypatch.setattr(asyncio, "sleep", AsyncMock())
 
-    await run_loop(
-        hass=_mock_hass_one_iter(), store=store, cadence=cadence, **_RUN_KWARGS
-    )
+    await run_loop(hass=_mock_hass_one_iter(), store=store, cadence=cadence, **_RUN_KWARGS)
 
     assert len(store.appended) == 1
     reading = store.appended[0]
@@ -514,11 +543,17 @@ async def test_run_loop_appends_to_store(monkeypatch):
 @pytest.mark.asyncio
 async def test_run_loop_does_not_capture_when_deprovisioned(monkeypatch):
     from custom_components.svitgrid.lifecycle import LifecycleState
+
     hass = _mock_hass_one_iter()
     store = _RecordingStore()
     lc = LifecycleState()
     lc.deprovision("revoked", "2026-06-25T10:00:00Z")
-    async def _noop_sleep(_): pass
+
+    async def _noop_sleep(_):
+        pass
+
     monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
-    await run_loop(hass=hass, store=store, cadence=Cadence(interval_s=60), lifecycle=lc, **_RUN_KWARGS)
+    await run_loop(
+        hass=hass, store=store, cadence=Cadence(interval_s=60), lifecycle=lc, **_RUN_KWARGS
+    )
     assert store.appended == []  # loop exited immediately, nothing captured

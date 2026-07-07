@@ -33,6 +33,7 @@ Implementation uses Python's `ast` module to parse the expression and
 walks the tree with an explicit allowlist, refusing nodes outside it.
 We never call `eval()` or `compile(..., mode='exec')`.
 """
+
 from __future__ import annotations
 
 import ast
@@ -96,9 +97,7 @@ def _eval_node(
     if isinstance(node, ast.Constant):
         if isinstance(node.value, (int, float)) and not isinstance(node.value, bool):
             return node.value
-        raise DslEvalError(
-            f"DSL rejects literal of type {type(node.value).__name__} in {expr!r}"
-        )
+        raise DslEvalError(f"DSL rejects literal of type {type(node.value).__name__} in {expr!r}")
 
     if isinstance(node, ast.Attribute):
         # Only depth-1: payload.x or config.y. The value MUST be a Name.
@@ -143,9 +142,7 @@ def _eval_node(
             raise DslEvalError(f"DSL rejects function call {func_repr!r} in {expr!r}")
         if node.keywords:
             raise DslEvalError(f"DSL rejects keyword arguments in {expr!r}")
-        args = [
-            _eval_node(a, payload=payload, config=config, expr=expr) for a in node.args
-        ]
+        args = [_eval_node(a, payload=payload, config=config, expr=expr) for a in node.args]
         return _FUNCTIONS[node.func.id](*args)
 
     # Bare names (other than payload/config inside Attribute) are rejected.
@@ -155,6 +152,4 @@ def _eval_node(
             f"(use payload.<name> or config.<name>) in {expr!r}"
         )
 
-    raise DslEvalError(
-        f"DSL rejects node type {type(node).__name__} in {expr!r}"
-    )
+    raise DslEvalError(f"DSL rejects node type {type(node).__name__} in {expr!r}")

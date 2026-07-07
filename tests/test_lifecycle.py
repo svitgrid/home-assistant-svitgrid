@@ -1,4 +1,4 @@
-from custom_components.svitgrid.lifecycle import LifecycleState, ACTIVE, PAUSED, DEPROVISIONED
+from custom_components.svitgrid.lifecycle import ACTIVE, DEPROVISIONED, LifecycleState
 
 
 def test_starts_active():
@@ -22,8 +22,12 @@ def test_idempotent_keeps_first_since():
 
 def test_mirrors_to_activity():
     class _Act:
-        def __init__(self): self.calls = []
-        def set_lifecycle(self, state, reason): self.calls.append((state, reason))
+        def __init__(self):
+            self.calls = []
+
+        def set_lifecycle(self, state, reason):
+            self.calls.append((state, reason))
+
     a = _Act()
     lc = LifecycleState(activity=a)
     lc.deprovision("revoked", "2026-06-25T10:00:00Z")
@@ -42,9 +46,14 @@ def test_deprovisioned_is_terminal_pause_cannot_override():
 def test_seed_non_active_mirrors_to_activity():
     """C1: constructing LifecycleState with a non-active seeded state must
     mirror immediately into the activity tracker via __post_init__."""
+
     class _Act:
-        def __init__(self): self.calls = []
-        def set_lifecycle(self, state, reason): self.calls.append((state, reason))
+        def __init__(self):
+            self.calls = []
+
+        def set_lifecycle(self, state, reason):
+            self.calls.append((state, reason))
+
     a = _Act()
     LifecycleState(state=DEPROVISIONED, reason="revoked", activity=a)
     # __post_init__ must have fired the mirror without needing _set()
@@ -53,9 +62,14 @@ def test_seed_non_active_mirrors_to_activity():
 
 def test_seed_active_does_not_call_activity():
     """C1: default active construction must NOT call set_lifecycle (no spurious mirror)."""
+
     class _Act:
-        def __init__(self): self.calls = []
-        def set_lifecycle(self, state, reason): self.calls.append((state, reason))
+        def __init__(self):
+            self.calls = []
+
+        def set_lifecycle(self, state, reason):
+            self.calls.append((state, reason))
+
     a = _Act()
     LifecycleState(activity=a)  # state=ACTIVE by default
     assert a.calls == []

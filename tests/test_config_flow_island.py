@@ -26,6 +26,7 @@ Keystore-population fix (gap closed in earlier commit — unchanged):
     stored in entry.data["island_key"] (proves the add-on holds the key even
     when async_set_island_key was a no-op for a fresh install).
 """
+
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -105,7 +106,10 @@ async def test_island_finalize_reads_key_from_status_and_stores(hass: HomeAssist
     app_island_key = "sk-app-123"
     finalize_resp = {**_FINALIZE_RESPONSE_BASE, "island": True, "cloudIngest": True}
     claimed = PairingClaimed(
-        household_id="h-island", preset_id=None, island=True, cloud_ingest=True,
+        household_id="h-island",
+        preset_id=None,
+        island=True,
+        cloud_ingest=True,
         island_key=app_island_key,
     )
     flow, mock_client = _make_flow(hass, claimed_status=claimed, mock_finalize_return=finalize_resp)
@@ -142,7 +146,10 @@ async def test_island_finalize_post_body_excludes_island_key(hass: HomeAssistant
     app_island_key = "sk-app-finalize-test"
     finalize_resp = {**_FINALIZE_RESPONSE_BASE, "island": True, "cloudIngest": True}
     claimed = PairingClaimed(
-        household_id="h-island", preset_id=None, island=True, cloud_ingest=True,
+        household_id="h-island",
+        preset_id=None,
+        island=True,
+        cloud_ingest=True,
         island_key=app_island_key,
     )
     flow, mock_client = _make_flow(hass, claimed_status=claimed, mock_finalize_return=finalize_resp)
@@ -170,7 +177,10 @@ async def test_island_finalize_none_key_in_status_proceeds_without_key(hass: Hom
     no island_key in entry.data, cloud_ingest_enabled is still written."""
     finalize_resp = {**_FINALIZE_RESPONSE_BASE, "island": True, "cloudIngest": True}
     claimed = PairingClaimed(
-        household_id="h-island", preset_id=None, island=True, cloud_ingest=True,
+        household_id="h-island",
+        preset_id=None,
+        island=True,
+        cloud_ingest=True,
         island_key=None,  # app failed to provide it
     )
     flow, mock_client = _make_flow(hass, claimed_status=claimed, mock_finalize_return=finalize_resp)
@@ -265,21 +275,25 @@ async def test_island_full_flow_entry_has_cloud_ingest_enabled(
         mock_ks.async_set_island_key = AsyncMock()
 
         mock_client = mock_client_cls.return_value
-        mock_client.start = AsyncMock(return_value={
-            "secret": "sec-island", "code": "ISLAND", "expiresIn": 300,
-        })
-        mock_client.get_status = AsyncMock(return_value=PairingClaimed(
-            household_id="h-island-full",
-            preset_id=None,
-            island=True,
-            cloud_ingest=True,
-            island_key="full-flow-island-key",
-        ))
+        mock_client.start = AsyncMock(
+            return_value={
+                "secret": "sec-island",
+                "code": "ISLAND",
+                "expiresIn": 300,
+            }
+        )
+        mock_client.get_status = AsyncMock(
+            return_value=PairingClaimed(
+                household_id="h-island-full",
+                preset_id=None,
+                island=True,
+                cloud_ingest=True,
+                island_key="full-flow-island-key",
+            )
+        )
         mock_client.finalize = AsyncMock(return_value=finalize_resp)
 
-        result = await hass.config_entries.flow.async_init(
-            DOMAIN, context={"source": "user"}
-        )
+        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
         await hass.config_entries.flow.async_configure(
             result["flow_id"], user_input={"next_step_id": "pair"}
         )
@@ -316,27 +330,33 @@ async def test_island_full_flow_finalize_body_excludes_island_key(
             return_value=(fake_priv, "04" + "a" * 128),
         ),
         patch("custom_components.svitgrid.config_flow.asyncio.sleep", side_effect=_instant_sleep),
-        patch("custom_components.svitgrid.config_flow.SvitgridKeystore", autospec=True) as mock_ks_cls,
+        patch(
+            "custom_components.svitgrid.config_flow.SvitgridKeystore", autospec=True
+        ) as mock_ks_cls,
     ):
         mock_ks = mock_ks_cls.return_value
         mock_ks.async_set_island_key = AsyncMock()
 
         mock_client = mock_client_cls.return_value
-        mock_client.start = AsyncMock(return_value={
-            "secret": "sec-cap", "code": "CAPTR", "expiresIn": 300,
-        })
-        mock_client.get_status = AsyncMock(return_value=PairingClaimed(
-            household_id="h-cap",
-            preset_id=None,
-            island=True,
-            cloud_ingest=True,
-            island_key="captured-island-key",
-        ))
+        mock_client.start = AsyncMock(
+            return_value={
+                "secret": "sec-cap",
+                "code": "CAPTR",
+                "expiresIn": 300,
+            }
+        )
+        mock_client.get_status = AsyncMock(
+            return_value=PairingClaimed(
+                household_id="h-cap",
+                preset_id=None,
+                island=True,
+                cloud_ingest=True,
+                island_key="captured-island-key",
+            )
+        )
         mock_client.finalize = AsyncMock(side_effect=_capture_finalize)
 
-        result = await hass.config_entries.flow.async_init(
-            DOMAIN, context={"source": "user"}
-        )
+        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
         await hass.config_entries.flow.async_configure(
             result["flow_id"], user_input={"next_step_id": "pair"}
         )
@@ -344,7 +364,9 @@ async def test_island_full_flow_finalize_body_excludes_island_key(
 
     # finalize POST body must NOT carry the key (app owns it; cloud got it via claim)
     assert "island_key" not in captured_kwargs, "finalize must NOT send island_key"
-    assert "cloud_ingest_enabled" not in captured_kwargs, "finalize must NOT send cloud_ingest_enabled"
+    assert "cloud_ingest_enabled" not in captured_kwargs, (
+        "finalize must NOT send cloud_ingest_enabled"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -386,10 +408,15 @@ async def test_finalize_island_entry_data_contains_island_key(hass: HomeAssistan
     app_key = "stash-test-island-key"
     finalize_resp = {**_FINALIZE_RESPONSE_BASE, "island": True, "cloudIngest": True}
     claimed = PairingClaimed(
-        household_id="h-island", preset_id=None, island=True, cloud_ingest=True,
+        household_id="h-island",
+        preset_id=None,
+        island=True,
+        cloud_ingest=True,
         island_key=app_key,
     )
-    flow, _mock_client = _make_flow(hass, claimed_status=claimed, mock_finalize_return=finalize_resp)
+    flow, _mock_client = _make_flow(
+        hass, claimed_status=claimed, mock_finalize_return=finalize_resp
+    )
 
     result = await flow.async_step_pair_finalize()
 
@@ -428,7 +455,10 @@ async def test_setup_entry_seeds_keystore_with_island_key(hass: HomeAssistant) -
             hass.config_entries, "async_forward_entry_setups", AsyncMock(return_value=True)
         ),
         patch("custom_components.svitgrid.SvitgridApiClient"),
-        patch("custom_components.svitgrid.refresh_entry_inverters", AsyncMock(return_value=([], False))),
+        patch(
+            "custom_components.svitgrid.refresh_entry_inverters",
+            AsyncMock(return_value=([], False)),
+        ),
     ):
         ok = await async_setup_entry(hass, entry)
         await hass.async_block_till_done()
@@ -455,10 +485,15 @@ async def test_island_cloud_ingest_true_wins_when_response_missing_field(
     # Finalize response deliberately OMITS cloudIngest to expose the bug.
     finalize_resp = {**_FINALIZE_RESPONSE_BASE}  # no cloudIngest key
     claimed = PairingClaimed(
-        household_id="h-ci1", preset_id=None, island=True, cloud_ingest=True,
+        household_id="h-ci1",
+        preset_id=None,
+        island=True,
+        cloud_ingest=True,
         island_key="ik-ci1",
     )
-    flow, _mock_client = _make_flow(hass, claimed_status=claimed, mock_finalize_return=finalize_resp)
+    flow, _mock_client = _make_flow(
+        hass, claimed_status=claimed, mock_finalize_return=finalize_resp
+    )
 
     result = await flow.async_step_pair_finalize()
 
@@ -478,10 +513,15 @@ async def test_island_cloud_ingest_false_wins_over_contradicting_response(
     # Finalize response contradicts the user's choice: cloudIngest=True.
     finalize_resp = {**_FINALIZE_RESPONSE_BASE, "cloudIngest": True}
     claimed = PairingClaimed(
-        household_id="h-ci2", preset_id=None, island=True, cloud_ingest=False,
+        household_id="h-ci2",
+        preset_id=None,
+        island=True,
+        cloud_ingest=False,
         island_key="ik-ci2",
     )
-    flow, _mock_client = _make_flow(hass, claimed_status=claimed, mock_finalize_return=finalize_resp)
+    flow, _mock_client = _make_flow(
+        hass, claimed_status=claimed, mock_finalize_return=finalize_resp
+    )
 
     result = await flow.async_step_pair_finalize()
 
@@ -498,7 +538,9 @@ async def test_non_island_cloud_ingest_key_is_absent(hass: HomeAssistant) -> Non
     """
     finalize_resp = {**_FINALIZE_RESPONSE_BASE}
     claimed = PairingClaimed(household_id="h-ci3", preset_id=None, island=False, cloud_ingest=True)
-    flow, _mock_client = _make_flow(hass, claimed_status=claimed, mock_finalize_return=finalize_resp)
+    flow, _mock_client = _make_flow(
+        hass, claimed_status=claimed, mock_finalize_return=finalize_resp
+    )
 
     result = await flow.async_step_pair_finalize()
 
@@ -535,7 +577,10 @@ async def test_setup_entry_non_island_keystore_island_key_is_none(hass: HomeAssi
             hass.config_entries, "async_forward_entry_setups", AsyncMock(return_value=True)
         ),
         patch("custom_components.svitgrid.SvitgridApiClient"),
-        patch("custom_components.svitgrid.refresh_entry_inverters", AsyncMock(return_value=([], False))),
+        patch(
+            "custom_components.svitgrid.refresh_entry_inverters",
+            AsyncMock(return_value=([], False)),
+        ),
     ):
         ok = await async_setup_entry(hass, entry)
         await hass.async_block_till_done()

@@ -4,8 +4,12 @@ from custom_components.svitgrid.harvest.register_spec import (
 )
 
 DEYE = {
-    "modelId": "deye_sg04lp3", "version": 1, "source": "generated",
-    "verified": True, "protocol": "solarman_v5", "port": 8899,
+    "modelId": "deye_sg04lp3",
+    "version": 1,
+    "source": "generated",
+    "verified": True,
+    "protocol": "solarman_v5",
+    "port": 8899,
     "defaultSlaveId": 1,
     "flags": {"batteryPositiveIsDischarge": True},
     "reads": [
@@ -14,12 +18,17 @@ DEYE = {
         {"field": "dailyPvEnergy", "address": 529, "scale": 0.1},
     ],
     "derivations": [
-        {"field": "batteryPower", "op": "builtin",
-         "builtin": "battery_sign_normalize", "inputs": ["batteryPower"]},
+        {
+            "field": "batteryPower",
+            "op": "builtin",
+            "builtin": "battery_sign_normalize",
+            "inputs": ["batteryPower"],
+        },
         {"field": "totalPvPower", "op": "sum", "inputs": ["pv1Power", "pv2Power"]},
     ],
     "writes": [],
 }
+
 
 def test_from_dict_parses_reads_and_flags():
     spec = RegisterSpec.from_dict(DEYE)
@@ -32,31 +41,59 @@ def test_from_dict_parses_reads_and_flags():
     daily = next(r for r in spec.reads if r.field == "dailyPvEnergy")
     assert daily.scale == 0.1
 
+
 def test_validate_rejects_unknown_builtin():
-    d = {**DEYE, "derivations": [
-        {"field": "x", "op": "builtin", "builtin": "nope", "inputs": ["batterySoc"]},
-    ]}
+    d = {
+        **DEYE,
+        "derivations": [
+            {"field": "x", "op": "builtin", "builtin": "nope", "inputs": ["batterySoc"]},
+        ],
+    }
     problems = RegisterSpec.from_dict(d).validate()
     assert any("nope" in p for p in problems)
 
+
 def test_validate_rejects_dangling_input():
-    d = {**DEYE, "derivations": [
-        {"field": "x", "op": "sum", "inputs": ["batterySoc", "missing"]},
-    ]}
+    d = {
+        **DEYE,
+        "derivations": [
+            {"field": "x", "op": "sum", "inputs": ["batterySoc", "missing"]},
+        ],
+    }
     problems = RegisterSpec.from_dict(d).validate()
     assert any("missing" in p for p in problems)
 
+
 def test_validate_allows_pipe_group_marker():
-    d = {**DEYE, "reads": [{"field": "vL1", "address": 1}, {"field": "vLoad1", "address": 2}],
-         "derivations": [{"field": "phaseVoltages", "op": "builtin",
-                          "builtin": "phase_voltage_grid_or_load",
-                          "inputs": ["vL1", "|", "vLoad1"]}]}
+    d = {
+        **DEYE,
+        "reads": [{"field": "vL1", "address": 1}, {"field": "vLoad1", "address": 2}],
+        "derivations": [
+            {
+                "field": "phaseVoltages",
+                "op": "builtin",
+                "builtin": "phase_voltage_grid_or_load",
+                "inputs": ["vL1", "|", "vLoad1"],
+            }
+        ],
+    }
     from custom_components.svitgrid.harvest.register_spec import RegisterSpec
+
     assert RegisterSpec.from_dict(d).validate() == []
 
+
 def test_builtin_catalog_has_seven():
-    assert frozenset({
-        "pv_power_from_vi", "battery_sign_normalize", "battery_temp_clamp",
-        "phase_voltage_grid_or_load", "phase_load_ct_or_inverter",
-        "grid_relay_bit", "daily_grid_unavailable",
-    }) == BUILTIN_CATALOG
+    assert (
+        frozenset(
+            {
+                "pv_power_from_vi",
+                "battery_sign_normalize",
+                "battery_temp_clamp",
+                "phase_voltage_grid_or_load",
+                "phase_load_ct_or_inverter",
+                "grid_relay_bit",
+                "daily_grid_unavailable",
+            }
+        )
+        == BUILTIN_CATALOG
+    )

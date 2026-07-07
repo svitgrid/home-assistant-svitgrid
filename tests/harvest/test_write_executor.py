@@ -14,6 +14,7 @@ Coverage:
      RuntimeError("prior_read_failed:...").
   7. set_battery_charge (legacy ABC method) routes through dispatch.
 """
+
 from __future__ import annotations
 
 import json
@@ -36,29 +37,33 @@ MODULE = "custom_components.svitgrid.harvest.write_executor"
 
 def _spec_with_writes(writes_raw: list[dict]) -> RegisterSpec:
     """Build a minimal RegisterSpec with the given write commands."""
-    return RegisterSpec.from_dict({
-        "modelId": "test_model",
-        "version": 1,
-        "protocol": "solarman_v5",
-        "port": 8899,
-        "defaultSlaveId": 1,
-        "flags": {},
-        "reads": [],
-        "derivations": [],
-        "writes": writes_raw,
-    })
+    return RegisterSpec.from_dict(
+        {
+            "modelId": "test_model",
+            "version": 1,
+            "protocol": "solarman_v5",
+            "port": 8899,
+            "defaultSlaveId": 1,
+            "flags": {},
+            "reads": [],
+            "derivations": [],
+            "writes": writes_raw,
+        }
+    )
 
 
 def _spec_work_mode() -> RegisterSpec:
     """RegisterSpec with a single full_word work_mode write command."""
-    return _spec_with_writes([
-        {
-            "command": "set_work_mode",
-            "fields": [
-                {"payloadField": "workMode", "address": 142, "encoding": "full_word"},
-            ],
-        }
-    ])
+    return _spec_with_writes(
+        [
+            {
+                "command": "set_work_mode",
+                "fields": [
+                    {"payloadField": "workMode", "address": 142, "encoding": "full_word"},
+                ],
+            }
+        ]
+    )
 
 
 def _spec_gen_force() -> RegisterSpec:
@@ -66,33 +71,37 @@ def _spec_gen_force() -> RegisterSpec:
 
     Uses the production-realistic ``set_``-prefixed cloud command name.
     """
-    return _spec_with_writes([
-        {
-            "command": "set_gen_force",
-            "fields": [
-                {
-                    "payloadField": "genForce",
-                    "address": 326,
-                    "encoding": "bit:13",
-                    "onValue": 1,
-                    "offValue": 0,
-                    "clearMask": 0x1FFF,
-                },
-            ],
-        }
-    ])
+    return _spec_with_writes(
+        [
+            {
+                "command": "set_gen_force",
+                "fields": [
+                    {
+                        "payloadField": "genForce",
+                        "address": 326,
+                        "encoding": "bit:13",
+                        "onValue": 1,
+                        "offValue": 0,
+                        "clearMask": 0x1FFF,
+                    },
+                ],
+            }
+        ]
+    )
 
 
 def _spec_battery_charge() -> RegisterSpec:
     """RegisterSpec with set_battery_charge (legacy routing test)."""
-    return _spec_with_writes([
-        {
-            "command": "set_battery_charge",
-            "fields": [
-                {"payloadField": "chargeLimit", "address": 340, "encoding": "full_word"},
-            ],
-        }
-    ])
+    return _spec_with_writes(
+        [
+            {
+                "command": "set_battery_charge",
+                "fields": [
+                    {"payloadField": "chargeLimit", "address": 340, "encoding": "full_word"},
+                ],
+            }
+        ]
+    )
 
 
 def _spec_battery_charge_slot() -> RegisterSpec:
@@ -102,35 +111,39 @@ def _spec_battery_charge_slot() -> RegisterSpec:
       - slotStart at base=148 (full_word)
       - gridChargeEnabled at base=172 (bit:0, clear_mask=0x03)
     """
-    return _spec_with_writes([
-        {
-            "command": "set_battery_charge_slot",
-            "fields": [],
-            "slot": {
-                "indexField": "slotIndex",
-                "count": 6,
-                "stride": 1,
-                "fields": [
-                    {
-                        "payloadField": "slotStart",
-                        "base": 148,
-                        "encoding": "full_word",
-                    },
-                    {
-                        "payloadField": "gridChargeEnabled",
-                        "base": 172,
-                        "encoding": "bit:0",
-                        "clearMask": 3,
-                        "onValue": 1,
-                        "offValue": 0,
-                    },
-                ],
-            },
-        }
-    ])
+    return _spec_with_writes(
+        [
+            {
+                "command": "set_battery_charge_slot",
+                "fields": [],
+                "slot": {
+                    "indexField": "slotIndex",
+                    "count": 6,
+                    "stride": 1,
+                    "fields": [
+                        {
+                            "payloadField": "slotStart",
+                            "base": 148,
+                            "encoding": "full_word",
+                        },
+                        {
+                            "payloadField": "gridChargeEnabled",
+                            "base": 172,
+                            "encoding": "bit:0",
+                            "clearMask": 3,
+                            "onValue": 1,
+                            "offValue": 0,
+                        },
+                    ],
+                },
+            }
+        ]
+    )
 
 
-def _make_executor(spec: RegisterSpec | None, read_word_side_effect=None, write_registers_side_effect=None):
+def _make_executor(
+    spec: RegisterSpec | None, read_word_side_effect=None, write_registers_side_effect=None
+):
     """Build a WriteExecutor with mocked transport functions.
 
     Returns (executor, mock_read_word, mock_write_registers).
@@ -155,6 +168,7 @@ def _make_executor(spec: RegisterSpec | None, read_word_side_effect=None, write_
 # ---------------------------------------------------------------------------
 # 1. Happy path — full_word (no prior needed)
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_dispatch_full_word_happy_path():
@@ -181,6 +195,7 @@ async def test_dispatch_full_word_happy_path():
 # 2. gen_force bit:13 — prior read + RMW + verify
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_dispatch_bit_field_prior_read_and_rmw():
     """gen_force bit:13 with clear_mask: prior read seeded → RMW word written → verified."""
@@ -205,6 +220,7 @@ async def test_dispatch_bit_field_prior_read_and_rmw():
 # ---------------------------------------------------------------------------
 # 2b. slot + bit:0 — prior read at slot-resolved address + RMW + verify
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_dispatch_slot_bit_field_prior_rmw():
@@ -241,9 +257,7 @@ async def test_dispatch_slot_bit_field_prior_rmw():
     assert mock_read.call_args_list[0].args[-1] == 174
 
     # write_registers called with exact (unit, address, value) pairs in field order
-    mock_write.assert_awaited_once_with(
-        executor._hass, spec, _CFG, [(1, 150, 800), (1, 174, 241)]
-    )
+    mock_write.assert_awaited_once_with(executor._hass, spec, _CFG, [(1, 150, 800), (1, 174, 241)])
 
     assert result == {"written": [[1, 150, 800], [1, 174, 241]], "verified": True}
 
@@ -251,6 +265,7 @@ async def test_dispatch_slot_bit_field_prior_rmw():
 # ---------------------------------------------------------------------------
 # 3. Unsupported command
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_dispatch_unsupported_command_raises():
@@ -269,6 +284,7 @@ async def test_dispatch_unsupported_command_raises():
 # 4. spec_holder.spec is None
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_dispatch_spec_none_raises():
     """spec_holder.spec is None → RuntimeError('spec_not_loaded')."""
@@ -285,6 +301,7 @@ async def test_dispatch_spec_none_raises():
 # ---------------------------------------------------------------------------
 # 5. Verify mismatch
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_dispatch_verify_mismatch_raises():
@@ -306,6 +323,7 @@ async def test_dispatch_verify_mismatch_raises():
 # 6. Prior read fails (bit field, read_word returns None)
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_dispatch_prior_read_fail_raises():
     """read_word returns None for a bit:N field prior → RuntimeError('prior_read_failed:...')."""
@@ -324,6 +342,7 @@ async def test_dispatch_prior_read_fail_raises():
 # ---------------------------------------------------------------------------
 # 7. Legacy set_battery_charge routes through dispatch
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_set_battery_charge_routes_through_dispatch():
@@ -345,6 +364,7 @@ async def test_set_battery_charge_routes_through_dispatch():
 # ---------------------------------------------------------------------------
 # 8. Verify read returning None → RuntimeError
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_dispatch_verify_read_none_raises():
@@ -375,9 +395,7 @@ async def test_dispatch_verify_read_none_raises():
 #    add-on ships) and prove a real cloud command name now resolves + writes.
 # ---------------------------------------------------------------------------
 
-_WRITE_VECTORS_PATH = (
-    Path(__file__).resolve().parents[1] / "fixtures" / "write-golden-vectors.json"
-)
+_WRITE_VECTORS_PATH = Path(__file__).resolve().parents[1] / "fixtures" / "write-golden-vectors.json"
 
 
 def _load_write_vectors() -> list[dict]:
@@ -433,8 +451,7 @@ async def test_real_set_prefixed_cloud_command_resolves_against_vendored_spec():
     executor, _registers, fake_read, fake_write = _executor_for_vector(vector)
 
     expected_writes = [
-        [w["unitId"], w["address"], w["value"]]
-        for w in vector["expectedRegisterWrites"]
+        [w["unitId"], w["address"], w["value"]] for w in vector["expectedRegisterWrites"]
     ]
 
     with (
@@ -455,8 +472,7 @@ async def test_legacy_set_battery_charge_alias_resolves_against_vendored_spec():
     executor, _registers, fake_read, fake_write = _executor_for_vector(vector)
 
     expected_writes = [
-        [w["unitId"], w["address"], w["value"]]
-        for w in vector["expectedRegisterWrites"]
+        [w["unitId"], w["address"], w["value"]] for w in vector["expectedRegisterWrites"]
     ]
 
     with (

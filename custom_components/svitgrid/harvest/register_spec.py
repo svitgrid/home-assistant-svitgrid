@@ -2,16 +2,23 @@
 
 Parses the JSON served by GET /api/v1/register-specs/:modelId. `writes` are
 parsed here (SP-C consumes them)."""
+
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
 
-BUILTIN_CATALOG = frozenset({
-    "pv_power_from_vi", "battery_sign_normalize", "battery_temp_clamp",
-    "phase_voltage_grid_or_load", "phase_load_ct_or_inverter",
-    "grid_relay_bit", "daily_grid_unavailable",
-})
+BUILTIN_CATALOG = frozenset(
+    {
+        "pv_power_from_vi",
+        "battery_sign_normalize",
+        "battery_temp_clamp",
+        "phase_voltage_grid_or_load",
+        "phase_load_ct_or_inverter",
+        "grid_relay_bit",
+        "daily_grid_unavailable",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -205,17 +212,11 @@ class RegisterSpec:
                 problems.extend(_validate_field_write(wc.command, fw, "top-level"))
             if wc.slot is not None:
                 if not wc.slot.index_field:
-                    problems.append(
-                        f"write command {wc.command!r} slot: missing index_field"
-                    )
+                    problems.append(f"write command {wc.command!r} slot: missing index_field")
                 if wc.slot.count < 1:
-                    problems.append(
-                        f"write command {wc.command!r} slot: count must be >= 1"
-                    )
+                    problems.append(f"write command {wc.command!r} slot: count must be >= 1")
                 if not wc.slot.fields:
-                    problems.append(
-                        f"write command {wc.command!r} slot: fields must be non-empty"
-                    )
+                    problems.append(f"write command {wc.command!r} slot: fields must be non-empty")
                 for fw in wc.slot.fields:
                     problems.extend(_validate_field_write(wc.command, fw, "slot"))
         return problems

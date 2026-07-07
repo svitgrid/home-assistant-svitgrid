@@ -1,4 +1,5 @@
 """Pure aggregation for raw->hourly->daily roll-ups (Sub-project 1)."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -39,5 +40,9 @@ def merge_hourly(hourly: list[dict[str, Any]]) -> dict[str, Any]:
     energy: dict[str, float] = {}
     for f in {f for h in hourly for f in h["energy"]}:
         energy[f] = max(h["energy"][f] for h in hourly if f in h["energy"])
-    return {"sample_count": sum(h["sample_count"] for h in hourly),
-            "avgs": avgs, "peaks": peaks, "energy": energy}
+    return {
+        "sample_count": sum(h["sample_count"] for h in hourly),
+        "avgs": avgs,
+        "peaks": peaks,
+        "energy": energy,
+    }

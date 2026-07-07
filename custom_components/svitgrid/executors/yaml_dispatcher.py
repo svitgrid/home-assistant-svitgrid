@@ -24,6 +24,7 @@ mechanics (compute args → call HA service) are identical. Anything more
 exotic (multi-register writes, conditional logic) is out of scope here;
 we add it when a real brand needs it.
 """
+
 from __future__ import annotations
 
 import logging
@@ -63,9 +64,7 @@ class YamlDispatcher(BaseExecutor):
                 _LOGGER.warning("Preset command missing id; skipping: %s", cmd)
         self._config = dict(config)
 
-    async def dispatch(
-        self, command_name: str, payload: dict[str, Any]
-    ) -> dict[str, Any]:
+    async def dispatch(self, command_name: str, payload: dict[str, Any]) -> dict[str, Any]:
         """Look up the command recipe, evaluate args, call the HA service.
 
         Returns a result dict the caller includes in the signed ACK so the
@@ -75,15 +74,11 @@ class YamlDispatcher(BaseExecutor):
         DslEvalError (or others) for evaluation / service-call failures."""
         recipe = self._by_id.get(command_name)
         if recipe is None:
-            raise UnsupportedCommandError(
-                f"Preset has no recipe for command {command_name!r}"
-            )
+            raise UnsupportedCommandError(f"Preset has no recipe for command {command_name!r}")
 
         service = recipe.get("service")
         if not isinstance(service, str) or "." not in service:
-            raise ValueError(
-                f"Command {command_name!r} has malformed service {service!r}"
-            )
+            raise ValueError(f"Command {command_name!r} has malformed service {service!r}")
         domain, service_name = service.split(".", 1)
 
         raw_args = recipe.get("args") or {}
@@ -91,19 +86,30 @@ class YamlDispatcher(BaseExecutor):
         for key, expression in raw_args.items():
             try:
                 resolved[key] = evaluate(
-                    expression, payload=payload, config=self._config,
+                    expression,
+                    payload=payload,
+                    config=self._config,
                 )
             except DslEvalError:
                 _LOGGER.warning(
-                    "DSL evaluation failed for %s.%s: %r", command_name, key, expression,
+                    "DSL evaluation failed for %s.%s: %r",
+                    command_name,
+                    key,
+                    expression,
                 )
                 raise
 
         _LOGGER.info(
-            "YamlDispatcher: %s → %s with %s", command_name, service, resolved,
+            "YamlDispatcher: %s → %s with %s",
+            command_name,
+            service,
+            resolved,
         )
         await self._hass.services.async_call(
-            domain, service_name, resolved, blocking=True,
+            domain,
+            service_name,
+            resolved,
+            blocking=True,
         )
         return {"service": service, "args": resolved}
 

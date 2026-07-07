@@ -2,6 +2,7 @@
 
 decode() mirrors reference_decoder.dart; sanitize() (Task 3) adds the
 spec-derivable reader clamps. Pinned by the golden-vector contract test."""
+
 from __future__ import annotations
 
 from .register_spec import Derivation, ReadDef, RegisterSpec
@@ -51,7 +52,7 @@ def decode(spec: RegisterSpec, raw: RawRegisters) -> dict[str, float | None]:
         elif x.op == "product":
             p = 1.0
             for f in x.inputs:
-                p *= (out.get(f) or 0.0)
+                p *= out.get(f) or 0.0
             out[x.field] = p
         elif x.op == "negate":
             v = out.get(x.inputs[0])
@@ -75,18 +76,20 @@ def decode(spec: RegisterSpec, raw: RawRegisters) -> dict[str, float | None]:
 # fields to match the Dart reader's behaviour. Explicitly-None entries (field key
 # present with value None — meaning the register was in reads but data was missing)
 # are intentionally left untouched.
-_STANDARD_ZERO_FIELDS: frozenset[str] = frozenset({
-    "batterySoc",
-    "batteryPower",
-    "batteryVoltage",
-    "gridPower",
-    "loadPower",
-    "totalPvPower",
-    "dailyPvEnergy",
-    "dailyGridImportEnergy",
-    "dailyGridExportEnergy",
-    "dailyLoadEnergy",
-})
+_STANDARD_ZERO_FIELDS: frozenset[str] = frozenset(
+    {
+        "batterySoc",
+        "batteryPower",
+        "batteryVoltage",
+        "gridPower",
+        "loadPower",
+        "totalPvPower",
+        "dailyPvEnergy",
+        "dailyGridImportEnergy",
+        "dailyGridExportEnergy",
+        "dailyLoadEnergy",
+    }
+)
 
 
 def sanitize(fields: dict[str, float | None], spec: RegisterSpec) -> dict[str, float | None]:
@@ -148,11 +151,13 @@ def _apply_builtin(d: Derivation, out: dict[str, float | None], spec: RegisterSp
         raise ValueError(f"unhandled builtin: {b}")
 
 
-def _phase_select(d: Derivation, out: dict[str, float | None], *, threshold: float, sum_gate: bool) -> None:
+def _phase_select(
+    d: Derivation, out: dict[str, float | None], *, threshold: float, sum_gate: bool
+) -> None:
     inputs = list(d.inputs)
     marker = inputs.index("|") if "|" in inputs else -1
     group_a = inputs if marker < 0 else inputs[:marker]
-    group_b = [] if marker < 0 else inputs[marker + 1:]
+    group_b = [] if marker < 0 else inputs[marker + 1 :]
     a = [(out.get(f) or 0.0) for f in group_a]
     b = [(out.get(f) or 0.0) for f in group_b]
     a_gate = (sum(a) > threshold) if sum_gate else (len(a) > 0 and a[0] > threshold)

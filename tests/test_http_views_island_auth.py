@@ -3,6 +3,7 @@
 Tests verify that each read view authorizes on HA-session OR X-Island-Key,
 instead of HA-session-only.  Written BEFORE implementation (RED phase).
 """
+
 from __future__ import annotations
 
 import pytest
@@ -31,16 +32,13 @@ class _FakeKeystore:
 
 class _FakeStore:
     async def live_snapshot(self):
-        return [{"inverterId": "inv-1", "ts": "2026-06-24T10:00:00Z",
-                 "payload": {"pvPower": 2.0}}]
+        return [{"inverterId": "inv-1", "ts": "2026-06-24T10:00:00Z", "payload": {"pvPower": 2.0}}]
 
     async def history_range(self, inverter_id, start, end):
-        return [{"day": "2026-06-23", "sample_count": 5,
-                 "avgs": {}, "peaks": {}, "energy": {}}]
+        return [{"day": "2026-06-23", "sample_count": 5, "avgs": {}, "peaks": {}, "energy": {}}]
 
     async def history_range_live(self, inverter_id, start, end):
-        return [{"day": "2026-06-23", "sample_count": 5,
-                 "avgs": {}, "peaks": {}, "energy": {}}]
+        return [{"day": "2026-06-23", "sample_count": 5, "avgs": {}, "peaks": {}, "energy": {}}]
 
     async def hourly_range(self, inverter_id, day):
         return []

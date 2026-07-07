@@ -12,6 +12,7 @@ is healthy without leaving HA:
 The last three sensors also carry attribute dicts (`recent`) with the
 last 10 events each — that's where the user sees the rolling history.
 """
+
 from __future__ import annotations
 
 import logging
@@ -24,7 +25,7 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -57,15 +58,17 @@ async def async_setup_entry(
     entities: list[SensorEntity] = []
     for inv in _inverters_from_entry(entry):
         inverter_id = inv["inverter_id"]
-        label = f'{inv.get("brand") or "Svitgrid"} {inv.get("model") or ""}'.strip()
-        entities.extend([
-            StatusSensor(activity, entry.entry_id, inverter_id, label),
-            LastIngestAtSensor(activity, entry.entry_id, inverter_id, label),
-            Ingests24hSensor(activity, entry.entry_id, inverter_id, label),
-            LastCommandAtSensor(activity, entry.entry_id, inverter_id, label),
-            Commands24hSensor(activity, entry.entry_id, inverter_id, label),
-            DiagnosticsSensor(activity, entry.entry_id, inverter_id, label),
-        ])
+        label = f"{inv.get('brand') or 'Svitgrid'} {inv.get('model') or ''}".strip()
+        entities.extend(
+            [
+                StatusSensor(activity, entry.entry_id, inverter_id, label),
+                LastIngestAtSensor(activity, entry.entry_id, inverter_id, label),
+                Ingests24hSensor(activity, entry.entry_id, inverter_id, label),
+                LastCommandAtSensor(activity, entry.entry_id, inverter_id, label),
+                Commands24hSensor(activity, entry.entry_id, inverter_id, label),
+                DiagnosticsSensor(activity, entry.entry_id, inverter_id, label),
+            ]
+        )
     async_add_entities(entities)
 
 

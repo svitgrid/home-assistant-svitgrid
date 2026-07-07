@@ -18,6 +18,7 @@ GATED: this coroutine is spawned ONLY when cloud_ingest_enabled=False (pure
 island mode).  With cloud-sync ON the cloud engine handles calendar events;
 double-fire must not occur.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -143,9 +144,7 @@ async def run_event_scheduler_loop(
     GATED: spawned ONLY when cloud_ingest_enabled=False.  With cloud-sync ON
     the cloud engine handles events; double-fire must not occur.
     """
-    _LOGGER.info(
-        "Island event scheduler loop started (interval=%ss, tz=%s)", interval_s, tz
-    )
+    _LOGGER.info("Island event scheduler loop started (interval=%ss, tz=%s)", interval_s, tz)
 
     while not hass.is_stopping:
         try:

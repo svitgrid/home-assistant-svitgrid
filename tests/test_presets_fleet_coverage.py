@@ -11,6 +11,7 @@ a line here AND the presets/<doc-id>.yaml file — otherwise this test fails CI.
 The two repos have no shared source of truth, so this list is the seam; keep it
 in step with models_catalog.dart.
 """
+
 from __future__ import annotations
 
 import pathlib
@@ -85,9 +86,7 @@ def _all_preset_files() -> list[pathlib.Path]:
     return sorted(PRESETS_DIR.glob("*.yaml"))
 
 
-@pytest.mark.parametrize(
-    "path", _all_preset_files(), ids=lambda p: p.stem
-)
+@pytest.mark.parametrize("path", _all_preset_files(), ids=lambda p: p.stem)
 def test_every_preset_uses_canonical_entity_map_keys(path):
     """A typo'd entityMap key is sent and silently stripped by the API, so the
     field never lights up. Lock every preset to ALL_FIELDS, not just the

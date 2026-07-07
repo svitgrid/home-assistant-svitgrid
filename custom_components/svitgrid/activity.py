@@ -11,19 +11,21 @@ Memory-only — restart clears history. That's fine: the API has the
 authoritative reading + command history; this is just a fast-glance
 status view inside HA.
 """
+
 from __future__ import annotations
 
 from collections import deque
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Iterable
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 _RECENT_BUFFER_SIZE = 10
 _COUNTER_WINDOW = timedelta(hours=24)
 
 
 def _utc_now() -> datetime:
-    return datetime.now(tz=timezone.utc)
+    return datetime.now(tz=UTC)
 
 
 @dataclass
@@ -87,13 +89,15 @@ class ActivityTracker:
         self.last_ingest_status = "ok"
         self._ingest_times.append(now)
         self._prune_window(self._ingest_times, now)
-        self._recent_ingests.append({
-            "at": now.isoformat(),
-            "status": "ok",
-            "sample_count": sample_count,
-            "period_sec": period_sec,
-            "summary": dict(summary),
-        })
+        self._recent_ingests.append(
+            {
+                "at": now.isoformat(),
+                "status": "ok",
+                "sample_count": sample_count,
+                "period_sec": period_sec,
+                "summary": dict(summary),
+            }
+        )
 
     def record_ingest_failure(self, *, reason: str) -> None:
         """Called by readings_publisher on 4xx/5xx (or network error)."""
@@ -103,11 +107,13 @@ class ActivityTracker:
         self.last_ingest_status = "error"
         self._ingest_times.append(now)
         self._prune_window(self._ingest_times, now)
-        self._recent_ingests.append({
-            "at": now.isoformat(),
-            "status": "error",
-            "reason": reason,
-        })
+        self._recent_ingests.append(
+            {
+                "at": now.isoformat(),
+                "status": "error",
+                "reason": reason,
+            }
+        )
 
     def record_ingest_skipped(
         self,
@@ -124,12 +130,14 @@ class ActivityTracker:
         self._status = "waiting"
         self.last_ingest_at = now
         self.last_ingest_status = "skipped"
-        self._recent_ingests.append({
-            "at": now.isoformat(),
-            "status": "skipped",
-            "missing_fields": list(missing_fields),
-            "entities": dict(entities),
-        })
+        self._recent_ingests.append(
+            {
+                "at": now.isoformat(),
+                "status": "skipped",
+                "missing_fields": list(missing_fields),
+                "entities": dict(entities),
+            }
+        )
 
     @property
     def ingest_count_24h(self) -> int:
@@ -176,13 +184,15 @@ class ActivityTracker:
         self.last_command_kind = kind
         self._command_times.append(now)
         self._prune_window(self._command_times, now)
-        self._recent_commands.append({
-            "at": now.isoformat(),
-            "kind": kind,
-            "success": success,
-            "payload": dict(payload),
-            "result": dict(result) if isinstance(result, dict) else result,
-        })
+        self._recent_commands.append(
+            {
+                "at": now.isoformat(),
+                "kind": kind,
+                "success": success,
+                "payload": dict(payload),
+                "result": dict(result) if isinstance(result, dict) else result,
+            }
+        )
 
     @property
     def command_count_24h(self) -> int:

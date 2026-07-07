@@ -1,6 +1,7 @@
 """Wire transport: plan contiguous register ranges from the spec, then read
 them over Solarman V5 (pysolarmanv5) or Modbus TCP (pymodbus). All blocking
 socket I/O is run by the caller via hass.async_add_executor_job."""
+
 from __future__ import annotations
 
 import contextlib
@@ -94,7 +95,9 @@ def _read_solarman(cfg: dict, ranges: list[tuple[int, int, int, str]]) -> RawReg
 
     # Import pysolarmanv5-specific connection error defensively; fall back to OSError.
     try:
-        from pysolarmanv5 import NoSocketAvailableError as _NoSocketAvailableError  # type: ignore[attr-defined]
+        from pysolarmanv5 import (
+            NoSocketAvailableError as _NoSocketAvailableError,  # type: ignore[attr-defined]
+        )
     except (ImportError, AttributeError):
         _NoSocketAvailableError = OSError  # type: ignore[assignment,misc]
 
@@ -174,9 +177,7 @@ def _read_solarman(cfg: dict, ranges: list[tuple[int, int, int, str]]) -> RawReg
             sm.disconnect()
 
     if not out:
-        raise RuntimeError(
-            "solarman: all ranges failed — logger unreachable or no registers read"
-        )
+        raise RuntimeError("solarman: all ranges failed — logger unreachable or no registers read")
     return out
 
 
@@ -203,9 +204,7 @@ def _read_modbus(cfg: dict, ranges: list[tuple[int, int, int, str]]) -> RawRegis
             else:
                 rr = client.read_holding_registers(start, count=count, device_id=unit_id)
             if rr.isError():
-                _LOGGER.debug(
-                    "modbus read error unit=%s addr=%s: %s", unit_id, start, rr
-                )
+                _LOGGER.debug("modbus read error unit=%s addr=%s: %s", unit_id, start, rr)
                 continue
             slot = out.setdefault(unit_id, {})
             for i, w in enumerate(rr.registers):
@@ -219,6 +218,7 @@ def _read_modbus(cfg: dict, ranges: list[tuple[int, int, int, str]]) -> RawRegis
 # ---------------------------------------------------------------------------
 # Write path
 # ---------------------------------------------------------------------------
+
 
 async def read_word(hass, spec: RegisterSpec, cfg: dict, unit_id: int, address: int) -> int | None:
     """Read a single register and return its value, or ``None`` on any error.
@@ -304,9 +304,7 @@ def _write_modbus(cfg: dict, writes: list[tuple[int, int, int]]) -> None:
         for unit_id, address, value in writes:
             result = client.write_registers(address, [value], device_id=unit_id)
             if result.isError():
-                raise RuntimeError(
-                    f"modbus write error unit={unit_id} addr={address}: {result}"
-                )
+                raise RuntimeError(f"modbus write error unit={unit_id} addr={address}: {result}")
     finally:
         with contextlib.suppress(Exception):
             client.close()

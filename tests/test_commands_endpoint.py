@@ -9,6 +9,7 @@ Written BEFORE implementation (RED phase). Tests cover:
 - unknown inverterId → 404
 - same commandId twice → second returns deduped:true, executor called once
 """
+
 from __future__ import annotations
 
 import json
@@ -109,9 +110,7 @@ def _install_keystore(
 def _install_executor(hass, inverter_id: str, executor) -> None:
     """Wire an executor into hass.data[DOMAIN] under a fake entry key."""
     hass.data.setdefault(DOMAIN, {})
-    hass.data[DOMAIN]["__test_entry__"] = {
-        "executors_by_inverter": {inverter_id: executor}
-    }
+    hass.data[DOMAIN]["__test_entry__"] = {"executors_by_inverter": {inverter_id: executor}}
 
 
 def _make_signed_body(
@@ -167,7 +166,9 @@ async def test_valid_key_valid_sig_known_cmd_returns_200_result(hass):
     _install_executor(hass, INVERTER_ID, executor)
 
     body = _make_signed_body(
-        private_key, key_id, "set_battery_charge",
+        private_key,
+        key_id,
+        "set_battery_charge",
         {"inverterId": INVERTER_ID, "chargeW": 3000},
     )
     view = SvitgridCommandsView()
@@ -195,7 +196,9 @@ async def test_valid_key_bad_sig_returns_403_executor_not_called(hass):
     _install_executor(hass, INVERTER_ID, executor)
 
     body = _make_signed_body(
-        private_key, key_id, "set_battery_charge",
+        private_key,
+        key_id,
+        "set_battery_charge",
         {"inverterId": INVERTER_ID, "chargeW": 3000},
         corrupt_sig=True,
     )
@@ -221,7 +224,9 @@ async def test_valid_key_unsupported_cmd_returns_422(hass):
     _install_executor(hass, INVERTER_ID, executor)
 
     body = _make_signed_body(
-        private_key, key_id, "unsupported_cmd",
+        private_key,
+        key_id,
+        "unsupported_cmd",
         {"inverterId": INVERTER_ID},
     )
     view = SvitgridCommandsView()
@@ -245,7 +250,9 @@ async def test_valid_key_executor_error_returns_502_with_detail(hass):
     _install_executor(hass, INVERTER_ID, executor)
 
     body = _make_signed_body(
-        private_key, key_id, "set_battery_charge",
+        private_key,
+        key_id,
+        "set_battery_charge",
         {"inverterId": INVERTER_ID, "chargeW": 1000},
     )
     view = SvitgridCommandsView()
@@ -270,7 +277,9 @@ async def test_no_island_key_returns_401_nothing_dispatched(hass):
     _install_executor(hass, INVERTER_ID, executor)
 
     body = _make_signed_body(
-        private_key, key_id, "set_battery_charge",
+        private_key,
+        key_id,
+        "set_battery_charge",
         {"inverterId": INVERTER_ID, "chargeW": 1000},
     )
     view = SvitgridCommandsView()
@@ -296,7 +305,9 @@ async def test_wrong_island_key_returns_401(hass):
     _install_executor(hass, INVERTER_ID, executor)
 
     body = _make_signed_body(
-        private_key, key_id, "set_battery_charge",
+        private_key,
+        key_id,
+        "set_battery_charge",
         {"inverterId": INVERTER_ID, "chargeW": 1000},
     )
     view = SvitgridCommandsView()
@@ -321,7 +332,9 @@ async def test_unknown_inverter_id_returns_404(hass):
     _install_executor(hass, "other-inverter-id", executor)
 
     body = _make_signed_body(
-        private_key, key_id, "set_battery_charge",
+        private_key,
+        key_id,
+        "set_battery_charge",
         # inverterId does NOT match installed executor
         {"inverterId": "totally-unknown-inverter"},
     )
@@ -347,7 +360,9 @@ async def test_same_command_id_twice_deduped_executor_called_once(hass):
     _install_executor(hass, INVERTER_ID, executor)
 
     body = _make_signed_body(
-        private_key, key_id, "set_battery_charge",
+        private_key,
+        key_id,
+        "set_battery_charge",
         {"inverterId": INVERTER_ID, "chargeW": 2000},
         command_id="cmd-uuid-abc123",
     )
@@ -428,6 +443,7 @@ async def test_command_mismatch_top_level_command_differs_from_signed(hass):
     # Build a body where signed command is "set_battery_charge" but top-level is different
     signed_payload = {"inverterId": INVERTER_ID, "chargeW": 3000}
     from custom_components.svitgrid.signing import sign_payload
+
     signed_event_data = {"command": "set_battery_charge", "payload": signed_payload}
     signature = sign_payload(signed_event_data, private_key)
 
@@ -460,6 +476,7 @@ async def test_command_mismatch_top_level_payload_differs_from_signed(hass):
     _install_executor(hass, INVERTER_ID, executor)
 
     from custom_components.svitgrid.signing import sign_payload
+
     signed_payload = {"inverterId": INVERTER_ID, "chargeW": 3000}
     signed_event_data = {"command": "set_battery_charge", "payload": signed_payload}
     signature = sign_payload(signed_event_data, private_key)
@@ -494,6 +511,7 @@ async def test_signed_event_data_missing_command_field_returns_400(hass):
     _install_executor(hass, INVERTER_ID, executor)
 
     from custom_components.svitgrid.signing import sign_payload
+
     # signedEventData is missing 'command'
     signed_event_data = {"payload": {"inverterId": INVERTER_ID}}
     signature = sign_payload(signed_event_data, private_key)
@@ -527,6 +545,7 @@ async def test_signed_event_data_non_dict_payload_returns_400(hass):
     _install_executor(hass, INVERTER_ID, executor)
 
     from custom_components.svitgrid.signing import sign_payload
+
     # signedEventData has a list as payload (not a dict)
     signed_event_data = {"command": "set_battery_charge", "payload": ["this", "is", "a", "list"]}
     signature = sign_payload(signed_event_data, private_key)

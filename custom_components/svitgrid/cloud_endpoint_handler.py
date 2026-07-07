@@ -49,18 +49,18 @@ async def probe_endpoint_auth(
     try:
         async with session.get(url, headers={"x-api-key": api_key}) as resp:
             if resp.status == 200:
-                _LOGGER.debug(
-                    "set_cloud_endpoint probe OK: %s returned 200", url
-                )
+                _LOGGER.debug("set_cloud_endpoint probe OK: %s returned 200", url)
                 return True
             _LOGGER.warning(
                 "set_cloud_endpoint probe failed: %s returned HTTP %s",
-                url, resp.status,
+                url,
+                resp.status,
             )
             return False
     except Exception:  # noqa: BLE001
         _LOGGER.warning(
-            "set_cloud_endpoint probe failed: network error reaching %s", url,
+            "set_cloud_endpoint probe failed: network error reaching %s",
+            url,
             exc_info=True,
         )
         return False

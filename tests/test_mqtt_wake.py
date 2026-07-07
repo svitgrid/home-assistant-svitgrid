@@ -6,6 +6,7 @@ Strategy: mock paho.mqtt.client.Client at the module level so we can:
 - Verify wake_event.set is invoked on message arrival
 - Verify get_mqtt_token is re-called on reconnect (JWT re-mint)
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -15,12 +16,12 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-
 # ─── paho.mqtt stub ────────────────────────────────────────────────────
 #
 # Inject a minimal fake paho package so mqtt_wake's lazy `import
 # paho.mqtt.client` resolves without installing the real lib. The fake's
 # Client class captures callbacks + exposes triggers the tests use.
+
 
 def _install_paho_stub():
     """Returns (fake_module, FakeClient)."""
@@ -174,10 +175,12 @@ async def test_remints_token_on_reconnect(paho_fake, token_payload):
     from custom_components.svitgrid.mqtt_wake import run_loop
 
     api = MagicMock()
-    api.get_mqtt_token = AsyncMock(side_effect=[
-        token_payload,  # first mint
-        {**token_payload, "token": "eyJ_second_jwt"},  # re-mint
-    ])
+    api.get_mqtt_token = AsyncMock(
+        side_effect=[
+            token_payload,  # first mint
+            {**token_payload, "token": "eyJ_second_jwt"},  # re-mint
+        ]
+    )
     hass = _mock_hass_stops_after(2)  # two iterations
     wake_event = asyncio.Event()
 
@@ -216,8 +219,8 @@ async def test_remints_token_on_reconnect(paho_fake, token_payload):
 @pytest.mark.asyncio
 async def test_token_mint_failure_backs_off(paho_fake, monkeypatch):
     """If get_mqtt_token raises, the loop logs + sleeps (exp backoff) and retries."""
-    from custom_components.svitgrid.api_client import SvitgridApiError
     from custom_components.svitgrid import mqtt_wake
+    from custom_components.svitgrid.api_client import SvitgridApiError
 
     sleeps: list[float] = []
 
@@ -232,7 +235,10 @@ async def test_token_mint_failure_backs_off(paho_fake, monkeypatch):
     wake_event = asyncio.Event()
 
     await mqtt_wake.run_loop(
-        hass=hass, api_client=api, api_key="k", wake_event=wake_event,
+        hass=hass,
+        api_client=api,
+        api_key="k",
+        wake_event=wake_event,
     )
 
     # Two failed iterations → two backoff sleeps (initial 5s, then 10s)
@@ -276,7 +282,10 @@ async def test_client_torn_down_before_backoff_sleep(paho_fake, token_payload, m
 
     # Never trigger_connect → the CONNECT wait times out → except → backoff.
     await mqtt_wake.run_loop(
-        hass=hass, api_client=api, api_key="k", wake_event=wake_event,
+        hass=hass,
+        api_client=api,
+        api_key="k",
+        wake_event=wake_event,
     )
 
     assert loop_stopped_at_sleep, "expected a backoff sleep after the connect timeout"
@@ -294,7 +303,9 @@ async def test_returns_silently_if_paho_unavailable(monkeypatch, token_payload):
         if k.startswith("paho"):
             sys.modules.pop(k)
     # Force ImportError for paho.mqtt.client
-    real_import = __builtins__["__import__"] if isinstance(__builtins__, dict) else __builtins__.__import__
+    real_import = (
+        __builtins__["__import__"] if isinstance(__builtins__, dict) else __builtins__.__import__
+    )
 
     def fake_import(name, *args, **kwargs):
         if name == "paho.mqtt.client" or name.startswith("paho.mqtt"):

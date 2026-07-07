@@ -18,6 +18,7 @@ re-exported by ``homeassistant.components.http.const``.  HA's own middleware
 sets ``request[KEY_AUTHENTICATED] = True`` after successful auth check (see
 ``homeassistant/helpers/http.py`` line 58).
 """
+
 from __future__ import annotations
 
 import hmac

@@ -8,7 +8,6 @@ from custom_components.svitgrid.preset_refresh import (
     should_merge,
 )
 
-
 # ---------------------------------------------------------------------------
 # merge_entity_map
 # ---------------------------------------------------------------------------
@@ -16,13 +15,17 @@ from custom_components.svitgrid.preset_refresh import (
 
 def test_merge_adds_only_missing_keys():
     cur = {"pv1Power": "sensor.a", "gridPower": "sensor.b"}
-    preset = {"pv1Power": "sensor.DIFFERENT", "dailyLossesEnergy": "sensor.loss", "loadFrequency": "sensor.lf"}
+    preset = {
+        "pv1Power": "sensor.DIFFERENT",
+        "dailyLossesEnergy": "sensor.loss",
+        "loadFrequency": "sensor.lf",
+    }
     merged, added = merge_entity_map(cur, preset)
-    assert merged["pv1Power"] == "sensor.a"          # existing NOT overwritten
+    assert merged["pv1Power"] == "sensor.a"  # existing NOT overwritten
     assert merged["dailyLossesEnergy"] == "sensor.loss"  # new added
     assert merged["loadFrequency"] == "sensor.lf"
     assert set(added) == {"dailyLossesEnergy", "loadFrequency"}
-    assert merged["gridPower"] == "sensor.b"          # existing key kept (no removal)
+    assert merged["gridPower"] == "sensor.b"  # existing key kept (no removal)
 
 
 def test_merge_noop_returns_empty_added():
@@ -38,11 +41,11 @@ def test_merge_noop_returns_empty_added():
 
 
 def test_should_merge_version_gate():
-    assert should_merge("6", 0) is True      # missing/0 stored -> catch up
-    assert should_merge("6", "5") is True    # newer
-    assert should_merge("6", "6") is False   # equal -> skip
-    assert should_merge("5", "6") is False   # older -> skip
-    assert should_merge(6, None) is True     # missing stored -> merge
+    assert should_merge("6", 0) is True  # missing/0 stored -> catch up
+    assert should_merge("6", "5") is True  # newer
+    assert should_merge("6", "6") is False  # equal -> skip
+    assert should_merge("5", "6") is False  # older -> skip
+    assert should_merge(6, None) is True  # missing stored -> merge
 
 
 # ---------------------------------------------------------------------------
@@ -61,14 +64,14 @@ async def test_refresh_merges_and_records_version():
     out, changed = await refresh_entry_inverters(invs, fetch, log=lambda *_: None)
     assert changed is True
     assert out[0]["entity_map"]["dailyLossesEnergy"] == "s.loss"
-    assert out[0]["entity_map"]["pv1Power"] == "s.a"   # not overwritten
+    assert out[0]["entity_map"]["pv1Power"] == "s.a"  # not overwritten
     assert str(out[0]["merged_preset_version"]) == "6"
 
 
 @pytest.mark.asyncio
 async def test_refresh_skips_manual_mode_and_failopen():
     invs = [
-        {"inverterId": "manual", "entity_map": {"pv1Power": "s.a"}},          # no preset_id
+        {"inverterId": "manual", "entity_map": {"pv1Power": "s.a"}},  # no preset_id
         {"inverterId": "err", "preset_id": "p", "entity_map": {}},
     ]
 
@@ -77,12 +80,19 @@ async def test_refresh_skips_manual_mode_and_failopen():
 
     out, changed = await refresh_entry_inverters(invs, fetch, log=lambda *_: None)
     assert changed is False
-    assert out == invs   # untouched
+    assert out == invs  # untouched
 
 
 @pytest.mark.asyncio
 async def test_refresh_noop_when_version_not_newer():
-    invs = [{"inverterId": "i1", "preset_id": "p1", "entity_map": {"pv1Power": "s.a"}, "merged_preset_version": "6"}]
+    invs = [
+        {
+            "inverterId": "i1",
+            "preset_id": "p1",
+            "entity_map": {"pv1Power": "s.a"},
+            "merged_preset_version": "6",
+        }
+    ]
 
     async def fetch(pid):
         return {"version": "6", "entityMap": {"dailyLossesEnergy": "s.loss"}}
@@ -94,9 +104,14 @@ async def test_refresh_noop_when_version_not_newer():
 
 @pytest.mark.asyncio
 async def test_refresh_records_version_when_all_keys_already_present():
-    invs = [{"inverterId": "i1", "preset_id": "p1",
-             "entity_map": {"pv1Power": "s.a"},
-             "merged_preset_version": "5"}]
+    invs = [
+        {
+            "inverterId": "i1",
+            "preset_id": "p1",
+            "entity_map": {"pv1Power": "s.a"},
+            "merged_preset_version": "5",
+        }
+    ]
 
     async def fetch(pid):
         return {"version": "6", "entityMap": {"pv1Power": "s.z"}}  # all keys already present
@@ -104,7 +119,7 @@ async def test_refresh_records_version_when_all_keys_already_present():
     out, changed = await refresh_entry_inverters(invs, fetch, log=lambda *_: None)
     assert changed is True
     assert str(out[0]["merged_preset_version"]) == "6"
-    assert out[0]["entity_map"]["pv1Power"] == "s.a"   # untouched (add-only)
+    assert out[0]["entity_map"]["pv1Power"] == "s.a"  # untouched (add-only)
 
 
 @pytest.mark.asyncio

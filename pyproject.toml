@@ -6,6 +6,12 @@ target-version = "py311"
 select = ["E", "F", "W", "I", "UP", "B", "SIM", "ASYNC"]
 ignore = ["E501"]
 
+[tool.ruff.lint.per-file-ignores]
+# Tests keep section-local imports (E402) and intentionally nested `with`
+# blocks (SIM117) — the inner context is scoped to a single asserted action
+# (e.g. caplog around one call) and merging it hurts readability.
+"tests/**" = ["E402", "SIM117"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]

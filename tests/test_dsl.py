@@ -5,6 +5,7 @@ The DSL is a tiny safe subset of Python expressions — no statements, no
 attribute access, no calls except whitelisted helpers. Two namespaces
 exposed: `payload` (the command's payload dict) and `config` (preset
 config from /finalize, e.g. battery_voltage, hub_name, slave_id)."""
+
 from __future__ import annotations
 
 import pytest
@@ -13,7 +14,6 @@ from custom_components.svitgrid.dsl import (
     DslEvalError,
     evaluate,
 )
-
 
 # ── Happy path: arithmetic + namespace refs ───────────────────────────
 
@@ -27,7 +27,10 @@ def test_literal_float():
 
 
 def test_payload_ref():
-    assert evaluate("payload.chargePowerLimitW", payload={"chargePowerLimitW": 2000}, config={}) == 2000
+    assert (
+        evaluate("payload.chargePowerLimitW", payload={"chargePowerLimitW": 2000}, config={})
+        == 2000
+    )
 
 
 def test_config_ref():
@@ -35,19 +38,25 @@ def test_config_ref():
 
 
 def test_division():
-    assert evaluate(
-        "payload.chargePowerLimitW / config.battery_voltage",
-        payload={"chargePowerLimitW": 2640},
-        config={"battery_voltage": 52.8},
-    ) == 50.0
+    assert (
+        evaluate(
+            "payload.chargePowerLimitW / config.battery_voltage",
+            payload={"chargePowerLimitW": 2640},
+            config={"battery_voltage": 52.8},
+        )
+        == 50.0
+    )
 
 
 def test_round_call():
-    assert evaluate(
-        "round(payload.chargePowerLimitW / config.battery_voltage / 0.1)",
-        payload={"chargePowerLimitW": 2640},
-        config={"battery_voltage": 52.8},
-    ) == 500
+    assert (
+        evaluate(
+            "round(payload.chargePowerLimitW / config.battery_voltage / 0.1)",
+            payload={"chargePowerLimitW": 2640},
+            config={"battery_voltage": 52.8},
+        )
+        == 500
+    )
 
 
 def test_min_max_abs():
@@ -62,11 +71,14 @@ def test_int_float_coercion():
 
 
 def test_nested_arithmetic():
-    assert evaluate(
-        "(payload.a + payload.b) * config.scale",
-        payload={"a": 10, "b": 5},
-        config={"scale": 2},
-    ) == 30
+    assert (
+        evaluate(
+            "(payload.a + payload.b) * config.scale",
+            payload={"a": 10, "b": 5},
+            config={"scale": 2},
+        )
+        == 30
+    )
 
 
 def test_unary_minus():

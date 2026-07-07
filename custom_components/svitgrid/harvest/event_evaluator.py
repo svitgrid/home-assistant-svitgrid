@@ -25,6 +25,7 @@ from zoneinfo import ZoneInfo
 
 # ─────────────────────────────── Window helpers ───────────────────────────────
 
+
 def parse_time_to_minutes(hhmm: str) -> int:
     """Convert "HH:mm" to minutes since midnight.
 
@@ -106,6 +107,7 @@ def is_event_in_window(schedule: dict, now_utc: datetime, tz: str) -> bool:
 
 # ─────────────────────────── EvaluatorDecision ───────────────────────────────
 
+
 @dataclass
 class EvaluatorDecision:
     """Result of evaluate_event.
@@ -134,14 +136,17 @@ _RELAY_GLITCH_MIN_POWER_W = 200.0
 _GEN_FORCE_START_SUSTAIN_MIN = 1  # minutes
 
 # Condition types that require cloud data — NEVER evaluated locally
-_CLOUD_CONDITION_TYPES: frozenset[str] = frozenset({
-    "forecast_today",
-    "dam_price",
-    "scheduled_outage",
-})
+_CLOUD_CONDITION_TYPES: frozenset[str] = frozenset(
+    {
+        "forecast_today",
+        "dam_price",
+        "scheduled_outage",
+    }
+)
 
 
 # ─────────────────── Grid presence (derive-grid-present.ts) ──────────────────
+
 
 def _derive_grid_present(reading: dict) -> bool | None:
     """Port of deriveGridPresent. Returns True / False / None."""
@@ -191,6 +196,7 @@ def _derive_grid_present(reading: dict) -> bool | None:
 
 # ─────────────────── Timestamp helpers ───────────────────────────────────────
 
+
 def _iso_to_ms(value: str | float | int | None) -> float | None:
     """Convert an ISO-8601 string or epoch-ms number to epoch milliseconds."""
     if value is None:
@@ -224,6 +230,7 @@ def _time_to_packed_hhmm(hhmm: str) -> int:
 
 
 # ─────────────────── Gen-force decision (gen-force-decision.ts) ──────────────
+
 
 def _parse_hm(hm: str) -> int:
     h, m = hm.split(":")
@@ -264,7 +271,9 @@ def _decide_gen_force(
     soc_demand = True if soc_start is None else soc <= float(soc_start)
     activation_desired = grid_permitted and soc_demand
 
-    quiet = _in_quiet_hours(now_local_min, config.get("quietHoursStart"), config.get("quietHoursEnd"))
+    quiet = _in_quiet_hours(
+        now_local_min, config.get("quietHoursStart"), config.get("quietHoursEnd")
+    )
     crit_soc = config.get("quietHoursCriticalOverrideSoc")
     crit_override = crit_soc is not None and soc <= float(crit_soc)
     quiet_blocked = quiet and not crit_override
@@ -298,7 +307,8 @@ def _decide_gen_force(
         cms_ms = _iso_to_ms(state.get("conditionMetSince"))
         if cms_ms is not None and (now_ms - cms_ms) >= _GEN_FORCE_START_SUSTAIN_MIN * 60_000.0:
             reason = (
-                "low_soc" if (soc_demand and soc_start is not None)
+                "low_soc"
+                if (soc_demand and soc_start is not None)
                 else ("grid_unavailable" if grid_gated else "scheduled")
             )
             return {"action": "activate", "reason": reason}
@@ -315,6 +325,7 @@ def _decide_gen_force(
 
 
 # ─────────────────── Custom conditions (custom-event-decision.ts) ─────────────
+
 
 def _numeric_holds(
     op: str,
@@ -337,20 +348,26 @@ def _one_holds(condition: dict, signals: dict, held: bool) -> bool:
         if soc is None:
             return False
         return _numeric_holds(
-            condition["op"], float(soc),
-            float(condition["threshold"]), condition.get("releaseThreshold"),
+            condition["op"],
+            float(soc),
+            float(condition["threshold"]),
+            condition.get("releaseThreshold"),
             held,
         )
     if ctype == "pv_power":
         return _numeric_holds(
-            condition["op"], float(signals.get("pvPowerW", 0)),
-            float(condition["thresholdW"]), condition.get("releaseThresholdW"),
+            condition["op"],
+            float(signals.get("pvPowerW", 0)),
+            float(condition["thresholdW"]),
+            condition.get("releaseThresholdW"),
             held,
         )
     if ctype == "load_power":
         return _numeric_holds(
-            condition["op"], float(signals.get("loadPowerW", 0)),
-            float(condition["thresholdW"]), condition.get("releaseThresholdW"),
+            condition["op"],
+            float(signals.get("loadPowerW", 0)),
+            float(condition["thresholdW"]),
+            condition.get("releaseThresholdW"),
             held,
         )
     if ctype == "grid":
@@ -415,6 +432,7 @@ def _decide_custom_event(
 
 # ─────────────────── Restore-command builders ────────────────────────────────
 
+
 def _restore_commands(event: dict, exec_state: dict) -> list:
     """Return the restore (de-activation) command list for the given mode."""
     mode = event.get("mode", "")
@@ -441,25 +459,35 @@ def _restore_commands(event: dict, exec_state: dict) -> list:
         prev_sell = exec_state.get("maintenancePriorSolarSell", False)
         cmds.append(("set_solar_sell", {"solarSell": 1 if prev_sell else 0}))
         if exec_state.get("gridFallbackFired"):
-            cmds.append(("set_battery_charge", {
-                "gridChargeEnabled": False,
-                "gridChargeSoc": 0,
-                "slotIndex": 0,
-                "disableOtherSlots": False,
-                "slotStart": _time_to_packed_hhmm(schedule.get("startTime", "00:00")),
-                "slotEnd": _time_to_packed_hhmm(schedule.get("endTime", "23:59")),
-            }))
+            cmds.append(
+                (
+                    "set_battery_charge",
+                    {
+                        "gridChargeEnabled": False,
+                        "gridChargeSoc": 0,
+                        "slotIndex": 0,
+                        "disableOtherSlots": False,
+                        "slotStart": _time_to_packed_hhmm(schedule.get("startTime", "00:00")),
+                        "slotEnd": _time_to_packed_hhmm(schedule.get("endTime", "23:59")),
+                    },
+                )
+            )
         return cmds
 
     if mode == "battery_charge":
-        return [("set_battery_charge", {
-            "gridChargeEnabled": False,
-            "gridChargeSoc": 0,
-            "slotIndex": 0,
-            "disableOtherSlots": False,
-            "slotStart": _time_to_packed_hhmm(schedule.get("startTime", "00:00")),
-            "slotEnd": _time_to_packed_hhmm(schedule.get("endTime", "23:59")),
-        })]
+        return [
+            (
+                "set_battery_charge",
+                {
+                    "gridChargeEnabled": False,
+                    "gridChargeSoc": 0,
+                    "slotIndex": 0,
+                    "disableOtherSlots": False,
+                    "slotStart": _time_to_packed_hhmm(schedule.get("startTime", "00:00")),
+                    "slotEnd": _time_to_packed_hhmm(schedule.get("endTime", "23:59")),
+                },
+            )
+        ]
 
     if mode == "custom":
         actions = config.get("customActions") or []
@@ -473,6 +501,7 @@ def _restore_commands(event: dict, exec_state: dict) -> list:
 
 
 # ─────────────────── Main entry point ────────────────────────────────────────
+
 
 def evaluate_event(
     event: dict,
@@ -494,14 +523,18 @@ def evaluate_event(
     # ── Cloud-only mode ────────────────────────────────────────────────────────
     if mode == "day_planning":
         return EvaluatorDecision(
-            action="skip", commands=[], new_state=dict(exec_state),
+            action="skip",
+            commands=[],
+            new_state=dict(exec_state),
             skip_reason="cloud_only_mode",
         )
 
     # ── Per-mode cloud-only config checks ─────────────────────────────────────
     if mode == "gen_force" and config.get("requireScheduledOutage"):
         return EvaluatorDecision(
-            action="skip", commands=[], new_state=dict(exec_state),
+            action="skip",
+            commands=[],
+            new_state=dict(exec_state),
             skip_reason="requires_scheduled_outage",
         )
 
@@ -509,7 +542,9 @@ def evaluate_event(
         conditions = config.get("customConditions") or []
         if any(c.get("type") in _CLOUD_CONDITION_TYPES for c in conditions):
             return EvaluatorDecision(
-                action="skip", commands=[], new_state=dict(exec_state),
+                action="skip",
+                commands=[],
+                new_state=dict(exec_state),
                 skip_reason="cloud_only_condition",
             )
 
@@ -526,7 +561,9 @@ def evaluate_event(
             new_state.pop("lastActivatedAt", None)
             new_state.pop("conditionMetSince", None)
             new_state.pop("conditionLostSince", None)
-            return EvaluatorDecision(action="deactivate", commands=restore_cmds, new_state=new_state)
+            return EvaluatorDecision(
+                action="deactivate", commands=restore_cmds, new_state=new_state
+            )
         if current_status == "pending_condition":
             new_state["status"] = "idle"
             new_state.pop("conditionMetSince", None)
@@ -567,8 +604,13 @@ def _eval_mode(
 
 # ─────────────────── battery_charge ──────────────────────────────────────────
 
+
 def _eval_battery_charge(
-    event: dict, reading: dict, exec_state: dict, new_state: dict, now_utc: datetime,
+    event: dict,
+    reading: dict,
+    exec_state: dict,
+    new_state: dict,
+    now_utc: datetime,
 ) -> EvaluatorDecision:
     """In-window → activate set_battery_charge once; hold when already active.
 
@@ -606,8 +648,13 @@ def _eval_battery_charge(
 
 # ─────────────────── sell_to_grid ────────────────────────────────────────────
 
+
 def _eval_sell_to_grid(
-    event: dict, reading: dict, exec_state: dict, new_state: dict, now_utc: datetime,
+    event: dict,
+    reading: dict,
+    exec_state: dict,
+    new_state: dict,
+    now_utc: datetime,
 ) -> EvaluatorDecision:
     """Simple mode: activate once (forecast/price gates STRIPPED).
     Smart mode: PV-power-gated with 2-min hysteresis on the OFF edge.
@@ -704,8 +751,13 @@ def _eval_sell_to_grid(
 
 # ─────────────────── lower_consumption ───────────────────────────────────────
 
+
 def _eval_lower_consumption(
-    event: dict, reading: dict, exec_state: dict, new_state: dict, now_utc: datetime,
+    event: dict,
+    reading: dict,
+    exec_state: dict,
+    new_state: dict,
+    now_utc: datetime,
 ) -> EvaluatorDecision:
     """batterySoc < socThreshold → would activate, but device-control actions
     (turn off smart loads) are outside the island WriteExecutor's capability.
@@ -741,8 +793,13 @@ def _eval_lower_consumption(
 
 # ─────────────────── consume_from_sun ────────────────────────────────────────
 
+
 def _eval_consume_from_sun(
-    event: dict, reading: dict, exec_state: dict, new_state: dict, now_utc: datetime,
+    event: dict,
+    reading: dict,
+    exec_state: dict,
+    new_state: dict,
+    now_utc: datetime,
 ) -> EvaluatorDecision:
     """PV + SOC threshold with minDurationMinutes hysteresis on both edges.
 
@@ -828,9 +885,14 @@ def _eval_consume_from_sun(
 
 # ─────────────────── battery_maintenance ─────────────────────────────────────
 
+
 def _eval_battery_maintenance(
-    event: dict, reading: dict, exec_state: dict, new_state: dict,
-    now_utc: datetime, tz: str,
+    event: dict,
+    reading: dict,
+    exec_state: dict,
+    new_state: dict,
+    now_utc: datetime,
+    tz: str,
 ) -> EvaluatorDecision:
     """Periodic full-charge cycle.
 
@@ -884,8 +946,12 @@ def _eval_battery_maintenance(
 
 # ─────────────────── use_battery ─────────────────────────────────────────────
 
+
 def _eval_use_battery(
-    event: dict, exec_state: dict, new_state: dict, now_utc: datetime,
+    event: dict,
+    exec_state: dict,
+    new_state: dict,
+    now_utc: datetime,
 ) -> EvaluatorDecision:
     """In-window → activate workMode=2 + disable grid charge. Idempotent.
 
@@ -910,9 +976,14 @@ def _eval_use_battery(
 
 # ─────────────────── gen_force ───────────────────────────────────────────────
 
+
 def _eval_gen_force(
-    event: dict, reading: dict, exec_state: dict, new_state: dict,
-    now_utc: datetime, tz: str,
+    event: dict,
+    reading: dict,
+    exec_state: dict,
+    new_state: dict,
+    now_utc: datetime,
+    tz: str,
 ) -> EvaluatorDecision:
     """SOC + grid-presence-gated generator force with 1-min sustain.
 
@@ -975,8 +1046,13 @@ def _eval_gen_force(
 
 # ─────────────────── custom ───────────────────────────────────────────────────
 
+
 def _eval_custom(
-    event: dict, reading: dict, exec_state: dict, new_state: dict, now_utc: datetime,
+    event: dict,
+    reading: dict,
+    exec_state: dict,
+    new_state: dict,
+    now_utc: datetime,
 ) -> EvaluatorDecision:
     """Evaluate custom event local conditions (battery_soc, pv_power, load_power, grid).
 
@@ -1023,11 +1099,7 @@ def _eval_custom(
         return EvaluatorDecision(action="hold", commands=[], new_state=new_state)
 
     if d_action == "activate":
-        cmds = [
-            (a["command"], dict(a.get("payload") or {}))
-            for a in actions
-            if a.get("command")
-        ]
+        cmds = [(a["command"], dict(a.get("payload") or {})) for a in actions if a.get("command")]
         new_state["status"] = "active"
         new_state["lastActivatedAt"] = now_utc.isoformat()
         new_state["conditionLostSince"] = None
@@ -1045,6 +1117,10 @@ def _eval_custom(
 
     # none — active + conditions still met, or idle + not met
     # Track release-side hysteresis onset when active + conditions just dropped
-    if exec_state.get("status") == "active" and not _evaluate_conditions(conditions, signals, held=True) and not exec_state.get("conditionLostSince"):
+    if (
+        exec_state.get("status") == "active"
+        and not _evaluate_conditions(conditions, signals, held=True)
+        and not exec_state.get("conditionLostSince")
+    ):
         new_state["conditionLostSince"] = now_utc.isoformat()
     return EvaluatorDecision(action="hold", commands=[], new_state=new_state)

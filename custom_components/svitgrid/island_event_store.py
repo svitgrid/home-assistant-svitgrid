@@ -10,6 +10,7 @@ same pattern used by ``reading_store.py``.  When *hass* is ``None`` (e.g. in
 unit tests that construct the store without a hass fixture), the wrappers fall
 back to ``asyncio.get_running_loop().run_in_executor(None, ...)``.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -112,9 +113,7 @@ class IslandEventStore:
         """Delete event by id.  Returns True if a row was removed."""
         conn = _connect(self._db_path)
         try:
-            cur = conn.execute(
-                "DELETE FROM island_events WHERE event_id = ?", (event_id,)
-            )
+            cur = conn.execute("DELETE FROM island_events WHERE event_id = ?", (event_id,))
             conn.commit()
             return cur.rowcount > 0
         finally:
@@ -150,8 +149,7 @@ class IslandEventStore:
         conn = _connect(self._db_path)
         try:
             conn.execute(
-                "UPDATE island_events SET execution_state = ?, updated_at = ? "
-                "WHERE event_id = ?",
+                "UPDATE island_events SET execution_state = ?, updated_at = ? WHERE event_id = ?",
                 (json.dumps(state, separators=(",", ":")), _now_iso(), event_id),
             )
             conn.commit()
@@ -164,15 +162,11 @@ class IslandEventStore:
         if self._hass is not None:
             await self._hass.async_add_executor_job(self._upsert_event_sync, event)
         else:
-            await asyncio.get_running_loop().run_in_executor(
-                None, self._upsert_event_sync, event
-            )
+            await asyncio.get_running_loop().run_in_executor(None, self._upsert_event_sync, event)
 
     async def async_delete_event(self, event_id: str) -> bool:
         if self._hass is not None:
-            return await self._hass.async_add_executor_job(
-                self._delete_event_sync, event_id
-            )
+            return await self._hass.async_add_executor_job(self._delete_event_sync, event_id)
         return await asyncio.get_running_loop().run_in_executor(
             None, self._delete_event_sync, event_id
         )
@@ -180,26 +174,18 @@ class IslandEventStore:
     async def async_list_events(self) -> list[dict[str, Any]]:
         if self._hass is not None:
             return await self._hass.async_add_executor_job(self._list_events_sync)
-        return await asyncio.get_running_loop().run_in_executor(
-            None, self._list_events_sync
-        )
+        return await asyncio.get_running_loop().run_in_executor(None, self._list_events_sync)
 
     async def async_get_event(self, event_id: str) -> dict[str, Any] | None:
         if self._hass is not None:
-            return await self._hass.async_add_executor_job(
-                self._get_event_sync, event_id
-            )
+            return await self._hass.async_add_executor_job(self._get_event_sync, event_id)
         return await asyncio.get_running_loop().run_in_executor(
             None, self._get_event_sync, event_id
         )
 
-    async def async_set_execution_state(
-        self, event_id: str, state: dict[str, Any]
-    ) -> None:
+    async def async_set_execution_state(self, event_id: str, state: dict[str, Any]) -> None:
         if self._hass is not None:
-            await self._hass.async_add_executor_job(
-                self._set_execution_state_sync, event_id, state
-            )
+            await self._hass.async_add_executor_job(self._set_execution_state_sync, event_id, state)
         else:
             await asyncio.get_running_loop().run_in_executor(
                 None, self._set_execution_state_sync, event_id, state

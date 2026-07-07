@@ -5,6 +5,7 @@ Tests written RED-first (TDD), covering every encoding rule from the brief:
   full_word + clear_mask, slot base+idx, via_next_slot (mid + wrap),
   slot-index-out-of-range.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -15,6 +16,7 @@ from custom_components.svitgrid.harvest.write_compute import compute_register_wr
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _fw(**kw) -> FieldWrite:
     """Build a FieldWrite with convenient kwargs (camelCase not needed here)."""
@@ -28,6 +30,7 @@ def _cmd(fields=(), slot=None) -> WriteCommand:
 # ---------------------------------------------------------------------------
 # full_word encoding
 # ---------------------------------------------------------------------------
+
 
 class TestFullWordEncoding:
     """full_word: scale, limits, on/off, clear_mask."""
@@ -124,6 +127,7 @@ class TestFullWordEncoding:
 # bit:N encoding
 # ---------------------------------------------------------------------------
 
+
 class TestBitEncoding:
     """bit:N: RMW on prior register, clear_mask, truthy detection."""
 
@@ -150,8 +154,14 @@ class TestBitEncoding:
 
     def test_bit13_set(self):
         """gen_force: bit:13, prior=0, set → 0x2000."""
-        fw = _fw(payload_field="genForce", address=326, encoding="bit:13",
-                 on_value=1, off_value=0, clear_mask=0x1FFF)
+        fw = _fw(
+            payload_field="genForce",
+            address=326,
+            encoding="bit:13",
+            on_value=1,
+            off_value=0,
+            clear_mask=0x1FFF,
+        )
         cmd = _cmd([fw])
         prior = {326: 0x0000}
         result = compute_register_writes(cmd, {"genForce": 1}, prior)
@@ -159,8 +169,14 @@ class TestBitEncoding:
         assert result == [(1, 326, 0x2000)]
 
     def test_bit13_clear(self):
-        fw = _fw(payload_field="genForce", address=326, encoding="bit:13",
-                 on_value=1, off_value=0, clear_mask=0x1FFF)
+        fw = _fw(
+            payload_field="genForce",
+            address=326,
+            encoding="bit:13",
+            on_value=1,
+            off_value=0,
+            clear_mask=0x1FFF,
+        )
         cmd = _cmd([fw])
         prior = {326: 0xFFFF}
         result = compute_register_writes(cmd, {"genForce": 0}, prior)
@@ -193,8 +209,7 @@ class TestBitEncoding:
 
     def test_int_payload_on_value_match(self):
         """int payload == on_value → set bit."""
-        fw = _fw(payload_field="genForce", address=326, encoding="bit:13",
-                 on_value=1, off_value=0)
+        fw = _fw(payload_field="genForce", address=326, encoding="bit:13", on_value=1, off_value=0)
         cmd = _cmd([fw])
         prior = {326: 0x0000}
         result = compute_register_writes(cmd, {"genForce": 1}, prior)
@@ -202,8 +217,7 @@ class TestBitEncoding:
 
     def test_int_payload_on_value_no_match(self):
         """int payload != on_value → clear bit."""
-        fw = _fw(payload_field="genForce", address=326, encoding="bit:13",
-                 on_value=1, off_value=0)
+        fw = _fw(payload_field="genForce", address=326, encoding="bit:13", on_value=1, off_value=0)
         cmd = _cmd([fw])
         prior = {326: 0x2000}
         result = compute_register_writes(cmd, {"genForce": 0}, prior)
@@ -214,6 +228,7 @@ class TestBitEncoding:
 # ---------------------------------------------------------------------------
 # Slot encoding
 # ---------------------------------------------------------------------------
+
 
 class TestSlotEncoding:
     """Slot: index_field, stride, via_next_slot, wrap at last slot, OOB raises."""
@@ -323,12 +338,13 @@ class TestSlotEncoding:
         # slot field (address=103 + 0*2=103, value=5) emitted second
         assert len(result) == 2
         assert result[0] == (1, 999, 42)  # top-level field first
-        assert result[1] == (1, 103, 5)   # slot field second
+        assert result[1] == (1, 103, 5)  # slot field second
 
 
 # ---------------------------------------------------------------------------
 # Always-emit rule
 # ---------------------------------------------------------------------------
+
 
 class TestAlwaysEmit:
     """Every field is always emitted — no idempotent skip."""

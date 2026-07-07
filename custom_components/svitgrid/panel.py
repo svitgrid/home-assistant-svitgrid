@@ -1,4 +1,5 @@
 """Branded Svitgrid sidebar panel registration (Sub-project 2)."""
+
 from __future__ import annotations
 
 import hashlib

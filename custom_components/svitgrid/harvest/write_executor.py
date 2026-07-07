@@ -12,6 +12,7 @@ Plugs into the signed-command path: the command poller calls
 ``executor.dispatch(command_name, payload)`` — signature is already verified
 upstream.
 """
+
 from __future__ import annotations
 
 import logging
@@ -93,9 +94,7 @@ class WriteExecutor(BaseExecutor):
     # Generic dispatch
     # ------------------------------------------------------------------
 
-    async def dispatch(
-        self, command_name: str, payload: dict[str, Any]
-    ) -> dict[str, Any]:
+    async def dispatch(self, command_name: str, payload: dict[str, Any]) -> dict[str, Any]:
         """Execute *command_name* against the inverter and return the ACK result.
 
         Steps
@@ -114,9 +113,7 @@ class WriteExecutor(BaseExecutor):
             raise RuntimeError("spec_not_loaded")
 
         # 2. Find command
-        cmd: WriteCommand | None = next(
-            (c for c in spec.writes if c.command == command_name), None
-        )
+        cmd: WriteCommand | None = next((c for c in spec.writes if c.command == command_name), None)
         if cmd is None:
             raise NotImplementedError(command_name)
 
@@ -124,26 +121,20 @@ class WriteExecutor(BaseExecutor):
         prior_addrs = _collect_prior_addresses(cmd, payload)
         prior: dict[int, int] = {}
         for addr in prior_addrs:
-            val = await read_word(
-                self._hass, spec, self._cfg, spec.default_slave_id, addr
-            )
+            val = await read_word(self._hass, spec, self._cfg, spec.default_slave_id, addr)
             if val is None:
                 raise RuntimeError(f"prior_read_failed:{addr}")
             prior[addr] = val
 
         # 4. Compute writes
-        writes = compute_register_writes(
-            cmd, payload, prior, unit_id=spec.default_slave_id
-        )
+        writes = compute_register_writes(cmd, payload, prior, unit_id=spec.default_slave_id)
 
         # 5. Write
         await write_registers(self._hass, spec, self._cfg, writes)
 
         # 6. Verify read-back
         for unit, addr, expected in writes:
-            read_back = await read_word(
-                self._hass, spec, self._cfg, unit, addr
-            )
+            read_back = await read_word(self._hass, spec, self._cfg, unit, addr)
             if read_back is None:
                 raise RuntimeError(f"verify_read_failed:{addr}")
             if read_back != expected:

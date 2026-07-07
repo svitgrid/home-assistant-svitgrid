@@ -10,8 +10,9 @@ _send_signed_ack can produce a valid signature.
 
 from __future__ import annotations
 
-import pytest
 from unittest.mock import AsyncMock
+
+import pytest
 
 from custom_components.svitgrid.command_poller import process_command
 from custom_components.svitgrid.signing import generate_keypair, sign_payload

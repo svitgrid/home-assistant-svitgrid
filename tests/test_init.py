@@ -27,12 +27,14 @@ def _stub_local_store_side_effects():
     SP2 Task 9 also seeds the shared lifecycle from store.get_lifecycle(), which
     opens the SQLite file — blocked by the HA harness — so default it to active.
     The deprovisioned test overrides this with its own in-scope patch."""
-    with patch("custom_components.svitgrid.run_sender_loop", new_callable=AsyncMock), \
-         patch("custom_components.svitgrid.register_views"), \
-         patch("custom_components.svitgrid.register_panel", new_callable=AsyncMock), \
-         patch("custom_components.svitgrid.remove_panel"), \
-         patch.object(ReadingStore, "get_lifecycle", AsyncMock(return_value=_ACTIVE_LIFECYCLE)), \
-         patch.object(ReadingStore, "prune_inverters_not_in", AsyncMock(return_value=0)):
+    with (
+        patch("custom_components.svitgrid.run_sender_loop", new_callable=AsyncMock),
+        patch("custom_components.svitgrid.register_views"),
+        patch("custom_components.svitgrid.register_panel", new_callable=AsyncMock),
+        patch("custom_components.svitgrid.remove_panel"),
+        patch.object(ReadingStore, "get_lifecycle", AsyncMock(return_value=_ACTIVE_LIFECYCLE)),
+        patch.object(ReadingStore, "prune_inverters_not_in", AsyncMock(return_value=0)),
+    ):
         yield
 
 
@@ -324,8 +326,9 @@ async def test_setup_loads_trusted_keys_from_keystore_state(hass, enable_custom_
 @pytest.mark.asyncio
 async def test_async_setup_entry_starts_publisher_and_poller(hass, enable_custom_integrations):
     """Setting up from a config entry boots both background loops (v2 multi-inverter)."""
-    from pytest_homeassistant_custom_component.common import MockConfigEntry
     from unittest.mock import AsyncMock, patch
+
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
 
     from custom_components.svitgrid import async_setup_entry
 
@@ -339,9 +342,7 @@ async def test_async_setup_entry_starts_publisher_and_poller(hass, enable_custom
             "edge_device_id": "ed-1",
             "household_id": "h-abc",
             "signing_key_id": "ha-home-01",
-            "private_key_pem": (
-                "-----BEGIN PRIVATE KEY-----\nFAKE\n-----END PRIVATE KEY-----\n"
-            ),
+            "private_key_pem": ("-----BEGIN PRIVATE KEY-----\nFAKE\n-----END PRIVATE KEY-----\n"),
             "public_key_hex": "04" + "a" * 128,
             "trusted_keys": [],
             "inverters": [
@@ -364,22 +365,16 @@ async def test_async_setup_entry_starts_publisher_and_poller(hass, enable_custom
     entry.add_to_hass(hass)
 
     with (
-        patch(
-            "custom_components.svitgrid.run_readings_loop", new_callable=AsyncMock
-        ) as rp,
-        patch(
-            "custom_components.svitgrid.run_command_loop", new_callable=AsyncMock
-        ) as cp,
-        patch(
-            "custom_components.svitgrid.run_mqtt_wake_loop", new_callable=AsyncMock
-        ),
-        patch(
-            "custom_components.svitgrid.run_sender_loop", new_callable=AsyncMock
-        ) as sender,
+        patch("custom_components.svitgrid.run_readings_loop", new_callable=AsyncMock) as rp,
+        patch("custom_components.svitgrid.run_command_loop", new_callable=AsyncMock) as cp,
+        patch("custom_components.svitgrid.run_mqtt_wake_loop", new_callable=AsyncMock),
+        patch("custom_components.svitgrid.run_sender_loop", new_callable=AsyncMock) as sender,
         patch("custom_components.svitgrid.register_views") as reg_views,
         patch("custom_components.svitgrid.register_panel", new_callable=AsyncMock),
         patch("custom_components.svitgrid.remove_panel"),
-        patch.object(hass.config_entries, "async_forward_entry_setups", AsyncMock(return_value=True)),
+        patch.object(
+            hass.config_entries, "async_forward_entry_setups", AsyncMock(return_value=True)
+        ),
     ):
         ok = await async_setup_entry(hass, entry)
         await hass.async_block_till_done()
@@ -432,8 +427,9 @@ async def test_async_setup_entry_starts_publisher_and_poller(hass, enable_custom
 async def test_async_unload_entry_cancels_tasks(hass, enable_custom_integrations):
     """async_unload_entry cancels all running background tasks (v2 multi-inverter)."""
     import asyncio
-    from pytest_homeassistant_custom_component.common import MockConfigEntry
     from unittest.mock import AsyncMock, patch
+
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
 
     from custom_components.svitgrid import async_setup_entry, async_unload_entry
 
@@ -447,9 +443,7 @@ async def test_async_unload_entry_cancels_tasks(hass, enable_custom_integrations
             "edge_device_id": "ed-1",
             "household_id": "h-abc",
             "signing_key_id": "ha-home-01",
-            "private_key_pem": (
-                "-----BEGIN PRIVATE KEY-----\nFAKE\n-----END PRIVATE KEY-----\n"
-            ),
+            "private_key_pem": ("-----BEGIN PRIVATE KEY-----\nFAKE\n-----END PRIVATE KEY-----\n"),
             "public_key_hex": "04" + "a" * 128,
             "trusted_keys": [],
             "inverters": [
@@ -475,22 +469,16 @@ async def test_async_unload_entry_cancels_tasks(hass, enable_custom_integrations
         await asyncio.Event().wait()  # blocks until cancelled
 
     with (
-        patch(
-            "custom_components.svitgrid.run_readings_loop", side_effect=_never_return
-        ),
-        patch(
-            "custom_components.svitgrid.run_command_loop", side_effect=_never_return
-        ),
-        patch(
-            "custom_components.svitgrid.run_mqtt_wake_loop", side_effect=_never_return
-        ),
-        patch(
-            "custom_components.svitgrid.run_sender_loop", side_effect=_never_return
-        ),
+        patch("custom_components.svitgrid.run_readings_loop", side_effect=_never_return),
+        patch("custom_components.svitgrid.run_command_loop", side_effect=_never_return),
+        patch("custom_components.svitgrid.run_mqtt_wake_loop", side_effect=_never_return),
+        patch("custom_components.svitgrid.run_sender_loop", side_effect=_never_return),
         patch("custom_components.svitgrid.register_views"),
         patch("custom_components.svitgrid.register_panel", new_callable=AsyncMock),
         patch("custom_components.svitgrid.remove_panel"),
-        patch.object(hass.config_entries, "async_forward_entry_setups", AsyncMock(return_value=True)),
+        patch.object(
+            hass.config_entries, "async_forward_entry_setups", AsyncMock(return_value=True)
+        ),
         patch.object(hass.config_entries, "async_unload_platforms", AsyncMock(return_value=True)),
     ):
         await async_setup_entry(hass, entry)
@@ -508,6 +496,7 @@ async def test_async_unload_entry_cancels_tasks(hass, enable_custom_integrations
         # Replace the cancel_rollup callback with a MagicMock so we can
         # assert it was called during unload.
         from unittest.mock import MagicMock
+
         cancel_rollup_mock = MagicMock()
         hass.data[DOMAIN][entry.entry_id]["cancel_rollup"] = cancel_rollup_mock
 
@@ -531,13 +520,16 @@ async def test_async_unload_entry_cancels_tasks(hass, enable_custom_integrations
 
 
 @pytest.mark.asyncio
-async def test_async_setup_entry_passes_preset_entity_map_to_publisher(hass, enable_custom_integrations):
+async def test_async_setup_entry_passes_preset_entity_map_to_publisher(
+    hass, enable_custom_integrations
+):
     """Phase 2 / v2 shape: when the config entry has an inverters list with an
     entity_map (from a preset carried through /finalize), the readings publisher
     must be called with that map and the correct inverter_id. Otherwise readings
     would post empty payloads and the API would 400 them all."""
-    from pytest_homeassistant_custom_component.common import MockConfigEntry
     from unittest.mock import AsyncMock, patch
+
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
 
     from custom_components.svitgrid import async_setup_entry
 
@@ -579,20 +571,16 @@ async def test_async_setup_entry_passes_preset_entity_map_to_publisher(hass, ena
     entry.add_to_hass(hass)
 
     with (
-        patch(
-            "custom_components.svitgrid.run_readings_loop", new_callable=AsyncMock
-        ) as rp,
-        patch(
-            "custom_components.svitgrid.run_command_loop", new_callable=AsyncMock
-        ),
-        patch(
-            "custom_components.svitgrid.run_mqtt_wake_loop", new_callable=AsyncMock
-        ),
+        patch("custom_components.svitgrid.run_readings_loop", new_callable=AsyncMock) as rp,
+        patch("custom_components.svitgrid.run_command_loop", new_callable=AsyncMock),
+        patch("custom_components.svitgrid.run_mqtt_wake_loop", new_callable=AsyncMock),
         patch("custom_components.svitgrid.run_sender_loop", new_callable=AsyncMock),
         patch("custom_components.svitgrid.register_views"),
         patch("custom_components.svitgrid.register_panel", new_callable=AsyncMock),
         patch("custom_components.svitgrid.remove_panel"),
-        patch.object(hass.config_entries, "async_forward_entry_setups", AsyncMock(return_value=True)),
+        patch.object(
+            hass.config_entries, "async_forward_entry_setups", AsyncMock(return_value=True)
+        ),
     ):
         ok = await async_setup_entry(hass, entry)
         await hass.async_block_till_done()
@@ -611,7 +599,9 @@ async def test_setup_prefers_options_entity_map(hass, enable_custom_integrations
     entity_map stored in inverters[0]['entity_map'] (legacy options override
     via _inverters_from_entry back-compat path)."""
     from unittest.mock import AsyncMock, patch
+
     from pytest_homeassistant_custom_component.common import MockConfigEntry
+
     from custom_components.svitgrid import async_setup_entry
 
     entry = MockConfigEntry(
@@ -650,14 +640,16 @@ async def test_setup_prefers_options_entity_map(hass, enable_custom_integrations
     async def _fake_loop(**kwargs):
         captured["entity_map"] = kwargs.get("entity_map")
 
-    with patch("custom_components.svitgrid.run_readings_loop", _fake_loop), \
-         patch("custom_components.svitgrid.run_command_loop", AsyncMock()), \
-         patch("custom_components.svitgrid.run_mqtt_wake_loop", AsyncMock()), \
-         patch("custom_components.svitgrid.run_sender_loop", AsyncMock()), \
-         patch("custom_components.svitgrid.register_views"), \
-         patch("custom_components.svitgrid.register_panel", new_callable=AsyncMock), \
-         patch("custom_components.svitgrid.remove_panel"), \
-         patch.object(hass.config_entries, "async_forward_entry_setups", AsyncMock()):
+    with (
+        patch("custom_components.svitgrid.run_readings_loop", _fake_loop),
+        patch("custom_components.svitgrid.run_command_loop", AsyncMock()),
+        patch("custom_components.svitgrid.run_mqtt_wake_loop", AsyncMock()),
+        patch("custom_components.svitgrid.run_sender_loop", AsyncMock()),
+        patch("custom_components.svitgrid.register_views"),
+        patch("custom_components.svitgrid.register_panel", new_callable=AsyncMock),
+        patch("custom_components.svitgrid.remove_panel"),
+        patch.object(hass.config_entries, "async_forward_entry_setups", AsyncMock()),
+    ):
         ok = await async_setup_entry(hass, entry)
         await hass.async_block_till_done()
 
@@ -669,7 +661,9 @@ async def test_setup_prefers_options_entity_map(hass, enable_custom_integrations
 async def test_options_change_reloads_entry(hass, enable_custom_integrations):
     """Updating entry.options fires the update listener, reloading the entry."""
     from unittest.mock import AsyncMock, patch
+
     from pytest_homeassistant_custom_component.common import MockConfigEntry
+
     from custom_components.svitgrid import async_setup_entry
 
     entry = MockConfigEntry(
@@ -690,20 +684,20 @@ async def test_options_change_reloads_entry(hass, enable_custom_integrations):
     )
     entry.add_to_hass(hass)
 
-    with patch("custom_components.svitgrid.run_readings_loop", AsyncMock()), \
-         patch("custom_components.svitgrid.run_command_loop", AsyncMock()), \
-         patch("custom_components.svitgrid.run_mqtt_wake_loop", AsyncMock()), \
-         patch("custom_components.svitgrid.run_sender_loop", AsyncMock()), \
-         patch("custom_components.svitgrid.register_views"), \
-         patch("custom_components.svitgrid.register_panel", new_callable=AsyncMock), \
-         patch("custom_components.svitgrid.remove_panel"), \
-         patch.object(hass.config_entries, "async_forward_entry_setups", AsyncMock()):
+    with (
+        patch("custom_components.svitgrid.run_readings_loop", AsyncMock()),
+        patch("custom_components.svitgrid.run_command_loop", AsyncMock()),
+        patch("custom_components.svitgrid.run_mqtt_wake_loop", AsyncMock()),
+        patch("custom_components.svitgrid.run_sender_loop", AsyncMock()),
+        patch("custom_components.svitgrid.register_views"),
+        patch("custom_components.svitgrid.register_panel", new_callable=AsyncMock),
+        patch("custom_components.svitgrid.remove_panel"),
+        patch.object(hass.config_entries, "async_forward_entry_setups", AsyncMock()),
+    ):
         await async_setup_entry(hass, entry)
         await hass.async_block_till_done()
 
-        with patch.object(
-            hass.config_entries, "async_reload", AsyncMock()
-        ) as mock_reload:
+        with patch.object(hass.config_entries, "async_reload", AsyncMock()) as mock_reload:
             hass.config_entries.async_update_entry(
                 entry, options={"entity_map": {"batterySoc": "sensor.new"}}
             )
@@ -722,7 +716,9 @@ async def test_async_setup_entry_calls_register_panel(hass, enable_custom_integr
     """register_panel must be awaited exactly once during async_setup_entry
     (after the store stack starts, guarded by panel.py's idempotency flag)."""
     from unittest.mock import AsyncMock, patch
+
     from pytest_homeassistant_custom_component.common import MockConfigEntry
+
     from custom_components.svitgrid import async_setup_entry
 
     entry = MockConfigEntry(
@@ -763,8 +759,12 @@ async def test_async_setup_entry_calls_register_panel(hass, enable_custom_integr
         patch("custom_components.svitgrid.run_mqtt_wake_loop", new_callable=AsyncMock),
         patch("custom_components.svitgrid.run_sender_loop", new_callable=AsyncMock),
         patch("custom_components.svitgrid.register_views"),
-        patch("custom_components.svitgrid.register_panel", new_callable=AsyncMock) as mock_register_panel,
-        patch.object(hass.config_entries, "async_forward_entry_setups", AsyncMock(return_value=True)),
+        patch(
+            "custom_components.svitgrid.register_panel", new_callable=AsyncMock
+        ) as mock_register_panel,
+        patch.object(
+            hass.config_entries, "async_forward_entry_setups", AsyncMock(return_value=True)
+        ),
     ):
         ok = await async_setup_entry(hass, entry)
         await hass.async_block_till_done()
@@ -778,7 +778,9 @@ async def test_async_unload_entry_calls_remove_panel(hass, enable_custom_integra
     """remove_panel must be called once during async_unload_entry."""
     import asyncio
     from unittest.mock import AsyncMock, patch
+
     from pytest_homeassistant_custom_component.common import MockConfigEntry
+
     from custom_components.svitgrid import async_setup_entry, async_unload_entry
 
     entry = MockConfigEntry(
@@ -824,7 +826,9 @@ async def test_async_unload_entry_calls_remove_panel(hass, enable_custom_integra
         patch("custom_components.svitgrid.register_views"),
         patch("custom_components.svitgrid.register_panel", new_callable=AsyncMock),
         patch("custom_components.svitgrid.remove_panel") as mock_remove_panel,
-        patch.object(hass.config_entries, "async_forward_entry_setups", AsyncMock(return_value=True)),
+        patch.object(
+            hass.config_entries, "async_forward_entry_setups", AsyncMock(return_value=True)
+        ),
         patch.object(hass.config_entries, "async_unload_platforms", AsyncMock(return_value=True)),
     ):
         await async_setup_entry(hass, entry)
@@ -840,8 +844,9 @@ async def test_async_unload_entry_calls_remove_panel(hass, enable_custom_integra
 async def test_deprovisioned_at_startup_skips_loops(hass, enable_custom_integrations):
     """When the persisted lifecycle is 'deprovisioned', no background loops are
     started, but the panel/views/sensors are still set up."""
-    from pytest_homeassistant_custom_component.common import MockConfigEntry
     from unittest.mock import AsyncMock, patch
+
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
 
     from custom_components.svitgrid import async_setup_entry
     from custom_components.svitgrid.reading_store import ReadingStore
@@ -856,9 +861,7 @@ async def test_deprovisioned_at_startup_skips_loops(hass, enable_custom_integrat
             "edge_device_id": "ed-1",
             "household_id": "h-abc",
             "signing_key_id": "ha-home-01",
-            "private_key_pem": (
-                "-----BEGIN PRIVATE KEY-----\nFAKE\n-----END PRIVATE KEY-----\n"
-            ),
+            "private_key_pem": ("-----BEGIN PRIVATE KEY-----\nFAKE\n-----END PRIVATE KEY-----\n"),
             "public_key_hex": "04" + "a" * 128,
             "trusted_keys": [],
             "inverters": [
@@ -887,25 +890,13 @@ async def test_deprovisioned_at_startup_skips_loops(hass, enable_custom_integrat
     }
 
     with (
-        patch.object(
-            ReadingStore, "get_lifecycle", AsyncMock(return_value=deprovisioned)
-        ),
-        patch(
-            "custom_components.svitgrid.run_readings_loop", new_callable=AsyncMock
-        ) as rp,
-        patch(
-            "custom_components.svitgrid.run_command_loop", new_callable=AsyncMock
-        ) as cp,
-        patch(
-            "custom_components.svitgrid.run_mqtt_wake_loop", new_callable=AsyncMock
-        ),
-        patch(
-            "custom_components.svitgrid.run_sender_loop", new_callable=AsyncMock
-        ) as sender,
+        patch.object(ReadingStore, "get_lifecycle", AsyncMock(return_value=deprovisioned)),
+        patch("custom_components.svitgrid.run_readings_loop", new_callable=AsyncMock) as rp,
+        patch("custom_components.svitgrid.run_command_loop", new_callable=AsyncMock) as cp,
+        patch("custom_components.svitgrid.run_mqtt_wake_loop", new_callable=AsyncMock),
+        patch("custom_components.svitgrid.run_sender_loop", new_callable=AsyncMock) as sender,
         patch("custom_components.svitgrid.register_views") as reg_views,
-        patch(
-            "custom_components.svitgrid.register_panel", new_callable=AsyncMock
-        ) as reg_panel,
+        patch("custom_components.svitgrid.register_panel", new_callable=AsyncMock) as reg_panel,
         patch.object(
             hass.config_entries,
             "async_forward_entry_setups",
@@ -947,8 +938,9 @@ async def test_async_setup_entry_prunes_orphaned_inverter_rows(hass, enable_cust
     """prune_inverters_not_in must be awaited once with the entry's active inverter-id
     set BEFORE the sender loop starts. This guards against head-of-line blocking
     when the inverter id changes after re-pairing."""
+    from unittest.mock import AsyncMock, patch
+
     from pytest_homeassistant_custom_component.common import MockConfigEntry
-    from unittest.mock import AsyncMock, patch, call
 
     from custom_components.svitgrid import async_setup_entry
 
@@ -962,9 +954,7 @@ async def test_async_setup_entry_prunes_orphaned_inverter_rows(hass, enable_cust
             "edge_device_id": "ed-1",
             "household_id": "h-prune",
             "signing_key_id": "ha-home-01",
-            "private_key_pem": (
-                "-----BEGIN PRIVATE KEY-----\nFAKE\n-----END PRIVATE KEY-----\n"
-            ),
+            "private_key_pem": ("-----BEGIN PRIVATE KEY-----\nFAKE\n-----END PRIVATE KEY-----\n"),
             "public_key_hex": "04" + "a" * 128,
             "trusted_keys": [],
             "inverters": [
@@ -1002,7 +992,9 @@ async def test_async_setup_entry_prunes_orphaned_inverter_rows(hass, enable_cust
         patch("custom_components.svitgrid.register_panel", new_callable=AsyncMock),
         patch("custom_components.svitgrid.remove_panel"),
         patch.object(ReadingStore, "prune_inverters_not_in", prune_mock),
-        patch.object(hass.config_entries, "async_forward_entry_setups", AsyncMock(return_value=True)),
+        patch.object(
+            hass.config_entries, "async_forward_entry_setups", AsyncMock(return_value=True)
+        ),
     ):
         ok = await async_setup_entry(hass, entry)
         await hass.async_block_till_done()
@@ -1017,8 +1009,9 @@ async def test_paused_at_startup_starts_loops(hass, enable_custom_integrations):
     """C2: When the persisted lifecycle is 'paused' (not deprovisioned), all
     background loops ARE started so the command poller can detect an operator
     re-enable. The binary_sensor surfaces reflect paused via the ActivityTracker."""
-    from pytest_homeassistant_custom_component.common import MockConfigEntry
     from unittest.mock import AsyncMock, patch
+
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
 
     from custom_components.svitgrid import async_setup_entry
     from custom_components.svitgrid.reading_store import ReadingStore
@@ -1033,9 +1026,7 @@ async def test_paused_at_startup_starts_loops(hass, enable_custom_integrations):
             "edge_device_id": "ed-1",
             "household_id": "h-paused",
             "signing_key_id": "ha-home-01",
-            "private_key_pem": (
-                "-----BEGIN PRIVATE KEY-----\nFAKE\n-----END PRIVATE KEY-----\n"
-            ),
+            "private_key_pem": ("-----BEGIN PRIVATE KEY-----\nFAKE\n-----END PRIVATE KEY-----\n"),
             "public_key_hex": "04" + "a" * 128,
             "trusted_keys": [],
             "inverters": [
@@ -1064,25 +1055,13 @@ async def test_paused_at_startup_starts_loops(hass, enable_custom_integrations):
     }
 
     with (
-        patch.object(
-            ReadingStore, "get_lifecycle", AsyncMock(return_value=paused)
-        ),
-        patch(
-            "custom_components.svitgrid.run_readings_loop", new_callable=AsyncMock
-        ) as rp,
-        patch(
-            "custom_components.svitgrid.run_command_loop", new_callable=AsyncMock
-        ) as cp,
-        patch(
-            "custom_components.svitgrid.run_mqtt_wake_loop", new_callable=AsyncMock
-        ),
-        patch(
-            "custom_components.svitgrid.run_sender_loop", new_callable=AsyncMock
-        ) as sender,
+        patch.object(ReadingStore, "get_lifecycle", AsyncMock(return_value=paused)),
+        patch("custom_components.svitgrid.run_readings_loop", new_callable=AsyncMock) as rp,
+        patch("custom_components.svitgrid.run_command_loop", new_callable=AsyncMock) as cp,
+        patch("custom_components.svitgrid.run_mqtt_wake_loop", new_callable=AsyncMock),
+        patch("custom_components.svitgrid.run_sender_loop", new_callable=AsyncMock) as sender,
         patch("custom_components.svitgrid.register_views"),
-        patch(
-            "custom_components.svitgrid.register_panel", new_callable=AsyncMock
-        ),
+        patch("custom_components.svitgrid.register_panel", new_callable=AsyncMock),
         patch.object(
             hass.config_entries,
             "async_forward_entry_setups",
@@ -1123,7 +1102,9 @@ async def test_apply_cloud_endpoint_change_updates_entry_and_schedules_reload(
     invokes) async_reload, so the calling task can finish cleanly before
     the reload tears it down."""
     from unittest.mock import AsyncMock, patch
+
     from pytest_homeassistant_custom_component.common import MockConfigEntry
+
     from custom_components.svitgrid import apply_cloud_endpoint_change
     from custom_components.svitgrid.const import DOMAIN
 
@@ -1142,16 +1123,15 @@ async def test_apply_cloud_endpoint_change_updates_entry_and_schedules_reload(
     )
     entry.add_to_hass(hass)
 
-    with patch(
-        "custom_components.svitgrid.probe_endpoint_auth",
-        new_callable=AsyncMock,
-        return_value=True,
-    ), patch.object(
-        hass.config_entries, "async_reload"
-    ) as mock_reload:
-        result = await apply_cloud_endpoint_change(
-            hass, entry, "https://api.svitgrid.app"
-        )
+    with (
+        patch(
+            "custom_components.svitgrid.probe_endpoint_auth",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
+        patch.object(hass.config_entries, "async_reload") as mock_reload,
+    ):
+        result = await apply_cloud_endpoint_change(hass, entry, "https://api.svitgrid.app")
 
     assert result is True
     # Entry data updated immediately + atomically:
@@ -1168,7 +1148,9 @@ async def test_apply_cloud_endpoint_change_is_noop_when_unchanged(hass):
     """If the new URL equals the current one, skip update + reload —
     a redundant migration command shouldn't bounce a healthy integration."""
     from unittest.mock import patch
+
     from pytest_homeassistant_custom_component.common import MockConfigEntry
+
     from custom_components.svitgrid import apply_cloud_endpoint_change
     from custom_components.svitgrid.const import DOMAIN
 
@@ -1187,14 +1169,11 @@ async def test_apply_cloud_endpoint_change_is_noop_when_unchanged(hass):
     )
     entry.add_to_hass(hass)
 
-    with patch.object(
-        hass.config_entries, "async_reload"
-    ) as mock_reload, patch.object(
-        hass.config_entries, "async_update_entry"
-    ) as mock_update:
-        result = await apply_cloud_endpoint_change(
-            hass, entry, "https://api-staging.svitgrid.app"
-        )
+    with (
+        patch.object(hass.config_entries, "async_reload") as mock_reload,
+        patch.object(hass.config_entries, "async_update_entry") as mock_update,
+    ):
+        result = await apply_cloud_endpoint_change(hass, entry, "https://api-staging.svitgrid.app")
 
     assert result is True
     mock_reload.assert_not_called()
@@ -1211,7 +1190,9 @@ async def test_apply_cloud_endpoint_change_returns_true_on_probe_success(hass):
     """When the pre-flight probe to the new endpoint returns 200, the helper
     must mutate ConfigEntry, schedule reload, and return True."""
     from unittest.mock import AsyncMock, patch
+
     from pytest_homeassistant_custom_component.common import MockConfigEntry
+
     from custom_components.svitgrid import apply_cloud_endpoint_change
     from custom_components.svitgrid.const import DOMAIN
 
@@ -1230,16 +1211,15 @@ async def test_apply_cloud_endpoint_change_returns_true_on_probe_success(hass):
     )
     entry.add_to_hass(hass)
 
-    with patch(
-        "custom_components.svitgrid.probe_endpoint_auth",
-        new_callable=AsyncMock,
-        return_value=True,
-    ) as mock_probe, patch.object(
-        hass.config_entries, "async_reload"
-    ) as mock_reload:
-        result = await apply_cloud_endpoint_change(
-            hass, entry, "https://api.svitgrid.app"
-        )
+    with (
+        patch(
+            "custom_components.svitgrid.probe_endpoint_auth",
+            new_callable=AsyncMock,
+            return_value=True,
+        ) as mock_probe,
+        patch.object(hass.config_entries, "async_reload") as mock_reload,
+    ):
+        result = await apply_cloud_endpoint_change(hass, entry, "https://api.svitgrid.app")
 
     assert result is True
     # Entry data must have been mutated
@@ -1266,8 +1246,9 @@ async def test_preset_refresh_at_setup_merges_new_fields(hass, enable_custom_int
     """When get_preset returns a newer-version preset with extra fields, setup
     persists the merged entity_map and merged_preset_version into the entry,
     and the publisher receives the refreshed entity_map."""
-    from pytest_homeassistant_custom_component.common import MockConfigEntry
     from unittest.mock import AsyncMock, patch
+
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
 
     from custom_components.svitgrid import async_setup_entry
 
@@ -1308,8 +1289,8 @@ async def test_preset_refresh_at_setup_merges_new_fields(hass, enable_custom_int
     newer_preset = {
         "version": 2,
         "entityMap": {
-            "batterySoc": "sensor.soc",      # already present — should not overwrite
-            "loadPower": "sensor.load_power", # new field
+            "batterySoc": "sensor.soc",  # already present — should not overwrite
+            "loadPower": "sensor.load_power",  # new field
         },
     }
 
@@ -1326,7 +1307,9 @@ async def test_preset_refresh_at_setup_merges_new_fields(hass, enable_custom_int
         patch("custom_components.svitgrid.register_views"),
         patch("custom_components.svitgrid.register_panel", new_callable=AsyncMock),
         patch("custom_components.svitgrid.remove_panel"),
-        patch.object(hass.config_entries, "async_forward_entry_setups", AsyncMock(return_value=True)),
+        patch.object(
+            hass.config_entries, "async_forward_entry_setups", AsyncMock(return_value=True)
+        ),
     ):
         # Patch api_client.get_preset AFTER the client is constructed inside setup.
         # We do it by patching SvitgridApiClient so the instance returned has
@@ -1349,15 +1332,17 @@ async def test_preset_refresh_at_setup_merges_new_fields(hass, enable_custom_int
     assert inv.get("merged_preset_version") == 2, "merged_preset_version must be persisted"
 
     # Publisher must have received the refreshed entity_map (with the new field).
-    assert "loadPower" in captured_entity_map.get("entity_map", {}), \
+    assert "loadPower" in captured_entity_map.get("entity_map", {}), (
         "publisher must see the refreshed entity_map"
+    )
 
 
 @pytest.mark.asyncio
 async def test_preset_refresh_fail_open_at_setup(hass, enable_custom_integrations):
     """When get_preset raises, setup still completes and the entry is unchanged."""
-    from pytest_homeassistant_custom_component.common import MockConfigEntry
     from unittest.mock import AsyncMock, patch
+
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
 
     from custom_components.svitgrid import async_setup_entry
 
@@ -1401,14 +1386,16 @@ async def test_preset_refresh_fail_open_at_setup(hass, enable_custom_integration
         patch("custom_components.svitgrid.register_views"),
         patch("custom_components.svitgrid.register_panel", new_callable=AsyncMock),
         patch("custom_components.svitgrid.remove_panel"),
-        patch.object(hass.config_entries, "async_forward_entry_setups", AsyncMock(return_value=True)),
+        patch.object(
+            hass.config_entries, "async_forward_entry_setups", AsyncMock(return_value=True)
+        ),
+        patch("custom_components.svitgrid.SvitgridApiClient") as mock_cls,
     ):
-        with patch("custom_components.svitgrid.SvitgridApiClient") as mock_cls:
-            mock_instance = mock_cls.return_value
-            mock_instance.get_preset = AsyncMock(side_effect=RuntimeError("network error"))
+        mock_instance = mock_cls.return_value
+        mock_instance.get_preset = AsyncMock(side_effect=RuntimeError("network error"))
 
-            ok = await async_setup_entry(hass, entry)
-            await hass.async_block_till_done()
+        ok = await async_setup_entry(hass, entry)
+        await hass.async_block_till_done()
 
     assert ok is True, "setup must succeed even when get_preset raises"
     # Entry must be unchanged — fail-open, no update_entry.
@@ -1418,14 +1405,17 @@ async def test_preset_refresh_fail_open_at_setup(hass, enable_custom_integration
 
 @pytest.mark.asyncio
 async def test_apply_cloud_endpoint_change_returns_false_on_probe_failure(
-    hass, caplog,
+    hass,
+    caplog,
 ):
     """When the pre-flight probe returns False (non-200), the helper must NOT
     mutate ConfigEntry, NOT schedule reload, log a distinctive ERROR, and
     return False."""
     import logging
     from unittest.mock import AsyncMock, patch
+
     from pytest_homeassistant_custom_component.common import MockConfigEntry
+
     from custom_components.svitgrid import apply_cloud_endpoint_change
     from custom_components.svitgrid.const import DOMAIN
 
@@ -1444,20 +1434,17 @@ async def test_apply_cloud_endpoint_change_returns_false_on_probe_failure(
     )
     entry.add_to_hass(hass)
 
-    with patch(
-        "custom_components.svitgrid.probe_endpoint_auth",
-        new_callable=AsyncMock,
-        return_value=False,
-    ), patch.object(
-        hass.config_entries, "async_reload"
-    ) as mock_reload, patch.object(
-        hass.config_entries, "async_update_entry"
-    ) as mock_update, caplog.at_level(
-        logging.ERROR, logger="custom_components.svitgrid"
+    with (
+        patch(
+            "custom_components.svitgrid.probe_endpoint_auth",
+            new_callable=AsyncMock,
+            return_value=False,
+        ),
+        patch.object(hass.config_entries, "async_reload") as mock_reload,
+        patch.object(hass.config_entries, "async_update_entry") as mock_update,
+        caplog.at_level(logging.ERROR, logger="custom_components.svitgrid"),
     ):
-        result = await apply_cloud_endpoint_change(
-            hass, entry, "https://api.svitgrid.app"
-        )
+        result = await apply_cloud_endpoint_change(hass, entry, "https://api.svitgrid.app")
 
     assert result is False
     # ConfigEntry must NOT have been mutated
@@ -1466,7 +1453,6 @@ async def test_apply_cloud_endpoint_change_returns_false_on_probe_failure(
     mock_reload.assert_not_called()
     # Distinctive grep-friendly error log
     assert any(
-        "set_cloud_endpoint probe failed" in record.message
-        and record.levelno == logging.ERROR
+        "set_cloud_endpoint probe failed" in record.message and record.levelno == logging.ERROR
         for record in caplog.records
     ), f"Expected distinctive error log. Records: {[r.message for r in caplog.records]}"

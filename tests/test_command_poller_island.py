@@ -16,11 +16,11 @@ Assertions:
 
 from __future__ import annotations
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from custom_components.svitgrid.command_poller import process_command
-from custom_components.svitgrid.const import ENABLE_ISLAND_COMMAND, DISABLE_ISLAND_COMMAND
 from custom_components.svitgrid.signing import generate_keypair
 
 
@@ -71,9 +71,7 @@ async def test_enable_island_seeds_keystore_updates_entry_and_acks_success():
     # tears down the poller task, so the success ACK MUST be sent first.
     call_order: list[str] = []
     api_client.ack_command.side_effect = lambda *a, **k: call_order.append("ack")
-    hass.config_entries.async_update_entry.side_effect = (
-        lambda *a, **k: call_order.append("update")
-    )
+    hass.config_entries.async_update_entry.side_effect = lambda *a, **k: call_order.append("update")
     hass.async_create_task.side_effect = lambda *a, **k: call_order.append("reload")
 
     await process_command(
@@ -137,9 +135,7 @@ async def test_disable_island_sets_cloud_ingest_true_keeps_key_and_acks():
 
     call_order: list[str] = []
     api_client.ack_command.side_effect = lambda *a, **k: call_order.append("ack")
-    hass.config_entries.async_update_entry.side_effect = (
-        lambda *a, **k: call_order.append("update")
-    )
+    hass.config_entries.async_update_entry.side_effect = lambda *a, **k: call_order.append("update")
     hass.async_create_task.side_effect = lambda *a, **k: call_order.append("reload")
 
     await process_command(

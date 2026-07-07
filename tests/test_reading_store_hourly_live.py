@@ -2,10 +2,9 @@
 readings_raw (INCLUDING the current in-progress hour), so a fresh household whose
 raw data has not yet been sealed into readings_hourly still gets a Day chart.
 """
-import json
 
-from custom_components.svitgrid.reading_store import ReadingStore
 from custom_components.svitgrid import rollup as _rollup
+from custom_components.svitgrid.reading_store import ReadingStore
 
 
 def _store(tmp_path):
@@ -21,20 +20,45 @@ def test_hourly_range_live_includes_completed_and_current_hour(tmp_path):
 
     # Completed hour 09:00 — two samples.
     h9_readings = [
-        {"inverterId": "inv-1", "timestamp": "2026-06-24T09:00:00Z",
-         "pvPower": 500.0, "batterySoc": 40.0, "dailyPvEnergy": 0.5},
-        {"inverterId": "inv-1", "timestamp": "2026-06-24T09:30:00Z",
-         "pvPower": 900.0, "batterySoc": 45.0, "dailyPvEnergy": 0.9},
+        {
+            "inverterId": "inv-1",
+            "timestamp": "2026-06-24T09:00:00Z",
+            "pvPower": 500.0,
+            "batterySoc": 40.0,
+            "dailyPvEnergy": 0.5,
+        },
+        {
+            "inverterId": "inv-1",
+            "timestamp": "2026-06-24T09:30:00Z",
+            "pvPower": 900.0,
+            "batterySoc": 45.0,
+            "dailyPvEnergy": 0.9,
+        },
     ]
     # "Current" in-progress hour 10:00 — the rollup would SKIP this hour, so it
     # is invisible via the sealed table but MUST be visible here.
     h10_readings = [
-        {"inverterId": "inv-1", "timestamp": "2026-06-24T10:00:00Z",
-         "pvPower": 1500.0, "batterySoc": 50.0, "dailyPvEnergy": 1.5},
-        {"inverterId": "inv-1", "timestamp": "2026-06-24T10:15:00Z",
-         "pvPower": 2000.0, "batterySoc": 55.0, "dailyPvEnergy": 2.0},
-        {"inverterId": "inv-1", "timestamp": "2026-06-24T10:30:00Z",
-         "pvPower": 1800.0, "batterySoc": 60.0, "dailyPvEnergy": 2.2},
+        {
+            "inverterId": "inv-1",
+            "timestamp": "2026-06-24T10:00:00Z",
+            "pvPower": 1500.0,
+            "batterySoc": 50.0,
+            "dailyPvEnergy": 1.5,
+        },
+        {
+            "inverterId": "inv-1",
+            "timestamp": "2026-06-24T10:15:00Z",
+            "pvPower": 2000.0,
+            "batterySoc": 55.0,
+            "dailyPvEnergy": 2.0,
+        },
+        {
+            "inverterId": "inv-1",
+            "timestamp": "2026-06-24T10:30:00Z",
+            "pvPower": 1800.0,
+            "batterySoc": 60.0,
+            "dailyPvEnergy": 2.2,
+        },
     ]
     for r in h9_readings + h10_readings:
         store._append_sync(r)
@@ -71,10 +95,12 @@ def test_hourly_range_live_current_hour_absent_from_sealed_table(tmp_path):
     live path adds value. Same raw data, contrasting the two readers."""
     store = _store(tmp_path)
     now = "2026-06-24T10:45:00Z"  # current hour = 10:00
-    store._append_sync({"inverterId": "inv-1", "timestamp": "2026-06-24T09:10:00Z",
-                        "pvPower": 500.0})
-    store._append_sync({"inverterId": "inv-1", "timestamp": "2026-06-24T10:20:00Z",
-                        "pvPower": 1500.0})
+    store._append_sync(
+        {"inverterId": "inv-1", "timestamp": "2026-06-24T09:10:00Z", "pvPower": 500.0}
+    )
+    store._append_sync(
+        {"inverterId": "inv-1", "timestamp": "2026-06-24T10:20:00Z", "pvPower": 1500.0}
+    )
 
     # Seal completed hours only (mirrors production rollup behavior).
     store._rollup_sync(now)
@@ -116,8 +142,9 @@ def test_hourly_range_live_includes_subsecond_last_second_of_day(tmp_path):
     """A reading at 23:59:59.743Z (sub-second, string > T23:59:59Z) must still be
     bucketed into the 23:00 hour — regression for the exclusive next-day bound."""
     store = _store(tmp_path)
-    store._append_sync({"inverterId": "inv-1", "timestamp": "2026-06-24T23:59:59.743115Z",
-                        "pvPower": 3.0})
+    store._append_sync(
+        {"inverterId": "inv-1", "timestamp": "2026-06-24T23:59:59.743115Z", "pvPower": 3.0}
+    )
     result = store._hourly_range_live_sync("inv-1", "2026-06-24")
     assert [b["hour"] for b in result] == ["2026-06-24T23:00:00Z"]
     assert result[0]["sample_count"] == 1
@@ -133,6 +160,7 @@ def test_month_bounds_malformed_month_raises_valueerror(tmp_path):
     """Malformed month must raise ValueError (endpoint maps it to HTTP 400),
     never crash with an unhandled error."""
     import pytest
+
     store = _store(tmp_path)
     for bad in ("foo", "2026-13", "2026-00", "", "2026"):
         with pytest.raises(ValueError):

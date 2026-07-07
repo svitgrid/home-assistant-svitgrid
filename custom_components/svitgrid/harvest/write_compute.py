@@ -7,6 +7,7 @@ No I/O.  Raise ``ValueError`` for an out-of-range slot index or a missing
 required payload field (the latter surfaces naturally as a ``KeyError`` from
 the payload dict).
 """
+
 from __future__ import annotations
 
 from .register_spec import FieldWrite, WriteCommand
@@ -90,9 +91,7 @@ def compute_register_writes(
         s = cmd.slot
         idx = int(payload[s.index_field])
         if not (0 <= idx < s.count):
-            raise ValueError(
-                f"slot index {idx} out of range 0..{s.count - 1}"
-            )
+            raise ValueError(f"slot index {idx} out of range 0..{s.count - 1}")
         for f in s.fields:
             slot_idx = ((idx + 1) % s.count) if f.via_next_slot else idx
             addr = f.base + slot_idx * s.stride

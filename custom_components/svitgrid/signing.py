@@ -137,6 +137,7 @@ def serialize_private_key(private_key: ec.EllipticCurvePrivateKey) -> str:
     keep working.
     """
     from cryptography.hazmat.primitives import serialization
+
     pem = private_key.private_bytes(
         encoding=serialization.Encoding.PEM,
         format=serialization.PrivateFormat.PKCS8,
@@ -149,6 +150,5 @@ def deserialize_private_key(pem: str) -> ec.EllipticCurvePrivateKey:
     """Inverse of serialize_private_key. Used at integration boot to
     reconstruct the signer from the config entry."""
     from cryptography.hazmat.primitives import serialization
-    return serialization.load_pem_private_key(
-        pem.encode("ascii"), password=None
-    )  # type: ignore[return-value]
+
+    return serialization.load_pem_private_key(pem.encode("ascii"), password=None)  # type: ignore[return-value]

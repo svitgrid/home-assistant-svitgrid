@@ -7,6 +7,7 @@ importKwh, exportKwh} (services/api/src/tariffs/hourly-aggregation.ts:73-78).
 
 Spec: docs/superpowers/plans/2026-07-02-island-hourly-energy.md, Task 2.
 """
+
 from __future__ import annotations
 
 import json
@@ -220,9 +221,7 @@ async def test_settlement_input_defaults_month_to_current_when_missing(hass):
     hass.config.time_zone = "UTC"
     store = _FakeStore([])
     view = SvitgridSettlementInputView(store)
-    request = _FakeRequest(
-        hass, island_key_header=ISLAND_KEY, query={"inverter_id": "inv-1"}
-    )
+    request = _FakeRequest(hass, island_key_header=ISLAND_KEY, query={"inverter_id": "inv-1"})
     resp = await view.get(request)
     assert resp.status == 200
     assert store.args[1] == _today()[:7]

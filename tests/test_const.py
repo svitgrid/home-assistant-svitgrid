@@ -1,4 +1,5 @@
 """Guards for the canonical-field constants."""
+
 from __future__ import annotations
 
 from custom_components.svitgrid.const import ALL_FIELDS, MAPPABLE_FIELDS
@@ -23,8 +24,9 @@ def test_mappable_fields_have_nonempty_labels():
 def test_core_payload_fields_are_the_five_non_pv_required():
     from custom_components.svitgrid.const import CORE_PAYLOAD_FIELDS
 
-    assert CORE_PAYLOAD_FIELDS == frozenset(
-        {"batterySoc", "batteryPower", "batteryVoltage", "gridPower", "loadPower"}
+    assert (
+        frozenset({"batterySoc", "batteryPower", "batteryVoltage", "gridPower", "loadPower"})
+        == CORE_PAYLOAD_FIELDS
     )
     # pvPower is NOT in the set — the gate defaults it to 0 for no-solar systems.
     assert "pvPower" not in CORE_PAYLOAD_FIELDS
@@ -57,6 +59,7 @@ def test_set_cloud_endpoint_is_an_internal_command():
         INTERNAL_COMMANDS,
         SET_CLOUD_ENDPOINT_COMMAND,
     )
+
     assert SET_CLOUD_ENDPOINT_COMMAND == "set_cloud_endpoint"
     assert SET_CLOUD_ENDPOINT_COMMAND in INTERNAL_COMMANDS
 
@@ -68,6 +71,7 @@ def test_default_api_base_is_in_allow_list():
         is_allowed_api_base,
     )
     from custom_components.svitgrid.const import DEFAULT_API_BASE
+
     assert is_allowed_api_base(DEFAULT_API_BASE)
 
 
@@ -76,4 +80,5 @@ def test_default_api_base_is_prod():
     prod, not staging. Existing installs keep their stored api_base and are
     moved by the server-issued set_cloud_endpoint command."""
     from custom_components.svitgrid.const import DEFAULT_API_BASE
+
     assert DEFAULT_API_BASE == "https://api.svitgrid.app"

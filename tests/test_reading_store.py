@@ -58,10 +58,13 @@ def test_get_sendable_returns_oldest_first_within_cap(tmp_path):
     store = _store(tmp_path)
     # cap = 48h relative to now below
     now = "2026-06-24T12:00:00Z"
-    _seed(store, "inv-1",
-          "2026-06-20T12:00:00Z",   # > 48h old → excluded
-          "2026-06-24T09:00:00Z",
-          "2026-06-24T10:00:00Z")
+    _seed(
+        store,
+        "inv-1",
+        "2026-06-20T12:00:00Z",  # > 48h old → excluded
+        "2026-06-24T09:00:00Z",
+        "2026-06-24T10:00:00Z",
+    )
     rows = store._get_sendable_sync(now, cap_s=48 * 3600, limit=50)
     assert [r["ts"] for r in rows] == ["2026-06-24T09:00:00Z", "2026-06-24T10:00:00Z"]
 
@@ -125,11 +128,17 @@ def test_live_snapshot_interval_none_single_reading(tmp_path):
 def test_median_gap_seconds_multiple(tmp_path):
     """Pure helper: 3 ts 300s apart → 300.0; single ts → None."""
     from custom_components.svitgrid.reading_store import _median_gap_seconds
-    assert _median_gap_seconds([
-        "2026-06-25T10:10:00Z",
-        "2026-06-25T10:05:00Z",
-        "2026-06-25T10:00:00Z",
-    ]) == 300.0
+
+    assert (
+        _median_gap_seconds(
+            [
+                "2026-06-25T10:10:00Z",
+                "2026-06-25T10:05:00Z",
+                "2026-06-25T10:00:00Z",
+            ]
+        )
+        == 300.0
+    )
     assert _median_gap_seconds(["2026-06-25T10:00:00Z"]) is None
 
 
@@ -146,6 +155,7 @@ def test_sync_status_counts_and_last_sent(tmp_path):
 def test_today_summary_returns_daily_row_when_present(tmp_path):
     store = _store(tmp_path)
     import json
+
     conn = store._connect_for_test()
     try:
         conn.execute(
@@ -176,18 +186,22 @@ def test_today_summary_returns_daily_row_when_present(tmp_path):
 def test_today_summary_falls_back_to_raw_aggregate(tmp_path):
     store = _store(tmp_path)
     # No daily row — only raw readings (including one at 23:59:59 to verify Fix 1).
-    store._append_sync({
-        "inverterId": "inv-1",
-        "timestamp": "2026-06-24T10:00:00Z",
-        "pvPower": 1000.0,
-        "dailyPvEnergy": 5.0,
-    })
-    store._append_sync({
-        "inverterId": "inv-1",
-        "timestamp": "2026-06-24T23:59:59Z",
-        "pvPower": 3000.0,
-        "dailyPvEnergy": 8.0,
-    })
+    store._append_sync(
+        {
+            "inverterId": "inv-1",
+            "timestamp": "2026-06-24T10:00:00Z",
+            "pvPower": 1000.0,
+            "dailyPvEnergy": 5.0,
+        }
+    )
+    store._append_sync(
+        {
+            "inverterId": "inv-1",
+            "timestamp": "2026-06-24T23:59:59Z",
+            "pvPower": 3000.0,
+            "dailyPvEnergy": 8.0,
+        }
+    )
 
     result = store._today_summary_sync("2026-06-24")
     assert len(result) == 1
@@ -202,7 +216,10 @@ def test_lifecycle_meta_roundtrip(tmp_path):
     store = _store(tmp_path)
     store._set_lifecycle_sync("deprovisioned", "revoked", "2026-06-25T10:00:00Z")
     assert store._get_lifecycle_sync() == {
-        "state": "deprovisioned", "reason": "revoked", "since": "2026-06-25T10:00:00Z"}
+        "state": "deprovisioned",
+        "reason": "revoked",
+        "since": "2026-06-25T10:00:00Z",
+    }
 
 
 def test_lifecycle_defaults_active_when_unset(tmp_path):
@@ -225,7 +242,9 @@ def test_prune_inverters_not_in_keeps_listed_and_deletes_rest(tmp_path):
     # only inv-A rows remain
     conn = store._connect_for_test()
     try:
-        rows = conn.execute("SELECT inverter_id FROM readings_raw ORDER BY inverter_id, ts").fetchall()
+        rows = conn.execute(
+            "SELECT inverter_id FROM readings_raw ORDER BY inverter_id, ts"
+        ).fetchall()
     finally:
         conn.close()
     assert all(r["inverter_id"] == "inv-A" for r in rows)
@@ -253,14 +272,15 @@ def test_prune_inverters_not_in_empty_set_deletes_all(tmp_path):
 def test_history_range_orders_and_bounds(tmp_path):
     store = _store(tmp_path)
     import json
+
     conn = store._connect_for_test()
     try:
         rows_to_insert = [
             ("inv-1", "2026-06-22"),
             ("inv-1", "2026-06-23"),
             ("inv-1", "2026-06-24"),
-            ("inv-1", "2026-06-20"),   # out of range
-            ("inv-2", "2026-06-23"),   # different inverter
+            ("inv-1", "2026-06-20"),  # out of range
+            ("inv-2", "2026-06-23"),  # different inverter
         ]
         for inv_id, day in rows_to_insert:
             conn.execute(
@@ -283,12 +303,34 @@ def test_history_range_orders_and_bounds(tmp_path):
 def test_hourly_range_returns_ordered_rows_for_day(tmp_path):
     store = _store(tmp_path)
     import json
+
     conn = store._connect_for_test()
     try:
         rows_to_insert = [
-            ("inv-1", "2026-06-24T10:00:00Z", 12, {"pvPower": 1500.0}, {"pvPower": 2000.0}, {"dailyPvEnergy": 1.0}),
-            ("inv-1", "2026-06-24T11:00:00Z", 15, {"pvPower": 2000.0}, {"pvPower": 2500.0}, {"dailyPvEnergy": 2.0}),
-            ("inv-1", "2026-06-24T09:00:00Z", 10, {"pvPower": 500.0}, {"pvPower": 800.0}, {"dailyPvEnergy": 0.5}),
+            (
+                "inv-1",
+                "2026-06-24T10:00:00Z",
+                12,
+                {"pvPower": 1500.0},
+                {"pvPower": 2000.0},
+                {"dailyPvEnergy": 1.0},
+            ),
+            (
+                "inv-1",
+                "2026-06-24T11:00:00Z",
+                15,
+                {"pvPower": 2000.0},
+                {"pvPower": 2500.0},
+                {"dailyPvEnergy": 2.0},
+            ),
+            (
+                "inv-1",
+                "2026-06-24T09:00:00Z",
+                10,
+                {"pvPower": 500.0},
+                {"pvPower": 800.0},
+                {"dailyPvEnergy": 0.5},
+            ),
             ("inv-2", "2026-06-24T10:00:00Z", 8, {}, {}, {}),  # different inverter
             ("inv-1", "2026-06-23T10:00:00Z", 5, {}, {}, {}),  # different day
         ]
@@ -296,7 +338,14 @@ def test_hourly_range_returns_ordered_rows_for_day(tmp_path):
             conn.execute(
                 "INSERT INTO readings_hourly (inverter_id, hour_start, sample_count, avgs, peaks, energy) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
-                (inv_id, hour_start, sample_count, json.dumps(avgs), json.dumps(peaks), json.dumps(energy)),
+                (
+                    inv_id,
+                    hour_start,
+                    sample_count,
+                    json.dumps(avgs),
+                    json.dumps(peaks),
+                    json.dumps(energy),
+                ),
             )
         conn.commit()
     finally:
@@ -327,6 +376,7 @@ def test_hourly_range_returns_empty_for_unknown_day(tmp_path):
 def test_hourly_range_excludes_other_inverters(tmp_path):
     store = _store(tmp_path)
     import json
+
     conn = store._connect_for_test()
     try:
         conn.execute(
@@ -353,11 +403,13 @@ def test_median_gap_seconds_malformed_timestamps_returns_none():
     assert _median_gap_seconds(["2026-06-25T10:00:00Z", "bad"]) is None
 
     # Two valid despite a malformed entry mixed in → result is a number.
-    result = _median_gap_seconds([
-        "2026-06-25T10:10:00Z",
-        "BAD-ENTRY",
-        "2026-06-25T10:00:00Z",
-    ])
+    result = _median_gap_seconds(
+        [
+            "2026-06-25T10:10:00Z",
+            "BAD-ENTRY",
+            "2026-06-25T10:00:00Z",
+        ]
+    )
     assert result == 600.0
 
 
@@ -371,6 +423,7 @@ async def test_wait_for_data_returns_promptly_after_append(tmp_path):
     reading = {"inverterId": "inv-1", "timestamp": "2026-06-28T10:00:00Z"}
 
     start = asyncio.get_event_loop().time()
+
     # Schedule an append to fire shortly after we start waiting
     async def _appender():
         await asyncio.sleep(0.05)

@@ -1,4 +1,5 @@
 """Version-gated register-spec cache (mirrors preset_refresh)."""
+
 from __future__ import annotations
 
 from ..preset_refresh import should_merge  # reuse numeric/str version compare

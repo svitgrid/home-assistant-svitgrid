@@ -1,4 +1,5 @@
 """Tests for SvitgridProblemBinarySensor."""
+
 from custom_components.svitgrid.activity import ActivityTracker
 from custom_components.svitgrid.binary_sensor import SvitgridProblemBinarySensor
 

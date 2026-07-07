@@ -9,6 +9,7 @@ fallback register 1 that Deye inverters don't implement.
 A relay pairing (no ``harvestConfig``) must skip the reachability check entirely
 and create an entry with NO ``harvest_config`` key (regression guard).
 """
+
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -57,12 +58,19 @@ def _make_flow(hass: HomeAssistant, *, harvest_config: dict | None) -> SvitgridC
     flow._private_key = ec.generate_private_key(ec.SECP256R1())
     flow._public_key_hex = "04" + "a" * 128
     payload: dict = {
-        "edgeDeviceId": "ed-h", "hardwareId": "ha-h",
-        "apiKey": "k", "householdId": "h", "presetId": None,
+        "edgeDeviceId": "ed-h",
+        "hardwareId": "ha-h",
+        "apiKey": "k",
+        "householdId": "h",
+        "presetId": None,
         "trustedKeys": [{"keyId": "ha-home-01", "publicKeyHex": "04" + "a" * 128}],
         "entityMap": {"batterySoc": "sensor.soc"},
-        "brand": "Deye", "model": "SG04LP3", "phases": 3,
-        "hasBattery": True, "pvStrings": 2, "commands": [],
+        "brand": "Deye",
+        "model": "SG04LP3",
+        "phases": 3,
+        "hasBattery": True,
+        "pvStrings": 2,
+        "commands": [],
     }
     if harvest_config is not None:
         payload["harvestConfig"] = harvest_config
@@ -76,10 +84,14 @@ def _mock_api_client(spec_dict: dict | None = _MINIMAL_SPEC_DICT):
     mock_instance = MagicMock()
     mock_instance.get_register_spec = AsyncMock(return_value=spec_dict)
     mock_cls = MagicMock(return_value=mock_instance)
-    return patch(
-        "custom_components.svitgrid.config_flow.SvitgridApiClient",
-        new=mock_cls,
-    ), mock_cls, mock_instance
+    return (
+        patch(
+            "custom_components.svitgrid.config_flow.SvitgridApiClient",
+            new=mock_cls,
+        ),
+        mock_cls,
+        mock_instance,
+    )
 
 
 @pytest.mark.asyncio
@@ -91,9 +103,12 @@ async def test_finalize_with_harvest_config_reachable_creates_entry(
     checker = AsyncMock(return_value=True)
     api_patch, mock_cls, mock_instance = _mock_api_client()
 
-    with api_patch, patch(
-        "custom_components.svitgrid.harvest.reachability.check_inverter_reachable",
-        new=checker,
+    with (
+        api_patch,
+        patch(
+            "custom_components.svitgrid.harvest.reachability.check_inverter_reachable",
+            new=checker,
+        ),
     ):
         result = await flow.async_step_pair_finalize()
 
@@ -124,9 +139,12 @@ async def test_finalize_with_harvest_config_unreachable_shows_error(
     checker = AsyncMock(return_value=False)
     api_patch, _, _ = _mock_api_client()
 
-    with api_patch, patch(
-        "custom_components.svitgrid.harvest.reachability.check_inverter_reachable",
-        new=checker,
+    with (
+        api_patch,
+        patch(
+            "custom_components.svitgrid.harvest.reachability.check_inverter_reachable",
+            new=checker,
+        ),
     ):
         result = await flow.async_step_pair_finalize()
 
@@ -145,9 +163,12 @@ async def test_finalize_relay_skips_reachability_and_has_no_harvest_config(
     checker = AsyncMock(return_value=True)
     api_patch, _, mock_instance = _mock_api_client()
 
-    with api_patch, patch(
-        "custom_components.svitgrid.harvest.reachability.check_inverter_reachable",
-        new=checker,
+    with (
+        api_patch,
+        patch(
+            "custom_components.svitgrid.harvest.reachability.check_inverter_reachable",
+            new=checker,
+        ),
     ):
         result = await flow.async_step_pair_finalize()
 
@@ -169,9 +190,12 @@ async def test_finalize_spec_fetch_returns_none_falls_back_to_no_spec(
     checker = AsyncMock(return_value=True)
     api_patch, _, mock_instance = _mock_api_client(spec_dict=None)
 
-    with api_patch, patch(
-        "custom_components.svitgrid.harvest.reachability.check_inverter_reachable",
-        new=checker,
+    with (
+        api_patch,
+        patch(
+            "custom_components.svitgrid.harvest.reachability.check_inverter_reachable",
+            new=checker,
+        ),
     ):
         result = await flow.async_step_pair_finalize()
 
@@ -194,8 +218,12 @@ async def test_finalize_spec_fetch_raises_falls_back_to_no_spec(
     mock_instance.get_register_spec = AsyncMock(side_effect=Exception("network error"))
     mock_cls = MagicMock(return_value=mock_instance)
 
-    with patch("custom_components.svitgrid.config_flow.SvitgridApiClient", new=mock_cls), \
-         patch("custom_components.svitgrid.harvest.reachability.check_inverter_reachable", new=checker):
+    with (
+        patch("custom_components.svitgrid.config_flow.SvitgridApiClient", new=mock_cls),
+        patch(
+            "custom_components.svitgrid.harvest.reachability.check_inverter_reachable", new=checker
+        ),
+    ):
         result = await flow.async_step_pair_finalize()
 
     assert result["type"] == FlowResultType.CREATE_ENTRY

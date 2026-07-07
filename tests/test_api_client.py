@@ -132,9 +132,7 @@ class TestReadingsPush:
         """A 400 (e.g. validation error — missing required sensors) is a hard
         client error: raise ReadingRejected so the caller backs off instead of
         re-POSTing the same bad payload every cadence tick."""
-        session, _ = _mock_session_with_response(
-            400, {"error": "Validation error", "details": []}
-        )
+        session, _ = _mock_session_with_response(400, {"error": "Validation error", "details": []})
         client = SvitgridApiClient(session, api_base="https://api.example")
         with pytest.raises(ReadingRejected) as exc_info:
             await client.push_reading(api_key="k", reading={"inverterId": "i"})
@@ -255,6 +253,7 @@ class TestAckCommand:
 
 # ── Phase 2 T10c: MQTT command-wake token mint ────────────────────────
 
+
 @pytest.mark.asyncio
 class TestGetMqttToken:
     async def test_returns_parsed_response(self):
@@ -277,10 +276,14 @@ class TestGetMqttToken:
         assert result["broker"]["port"] == 8883
 
     async def test_includes_api_key_header(self):
-        session, _ = _mock_session_with_response(200, {
-            "token": "t", "expiresAt": "x",
-            "broker": {"host": "h", "port": 8883, "topic": "devices/x/wake"},
-        })
+        session, _ = _mock_session_with_response(
+            200,
+            {
+                "token": "t",
+                "expiresAt": "x",
+                "broker": {"host": "h", "port": 8883, "topic": "devices/x/wake"},
+            },
+        )
         client = SvitgridApiClient(session, api_base="https://api.example")
         await client.get_mqtt_token(api_key="secret-key")
         call_args = session.post.call_args
@@ -290,6 +293,7 @@ class TestGetMqttToken:
 
     async def test_503_when_broker_unconfigured_raises(self):
         from custom_components.svitgrid.api_client import SvitgridApiError
+
         session, _ = _mock_session_with_response(503, {"error": "mqtt_broker_not_configured"})
         client = SvitgridApiClient(session, api_base="https://api.example")
         with pytest.raises(SvitgridApiError):
@@ -297,6 +301,7 @@ class TestGetMqttToken:
 
     async def test_401_raises(self):
         from custom_components.svitgrid.api_client import SvitgridApiError
+
         session, _ = _mock_session_with_response(401, {"error": "Unauthorized"})
         client = SvitgridApiClient(session, api_base="https://api.example")
         with pytest.raises(SvitgridApiError):
@@ -304,6 +309,7 @@ class TestGetMqttToken:
 
 
 # ── Graceful stop signal: stopped:true in response body ───────────────────
+
 
 @pytest.mark.asyncio
 class TestDeviceStopped:
@@ -358,12 +364,18 @@ class TestDeviceStopped:
 
 # ── Multi-inverter: add_inverter() ───────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 class TestAddInverter:
     async def test_preset_posts_to_correct_url_and_returns_body(self):
         session, _ = _mock_session_with_response(
             200,
-            {"inverterId": "ha-abc123", "brand": "Deye", "entityMap": {"batterySoc": "sensor.soc"}, "commands": []},
+            {
+                "inverterId": "ha-abc123",
+                "brand": "Deye",
+                "entityMap": {"batterySoc": "sensor.soc"},
+                "commands": [],
+            },
         )
         client = SvitgridApiClient(session, api_base="https://api.example")
         body = await client.add_inverter(api_key="my-api-key", preset_id="deye-sg04lp3")
@@ -470,7 +482,12 @@ class TestPushReadingsBatch:
             await client.push_readings_batch(api_key="k" * 64, readings=[{"x": 1}])
 
     async def test_push_readings_batch_410_raises_device_evicted(self):
-        session, _ = _mock_session_with_response(410, {"error": "Device key revoked (owner household removed)"})
+        session, _ = _mock_session_with_response(
+            410, {"error": "Device key revoked (owner household removed)"}
+        )
         client = SvitgridApiClient(session, api_base="https://api.example")
         with pytest.raises(DeviceEvicted):
-            await client.push_readings_batch(api_key="k" * 64, readings=[{"inverterId": "i", "timestamp": "2026-06-25T10:00:00Z"}])
+            await client.push_readings_batch(
+                api_key="k" * 64,
+                readings=[{"inverterId": "i", "timestamp": "2026-06-25T10:00:00Z"}],
+            )

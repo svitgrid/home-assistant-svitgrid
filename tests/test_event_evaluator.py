@@ -10,6 +10,7 @@ One+ test per mode; covers:
   - day_planning → skip:cloud_only_mode
   - smart-mode / sustain hysteresis prevents flapping
 """
+
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
@@ -388,7 +389,12 @@ def test_consume_from_sun_deactivates_after_off_sustain():
     event = {
         "mode": "consume_from_sun",
         "schedule": _in_window_schedule(),
-        "config": {"socOnThreshold": 85, "socOffThreshold": 70, "solarFloorW": 500, "minDurationMinutes": 5},
+        "config": {
+            "socOnThreshold": 85,
+            "socOffThreshold": 70,
+            "solarFloorW": 500,
+            "minDurationMinutes": 5,
+        },
     }
     # Active, SOC dropped below socOff, conditionLostSince 10 min ago
     state = _active(conditionLostSince=_ago(10))
@@ -402,7 +408,12 @@ def test_consume_from_sun_hysteresis_prevents_flap():
     event = {
         "mode": "consume_from_sun",
         "schedule": _in_window_schedule(),
-        "config": {"socOnThreshold": 85, "socOffThreshold": 70, "solarFloorW": 500, "minDurationMinutes": 5},
+        "config": {
+            "socOnThreshold": 85,
+            "socOffThreshold": 70,
+            "solarFloorW": 500,
+            "minDurationMinutes": 5,
+        },
     }
     # Active, off condition just triggered (30 sec ago — within hysteresis window)
     state = _active(conditionLostSince=_ago(0.5))
@@ -745,7 +756,11 @@ def test_custom_deactivates_after_release_sustain():
         "config": {
             "customConditions": [{"type": "battery_soc", "op": "lte", "threshold": 30}],
             "customActions": [
-                {"command": "set_work_mode", "payload": {"workMode": 0}, "restorePayload": {"workMode": 2}}
+                {
+                    "command": "set_work_mode",
+                    "payload": {"workMode": 0},
+                    "restorePayload": {"workMode": 2},
+                }
             ],
             "sustainMinutes": 2,
         },
