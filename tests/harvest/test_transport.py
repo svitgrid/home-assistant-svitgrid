@@ -97,7 +97,7 @@ def test_read_solarman_assembles_raw_registers(monkeypatch):
         123456789,
         port=8899,
         mb_slave_id=1,
-        socket_timeout=8,
+        socket_timeout=3,
         auto_reconnect=True,
     )
     # read called with positional-style kwargs

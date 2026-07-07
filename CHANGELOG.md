@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.12.0 — 2026-07-07
+
+### Added
+- **Island mode — keep your energy data on your own Home Assistant.** The add-on
+  can now serve the Svitgrid app directly over your LAN with no cloud round-trip:
+  your live dashboard, charts, history and financial reports are computed on Home
+  Assistant from its own stored readings. Turn it on/off from the app (or via the
+  `enable_island` / `disable_island` commands); a cloud-sync toggle decides whether
+  readings still flow to the cloud so forecasts, arbitrage and smart schedules keep
+  working.
+  - **Local history endpoint** (`GET /api/svitgrid/history`) serving hourly, daily
+    and **5-minute** buckets computed live from raw readings — including the
+    current, still-in-progress hour and day — with per-phase grid voltage preserved
+    in the buckets. (Pairs with the Svitgrid app 1.0.12 Day-chart update.)
+  - **Local financial settlement** (`settlement-input`) — pure per-hour
+    import/export energy deltas with meter-reset handling, so the app's green-tariff,
+    cooperative, business and active-consumer (РДН) reports compute locally.
+  - **LAN trust keys** — add/revoke endpoints that pair the app's device key to the
+    add-on over the local network (trust-on-first-use with proof-of-possession), so
+    signed control commands work with no internet.
+- **Configurable harvest cadence** (`GET`/`PUT /api/svitgrid/cadence`), with the
+  polling floor lowered to 5 seconds.
+- **Change the inverter connection in place** (`set_harvest_config`) — probes the
+  new connection before applying it, and the change now persists across restarts.
+
+### Fixed
+- HA-Solarman battery sign is normalized on the local path — charging vs
+  discharging is no longer inverted on the branded panel.
+- The MQTT wake client is torn down before back-off, stopping a reconnect flood.
+- Daily generator runtime is now included in the daily-counter rollup.
+- Island enable/config changes reload the integration idempotently and no longer
+  cancel the reading poller mid-apply.
+
 ## 0.11.0 — 2026-07-02
 
 ### Added

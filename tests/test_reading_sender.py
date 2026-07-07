@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+from datetime import datetime, timezone
 
 import pytest
 
@@ -217,7 +218,11 @@ async def test_sender_drains_promptly_on_append(tmp_path):
 
         # Now append a reading — this should wake the sender immediately
         start = asyncio.get_event_loop().time()
-        store._append_sync({"inverterId": "inv-1", "timestamp": "2026-06-28T10:00:00Z"})
+        # Use a fresh timestamp so the reading isn't aged out by skip_aged (the
+        # sender caps backfill at BACKFILL_CAP_S from wall-clock now); a hardcoded
+        # past date would rot and get skipped once it exceeds the cap.
+        fresh_ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        store._append_sync({"inverterId": "inv-1", "timestamp": fresh_ts})
         store._signal_data_available()
 
         # Poll until sent or timeout
