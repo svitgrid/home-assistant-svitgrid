@@ -1,6 +1,6 @@
 import asyncio
 import contextlib
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -221,7 +221,7 @@ async def test_sender_drains_promptly_on_append(tmp_path):
         # Use a fresh timestamp so the reading isn't aged out by skip_aged (the
         # sender caps backfill at BACKFILL_CAP_S from wall-clock now); a hardcoded
         # past date would rot and get skipped once it exceeds the cap.
-        fresh_ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        fresh_ts = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
         store._append_sync({"inverterId": "inv-1", "timestamp": fresh_ts})
         store._signal_data_available()
 
