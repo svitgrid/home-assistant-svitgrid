@@ -7,7 +7,20 @@ import contextlib
 import copy
 import logging
 
+try:  # normal package import
+    from .const import DOMAIN
+except ImportError:  # some unit tests load this module standalone by file path
+    DOMAIN = "svitgrid"
+
 _LOGGER = logging.getLogger(__name__)
+
+
+def _suppress_listener_reload(hass) -> None:
+    """Tell the config-entry update-listener (_async_reload_entry) to SKIP its
+    reload for the next async_update_entry — the caller does its own explicit
+    reload. Without this both fire, producing two overlapping setups (e.g. two
+    direct-harvest loops contending for a single-connection Solarman logger)."""
+    hass.data.setdefault(DOMAIN, {})["_skip_reload_once"] = True
 
 
 async def probe_modbus_reachable(host: str, port: int) -> bool:
@@ -47,6 +60,7 @@ async def apply_harvest_config_change(hass, entry, conn: dict) -> None:
             hc["port"] = conn["port"]
             hc["slave_id"] = conn["slaveId"]
             break
+    _suppress_listener_reload(hass)
     hass.config_entries.async_update_entry(entry, data=new_data)
     hass.async_create_task(hass.config_entries.async_reload(entry.entry_id))
 
@@ -73,6 +87,7 @@ async def apply_read_source_change(
             else:
                 inv["harvest_config"] = harvest_config
             break
+    _suppress_listener_reload(hass)
     hass.config_entries.async_update_entry(entry, data=new_data)
 
     async def _do_reload() -> None:

@@ -255,8 +255,16 @@ async def _async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     A cadence-only change (flagged by the cadence PUT handler) is applied to the
     in-memory holder directly and needs no reload — reloading would re-run setup
     unnecessarily. The flag is consumed (popped) so any later non-cadence update
-    still reloads."""
-    if hass.data.get(DOMAIN, {}).pop("_cadence_only_update", False):
+    still reloads.
+
+    `_skip_reload_once` is set by callers (harvest_config_apply) that perform
+    their OWN explicit reload after async_update_entry — without it, this
+    listener would ALSO reload, producing two concurrent setups (e.g. two
+    direct-harvest loops fighting over a single-connection logger)."""
+    data = hass.data.get(DOMAIN, {})
+    cadence_only = data.pop("_cadence_only_update", False)
+    skip_once = data.pop("_skip_reload_once", False)
+    if cadence_only or skip_once:
         return
     await hass.config_entries.async_reload(entry.entry_id)
 

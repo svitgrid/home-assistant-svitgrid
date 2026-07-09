@@ -18,6 +18,7 @@ def _entry(inverters):
 
 def _hass():
     h = MagicMock()
+    h.data = {}  # real dict so the _skip_reload_once flag is observable
     return h
 
 
@@ -34,6 +35,10 @@ async def test_create_harvest_config_on_relay_inverter():
     assert inv["entity_map"] == {"batterySoc": "sensor.x"}  # entity_map retained
     hass.config_entries.async_reload.assert_not_called()  # reload is via async_create_task
     hass.async_create_task.assert_called_once()
+    # The update-listener's reload is suppressed (we do our own explicit reload)
+    # so the switch spawns exactly ONE setup, not two contending harvest loops.
+    from custom_components.svitgrid.const import DOMAIN
+    assert hass.data[DOMAIN]["_skip_reload_once"] is True
 
 
 @pytest.mark.asyncio

@@ -177,3 +177,17 @@ async def test_reload_entry_reloads_when_flag_absent():
     hass = _ReloadHass(flag_value=None)
     await _async_reload_entry(hass, _ReloadEntry())
     assert hass.config_entries.reload_calls == ["entry-xyz"]
+
+
+@pytest.mark.asyncio
+async def test_reload_entry_skips_when_skip_reload_once_flag_set():
+    """_async_reload_entry skips its reload when `_skip_reload_once` is set (the
+    caller — harvest_config_apply — does its own explicit reload), preventing a
+    double reload / two overlapping setups. The flag is consumed."""
+    from custom_components.svitgrid import _async_reload_entry
+
+    hass = _ReloadHass(flag_value=None)
+    hass.data[DOMAIN]["_skip_reload_once"] = True
+    await _async_reload_entry(hass, _ReloadEntry())
+    assert hass.config_entries.reload_calls == []
+    assert "_skip_reload_once" not in hass.data[DOMAIN]
