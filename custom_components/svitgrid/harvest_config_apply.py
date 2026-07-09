@@ -37,7 +37,9 @@ async def apply_harvest_config_change(hass, entry, conn: dict) -> None:
     unchanged `data=` as a no-op, silently dropping the persisted change
     (reverts to the old connection on next restart).
     """
-    new_data = copy.deepcopy(entry.data)
+    # entry.data is a read-only MappingProxyType at runtime; copy.deepcopy can't
+    # pickle a mappingproxy (Python 3.14 TypeError), so dict()-convert first.
+    new_data = copy.deepcopy(dict(entry.data))
     for inv in new_data.get("inverters", []):
         hc = inv.get("harvest_config")
         if hc:
@@ -61,7 +63,9 @@ async def apply_read_source_change(
     and HA drops an unchanged `data=` as a no-op (same gotcha as
     apply_harvest_config_change).
     """
-    new_data = copy.deepcopy(entry.data)
+    # entry.data is a read-only MappingProxyType at runtime; copy.deepcopy can't
+    # pickle a mappingproxy (Python 3.14 TypeError), so dict()-convert first.
+    new_data = copy.deepcopy(dict(entry.data))
     for inv in new_data.get("inverters", []):
         if inv.get("inverter_id") == inverter_id:
             if harvest_config is None:

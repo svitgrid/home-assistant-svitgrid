@@ -1,4 +1,5 @@
 import copy
+from types import MappingProxyType
 from unittest.mock import MagicMock
 import pytest
 from custom_components.svitgrid.harvest_config_apply import apply_read_source_change
@@ -6,7 +7,11 @@ from custom_components.svitgrid.harvest_config_apply import apply_read_source_ch
 
 def _entry(inverters):
     e = MagicMock()
-    e.data = {"inverters": inverters}
+    # HA's ConfigEntry.data is a read-only MappingProxyType at runtime — NOT a
+    # plain dict. copy.deepcopy() cannot pickle a mappingproxy (Python 3.14
+    # TypeError), so apply must dict()-convert before deep-copying. Reproduce
+    # the runtime type here so this path is actually exercised.
+    e.data = MappingProxyType({"inverters": inverters})
     e.entry_id = "entry-1"
     return e
 
