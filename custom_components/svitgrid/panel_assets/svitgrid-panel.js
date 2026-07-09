@@ -9,7 +9,8 @@
  *   today:   { inverters: [{ energy:{ dailyPvEnergy, dailyLoadEnergy,
  *                            dailyGridImportEnergy, dailyGridExportEnergy } }] }
  *   history: { days: [{ day, energy:{ dailyPvEnergy } }] }
- *   sync:    { counts:{ sent, pending, failed, skipped }, last_sent_ts }
+ *   sync:    { counts:{ sent, pending, failed, skipped }, last_sent_ts,
+ *              cloud_ingest_enabled }  // false => island mode, local-only footer
  *
  * Sign conventions (CORRECT — do not change, only display):
  *   batteryPower < 0 = discharging; >= 0 = charging.
@@ -74,6 +75,8 @@
     kwh: "kWh",
     stale: "Stale",
     syncedAll: "All readings synced",
+    islandLocalOnly: "Island mode — stored locally",
+    readingsStored: "readings stored locally",
     lastSent: "last sent",
     pending: "pending",
     failed: "failed",
@@ -3349,6 +3352,26 @@
         }
 
         if (!this._syncFooter) return true;
+
+        // Island mode (cloud ingest off): there is NO cloud to sync to, so
+        // readings legitimately sit in sync_state='pending' forever. Render a
+        // neutral "stored locally" footer instead of a false ⚠ sync warning.
+        // Only an explicit `false` triggers this — older servers omit the flag
+        // (undefined) and keep the normal cloud-sync display.
+        if (data && data.cloud_ingest_enabled === false) {
+          this._syncFooter.className = "sync-footer ok";
+          this._syncFooter.innerHTML = "";
+          const lead = document.createElement("span");
+          lead.className = "sync-lead";
+          lead.textContent = "🏝 " + STR.islandLocalOnly;
+          const detail = document.createElement("span");
+          detail.className = "sync-detail";
+          const stored = sent + pending + failed + skipped;
+          detail.textContent = "· " + stored + " " + STR.readingsStored;
+          this._syncFooter.appendChild(lead);
+          this._syncFooter.appendChild(detail);
+          return true;
+        }
 
         const hasIssue = pending + failed > 0;
         this._syncFooter.className = "sync-footer " + (hasIssue ? "issue" : "ok");

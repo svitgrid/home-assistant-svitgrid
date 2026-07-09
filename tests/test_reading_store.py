@@ -152,6 +152,27 @@ def test_sync_status_counts_and_last_sent(tmp_path):
     assert status["last_sent_ts"] == "2026-06-24T10:00:00Z"
 
 
+def test_sync_status_defaults_cloud_ingest_enabled_true(tmp_path):
+    # Non-island store (default): sync-status reports cloud ingest ON so the
+    # panel keeps showing the normal cloud-sync footer.
+    store = _store(tmp_path)
+    assert store.cloud_ingest_enabled is True
+    status = store._sync_status_sync()
+    assert status["cloud_ingest_enabled"] is True
+
+
+def test_sync_status_reports_cloud_ingest_disabled_in_island(tmp_path):
+    # Pure island mode: the cloud sender never runs, so readings pile up as
+    # 'pending' by design. The panel needs this flag to render "local only"
+    # instead of a false ⚠ sync warning.
+    store = _store(tmp_path)
+    store.cloud_ingest_enabled = False
+    store._append_sync({"inverterId": "inv-1", "timestamp": "2026-06-24T10:00:00Z"})
+    status = store._sync_status_sync()
+    assert status["cloud_ingest_enabled"] is False
+    assert status["counts"] == {"pending": 1}
+
+
 def test_today_summary_returns_daily_row_when_present(tmp_path):
     store = _store(tmp_path)
     import json
