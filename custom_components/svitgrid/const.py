@@ -151,6 +151,13 @@ DISABLE_ISLAND_COMMAND = "disable_island"
 # trust posture as set_cloud_endpoint/enable_island. Command-poller probes
 # the new endpoint's TCP reachability before applying (fail-closed).
 SET_HARVEST_CONFIG_COMMAND = "set_harvest_config"
+# Switch an inverter between relay (edge-forwarded) and native (direct
+# Modbus harvest) read sources. Internal (no admin signature required) —
+# RBAC-gated at the API level (household owner/admin), same trust posture
+# as set_harvest_config/set_cloud_endpoint. Command-poller probes the
+# Modbus endpoint's TCP reachability before switching to native (fail-closed);
+# switching back to relay does not probe.
+SET_READ_SOURCE_COMMAND = "set_read_source"
 
 INTERNAL_COMMANDS = frozenset(
     {
@@ -160,6 +167,7 @@ INTERNAL_COMMANDS = frozenset(
         ENABLE_ISLAND_COMMAND,
         DISABLE_ISLAND_COMMAND,
         SET_HARVEST_CONFIG_COMMAND,
+        SET_READ_SOURCE_COMMAND,
     }
 )
 

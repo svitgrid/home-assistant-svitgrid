@@ -31,8 +31,13 @@ from .const import (
     REVOKE_TRUSTED_KEY_COMMAND,
     SET_CLOUD_ENDPOINT_COMMAND,
     SET_HARVEST_CONFIG_COMMAND,
+    SET_READ_SOURCE_COMMAND,
 )
-from .harvest_config_apply import apply_harvest_config_change, probe_modbus_reachable
+from .harvest_config_apply import (
+    apply_harvest_config_change,
+    apply_read_source_change,
+    probe_modbus_reachable,
+)
 from .keystore import SvitgridKeystore
 from .signing import sign_payload
 
@@ -370,6 +375,84 @@ async def process_command(
                 "applied. cmd_id=%s conn=%s manual recovery required.",
                 cmd_id,
                 payload,
+            )
+        return
+
+    # === Arm 1c-ter: set_read_source (relay <-> native harvest) ===
+    # Internal (RBAC-gated at the API). Payload:
+    #   { inverterId, mode: 'native'|'relay', harvestConfig?: {...camelCase...} }
+    # native → probe the Modbus endpoint, then CREATE harvest_config on that
+    # inverter; relay → CLEAR harvest_config (entity_map retained). ACK before
+    # apply/reload (the reload tears down the api_client mid-flight — same race
+    # as Arm 1c/1c-bis/1d).
+    if cmd_type == SET_READ_SOURCE_COMMAND:
+        payload = command.get("payload") or {}
+        inverter_id = payload.get("inverterId")
+        mode = payload.get("mode")
+
+        if hass is None or entry is None:
+            await _send_signed_ack(
+                api_client=api_client, api_key=api_key, command_id=cmd_id,
+                success=False, rejected=True, reason="yaml_config_no_entry",
+                our_private_key=our_private_key, our_signing_key_id=our_signing_key_id,
+                executor_version=executor_version,
+            )
+            return
+
+        if not inverter_id or mode not in ("native", "relay"):
+            await _send_signed_ack(
+                api_client=api_client, api_key=api_key, command_id=cmd_id,
+                success=False, rejected=True, reason="invalid_payload",
+                our_private_key=our_private_key, our_signing_key_id=our_signing_key_id,
+                executor_version=executor_version,
+            )
+            return
+
+        harvest_config = None
+        if mode == "native":
+            hc_wire = payload.get("harvestConfig") or {}
+            if not hc_wire.get("ip") or not hc_wire.get("port"):
+                await _send_signed_ack(
+                    api_client=api_client, api_key=api_key, command_id=cmd_id,
+                    success=False, rejected=True, reason="invalid_payload",
+                    our_private_key=our_private_key, our_signing_key_id=our_signing_key_id,
+                    executor_version=executor_version,
+                )
+                return
+            if not await probe_modbus_reachable(hc_wire["ip"], hc_wire["port"]):
+                _LOGGER.error(
+                    "set_read_source probe failed — %s:%s not reachable. cmd_id=%s",
+                    hc_wire.get("ip"), hc_wire.get("port"), cmd_id,
+                )
+                await _send_signed_ack(
+                    api_client=api_client, api_key=api_key, command_id=cmd_id,
+                    success=False, rejected=True, reason="probe_failed",
+                    our_private_key=our_private_key, our_signing_key_id=our_signing_key_id,
+                    executor_version=executor_version,
+                )
+                return
+            # snake-case for storage (mirrors SP-D finalize)
+            harvest_config = {
+                "protocol": hc_wire.get("protocol", "solarman_v5"),
+                "ip": hc_wire["ip"],
+                "port": hc_wire["port"],
+                "slave_id": hc_wire.get("slaveId", 1),
+                "model_id": hc_wire.get("modelId"),
+                "logger_serial": hc_wire.get("loggerSerial", ""),
+            }
+
+        await _send_signed_ack(
+            api_client=api_client, api_key=api_key, command_id=cmd_id,
+            success=True, result={"mode": mode, "inverterId": inverter_id},
+            our_private_key=our_private_key, our_signing_key_id=our_signing_key_id,
+            executor_version=executor_version,
+        )
+        try:
+            await apply_read_source_change(hass, entry, inverter_id, harvest_config)
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception(
+                "set_read_source apply failed AFTER successful ACK — cmd_id=%s "
+                "inverter=%s mode=%s manual recovery required.", cmd_id, inverter_id, mode,
             )
         return
 
