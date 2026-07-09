@@ -385,6 +385,9 @@ async def process_command(
     # inverter; relay → CLEAR harvest_config (entity_map retained). ACK before
     # apply/reload (the reload tears down the api_client mid-flight — same race
     # as Arm 1c/1c-bis/1d).
+    # relay mode is additionally guarded: an inverter with no (or empty)
+    # entity_map is rejected with reason="no_entity_map" — nothing to relay
+    # readings from, so applying the switch would leave it a dead relay.
     if cmd_type == SET_READ_SOURCE_COMMAND:
         payload = command.get("payload") or {}
         inverter_id = payload.get("inverterId")
@@ -408,10 +411,12 @@ async def process_command(
             )
             return
 
-        configured_ids = {
-            inv.get("inverter_id") for inv in (entry.data.get("inverters") or [])
-        }
-        if inverter_id not in configured_ids:
+        configured_inverters = entry.data.get("inverters") or []
+        target_inv = next(
+            (inv for inv in configured_inverters if inv.get("inverter_id") == inverter_id),
+            None,
+        )
+        if target_inv is None:
             _LOGGER.warning(
                 "set_read_source rejected — inverter %s not configured on this entry. cmd_id=%s",
                 inverter_id, cmd_id,
@@ -419,6 +424,27 @@ async def process_command(
             await _send_signed_ack(
                 api_client=api_client, api_key=api_key, command_id=cmd_id,
                 success=False, rejected=True, reason="unknown_inverter",
+                our_private_key=our_private_key, our_signing_key_id=our_signing_key_id,
+                executor_version=executor_version,
+            )
+            return
+
+        # Finding I1: reverting to relay clears harvest_config and falls back
+        # to relaying entity_map-driven sensor readings. An inverter with no
+        # (or empty) entity_map has nothing to relay — applying the switch
+        # would drop it into a dead relay (permanently offline) rather than
+        # restore a working read path. Defense-in-depth: the API-side switch
+        # endpoint and mobile UI should already prevent this, but a stale
+        # mobile client or a direct API call must still be caught here.
+        if mode == "relay" and not target_inv.get("entity_map"):
+            _LOGGER.warning(
+                "set_read_source (relay) rejected — inverter %s has no entity_map; "
+                "reverting would leave it a dead relay. cmd_id=%s",
+                inverter_id, cmd_id,
+            )
+            await _send_signed_ack(
+                api_client=api_client, api_key=api_key, command_id=cmd_id,
+                success=False, rejected=True, reason="no_entity_map",
                 our_private_key=our_private_key, our_signing_key_id=our_signing_key_id,
                 executor_version=executor_version,
             )
