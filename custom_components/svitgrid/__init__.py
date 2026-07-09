@@ -102,6 +102,11 @@ async def _start_local_store(
 
     await hass.async_add_executor_job(partial(os.makedirs, db_dir, exist_ok=True))
     store = ReadingStore(hass, os.path.join(db_dir, READINGS_DB_FILE))
+    # Let the store (and thus the /sync-status view + panel footer) know whether
+    # this entry uploads to the cloud. In pure island mode the sender never runs,
+    # so readings stay 'pending' by design — the panel must not flag that as an
+    # error.
+    store.cloud_ingest_enabled = cloud_ingest_enabled
 
     # Prune orphaned rows BEFORE the sender starts (re-pair queue poison fix).
     if active_ids is not None:

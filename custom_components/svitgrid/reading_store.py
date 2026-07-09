@@ -102,6 +102,13 @@ class ReadingStore:
     def __init__(self, hass: HomeAssistant | None, db_path: str) -> None:
         self._hass = hass
         self._db_path = db_path
+        # Whether this entry uploads readings to the cloud. Default True so
+        # non-island installs are unaffected; _start_local_store stamps it False
+        # in pure island mode. Surfaced in sync_status() so the
+        # panel can render "local only" instead of a false ⚠ pending-sync
+        # warning — in island mode the cloud sender never runs, so readings
+        # legitimately sit in sync_state='pending' forever.
+        self.cloud_ingest_enabled: bool = True
         # Lazily created asyncio.Event — do NOT create at __init__ time because
         # that would bind to whatever loop happens to be current at construction,
         # which may differ from the running loop used by the sender.
@@ -738,7 +745,11 @@ class ReadingStore:
             row = conn.execute(
                 "SELECT MAX(ts) m FROM readings_raw WHERE sync_state='sent'"
             ).fetchone()
-            return {"counts": counts, "last_sent_ts": row["m"] if row else None}
+            return {
+                "counts": counts,
+                "last_sent_ts": row["m"] if row else None,
+                "cloud_ingest_enabled": self.cloud_ingest_enabled,
+            }
         finally:
             conn.close()
 

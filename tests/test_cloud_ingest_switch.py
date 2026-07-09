@@ -131,6 +131,9 @@ async def test_cloud_ingest_disabled_skips_sender_but_runs_harvest(
     assert entry_state.get("sender_task") is None, "sender_task must be None in island mode"
     assert callable(entry_state.get("cancel_rollup")), "rollup must still run in island mode"
     assert entry_state.get("store") is not None, "store must always be created"
+    # The store must know cloud ingest is off so the panel's sync footer can
+    # render "local only" instead of a false ⚠ pending-sync warning.
+    assert entry_state["store"].cloud_ingest_enabled is False
 
 
 @pytest.mark.asyncio
@@ -174,6 +177,7 @@ async def test_cloud_ingest_absent_defaults_to_enabled(hass, enable_custom_integ
 
     entry_state = hass.data[DOMAIN][entry.entry_id]
     assert entry_state.get("sender_task") is not None
+    assert entry_state["store"].cloud_ingest_enabled is True
 
 
 @pytest.mark.asyncio
