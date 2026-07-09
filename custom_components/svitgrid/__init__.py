@@ -710,7 +710,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             run_command_loop(
                 hass=hass,
                 api_client=api_client,
-                keystore=None,
+                # Pass the keystore built + saved above (also stored in
+                # hass.data[DOMAIN]["keystore"] for X-Island-Key validation).
+                # enable_island seeds the island key via keystore.async_set_island_key;
+                # with keystore=None it hit the fail-closed guard and rejected every
+                # enable_island command (reason=keystore_unavailable), so the
+                # "convert existing HA household to island" switch never applied.
+                # entry_data still carries the trust material for the signed-command
+                # path; the keystore.load() branch reads the same fields it was saved from.
+                keystore=keystore,
                 entry_data=dict(data),
                 wake_event=wake_event,
                 activity=activity,

@@ -164,3 +164,55 @@ async def test_spec_load_failure_does_not_crash_setup(hass, enable_custom_integr
     assert harvest.call_count == 1
     # Fail-open: holder.spec stays None, loop tolerates it.
     assert harvest.call_args.kwargs["spec_holder"].spec is None
+
+
+@pytest.mark.asyncio
+async def test_config_entry_command_poller_receives_keystore(
+    hass, enable_custom_integrations
+):
+    """The config-entry command poller MUST be spawned with the keystore that
+    async_setup_entry builds and stores in hass.data[DOMAIN]["keystore"].
+
+    Regression: it was previously spawned with keystore=None, so the
+    `enable_island` handler hit its `if keystore is None:` fail-closed guard and
+    rejected every enable_island command with reason=keystore_unavailable — the
+    "convert existing HA household to island" switch could never seed the island
+    key. The key material is available in-scope; wire it through.
+    """
+    from custom_components.svitgrid import async_setup_entry
+
+    # Relay inverter (no harvest_config) — the shared command poller is spawned
+    # regardless of read path, so a plain entity-map inverter exercises it.
+    entry = _make_entry(None)
+    entry.add_to_hass(hass)
+
+    with (
+        patch("custom_components.svitgrid.run_readings_loop", new_callable=AsyncMock),
+        patch("custom_components.svitgrid.run_direct_harvest_loop", new_callable=AsyncMock),
+        patch(
+            "custom_components.svitgrid.run_command_loop", new_callable=AsyncMock
+        ) as poller,
+        patch("custom_components.svitgrid.run_mqtt_wake_loop", new_callable=AsyncMock),
+        patch("custom_components.svitgrid.run_sender_loop", new_callable=AsyncMock),
+        patch("custom_components.svitgrid.register_views"),
+        patch("custom_components.svitgrid.register_panel", new_callable=AsyncMock),
+        patch("custom_components.svitgrid.remove_panel"),
+        patch.object(
+            hass.config_entries, "async_forward_entry_setups", AsyncMock(return_value=True)
+        ),
+        patch("custom_components.svitgrid.SvitgridApiClient") as mock_cls,
+    ):
+        client = mock_cls.return_value
+        client.get_register_spec = AsyncMock(return_value=dict(_MINIMAL_SPEC))
+        client.get_preset = AsyncMock(return_value=None)
+
+        ok = await async_setup_entry(hass, entry)
+        await hass.async_block_till_done()
+
+    assert ok is True
+    assert poller.call_count == 1
+    ks = poller.call_args.kwargs["keystore"]
+    # The poller must get a real keystore — the SAME instance stored for the
+    # island X-Island-Key validation path — not None.
+    assert ks is not None
+    assert ks is hass.data[DOMAIN]["keystore"]
