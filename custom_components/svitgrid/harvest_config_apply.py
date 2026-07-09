@@ -47,3 +47,31 @@ async def apply_harvest_config_change(hass, entry, conn: dict) -> None:
             break
     hass.config_entries.async_update_entry(entry, data=new_data)
     hass.async_create_task(hass.config_entries.async_reload(entry.entry_id))
+
+
+async def apply_read_source_change(
+    hass, entry, inverter_id: str, harvest_config: dict | None
+) -> None:
+    """Set (create/replace) or clear the `harvest_config` on the inverter with
+    `inverter_id`, then reload the entry so async_setup_entry re-selects the
+    read loop (harvest_config present → run_direct_harvest_loop; absent →
+    run_readings_loop off the retained entity_map).
+
+    Deep-copies entry.data — an in-place mutation would make new_data == entry.data
+    and HA drops an unchanged `data=` as a no-op (same gotcha as
+    apply_harvest_config_change).
+    """
+    new_data = copy.deepcopy(entry.data)
+    for inv in new_data.get("inverters", []):
+        if inv.get("inverter_id") == inverter_id:
+            if harvest_config is None:
+                inv.pop("harvest_config", None)
+            else:
+                inv["harvest_config"] = harvest_config
+            break
+    hass.config_entries.async_update_entry(entry, data=new_data)
+
+    async def _do_reload() -> None:
+        await hass.config_entries.async_reload(entry.entry_id)
+
+    hass.async_create_task(_do_reload())
