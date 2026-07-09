@@ -109,8 +109,15 @@ async def run_loop(
                 client_id=f"svitgrid-ha-{topic.replace('/', '_')}",
                 protocol=paho.MQTTv311,
             )
-            # Bridge auth — username is informational; password is the JWT.
-            client.username_pw_set(username="edge-device", password=token_data["token"])
+            # Bridge auth — the broker (mosquitto-go-auth, parse_token=true,
+            # jwt_userfield=Subject) reads the JWT from the MQTT USERNAME field
+            # and parses it locally to derive the identity. The token MUST be
+            # the username; the password is ignored. Sending username="edge-device"
+            # with the JWT in the password made the broker parse "edge-device" as
+            # a JWT ("token contains an invalid number of segments") and drop the
+            # CONNECT with no CONNACK (rc=7) — the wake-bell never connected.
+            # Matches the ESP32 firmware (.username = token, .password = "ignored").
+            client.username_pw_set(username=token_data["token"], password="ignored")
             client.tls_set()  # default system trust store
 
             # Bind the per-iteration client/topic/events as default args so each

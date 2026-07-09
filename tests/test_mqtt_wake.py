@@ -163,6 +163,14 @@ async def test_connects_subscribes_and_signals_wake_on_message(paho_fake, token_
     client = paho_fake.instances[0]
     assert client.tls_set_called is True
     assert client.connect_args == ("mqtt.svitgrid.app", 8883, 60)
+    # The broker (mosquitto-go-auth, parse_token=true, userfield=Subject) reads
+    # the JWT from the MQTT USERNAME field and parses it locally. The token MUST
+    # be the username — sending username="edge-device" with the JWT in the
+    # password made the broker try to parse "edge-device" as a JWT ("token
+    # contains an invalid number of segments") and drop the CONNECT (rc=7), so
+    # the wake-bell never connected. Matches the ESP32 firmware (username=token).
+    assert client.username == "eyJfake.jwt.payload"
+    assert client.password != "eyJfake.jwt.payload"
     assert client.subscriptions == [("devices/abc123/wake", 1)]
     assert client.loop_started is True
     assert client.loop_stopped is True
@@ -212,8 +220,9 @@ async def test_remints_token_on_reconnect(paho_fake, token_payload):
 
     # Token was minted twice (initial + on reconnect)
     assert api.get_mqtt_token.await_count == 2
-    # Second client used the re-minted token
-    assert paho_fake.instances[1].password == "eyJ_second_jwt"
+    # Second client used the re-minted token — carried in the USERNAME field
+    # (the broker parses the JWT from the username; see happy-path test).
+    assert paho_fake.instances[1].username == "eyJ_second_jwt"
 
 
 @pytest.mark.asyncio
