@@ -408,6 +408,22 @@ async def process_command(
             )
             return
 
+        configured_ids = {
+            inv.get("inverter_id") for inv in (entry.data.get("inverters") or [])
+        }
+        if inverter_id not in configured_ids:
+            _LOGGER.warning(
+                "set_read_source rejected — inverter %s not configured on this entry. cmd_id=%s",
+                inverter_id, cmd_id,
+            )
+            await _send_signed_ack(
+                api_client=api_client, api_key=api_key, command_id=cmd_id,
+                success=False, rejected=True, reason="unknown_inverter",
+                our_private_key=our_private_key, our_signing_key_id=our_signing_key_id,
+                executor_version=executor_version,
+            )
+            return
+
         harvest_config = None
         if mode == "native":
             hc_wire = payload.get("harvestConfig") or {}

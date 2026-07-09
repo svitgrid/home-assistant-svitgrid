@@ -12,6 +12,12 @@ from custom_components.svitgrid.command_poller import process_command
 from custom_components.svitgrid.const import SET_READ_SOURCE_COMMAND
 
 
+def _configured_entry(inverter_id="ha-1"):
+    entry = MagicMock()
+    entry.data = {"inverters": [{"inverter_id": inverter_id}]}
+    return entry
+
+
 def _base_kwargs(hass, entry):
     return dict(
         api_client=AsyncMock(),
@@ -28,7 +34,7 @@ def _base_kwargs(hass, entry):
 
 @pytest.mark.asyncio
 async def test_set_read_source_native_probe_ok_applies_snake_cased_and_acks_success():
-    hass, entry = MagicMock(), MagicMock()
+    hass, entry = MagicMock(), _configured_entry()
     cmd = {
         "commandId": "c1",
         "command": SET_READ_SOURCE_COMMAND,
@@ -76,7 +82,7 @@ async def test_set_read_source_native_probe_ok_applies_snake_cased_and_acks_succ
 
 @pytest.mark.asyncio
 async def test_set_read_source_native_probe_fail_rejects_no_apply():
-    hass, entry = MagicMock(), MagicMock()
+    hass, entry = MagicMock(), _configured_entry()
     cmd = {
         "commandId": "c2",
         "command": SET_READ_SOURCE_COMMAND,
@@ -110,7 +116,7 @@ async def test_set_read_source_native_probe_fail_rejects_no_apply():
 
 @pytest.mark.asyncio
 async def test_set_read_source_relay_applies_clear_no_probe_and_acks_success():
-    hass, entry = MagicMock(), MagicMock()
+    hass, entry = MagicMock(), _configured_entry()
     cmd = {
         "commandId": "c3",
         "command": SET_READ_SOURCE_COMMAND,
@@ -134,3 +140,36 @@ async def test_set_read_source_relay_applies_clear_no_probe_and_acks_success():
     probe.assert_not_awaited()
     apply.assert_awaited_once_with(hass, entry, "ha-1", None)
     assert ack.await_args.kwargs["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_set_read_source_unknown_inverter_rejects_no_apply_no_probe():
+    """inverterId not present in entry.data['inverters'] must be rejected
+    BEFORE any probe/apply — a silent no-op that still ACKs success would
+    make the user believe the read source switched when nothing changed."""
+    hass, entry = MagicMock(), _configured_entry(inverter_id="ha-1")
+    cmd = {
+        "commandId": "c4",
+        "command": SET_READ_SOURCE_COMMAND,
+        "payload": {
+            "inverterId": "ha-does-not-exist",
+            "mode": "relay",
+        },
+    }
+    with (
+        patch(
+            "custom_components.svitgrid.command_poller.probe_modbus_reachable",
+            new=AsyncMock(),
+        ) as probe,
+        patch(
+            "custom_components.svitgrid.command_poller.apply_read_source_change", new=AsyncMock()
+        ) as apply,
+        patch("custom_components.svitgrid.command_poller._send_signed_ack", new=AsyncMock()) as ack,
+    ):
+        await process_command(command=cmd, **_base_kwargs(hass, entry))
+
+    probe.assert_not_awaited()
+    apply.assert_not_awaited()
+    assert ack.await_args.kwargs["success"] is False
+    assert ack.await_args.kwargs["rejected"] is True
+    assert ack.await_args.kwargs["reason"] == "unknown_inverter"
