@@ -551,14 +551,14 @@ import {
       border-radius: 2px;
       flex-shrink: 0;
     }
-    .line-path-pv       { stroke: var(--accent); }
-    .line-path-load     { stroke: var(--sg-text); }
-    .line-path-battery  { stroke: var(--sg-ok); }
-    .line-path-grid     { stroke: var(--info-color, #1565C0); }
-    .line-dot-pv        { fill: var(--accent); }
-    .line-dot-load      { fill: var(--sg-text); }
-    .line-dot-battery   { fill: var(--sg-ok); }
-    .line-dot-grid      { fill: var(--info-color, #1565C0); }
+    .line-path.line-path-pv       { stroke: var(--accent); }
+    .line-path.line-path-load     { stroke: var(--sg-text); }
+    .line-path.line-path-battery  { stroke: var(--sg-ok); }
+    .line-path.line-path-grid     { stroke: var(--info-color, #1565C0); }
+    .line-dot.line-dot-pv         { fill: var(--accent); }
+    .line-dot.line-dot-load       { fill: var(--sg-text); }
+    .line-dot.line-dot-battery    { fill: var(--sg-ok); }
+    .line-dot.line-dot-grid       { fill: var(--info-color, #1565C0); }
 
     /* Sources stacked-bar segments */
     .bar-seg-pv      { background: var(--accent); }
@@ -622,9 +622,6 @@ import {
       cursor: pointer;
     }
     .line-dot:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
-    @media (prefers-reduced-motion: reduce) {
-      .line-path { stroke-dasharray: none; }
-    }
 
     /* Sync footer */
     .sync-footer {
@@ -2177,6 +2174,7 @@ import {
           this._histKey = null;
           this._historySec.className = "";
           this._historySec.innerHTML = "";
+          this._appendHistControls(this._historySec);
           const empty = document.createElement("div");
           empty.className = "history-empty";
           empty.textContent = STR.historyEmpty;
@@ -2313,40 +2311,44 @@ import {
       const controls = document.createElement("div");
       controls.className = "hist-controls";
 
-      // Mode switcher: Energy | Sources | Trends
-      const modeGroup = document.createElement("div");
-      modeGroup.className = "hist-chip-group";
-      modeGroup.setAttribute("role", "group");
-      modeGroup.setAttribute("aria-label", STR.histAriaMode);
-      const modeOptions = [
-        { key: "energy",  label: STR.histModeEnergy },
-        { key: "sources", label: STR.histModeSources },
-        { key: "trends",  label: STR.histModeTrends },
-      ];
-      for (const mo of modeOptions) {
-        if (this._period === "day" && mo.key !== "energy") continue;
-        const btn = document.createElement("button");
-        btn.type = "button";
-        btn.className = "hist-chip";
-        btn.textContent = mo.label;
-        btn.setAttribute("aria-pressed", mo.key === this._histMode ? "true" : "false");
-        btn.addEventListener("click", () => {
-          if (this._histMode === mo.key) return;
-          this._histMode = mo.key;
-          this._histKey = null;
-          this._lastHistoryFetch = 0;
-          if (this._histSec) this._histSec.textContent = this._histSectionTitle();
-          this._loadHistory();
-        });
-        modeGroup.appendChild(btn);
-      }
-      controls.appendChild(modeGroup);
+      // Mode switcher: Energy | Sources | Trends (not shown on Day — the hourly
+      // chart always shows the 4-series profile, so a lone "Energy" chip would
+      // be a permanently-pressed no-op toggle)
+      if (this._period !== "day") {
+        const modeGroup = document.createElement("div");
+        modeGroup.className = "hist-chip-group";
+        modeGroup.setAttribute("role", "group");
+        modeGroup.setAttribute("aria-label", STR.histAriaMode);
+        const modeOptions = [
+          { key: "energy",  label: STR.histModeEnergy },
+          { key: "sources", label: STR.histModeSources },
+          { key: "trends",  label: STR.histModeTrends },
+        ];
+        for (const mo of modeOptions) {
+          if (this._period === "day" && mo.key !== "energy") continue;
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "hist-chip";
+          btn.textContent = mo.label;
+          btn.setAttribute("aria-pressed", mo.key === this._histMode ? "true" : "false");
+          btn.addEventListener("click", () => {
+            if (this._histMode === mo.key) return;
+            this._histMode = mo.key;
+            this._histKey = null;
+            this._lastHistoryFetch = 0;
+            if (this._histSec) this._histSec.textContent = this._histSectionTitle();
+            this._loadHistory();
+          });
+          modeGroup.appendChild(btn);
+        }
+        controls.appendChild(modeGroup);
 
-      // Separator
-      const modeSep = document.createElement("div");
-      modeSep.className = "hist-sep";
-      modeSep.setAttribute("aria-hidden", "true");
-      controls.appendChild(modeSep);
+        // Separator
+        const modeSep = document.createElement("div");
+        modeSep.className = "hist-sep";
+        modeSep.setAttribute("aria-hidden", "true");
+        controls.appendChild(modeSep);
+      }
 
       // Period tabs: Day | Month | Year | All-time
       const periodGroup = document.createElement("div");
@@ -2667,7 +2669,7 @@ import {
       for (let i = 0; i < series.length; i++) {
         const lbl = document.createElement("div");
         lbl.className = "bar-label";
-        if (i % 5 === 0 || i === lastIdx) {
+        if (this._period === "year" || this._period === "all" || i % 5 === 0 || i === lastIdx) {
           lbl.textContent = this._bucketLabel(series[i].day);
         }
         axis.appendChild(lbl);
@@ -2823,7 +2825,7 @@ import {
       for (let i = 0; i < sourceSeries.length; i++) {
         const lbl = document.createElement("div");
         lbl.className = "bar-label";
-        if (i % 5 === 0 || i === lastIdx) {
+        if (this._period === "year" || this._period === "all" || i % 5 === 0 || i === lastIdx) {
           lbl.textContent = this._bucketLabel(sourceSeries[i].day);
         }
         axis.appendChild(lbl);
@@ -3141,10 +3143,10 @@ import {
       legend.className = "intraday-legend";
       legend.setAttribute("aria-label", "Chart legend");
       const swatchColors = [
-        { cls: "bar-seg-pv",          label: STR.intradaySeriesPv,      style: "background:var(--accent)" },
-        { cls: "",                     label: STR.intradaySeriesLoad,    style: "background:var(--sg-text)" },
-        { cls: "bar-seg-battery",      label: STR.intradaySeriesBattery, style: "background:var(--sg-ok)" },
-        { cls: "bar-seg-import",       label: STR.intradaySeriesGrid,    style: "background:var(--info-color,#1565C0)" },
+        { label: STR.intradaySeriesPv,      style: "background:var(--accent)" },
+        { label: STR.intradaySeriesLoad,    style: "background:var(--sg-text)" },
+        { label: STR.intradaySeriesBattery, style: "background:var(--sg-ok)" },
+        { label: STR.intradaySeriesGrid,    style: "background:var(--info-color,#1565C0)" },
       ];
       for (const li of swatchColors) {
         const item = document.createElement("div");
@@ -3363,7 +3365,7 @@ import {
       for (let i = 0; i < trendSeries.length; i++) {
         const lbl = document.createElement("div");
         lbl.className = "bar-label";
-        if (i % 5 === 0 || i === lastIdx) {
+        if (this._period === "year" || this._period === "all" || i % 5 === 0 || i === lastIdx) {
           lbl.textContent = this._bucketLabel(trendSeries[i].day);
         }
         axis.appendChild(lbl);
@@ -3460,8 +3462,9 @@ import {
     // ---------------------------------------------------------------- //
     _localDate(dateStr) {
       if (!dateStr) return "—";
+      const [y, m, d] = String(dateStr).split("-").map((n) => parseInt(n, 10));
       try {
-        return new Date(dateStr).toLocaleDateString(undefined, {
+        return new Date(y, m - 1, d).toLocaleDateString(undefined, {
           month: "short",
           day: "numeric",
         });
