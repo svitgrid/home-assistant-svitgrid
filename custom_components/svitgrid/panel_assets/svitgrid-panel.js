@@ -150,7 +150,6 @@ import {
     intradaySeriesLoad: "House",
     intradaySeriesBattery: "Battery",
     intradaySeriesGrid: "Grid",
-    intradayAriaBar: "View hourly profile for",
     intradayUnitW: "W",
     intradayUnitKw: "kW",
   };
@@ -536,57 +535,6 @@ import {
     .hist-nav-label {
       background: none; border: none; color: var(--sg-text); cursor: pointer;
       font-size: 13px; font-weight: 500; padding: 2px 4px;
-    }
-
-    /* Tappable bar-col button (intraday drill-down) */
-    .bar-col-btn {
-      background: none;
-      border: none;
-      padding: 0;
-      margin: 0;
-      cursor: pointer;
-      font: inherit;
-      color: inherit;
-      width: 100%;
-      height: 100%;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: flex-end;
-      flex: 1;
-      min-width: 7px;
-      height: 100%;
-      position: relative;
-    }
-    .bar-col-btn:focus-visible {
-      outline: 2px solid var(--accent);
-      outline-offset: 1px;
-      border-radius: 2px;
-    }
-    @media (prefers-reduced-motion: reduce) {
-      .bar-col-btn { transition: none; }
-    }
-
-    /* Intraday back button */
-    .intraday-back {
-      font-family: inherit;
-      font-size: 12px;
-      font-weight: 600;
-      color: var(--accent);
-      background: none;
-      border: none;
-      cursor: pointer;
-      padding: 0;
-      margin-bottom: var(--sp-3);
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
-    }
-    .intraday-back:hover { text-decoration: underline; }
-    .intraday-back:focus-visible {
-      outline: 2px solid var(--accent);
-      outline-offset: 2px;
-      border-radius: 2px;
     }
 
     /* Intraday multi-series line chart */
@@ -1057,7 +1005,6 @@ import {
       this._histKey = null;
       this._histMode = "energy";
       this._histSec = null;
-      this._intradayDay = null;
       this._intradayReq = 0;
 
       this._liveSec = this._addSection(root, STR.live, "live-region");
@@ -2684,29 +2631,18 @@ import {
         const col = document.createElement("div");
         col.className = "bar-col";
 
-        // Tappable button wrapping the bar (intraday drill-down)
-        const btn = document.createElement("button");
-        btn.type = "button";
-        btn.className = "bar-col-btn";
-        btn.setAttribute("aria-label", STR.intradayAriaBar + " " + s.day);
-        btn.addEventListener("click", (e) => {
-          this._intradayDay = s.day;
-          this._loadIntraday(s.day);
-          e.stopPropagation();
-        });
-
         // Value caps on tallest + most-recent
         if (i === tallestIdx || i === lastIdx) {
           const cap = document.createElement("div");
           cap.className = "bar-cap";
           cap.textContent = this._kwh(s.kwh);
-          btn.appendChild(cap);
+          col.appendChild(cap);
         }
 
         const bar = document.createElement("div");
         bar.className = "bar";
         bar.style.height = Math.max(pct, 2) + "%";
-        const label = this._localDate(s.day) + ": " + this._kwh(s.kwh) + " kWh";
+        const label = this._bucketLabel(s.day) + ": " + this._kwh(s.kwh) + " kWh";
         bar.setAttribute("role", "presentation");
         bar.setAttribute("aria-hidden", "true");
         const showTip = (clientX) => {
@@ -2719,13 +2655,10 @@ import {
           tooltip.style.top = (barRect.top - plotRect.top) + "px";
         };
         const hideTip = () => tooltip.classList.remove("show");
-        btn.addEventListener("mouseenter", (e) => showTip(e.clientX));
-        btn.addEventListener("mouseleave", hideTip);
-        btn.addEventListener("focus", () => showTip(null));
-        btn.addEventListener("blur", hideTip);
+        col.addEventListener("mouseenter", (e) => showTip(e.clientX));
+        col.addEventListener("mouseleave", hideTip);
 
-        btn.appendChild(bar);
-        col.appendChild(btn);
+        col.appendChild(bar);
         chart.appendChild(col);
       }
 
@@ -2741,7 +2674,7 @@ import {
         const lbl = document.createElement("div");
         lbl.className = "bar-label";
         if (i % 5 === 0 || i === lastIdx) {
-          lbl.textContent = this._localDate(series[i].day);
+          lbl.textContent = this._bucketLabel(series[i].day);
         }
         axis.appendChild(lbl);
       }
@@ -2830,23 +2763,12 @@ import {
         const col = document.createElement("div");
         col.className = "bar-col";
 
-        // Tappable button wrapping the stacked bar (intraday drill-down)
-        const btn = document.createElement("button");
-        btn.type = "button";
-        btn.className = "bar-col-btn";
-        btn.setAttribute("aria-label", STR.intradayAriaBar + " " + s.day);
-        btn.addEventListener("click", (e) => {
-          this._intradayDay = s.day;
-          this._loadIntraday(s.day);
-          e.stopPropagation();
-        });
-
         // Value cap on most-recent bar
         if (i === lastIdx && total > 0) {
           const cap = document.createElement("div");
           cap.className = "bar-cap";
           cap.textContent = this._kwh(total);
-          btn.appendChild(cap);
+          col.appendChild(cap);
         }
 
         // Stacked bar: segments stacked bottom-up (flex-direction: column-reverse)
@@ -2856,7 +2778,7 @@ import {
         stackBar.className = "stacked-bar";
         stackBar.style.height = Math.max(pct, 2) + "%";
         const tipLabel =
-          this._localDate(s.day) + ": " +
+          this._bucketLabel(s.day) + ": " +
           STR.histSourcesPv + " " + this._kwh(s.pv) + " · " +
           STR.histSourcesImport + " " + this._kwh(s.imp) + " · " +
           STR.histSourcesBattery + " " + this._kwh(s.batt) + " · " +
@@ -2889,13 +2811,10 @@ import {
           tooltip.style.top = (barRect.top - plotRect.top) + "px";
         };
         const hideTip = () => tooltip.classList.remove("show");
-        btn.addEventListener("mouseenter", (e) => showTip(e.clientX));
-        btn.addEventListener("mouseleave", hideTip);
-        btn.addEventListener("focus", () => showTip(null));
-        btn.addEventListener("blur", hideTip);
+        col.addEventListener("mouseenter", (e) => showTip(e.clientX));
+        col.addEventListener("mouseleave", hideTip);
 
-        btn.appendChild(stackBar);
-        col.appendChild(btn);
+        col.appendChild(stackBar);
         chart.appendChild(col);
       }
 
@@ -2911,7 +2830,7 @@ import {
         const lbl = document.createElement("div");
         lbl.className = "bar-label";
         if (i % 5 === 0 || i === lastIdx) {
-          lbl.textContent = this._localDate(sourceSeries[i].day);
+          lbl.textContent = this._bucketLabel(sourceSeries[i].day);
         }
         axis.appendChild(lbl);
       }
@@ -3032,25 +2951,9 @@ import {
       this._historySec.innerHTML = "";
 
       // Update section title.
-      if (this._histSec) {
-        const dateLabel = this._localDate(day);
-        this._histSec.textContent = STR.intradayTitle + " — " + dateLabel;
-      }
+      if (this._histSec) this._histSec.textContent = this._histSectionTitle();
 
-      // Back button
-      const back = document.createElement("button");
-      back.type = "button";
-      back.className = "intraday-back";
-      back.textContent = STR.intradayBack;
-      back.addEventListener("click", () => {
-        this._intradayDay = null;
-        this._intradayReq += 1; // invalidate any in-flight intraday fetch
-        if (this._histSec) this._histSec.textContent = this._histSectionTitle();
-        this._histKey = null;  // force re-render of the range chart
-        this._lastHistoryFetch = 0;
-        this._loadHistory();
-      });
-      this._historySec.appendChild(back);
+      this._appendHistControls(this._historySec);
 
       // Empty state
       if (!hasAny) {
@@ -3430,7 +3333,7 @@ import {
         circle.setAttribute("cy", cy.toFixed(2));
         circle.setAttribute("r", n > 60 ? "2" : "3.5");
         circle.classList.add("line-dot");
-        const tipLabel = this._localDate(s.day) + ": " + fmt(s.value);
+        const tipLabel = this._bucketLabel(s.day) + ": " + fmt(s.value);
         circle.setAttribute("role", "img");
         circle.setAttribute("aria-label", tipLabel);
         circle.setAttribute("tabindex", "0");
@@ -3467,7 +3370,7 @@ import {
         const lbl = document.createElement("div");
         lbl.className = "bar-label";
         if (i % 5 === 0 || i === lastIdx) {
-          lbl.textContent = this._localDate(trendSeries[i].day);
+          lbl.textContent = this._bucketLabel(trendSeries[i].day);
         }
         axis.appendChild(lbl);
       }
@@ -3571,6 +3474,17 @@ import {
       } catch (_) {
         return dateStr;
       }
+    }
+
+    _bucketLabel(key) {
+      // key is a bucket string whose shape depends on the active period:
+      //   month period -> "YYYY-MM-DD" (day label), year -> "YYYY-MM" (month), all -> "YYYY".
+      if (this._period === "year") {
+        const [y, m] = key.split("-").map((n) => parseInt(n, 10));
+        return new Date(y, m - 1, 1).toLocaleString(undefined, { month: "short" });
+      }
+      if (this._period === "all") return key; // "YYYY"
+      return this._localDate(key); // month period → day label
     }
 
     _monthLabel(dayStr) {
