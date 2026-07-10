@@ -2567,33 +2567,46 @@ import {
     }
 
     _openPeriodPicker() {
+      const period = this._period;
+      const today = this._dateStr(new Date());
       const input = document.createElement("input");
-      input.type = this._period === "month" ? "month" : this._period === "year" ? "number" : "date";
-      if (this._period === "year") { input.min = "2024"; input.max = String(new Date().getFullYear()); }
-      input.max = input.max || this._dateStr(new Date());
-      input.value =
-        this._period === "month" ? this._periodAnchor.slice(0, 7)
-        : this._period === "year" ? this._periodAnchor.slice(0, 4)
-        : this._periodAnchor;
-      input.style.position = "fixed";
-      input.style.left = "-9999px";
-      this.shadowRoot.appendChild(input);
+      const cleanup = () => { try { input.remove(); } catch (_) {} };
       const commit = () => {
         const v = input.value;
         if (v) {
           this._periodAnchor =
-            this._period === "month" ? v + "-01"
-            : this._period === "year" ? v + "-01-01"
+            period === "month" ? v + "-01"
+            : period === "year" ? v.slice(0, 4) + "-01-01"
             : v;
           this._histKey = null;
           this._lastHistoryFetch = 0;
           this._loadHistory();
         }
-        input.remove();
+        cleanup();
       };
+      if (period === "month") {
+        input.type = "month";
+        input.max = today.slice(0, 7);
+        input.value = this._periodAnchor.slice(0, 7);
+      } else {
+        // Day and Year both use a native date picker; Year commits by year only.
+        // (There is no native year-only picker; a date input's popup is the
+        // reliable, leak-free way to jump — showPicker() is supported for date.)
+        input.type = "date";
+        input.max = today;
+        input.value = this._periodAnchor;
+      }
+      input.style.position = "fixed";
+      input.style.left = "-9999px";
+      this.shadowRoot.appendChild(input);
       input.addEventListener("change", commit);
-      input.addEventListener("blur", () => input.remove());
-      input.showPicker ? input.showPicker() : input.focus();
+      input.addEventListener("blur", cleanup);
+      try {
+        if (input.showPicker) input.showPicker();
+        else input.focus();
+      } catch (_) {
+        cleanup();
+      }
     }
 
     _renderHistory(series) {
