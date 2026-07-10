@@ -23,6 +23,9 @@ async def test_register_panel_serves_module_and_registers(hass):
     assert panel_cfg.path.endswith("panel_assets/svitgrid-panel.js")
     helper_cfg = next(c for c in sp_calls if c.url_path.endswith("history_periods.js"))
     assert helper_cfg.path.endswith("panel_assets/history_periods.js")
+    # cache_headers: panel module is content-hash-busted (True), helper must be fresh (False)
+    assert panel_cfg.cache_headers is True
+    assert helper_cfg.cache_headers is False
     # panel registered with the right identity
     kw = reg.await_args.kwargs
     assert kw["frontend_url_path"] == "svitgrid"
