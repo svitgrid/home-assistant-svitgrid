@@ -2655,6 +2655,7 @@ import {
         const bar = document.createElement("div");
         bar.className = "bar";
         bar.style.height = Math.max(pct, 2) + "%";
+        bar.style.background = this._metricColor(this._histMetric);
         const label = this._bucketLabel(s.day) + ": " + this._kwh(s.kwh) + " kWh";
         bar.setAttribute("role", "presentation");
         bar.setAttribute("aria-hidden", "true");
@@ -3539,6 +3540,22 @@ import {
       const [y, m] = dayStr.split("-").map((n) => parseInt(n, 10));
       const d = new Date(y, m - 1, 1);
       return d.toLocaleString(undefined, { month: "long" }) + " " + y;
+    }
+
+    // Bar color for the Energy chart's selected metric — mirrors the mobile
+    // app's AppColors so Month/Year/All-time bars are colored per metric instead
+    // of a flat accent. Distinct hues so switching metrics visibly changes color.
+    _metricColor(metric) {
+      switch (metric) {
+        case "dailyPvEnergy":               return "#F59E0B"; // solar amber
+        case "dailyLoadEnergy":             return "#8B5CF6"; // consumed / house — violet
+        case "dailyGridImportEnergy":       return "#3B82F6"; // grid import — blue
+        case "dailyGridExportEnergy":       return "#06B6D4"; // grid export — cyan
+        case "dailyBatteryChargeEnergy":    return "#22C55E"; // battery charge — green
+        case "dailyBatteryDischargeEnergy": return "#16A34A"; // battery discharge — deep green
+        case "dailyLossesEnergy":           return "#94A3B8"; // losses — slate gray
+        default:                            return "var(--accent)";
+      }
     }
 
     _loadIntradayHidden() {

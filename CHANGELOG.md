@@ -16,6 +16,10 @@
 - **Toggle series on the hourly chart.** Click a legend entry (Solar / House /
   Battery / Grid) to hide or show that line; the chart rescales to what's
   visible and your choice is remembered per browser.
+- **Per-metric bar colors.** The Month/Year/All-time Energy bar chart now colors
+  bars by the selected metric (Generated amber, Consumed violet, Imported blue,
+  Exported cyan, Battery charge/discharge green, Losses gray) instead of a flat
+  gold, matching the mobile app's palette.
 
 ## 0.12.0 — 2026-07-07
 
