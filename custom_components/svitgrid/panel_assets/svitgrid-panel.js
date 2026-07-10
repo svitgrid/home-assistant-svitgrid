@@ -930,7 +930,8 @@ import {
       this._detailOpen = {};       // inverterId -> bool (open/closed state, survives refresh)
 
       // History controls (SP-C foundation — extended by Tasks 3-5)
-      this._histRangeDays = 30;            // 7 | 30 | 90 | 365
+      this._period = "day";                // "day" | "month" | "year" | "all"
+      this._periodAnchor = this._dateStr(new Date()); // YYYY-MM-DD anchor
       this._histMode = "energy";           // "energy" | "sources" | "trends"
       this._histMetric = "dailyPvEnergy";  // active energy field key
       this._trendMetric = "batterySoc";    // active trend metric key
@@ -938,8 +939,7 @@ import {
       this._histSec = null;                // h2 section title node (for dynamic text update)
 
       // Intraday drill-down (Task 5)
-      this._intradayDay = null;            // YYYY-MM-DD of selected day; null = range view
-      this._intradayReq = 0;              // stale-guard token for intraday fetches
+      this._dayReq = 0;                    // stale-guard for the Day (hourly) fetch
 
       // Shadow refs
       this._liveSec = null;
@@ -1098,7 +1098,7 @@ import {
     // Compute the dynamic history section title from current range/metric state.
     _histSectionTitle() {
       if (this._histMode === "sources") {
-        return STR.histSourcesTitle + " — last " + this._histRangeDays + " days";
+        return STR.histSourcesTitle + this._periodSuffix();
       }
       if (this._histMode === "trends") {
         const trendLabels = {
@@ -1108,7 +1108,7 @@ import {
           gridFrequency:        STR.histTrendMetricFreq,
         };
         const label = trendLabels[this._trendMetric] || STR.histTrendsTitle;
-        return label + " — last " + this._histRangeDays + " days";
+        return label + this._periodSuffix();
       }
       const metricLabels = {
         dailyPvEnergy:              STR.histMetricGenerated,
@@ -1120,7 +1120,17 @@ import {
         dailyLossesEnergy:          STR.histMetricLosses,
       };
       const label = metricLabels[this._histMetric] || STR.histMetricGenerated;
-      return label + " — last " + this._histRangeDays + " days";
+      return label + this._periodSuffix();
+    }
+
+    _periodSuffix() {
+      switch (this._period) {
+        case "day":   return " — " + this._localDate(this._periodAnchor);
+        case "month": return " — " + this._monthLabel(this._periodAnchor); // e.g. "July 2026"
+        case "year":  return " — " + this._periodAnchor.slice(0, 4);
+        case "all":   return " — all time";
+        default:      return "";
+      }
     }
 
     _fillSkeleton(sec, kind) {
@@ -2194,15 +2204,18 @@ import {
     }
 
     // ---------------------------------------------------------------- //
-    // History — driven by _histRangeDays and _histMetric (SP-C foundation)
+    // History — driven by _period/_periodAnchor and _histMetric (SP-C foundation)
     // ---------------------------------------------------------------- //
     async _loadHistory() {
-      if (this._intradayDay) return true;
+      if (!this._historySec) return true;
+
+      if (this._period === "day") {
+        return await this._loadDayHourly(this._periodAnchor);
+      }
+
       this._histReq = (this._histReq || 0) + 1;
       const req = this._histReq;
       try {
-        if (!this._historySec) return true;
-
         if (!this._lastLiveInverterId) {
           this._histKey = null;
           this._historySec.className = "";
@@ -2214,11 +2227,13 @@ import {
           return true;
         }
 
-        const today = new Date();
-        const startDate = new Date(today);
-        startDate.setDate(today.getDate() - (this._histRangeDays - 1));
-        const endStr = this._dateStr(today);
-        const startStr = this._dateStr(startDate);
+        const spec = periodFetchSpec(
+          this._periodAnchor,
+          this._period,
+          this._dateStr(new Date())
+        );
+        const startStr = spec.start;
+        const endStr = spec.end;
 
         // The history endpoint is per-inverter; we sum the chosen metric across
         // all live inverters per day for parity with the Today tiles.
@@ -2250,8 +2265,8 @@ import {
           }
           const days = data && Array.isArray(data.days) ? data.days : [];
           for (const d of days) {
-            const day = d.day;
-            if (typeof day !== "string") continue;
+            if (typeof d.day !== "string") continue;
+            const day = bucketKeyFor(d.day, this._period);
             if (isSources) {
               const prev = byDay.get(day) || { pv: 0, imp: 0, batt: 0 };
               const e = d.energy || {};
@@ -2288,7 +2303,7 @@ import {
             .map(([day, v]) => ({ day, pv: v.pv, imp: v.imp, batt: v.batt }))
             .sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0));
           const dataFingerprint = sourceSeries.map((s) => s.day + ":" + s.pv + ":" + s.imp + ":" + s.batt).join(",");
-          const newKey = this._histRangeDays + "|sources|" + dataFingerprint;
+          const newKey = this._period + "|" + this._periodAnchor + "|sources|" + dataFingerprint;
           if (newKey !== this._histKey) {
             this._histKey = newKey;
             this._renderHistorySources(sourceSeries);
@@ -2299,7 +2314,7 @@ import {
             .map(([day, items]) => ({ day, value: this.weightedMean(items) }))
             .sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0));
           const dataFingerprint = trendSeries.map((s) => s.day + ":" + (s.value === null ? "null" : s.value.toFixed(2))).join(",");
-          const newKey = this._histRangeDays + "|trends|" + trendMetric + "|" + dataFingerprint;
+          const newKey = this._period + "|" + this._periodAnchor + "|trends|" + trendMetric + "|" + dataFingerprint;
           if (newKey !== this._histKey) {
             this._histKey = newKey;
             this._renderHistoryTrends(trendSeries, trendMetric);
@@ -2308,9 +2323,9 @@ import {
           const series = Array.from(byDay.entries())
             .map(([day, kwh]) => ({ day, kwh }))
             .sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0));
-          // Build a cache key from range + metric + data fingerprint.
+          // Build a cache key from period + anchor + metric + data fingerprint.
           const dataFingerprint = series.map((s) => s.day + ":" + s.kwh).join(",");
-          const newKey = this._histRangeDays + "|" + metric + "|" + dataFingerprint;
+          const newKey = this._period + "|" + this._periodAnchor + "|" + metric + "|" + dataFingerprint;
           if (newKey !== this._histKey) {
             this._histKey = newKey;
             this._renderHistory(series);
@@ -2326,6 +2341,13 @@ import {
         }
         return false;
       }
+    }
+
+    // Day period: delegate to the existing hourly fetch+render.
+    // (Task 5 folds _loadIntraday/_renderIntraday into this path directly.)
+    async _loadDayHourly(day) {
+      await this._loadIntraday(day);
+      return true;
     }
 
     // Shared history controls bar: mode switcher + range chips + metric chips (energy only).
@@ -3434,6 +3456,13 @@ import {
       } catch (_) {
         return dateStr;
       }
+    }
+
+    _monthLabel(dayStr) {
+      // "2026-07-10" -> "July 2026" (browser locale month name).
+      const [y, m] = dayStr.split("-").map((n) => parseInt(n, 10));
+      const d = new Date(y, m - 1, 1);
+      return d.toLocaleString(undefined, { month: "long" }) + " " + y;
     }
 
     _dateStr(d) {
