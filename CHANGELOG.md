@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.13.0 — 2026-07-10
+
+### Changed
+- **Svitgrid panel history chart — pick your own time span.** The old fixed
+  7d/30d/90d/365d buttons are replaced with a **Day / Month / Year / All-time**
+  selector that changes the bar granularity to match: hourly bars for a day,
+  daily bars for a month, monthly bars for a year, and yearly bars for all time.
+  Step through periods with the ‹ / › arrows or tap the date to jump to any
+  day, month or year. Monthly and yearly totals are rolled up locally from the
+  add-on's stored daily history, so this works in island mode with no cloud
+  round-trip. The Sources and Trends views remain for Month/Year/All-time; the
+  Day view shows the hourly profile directly (the old tap-a-bar drill-down is
+  no longer needed).
+
 ## 0.12.0 — 2026-07-07
 
 ### Added
