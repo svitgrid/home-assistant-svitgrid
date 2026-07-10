@@ -2665,8 +2665,7 @@ import {
           const plotRect = plot.getBoundingClientRect();
           const barRect = bar.getBoundingClientRect();
           const x = (clientX != null ? clientX : barRect.left + barRect.width / 2) - plotRect.left + plot.scrollLeft;
-          tooltip.style.left = x + "px";
-          tooltip.style.top = (barRect.top - plotRect.top) + "px";
+          this._placeTooltip(tooltip, plot, x, barRect.top - plotRect.top);
         };
         const hideTip = () => tooltip.classList.remove("show");
         col.addEventListener("mouseenter", (e) => showTip(e.clientX));
@@ -2821,8 +2820,7 @@ import {
           const plotRect = plot.getBoundingClientRect();
           const barRect = stackBar.getBoundingClientRect();
           const x = (clientX != null ? clientX : barRect.left + barRect.width / 2) - plotRect.left + plot.scrollLeft;
-          tooltip.style.left = x + "px";
-          tooltip.style.top = (barRect.top - plotRect.top) + "px";
+          this._placeTooltip(tooltip, plot, x, barRect.top - plotRect.top);
         };
         const hideTip = () => tooltip.classList.remove("show");
         col.addEventListener("mouseenter", (e) => showTip(e.clientX));
@@ -3126,8 +3124,7 @@ import {
             const svgRect  = svg.getBoundingClientRect();
             const xPx = (cx / SVG_W) * svgRect.width + (svgRect.left - plotRect.left) + plot.scrollLeft;
             const yPx = (cy / SVG_H) * svgRect.height + (svgRect.top  - plotRect.top);
-            tooltip.style.left = (clientX != null ? clientX - plotRect.left + plot.scrollLeft : xPx) + "px";
-            tooltip.style.top  = yPx + "px";
+            this._placeTooltip(tooltip, plot, (clientX != null ? clientX - plotRect.left + plot.scrollLeft : xPx), yPx);
           };
           const hideTip = () => tooltip.classList.remove("show");
           circle.addEventListener("mouseenter", (e) => showTip(e.clientX));
@@ -3392,8 +3389,7 @@ import {
           // Map SVG x percentage to plot pixel offset.
           const xPx = (cx / SVG_W) * svgRect.width + (svgRect.left - plotRect.left) + plot.scrollLeft;
           const yPx = (cy / SVG_H) * svgRect.height + (svgRect.top - plotRect.top);
-          tooltip.style.left = (clientX != null ? (clientX - plotRect.left + plot.scrollLeft) : xPx) + "px";
-          tooltip.style.top = yPx + "px";
+          this._placeTooltip(tooltip, plot, (clientX != null ? (clientX - plotRect.left + plot.scrollLeft) : xPx), yPx);
         };
         const hideTip = () => tooltip.classList.remove("show");
         circle.addEventListener("mouseenter", (e) => showTip(e.clientX));
@@ -3556,6 +3552,23 @@ import {
         case "dailyLossesEnergy":           return "#94A3B8"; // losses — slate gray
         default:                            return "var(--accent)";
       }
+    }
+
+    // Position a chart tooltip: flip it below the anchor when there's no room
+    // above (so high points/bars don't clip past the top of the plot), and clamp
+    // it horizontally within the visible plot width. leftPx/yPx are in plot
+    // content coordinates.
+    _placeTooltip(tooltip, plot, leftPx, yPx) {
+      const tipH = tooltip.offsetHeight || 24;
+      const halfW = (tooltip.offsetWidth || 0) / 2;
+      const flipDown = (yPx - tipH - 6) < 0;
+      tooltip.style.transform = flipDown
+        ? "translate(-50%, 6px)"
+        : "translate(-50%, calc(-100% - 6px))";
+      const minLeft = plot.scrollLeft + halfW + 2;
+      const maxLeft = plot.scrollLeft + plot.clientWidth - halfW - 2;
+      tooltip.style.left = Math.max(minLeft, Math.min(leftPx, maxLeft)) + "px";
+      tooltip.style.top = yPx + "px";
     }
 
     _loadIntradayHidden() {
