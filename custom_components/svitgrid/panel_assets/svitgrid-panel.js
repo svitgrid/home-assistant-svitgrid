@@ -17,6 +17,15 @@
  *   gridPower    > 0 = importing;   <= 0 = exporting.
  */
 
+import {
+  PERIODS,
+  bucketKeyFor,
+  stepAnchor,
+  canGoForward,
+  periodFetchSpec,
+  periodLabel,
+} from "./history_periods.js";
+
 (function () {
   "use strict";
 

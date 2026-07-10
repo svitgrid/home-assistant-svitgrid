@@ -14,10 +14,15 @@ async def test_register_panel_serves_module_and_registers(hass):
         "custom_components.svitgrid.panel.panel_custom.async_register_panel", new_callable=AsyncMock
     ) as reg:
         await register_panel(hass)
-    # static path registered for the JS module
-    sp_call = hass.http.async_register_static_paths.await_args.args[0][0]
-    assert sp_call.url_path == "/svitgrid_panel/svitgrid-panel.js"
-    assert sp_call.path.endswith("panel_assets/svitgrid-panel.js")
+    # both static paths registered in one call: the panel module + the helper
+    sp_calls = hass.http.async_register_static_paths.await_args.args[0]
+    urls = {c.url_path for c in sp_calls}
+    assert "/svitgrid_panel/svitgrid-panel.js" in urls
+    assert "/svitgrid_panel/history_periods.js" in urls
+    panel_cfg = next(c for c in sp_calls if c.url_path.endswith("svitgrid-panel.js"))
+    assert panel_cfg.path.endswith("panel_assets/svitgrid-panel.js")
+    helper_cfg = next(c for c in sp_calls if c.url_path.endswith("history_periods.js"))
+    assert helper_cfg.path.endswith("panel_assets/history_periods.js")
     # panel registered with the right identity
     kw = reg.await_args.kwargs
     assert kw["frontend_url_path"] == "svitgrid"
@@ -25,7 +30,6 @@ async def test_register_panel_serves_module_and_registers(hass):
     # module_url is the static path plus a content-hash cache-buster so browsers
     # re-fetch the module after each add-on update (static path stays bare).
     assert kw["module_url"].startswith("/svitgrid_panel/svitgrid-panel.js?h=")
-    assert sp_call.url_path == "/svitgrid_panel/svitgrid-panel.js"
 
 
 @pytest.mark.asyncio

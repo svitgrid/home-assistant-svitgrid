@@ -17,6 +17,7 @@ _LOGGER = logging.getLogger(__name__)
 _PANEL_URL = "svitgrid"
 _WEBCOMPONENT = "svitgrid-panel"
 _MODULE_URL = "/svitgrid_panel/svitgrid-panel.js"
+_HELPER_URL = "/svitgrid_panel/history_periods.js"
 _PANEL_FLAG = "_panel_registered"
 
 
@@ -30,6 +31,10 @@ def _is_already_registered(err: Exception) -> bool:
 
 def _module_path() -> str:
     return os.path.join(os.path.dirname(__file__), "panel_assets", "svitgrid-panel.js")
+
+
+def _helper_path() -> str:
+    return os.path.join(os.path.dirname(__file__), "panel_assets", "history_periods.js")
 
 
 def _module_hash() -> str:
@@ -60,7 +65,10 @@ async def register_panel(hass: HomeAssistant) -> None:
     # (frontend ValueError). Treat those as a no-op so setup doesn't fail.
     try:
         await hass.http.async_register_static_paths(
-            [StaticPathConfig(_MODULE_URL, _module_path(), True)]
+            [
+                StaticPathConfig(_MODULE_URL, _module_path(), True),
+                StaticPathConfig(_HELPER_URL, _helper_path(), False),
+            ]
         )
     except (RuntimeError, ValueError) as err:
         if not _is_already_registered(err):
