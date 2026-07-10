@@ -13,6 +13,9 @@
   round-trip. The Sources and Trends views remain for Month/Year/All-time; the
   Day view shows the hourly profile directly (the old tap-a-bar drill-down is
   no longer needed).
+- **Toggle series on the hourly chart.** Click a legend entry (Solar / House /
+  Battery / Grid) to hide or show that line; the chart rescales to what's
+  visible and your choice is remembered per browser.
 
 ## 0.12.0 — 2026-07-07
 

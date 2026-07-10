@@ -144,6 +144,9 @@ import {
     intradaySeriesLoad: "House",
     intradaySeriesBattery: "Battery",
     intradaySeriesGrid: "Grid",
+    intradayLegendAria: "Toggle chart series",
+    intradayLegendHidden: "hidden",
+    intradayAllHidden: "All series hidden — tap a legend item to show one.",
     intradayUnitW: "W",
     intradayUnitKw: "kW",
   };
@@ -541,10 +544,22 @@ import {
       color: var(--sg-text-2);
     }
     .intraday-legend-item {
-      display: flex;
+      display: inline-flex;
       align-items: center;
       gap: 5px;
+      background: none;
+      border: none;
+      padding: 2px 4px;
+      margin: 0;
+      font: inherit;
+      color: inherit;
+      cursor: pointer;
+      border-radius: 6px;
     }
+    .intraday-legend-item:hover { background: var(--sg-divider); }
+    .intraday-legend-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+    .intraday-legend-item.legend-item-off { opacity: 0.45; }
+    .intraday-legend-item.legend-item-off span { text-decoration: line-through; }
     .intraday-legend-swatch {
       width: 10px;
       height: 3px;
@@ -894,7 +909,9 @@ import {
       this._histKey = null;                // cache key: range|metric|data changes trigger re-render
       this._histSec = null;                // h2 section title node (for dynamic text update)
 
-      // Intraday drill-down (Task 5)
+      // Day (hourly) chart series toggled off via the legend (persisted per-browser).
+      this._intradayHidden = this._loadIntradayHidden();
+      this._intradayCache = null;          // last-rendered hourly series, for re-render on legend toggle
 
       // Shadow refs
       this._liveSec = null;
@@ -2960,11 +2977,20 @@ import {
         return;
       }
 
-      // Compute min/max across all four series for unified y-scale.
+      // Cache the raw series so a legend toggle can re-render without re-fetching.
+      this._intradayCache = { day, hasAny, pvSeries, loadSeries, battSeries, gridSeries };
+
+      // Series the user has toggled off via the legend.
+      const hidden = this._intradayHidden || new Set();
+      const keyedSeries = [
+        ["pv", pvSeries], ["load", loadSeries], ["battery", battSeries], ["grid", gridSeries],
+      ];
+
+      // Compute min/max across the VISIBLE series only, so hiding a series rescales.
       let minVal = Infinity;
       let maxVal = -Infinity;
-      const allSeries = [pvSeries, loadSeries, battSeries, gridSeries];
-      for (const ser of allSeries) {
+      for (const [key, ser] of keyedSeries) {
+        if (hidden.has(key)) continue;
         for (const v of ser) {
           if (v !== null) {
             if (v < minVal) minVal = v;
@@ -2972,6 +2998,8 @@ import {
           }
         }
       }
+      // All series hidden (or no visible data) → degenerate scale; axes still render.
+      if (!isFinite(minVal) || !isFinite(maxVal)) { minVal = 0; maxVal = 0; }
       const range = maxVal - minVal;
       const pad = range > 0 ? range * 0.08 : Math.max(Math.abs(maxVal) * 0.05, 10);
       const yLo = minVal - pad;
@@ -3049,13 +3077,14 @@ import {
       const yOf = (v) => SVG_H - ((v - yLo) / yRange) * SVG_H;
 
       const seriesDefs = [
-        { data: pvSeries,   name: STR.intradaySeriesPv,      pathCls: "line-path line-path-pv",      dotCls: "line-dot line-dot-pv"     },
-        { data: loadSeries, name: STR.intradaySeriesLoad,    pathCls: "line-path line-path-load",    dotCls: "line-dot line-dot-load"   },
-        { data: battSeries, name: STR.intradaySeriesBattery, pathCls: "line-path line-path-battery", dotCls: "line-dot line-dot-battery"},
-        { data: gridSeries, name: STR.intradaySeriesGrid,    pathCls: "line-path line-path-grid",    dotCls: "line-dot line-dot-grid"   },
+        { key: "pv",      data: pvSeries,   name: STR.intradaySeriesPv,      pathCls: "line-path line-path-pv",      dotCls: "line-dot line-dot-pv"     },
+        { key: "load",    data: loadSeries, name: STR.intradaySeriesLoad,    pathCls: "line-path line-path-load",    dotCls: "line-dot line-dot-load"   },
+        { key: "battery", data: battSeries, name: STR.intradaySeriesBattery, pathCls: "line-path line-path-battery", dotCls: "line-dot line-dot-battery"},
+        { key: "grid",    data: gridSeries, name: STR.intradaySeriesGrid,    pathCls: "line-path line-path-grid",    dotCls: "line-dot line-dot-grid"   },
       ];
 
       for (const serDef of seriesDefs) {
+        if (hidden.has(serDef.key)) continue;   // series toggled off via the legend
         // Build path
         let pathD = "";
         let inSeg = false;
@@ -3138,19 +3167,33 @@ import {
 
       this._historySec.appendChild(wrap);
 
+      // Hint when the user has toggled every series off (chart is empty but data exists).
+      if (keyedSeries.every(([k]) => hidden.has(k))) {
+        const allHidden = document.createElement("div");
+        allHidden.className = "history-empty";
+        allHidden.textContent = STR.intradayAllHidden;
+        this._historySec.appendChild(allHidden);
+      }
+
       // Legend
       const legend = document.createElement("div");
       legend.className = "intraday-legend";
-      legend.setAttribute("aria-label", "Chart legend");
+      legend.setAttribute("role", "group");
+      legend.setAttribute("aria-label", STR.intradayLegendAria);
       const swatchColors = [
-        { label: STR.intradaySeriesPv,      style: "background:var(--accent)" },
-        { label: STR.intradaySeriesLoad,    style: "background:var(--sg-text)" },
-        { label: STR.intradaySeriesBattery, style: "background:var(--sg-ok)" },
-        { label: STR.intradaySeriesGrid,    style: "background:var(--info-color,#1565C0)" },
+        { key: "pv",      label: STR.intradaySeriesPv,      style: "background:var(--accent)" },
+        { key: "load",    label: STR.intradaySeriesLoad,    style: "background:var(--sg-text)" },
+        { key: "battery", label: STR.intradaySeriesBattery, style: "background:var(--sg-ok)" },
+        { key: "grid",    label: STR.intradaySeriesGrid,    style: "background:var(--info-color,#1565C0)" },
       ];
       for (const li of swatchColors) {
-        const item = document.createElement("div");
-        item.className = "intraday-legend-item";
+        const isHidden = hidden.has(li.key);
+        // Legend entries are toggle buttons: click to show/hide that series.
+        const item = document.createElement("button");
+        item.type = "button";
+        item.className = "intraday-legend-item" + (isHidden ? " legend-item-off" : "");
+        item.setAttribute("aria-pressed", isHidden ? "false" : "true");
+        item.setAttribute("aria-label", li.label + (isHidden ? " — " + STR.intradayLegendHidden : ""));
         const swatch = document.createElement("div");
         swatch.className = "intraday-legend-swatch";
         swatch.setAttribute("aria-hidden", "true");
@@ -3159,6 +3202,13 @@ import {
         lbl.textContent = li.label;
         item.appendChild(swatch);
         item.appendChild(lbl);
+        item.addEventListener("click", () => {
+          if (this._intradayHidden.has(li.key)) this._intradayHidden.delete(li.key);
+          else this._intradayHidden.add(li.key);
+          this._saveIntradayHidden();
+          const c = this._intradayCache;
+          if (c) this._renderIntraday(c.day, c.hasAny, c.pvSeries, c.loadSeries, c.battSeries, c.gridSeries);
+        });
         legend.appendChild(item);
       }
       this._historySec.appendChild(legend);
@@ -3489,6 +3539,27 @@ import {
       const [y, m] = dayStr.split("-").map((n) => parseInt(n, 10));
       const d = new Date(y, m - 1, 1);
       return d.toLocaleString(undefined, { month: "long" }) + " " + y;
+    }
+
+    _loadIntradayHidden() {
+      try {
+        const raw = window.localStorage.getItem("svitgrid.intradayHidden");
+        const arr = raw ? JSON.parse(raw) : [];
+        return new Set(Array.isArray(arr) ? arr : []);
+      } catch (_) {
+        return new Set();
+      }
+    }
+
+    _saveIntradayHidden() {
+      try {
+        window.localStorage.setItem(
+          "svitgrid.intradayHidden",
+          JSON.stringify(Array.from(this._intradayHidden))
+        );
+      } catch (_) {
+        /* localStorage unavailable / quota — toggle still works for this session */
+      }
     }
 
     _dateStr(d) {
