@@ -103,10 +103,6 @@ import {
     takeoverSince: "since",
     system: "System",
     // History controls
-    histDays7: "7d",
-    histDays30: "30d",
-    histDays90: "90d",
-    histDays365: "365d",
     histMetricGenerated: "Generated",
     histMetricConsumed: "Consumed",
     histMetricImported: "Imported",
@@ -114,7 +110,6 @@ import {
     histMetricBattCharged: "Batt charged",
     histMetricBattDischarged: "Batt discharged",
     histMetricLosses: "Losses",
-    histAriaRange: "Select history range",
     histAriaMetric: "Select energy metric",
     histAriaMode: "Select history mode",
     periodDay: "Day",
@@ -143,7 +138,6 @@ import {
     histTrendUnitDegC: "°C",
     histTrendUnitHz: "Hz",
     // Intraday drill-down
-    intradayBack: "← Back",
     intradayTitle: "Hourly profile",
     intradayNoData: "No hourly detail for this day.",
     intradaySeriesPv: "Solar",
@@ -904,7 +898,6 @@ import {
       this._histSec = null;                // h2 section title node (for dynamic text update)
 
       // Intraday drill-down (Task 5)
-      this._dayReq = 0;                    // stale-guard for the Day (hourly) fetch
 
       // Shadow refs
       this._liveSec = null;
@@ -2430,8 +2423,9 @@ import {
         controls.appendChild(nav);
       }
 
-      // Separator + metric chips: only visible in Energy mode
-      if (this._histMode === "energy") {
+      // Separator + metric chips: only visible in Energy mode (not on Day — the
+      // hourly chart ignores _histMetric and always shows the 4-series profile)
+      if (this._histMode === "energy" && this._period !== "day") {
         const sep = document.createElement("div");
         sep.className = "hist-sep";
         sep.setAttribute("aria-hidden", "true");
@@ -2951,7 +2945,7 @@ import {
       this._historySec.innerHTML = "";
 
       // Update section title.
-      if (this._histSec) this._histSec.textContent = this._histSectionTitle();
+      if (this._histSec) this._histSec.textContent = STR.intradayTitle + " — " + this._localDate(this._periodAnchor);
 
       this._appendHistControls(this._historySec);
 
