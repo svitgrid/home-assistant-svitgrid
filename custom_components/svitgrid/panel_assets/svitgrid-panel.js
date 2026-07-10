@@ -117,6 +117,13 @@ import {
     histAriaRange: "Select history range",
     histAriaMetric: "Select energy metric",
     histAriaMode: "Select history mode",
+    periodDay: "Day",
+    periodMonth: "Month",
+    periodYear: "Year",
+    periodAll: "All-time",
+    periodPrev: "Previous period",
+    periodNext: "Next period",
+    periodAriaTabs: "Select history period",
     histModeEnergy: "Energy",
     histModeSources: "Sources",
     histModeTrends: "Trends",
@@ -519,6 +526,16 @@ import {
       background: var(--sg-divider);
       flex-shrink: 0;
       align-self: center;
+    }
+    .hist-nav { display: flex; align-items: center; gap: var(--sp-2); margin-top: var(--sp-2); }
+    .hist-nav-btn {
+      background: none; border: none; color: var(--sg-text); cursor: pointer;
+      font-size: 18px; line-height: 1; padding: 2px 6px; border-radius: 6px;
+    }
+    .hist-nav-btn:disabled { cursor: default; }
+    .hist-nav-label {
+      background: none; border: none; color: var(--sg-text); cursor: pointer;
+      font-size: 13px; font-weight: 500; padding: 2px 4px;
     }
 
     /* Tappable bar-col button (intraday drill-down) */
@@ -2367,6 +2384,7 @@ import {
         { key: "trends",  label: STR.histModeTrends },
       ];
       for (const mo of modeOptions) {
+        if (this._period === "day" && mo.key !== "energy") continue;
         const btn = document.createElement("button");
         btn.type = "button";
         btn.className = "hist-chip";
@@ -2390,31 +2408,80 @@ import {
       modeSep.setAttribute("aria-hidden", "true");
       controls.appendChild(modeSep);
 
-      // Range chips: 7 / 30 / 90 / 365
-      const rangeGroup = document.createElement("div");
-      rangeGroup.className = "hist-chip-group";
-      rangeGroup.setAttribute("role", "group");
-      rangeGroup.setAttribute("aria-label", STR.histAriaRange);
-      const rangeDays = [7, 30, 90, 365];
-      const rangeLabels = [STR.histDays7, STR.histDays30, STR.histDays90, STR.histDays365];
-      for (let ri = 0; ri < rangeDays.length; ri++) {
-        const d = rangeDays[ri];
+      // Period tabs: Day | Month | Year | All-time
+      const periodGroup = document.createElement("div");
+      periodGroup.className = "hist-chip-group";
+      periodGroup.setAttribute("role", "group");
+      periodGroup.setAttribute("aria-label", STR.periodAriaTabs);
+      const periodLabels = {
+        day: STR.periodDay, month: STR.periodMonth,
+        year: STR.periodYear, all: STR.periodAll,
+      };
+      for (const p of PERIODS) {
         const btn = document.createElement("button");
         btn.type = "button";
         btn.className = "hist-chip";
-        btn.textContent = rangeLabels[ri];
-        btn.setAttribute("aria-pressed", d === this._histRangeDays ? "true" : "false");
+        btn.textContent = periodLabels[p];
+        btn.setAttribute("aria-pressed", p === this._period ? "true" : "false");
         btn.addEventListener("click", () => {
-          if (this._histRangeDays === d) return;
-          this._histRangeDays = d;
+          if (this._period === p) return;
+          this._period = p;
+          // Switching to Day hides Sources/Trends → fall back to Energy.
+          if (p === "day" && this._histMode !== "energy") this._histMode = "energy";
           this._histKey = null;
           this._lastHistoryFetch = 0;
-          if (this._histSec) this._histSec.textContent = this._histSectionTitle();
+          this._rerenderHistoryControls();
           this._loadHistory();
         });
-        rangeGroup.appendChild(btn);
+        periodGroup.appendChild(btn);
       }
-      controls.appendChild(rangeGroup);
+      controls.appendChild(periodGroup);
+
+      if (this._period !== "all") {
+        const nav = document.createElement("div");
+        nav.className = "hist-nav";
+
+        const prev = document.createElement("button");
+        prev.type = "button";
+        prev.className = "hist-nav-btn";
+        prev.textContent = "‹";
+        prev.setAttribute("aria-label", STR.periodPrev);
+        prev.addEventListener("click", () => {
+          this._periodAnchor = stepAnchor(this._periodAnchor, this._period, -1);
+          this._histKey = null;
+          this._lastHistoryFetch = 0;
+          this._rerenderHistoryControls();
+          this._loadHistory();
+        });
+        nav.appendChild(prev);
+
+        const label = document.createElement("button");
+        label.type = "button";
+        label.className = "hist-nav-label";
+        label.textContent = periodLabel(this._periodAnchor, this._period);
+        label.addEventListener("click", () => this._openPeriodPicker());
+        nav.appendChild(label);
+
+        const next = document.createElement("button");
+        next.type = "button";
+        next.className = "hist-nav-btn";
+        next.textContent = "›";
+        next.setAttribute("aria-label", STR.periodNext);
+        const fwd = canGoForward(this._periodAnchor, this._period, this._dateStr(new Date()));
+        next.disabled = !fwd;
+        next.style.opacity = fwd ? "1" : "0.3";
+        next.addEventListener("click", () => {
+          if (!canGoForward(this._periodAnchor, this._period, this._dateStr(new Date()))) return;
+          this._periodAnchor = stepAnchor(this._periodAnchor, this._period, 1);
+          this._histKey = null;
+          this._lastHistoryFetch = 0;
+          this._rerenderHistoryControls();
+          this._loadHistory();
+        });
+        nav.appendChild(next);
+
+        controls.appendChild(nav);
+      }
 
       // Separator + metric chips: only visible in Energy mode
       if (this._histMode === "energy") {
@@ -2492,6 +2559,41 @@ import {
       }
 
       container.appendChild(controls);
+    }
+
+    _rerenderHistoryControls() {
+      if (this._histSec) this._histSec.textContent = this._histSectionTitle();
+      // The subsequent _loadHistory() rebuilds controls via the render path.
+    }
+
+    _openPeriodPicker() {
+      const input = document.createElement("input");
+      input.type = this._period === "month" ? "month" : this._period === "year" ? "number" : "date";
+      if (this._period === "year") { input.min = "2024"; input.max = String(new Date().getFullYear()); }
+      input.max = input.max || this._dateStr(new Date());
+      input.value =
+        this._period === "month" ? this._periodAnchor.slice(0, 7)
+        : this._period === "year" ? this._periodAnchor.slice(0, 4)
+        : this._periodAnchor;
+      input.style.position = "fixed";
+      input.style.left = "-9999px";
+      this.shadowRoot.appendChild(input);
+      const commit = () => {
+        const v = input.value;
+        if (v) {
+          this._periodAnchor =
+            this._period === "month" ? v + "-01"
+            : this._period === "year" ? v + "-01-01"
+            : v;
+          this._histKey = null;
+          this._lastHistoryFetch = 0;
+          this._loadHistory();
+        }
+        input.remove();
+      };
+      input.addEventListener("change", commit);
+      input.addEventListener("blur", () => input.remove());
+      input.showPicker ? input.showPicker() : input.focus();
     }
 
     _renderHistory(series) {
