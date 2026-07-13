@@ -351,3 +351,69 @@ def test_cadence_default_is_five_minutes():
     from custom_components.svitgrid.reading_sender import Cadence
 
     assert Cadence().interval_s == 300
+
+
+class _RecordingPublisher:
+    """Fake MQTT readings publisher — records publishes; connect always ok."""
+
+    def __init__(self, connected: bool = True) -> None:
+        self._connected = connected
+        self.published: list[str] = []
+
+    async def ensure_connected(self) -> bool:
+        return self._connected
+
+    def publish(self, reading_json: str) -> bool:
+        self.published.append(reading_json)
+        return True
+
+
+@pytest.mark.asyncio
+async def test_drain_publishes_mqtt_when_flag_set(tmp_path):
+    store = _store(tmp_path)
+    now = "2026-06-24T12:00:00Z"
+    store._append_sync({"inverterId": "inv-1", "timestamp": "2026-06-24T10:00:00Z"})
+    store._append_sync({"inverterId": "inv-1", "timestamp": "2026-06-24T10:00:05Z"})
+    client = _FakeClient({"mqttPublishReadings": True})  # no per-item results → all sent
+    pub = _RecordingPublisher()
+
+    sent = await drain_once(
+        store=store, api_client=client, api_key="k", now_iso=now,
+        cadence=Cadence(interval_s=10), publisher=pub,
+    )
+
+    assert sent == 2
+    assert len(pub.published) == 2  # each cloud-sent reading published over MQTT
+
+
+@pytest.mark.asyncio
+async def test_drain_no_mqtt_publish_when_flag_absent(tmp_path):
+    store = _store(tmp_path)
+    now = "2026-06-24T12:00:00Z"
+    store._append_sync({"inverterId": "inv-1", "timestamp": "2026-06-24T10:00:00Z"})
+    client = _FakeClient({"ingestIntervalMs": 30000})  # flag NOT present
+    pub = _RecordingPublisher()
+
+    await drain_once(
+        store=store, api_client=client, api_key="k", now_iso=now,
+        cadence=Cadence(interval_s=10), publisher=pub,
+    )
+
+    assert pub.published == []  # server didn't opt this device in → no MQTT
+
+
+@pytest.mark.asyncio
+async def test_drain_no_mqtt_publish_when_broker_unreachable(tmp_path):
+    store = _store(tmp_path)
+    now = "2026-06-24T12:00:00Z"
+    store._append_sync({"inverterId": "inv-1", "timestamp": "2026-06-24T10:00:00Z"})
+    client = _FakeClient({"mqttPublishReadings": True})
+    pub = _RecordingPublisher(connected=False)  # ensure_connected() -> False
+
+    sent = await drain_once(
+        store=store, api_client=client, api_key="k", now_iso=now,
+        cadence=Cadence(interval_s=10), publisher=pub,
+    )
+
+    assert sent == 1  # HTTP send still succeeded (fail-open)
+    assert pub.published == []  # no publish attempted when not connected

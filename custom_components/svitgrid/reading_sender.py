@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -13,6 +14,7 @@ from homeassistant.core import HomeAssistant
 from .api_client import DeviceEvicted, ReadingRejected
 from .battery_sign import flip_battery_sign
 from .const import BACKFILL_CAP_S, CADENCE_DEFAULT_INTERVAL_S, INGEST_BATCH_MAX, SENDER_TICK_S
+from .mqtt_readings_publisher import ReadingsMqttClient
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -39,6 +41,7 @@ async def drain_once(
     cap_s: int = BACKFILL_CAP_S,
     lifecycle=None,
     discharge_positive_ids: set[str] | None = None,
+    publisher=None,
 ) -> int:
     """Drain at most one batch. Returns number of rows marked 'sent'.
 
@@ -104,6 +107,23 @@ async def drain_once(
     if failed_keys:
         await _maybe(store.mark_failed(failed_keys, now_iso))
 
+    # Additive MQTT publish of the cloud-accepted readings. ISLAND-SAFE: this is
+    # the cloud sender, which never runs for island-mode entries, so island
+    # readings never reach here. Best-effort — the HTTP batch above is the
+    # source of truth; a broker outage just means no warm-Redis copy. Gated on
+    # the server's `mqttPublishReadings` flag (same gate as the edge connector).
+    if (
+        publisher is not None
+        and sent_keys
+        and isinstance(body, dict)
+        and body.get("mqttPublishReadings")
+        and await publisher.ensure_connected()
+    ):
+        sent_set = set(sent_keys)
+        for key, reading in zip(keys, readings, strict=False):
+            if key in sent_set:
+                publisher.publish(json.dumps(reading))
+
     interval_ms = body.get("ingestIntervalMs") if isinstance(body, dict) else None
     if isinstance(interval_ms, (int, float)) and interval_ms > 0:
         cadence.interval_s = int(interval_ms / 1000)
@@ -122,27 +142,37 @@ async def run_sender_loop(
     lifecycle=None,
     discharge_positive_ids: set[str] | None = None,
 ) -> None:
+    # Additive MQTT readings publisher, owned by this loop so its paho network
+    # thread is torn down when the loop exits (task cancel on unload). Construction
+    # is cheap — it does NOT connect until drain_once first sees the server's
+    # `mqttPublishReadings` flag. Only reached here for cloud installs (this loop
+    # isn't spawned in island mode).
+    publisher = ReadingsMqttClient(api_client=api_client, api_key=api_key)
     wait_for_data = getattr(store, "wait_for_data", None)
-    while not hass.is_stopping and (lifecycle is None or lifecycle.active):
-        try:
-            await drain_once(
-                store=store,
-                api_client=api_client,
-                api_key=api_key,
-                now_iso=_now_iso(),
-                cadence=cadence,
-                lifecycle=lifecycle,
-                discharge_positive_ids=discharge_positive_ids,
-            )
-        except Exception:  # never let the sender loop die
-            _LOGGER.exception("sender drain failed")
-        # Use the store's data-available event when present so a fresh reading
-        # wakes the sender immediately instead of waiting up to tick_s.
-        # Fall back to a plain sleep for test doubles or stores that lack the method.
-        if wait_for_data is not None:
-            await wait_for_data(tick_s)
-        else:
-            await asyncio.sleep(tick_s)
+    try:
+        while not hass.is_stopping and (lifecycle is None or lifecycle.active):
+            try:
+                await drain_once(
+                    store=store,
+                    api_client=api_client,
+                    api_key=api_key,
+                    now_iso=_now_iso(),
+                    cadence=cadence,
+                    lifecycle=lifecycle,
+                    discharge_positive_ids=discharge_positive_ids,
+                    publisher=publisher,
+                )
+            except Exception:  # never let the sender loop die
+                _LOGGER.exception("sender drain failed")
+            # Use the store's data-available event when present so a fresh reading
+            # wakes the sender immediately instead of waiting up to tick_s.
+            # Fall back to a plain sleep for test doubles or stores that lack the method.
+            if wait_for_data is not None:
+                await wait_for_data(tick_s)
+            else:
+                await asyncio.sleep(tick_s)
+    finally:
+        publisher.stop()
 
 
 async def _maybe(awaitable_or_value: Any) -> Any:
