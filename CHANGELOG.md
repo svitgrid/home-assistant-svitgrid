@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.14.0 — 2026-07-13
+
+### Added
+- **Faster cloud reads via MQTT.** The add-on now also publishes each
+  cloud-sent reading to the Svitgrid broker (in addition to the normal HTTPS
+  upload), so the app can serve fresh data straight from the cache instead of
+  waiting on the periodic sync. It's additive and best-effort — if the broker
+  is briefly unreachable, the HTTPS upload is still the source of truth, so
+  nothing is lost. Off by default; Svitgrid enables it per install.
+- **Island mode is unaffected.** Publishing rides on the cloud sender, which
+  never runs in island mode, so a local-only install sends nothing to the
+  broker.
+
 ## 0.13.0 — 2026-07-10
 
 ### Changed
