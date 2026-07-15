@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.15.2 — 2026-07-15
 
 ### Fixed
 - **"Refresh now" no longer gets silently dropped.** The app's poll-now
