@@ -558,3 +558,50 @@ async def test_drain_publisher_not_connected_uses_http_as_today(tmp_path):
     assert sent == 1
     assert len(client.calls) == 1
     assert pub.publish_and_wait_calls == []
+
+
+# ── config-pushed cadence must reach the shared Cadence (dead-cadence fix) ───
+
+
+@pytest.mark.asyncio
+async def test_drain_applies_config_cadence_on_mqtt_primary_path(tmp_path):
+    """A cadence pushed over `devices/{id}/config` (control.interval_s) must be
+    applied to the shared Cadence even when the drain takes the MQTT-primary
+    path (where the HTTP response, the other cadence source, never runs)."""
+    store = _store(tmp_path)
+    now = "2026-06-24T12:00:00Z"
+    store._append_sync({"inverterId": "inv-1", "timestamp": "2026-06-24T10:00:00Z"})
+    client = _FakeClient({"results": [{"ok": True}]})  # unused: no HTTP call expected
+    pub = _PubAckPublisher(acks=True)
+    control = MqttControlState(mqtt_primary=True, bootstrapped=True, interval_s=45)
+    cadence = Cadence(interval_s=10)
+
+    sent = await drain_once(
+        store=store, api_client=client, api_key="k", now_iso=now,
+        cadence=cadence, publisher=pub, control=control,
+    )
+
+    assert sent == 1
+    assert client.calls == []  # MQTT-primary happy path — no HTTP fallback needed
+    assert cadence.interval_s == 45
+
+
+@pytest.mark.asyncio
+async def test_drain_applies_config_cadence_on_http_path(tmp_path):
+    """Same config-pushed cadence must also apply on a plain HTTP-mode drain
+    (mqtt_primary off / not yet bootstrapped), independent of whatever the HTTP
+    response itself carries."""
+    store = _store(tmp_path)
+    now = "2026-06-24T12:00:00Z"
+    store._append_sync({"inverterId": "inv-1", "timestamp": "2026-06-24T10:00:00Z"})
+    client = _FakeClient({"results": [{"ok": True}]})  # no ingestIntervalMs in response
+    control = MqttControlState(mqtt_primary=False, bootstrapped=False, interval_s=45)
+    cadence = Cadence(interval_s=10)
+
+    sent = await drain_once(
+        store=store, api_client=client, api_key="k", now_iso=now,
+        cadence=cadence, control=control,
+    )
+
+    assert sent == 1
+    assert cadence.interval_s == 45

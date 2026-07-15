@@ -159,6 +159,18 @@ async def drain_once(
     over HTTP, and the store row stays 'pending' until either path marks it
     sent.
     """
+    # Config-over-MQTT is the cadence source for MQTT-primary installs: in
+    # steady state the HTTP response (the other cadence source, set in
+    # _http_send below) rarely runs, so a cadence pushed on
+    # `devices/{id}/config` would otherwise never reach the shared Cadence.
+    # Applied up front so it takes effect regardless of which branch below
+    # actually sends this batch. The HTTP-response update further down still
+    # runs on every real HTTP round-trip (bootstrap/fallback source) and may
+    # overwrite this in the same cycle — both derive from the same server
+    # cadence logic, so they agree.
+    if control is not None and control.interval_s is not None and control.interval_s > 0:
+        cadence.interval_s = control.interval_s
+
     # Age out anything beyond the backfill cap so it never clogs the queue.
     await _maybe(store.skip_aged(now_iso, cap_s))
 

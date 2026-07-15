@@ -173,6 +173,13 @@ async def run_loop(
                 if msg.topic == cfg_topic:
                     _LOGGER.debug("MQTT config push topic=%s payload=%s", msg.topic, msg.payload[:256])
                     if control is not None:
+                        # Runs on paho's network thread, not the asyncio loop —
+                        # safe under CPython's GIL because apply_config only
+                        # assigns independent scalar fields (mqtt_primary,
+                        # interval_s) one at a time; `bootstrapped` is never
+                        # written here, only read/written on the loop thread
+                        # (reading_sender.drain_once), so there's no shared
+                        # field being mutated from both threads.
                         apply_config(control, msg.payload)
                     return
                 _LOGGER.debug("MQTT wake-bell topic=%s payload=%s", msg.topic, msg.payload[:32])
