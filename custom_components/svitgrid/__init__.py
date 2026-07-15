@@ -53,6 +53,7 @@ from .http_views import register_views
 from .island_event_store import IslandEventStore
 from .keystore import SvitgridKeystore
 from .lifecycle import DEPROVISIONED, LifecycleState
+from .mqtt_control import MqttControlState
 from .mqtt_wake import run_loop as run_mqtt_wake_loop
 from .panel import register_panel, remove_panel
 from .preset_refresh import refresh_entry_inverters
@@ -73,11 +74,20 @@ async def _start_local_store(
     active_ids=None,
     cloud_ingest_enabled: bool = True,
     discharge_positive_ids=None,
+    control: MqttControlState | None = None,
 ):
     """Create the per-entry local store, seed the shared lifecycle holder from
     persisted state, register the read views once, and (only when the device is
     still active) start the sender + rollup timer. Returns (store, cadence,
     sender_task, cancel_rollup, lifecycle).
+
+    ``control`` (Task 3) is the shared ``MqttControlState`` — when the caller
+    passes the SAME instance also given to the MQTT wake client
+    (`run_mqtt_wake_loop`), the sender's MQTT-primary decision reflects the
+    live `mqttPublishReadings`/cadence config the wake client learns from
+    `devices/{deviceId}/config`. Left as None for callers (e.g. the YAML setup
+    path) that don't wire a wake client — `drain_once` then always uses HTTP,
+    same as before Task 3.
 
     active_ids: set of inverter_id strings currently in the active config.
     Orphaned readings_raw rows (for inverter ids NOT in active_ids) are pruned
@@ -159,6 +169,7 @@ async def _start_local_store(
                 cadence=cadence,
                 lifecycle=lifecycle,
                 discharge_positive_ids=discharge_positive_ids,
+                control=control,
             ),
             name="svitgrid_reading_sender",
         )
@@ -568,6 +579,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     sender_task = None
     cancel_rollup = None
     lifecycle = None
+    # Task 3: shared MqttControlState, constructed in the `if inverters:` block
+    # below and passed to BOTH the sender (_start_local_store -> drain_once)
+    # and the MQTT wake client further down, so the wake client's
+    # `devices/{deviceId}/config` updates are visible to the drain loop.
+    # Hoisted (like lifecycle/store) so it is accessible outside that block.
+    control: MqttControlState | None = None
     # Hoisted so it is accessible outside the `if inverters:` block (used when
     # spawning the island event scheduler in the `if loops_active:` block below).
     cloud_ingest_enabled = entry.data.get(
@@ -585,6 +602,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             for inv in inverters
             if preset_is_discharge_positive(inv.get("preset_id"))
         }
+        # Task 3: one MqttControlState per entry, shared by reference between
+        # the sender (drain_once, via _start_local_store below) and the MQTT
+        # wake client (further down, once loops_active) so a
+        # `devices/{deviceId}/config` push is immediately visible to the
+        # drain loop's MQTT-primary decision.
+        control = MqttControlState()
         store, cadence, sender_task, cancel_rollup, lifecycle = await _start_local_store(
             hass,
             api_client,
@@ -593,6 +616,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             active_ids=active_ids,
             cloud_ingest_enabled=cloud_ingest_enabled,
             discharge_positive_ids=discharge_positive_ids,
+            control=control,
         )
         cadence.interval_s = _initial_cadence_seconds(dict(entry.data))
         hass.data.setdefault(DOMAIN, {})
@@ -750,6 +774,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 api_client=api_client,
                 api_key=api_key,
                 wake_event=wake_event,
+                # SAME MqttControlState instance the sender reads (Task 3) —
+                # constructed above in the `if inverters:` block. control is
+                # None when there were no inverters (loops_active can only be
+                # True here if `inverters` was non-empty, so control is always
+                # set by this point; the None annotation covers that hoisted
+                # default for type-checking only).
+                control=control,
             ),
             name="svitgrid_mqtt_wake",
         )
@@ -803,6 +834,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "sender_task": sender_task,
         "cancel_rollup": cancel_rollup,
         "lifecycle": lifecycle,
+        "mqtt_control": control,
         "update_coordinator": update_coordinator,
     }
     await hass.config_entries.async_forward_entry_setups(

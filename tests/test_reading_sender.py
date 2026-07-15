@@ -6,6 +6,7 @@ import pytest
 
 from custom_components.svitgrid.api_client import DeviceEvicted, ReadingRejected
 from custom_components.svitgrid.lifecycle import DEPROVISIONED, PAUSED, LifecycleState
+from custom_components.svitgrid.mqtt_control import MqttControlState
 from custom_components.svitgrid.reading_sender import Cadence, drain_once, run_sender_loop
 from custom_components.svitgrid.reading_store import ReadingStore
 
@@ -417,3 +418,143 @@ async def test_drain_no_mqtt_publish_when_broker_unreachable(tmp_path):
 
     assert sent == 1  # HTTP send still succeeded (fail-open)
     assert pub.published == []  # no publish attempted when not connected
+
+
+# ── Task 3: MQTT-primary drain (PUBACK + HTTP bootstrap/fallback) ────────────
+
+
+class _PubAckPublisher:
+    """Fake MQTT readings publisher with per-reading PUBACK control, for the
+    MQTT-primary path. ``acks`` is either a single bool (applied to every
+    ``publish_and_wait`` call) or a list of bools consumed in call order."""
+
+    def __init__(self, acks, connected: bool = True) -> None:
+        self._connected = connected
+        self._acks = acks
+        self._call_n = 0
+        self.publish_and_wait_calls: list[str] = []
+        self.published: list[str] = []
+
+    async def ensure_connected(self) -> bool:
+        return self._connected
+
+    async def publish_and_wait(self, payload: str, timeout: float = 5.0) -> bool:
+        self.publish_and_wait_calls.append(payload)
+        result = self._acks if isinstance(self._acks, bool) else self._acks[self._call_n]
+        self._call_n += 1
+        return result
+
+    def publish(self, reading_json: str) -> bool:
+        self.published.append(reading_json)
+        return True
+
+
+@pytest.mark.asyncio
+async def test_drain_bootstrap_uses_http_even_when_mqtt_primary_and_connected(tmp_path):
+    """First drain each session must go over HTTP (bootstrap), even when the
+    control flag is on and the publisher is connected — and a successful HTTP
+    round-trip flips control.bootstrapped to True."""
+    store = _store(tmp_path)
+    now = "2026-06-24T12:00:00Z"
+    store._append_sync({"inverterId": "inv-1", "timestamp": "2026-06-24T10:00:00Z"})
+    store._append_sync({"inverterId": "inv-1", "timestamp": "2026-06-24T10:00:05Z"})
+    client = _FakeClient({"results": [{"ok": True}, {"ok": True}]})
+    pub = _PubAckPublisher(acks=True)
+    control = MqttControlState(mqtt_primary=True, bootstrapped=False)
+
+    sent = await drain_once(
+        store=store, api_client=client, api_key="k", now_iso=now,
+        cadence=Cadence(interval_s=10), publisher=pub, control=control,
+    )
+
+    assert sent == 2
+    assert len(client.calls) == 1 and len(client.calls[0]) == 2  # HTTP used, all rows
+    assert pub.publish_and_wait_calls == []  # MQTT-primary path never entered
+    assert control.bootstrapped is True  # flipped on HTTP success
+
+
+@pytest.mark.asyncio
+async def test_drain_mqtt_primary_happy_path_skips_http(tmp_path):
+    """Once bootstrapped, mqtt_primary=True + connected + every row PUBACKed
+    means NO HTTP call at all; every row is mark_sent via the MQTT path."""
+    store = _store(tmp_path)
+    now = "2026-06-24T12:00:00Z"
+    store._append_sync({"inverterId": "inv-1", "timestamp": "2026-06-24T10:00:00Z"})
+    store._append_sync({"inverterId": "inv-1", "timestamp": "2026-06-24T10:00:05Z"})
+    client = _FakeClient({"results": [{"ok": True}, {"ok": True}]})
+    pub = _PubAckPublisher(acks=True)
+    control = MqttControlState(mqtt_primary=True, bootstrapped=True)
+
+    sent = await drain_once(
+        store=store, api_client=client, api_key="k", now_iso=now,
+        cadence=Cadence(interval_s=10), publisher=pub, control=control,
+    )
+
+    assert sent == 2
+    assert client.calls == []  # push_readings_batch never called
+    assert len(pub.publish_and_wait_calls) == 2
+    assert store._count_by_state_sync() == {"sent": 2}
+
+
+@pytest.mark.asyncio
+async def test_drain_partial_puback_falls_back_to_http_for_unacked_only(tmp_path):
+    """Rows the broker didn't PUBACK must go over HTTP; acked rows must NOT be
+    re-sent over HTTP."""
+    store = _store(tmp_path)
+    now = "2026-06-24T12:00:00Z"
+    store._append_sync({"inverterId": "inv-1", "timestamp": "2026-06-24T10:00:00Z"})
+    store._append_sync({"inverterId": "inv-1", "timestamp": "2026-06-24T10:00:05Z"})
+    client = _FakeClient({"results": [{"ok": True}]})  # only 1 row expected over HTTP
+    pub = _PubAckPublisher(acks=[True, False])
+    control = MqttControlState(mqtt_primary=True, bootstrapped=True)
+
+    sent = await drain_once(
+        store=store, api_client=client, api_key="k", now_iso=now,
+        cadence=Cadence(interval_s=10), publisher=pub, control=control,
+    )
+
+    assert len(client.calls) == 1 and len(client.calls[0]) == 1  # only the un-acked row
+    assert sent == 2  # 1 acked (MQTT) + 1 sent via HTTP fallback
+    assert store._count_by_state_sync() == {"sent": 2}
+
+
+@pytest.mark.asyncio
+async def test_drain_flag_off_uses_http_as_today(tmp_path):
+    """control.mqtt_primary False → HTTP path exactly as before, regardless
+    of bootstrap/connection state."""
+    store = _store(tmp_path)
+    now = "2026-06-24T12:00:00Z"
+    store._append_sync({"inverterId": "inv-1", "timestamp": "2026-06-24T10:00:00Z"})
+    client = _FakeClient({"results": [{"ok": True}]})
+    pub = _PubAckPublisher(acks=True)
+    control = MqttControlState(mqtt_primary=False, bootstrapped=True)
+
+    sent = await drain_once(
+        store=store, api_client=client, api_key="k", now_iso=now,
+        cadence=Cadence(interval_s=10), publisher=pub, control=control,
+    )
+
+    assert sent == 1
+    assert len(client.calls) == 1
+    assert pub.publish_and_wait_calls == []
+
+
+@pytest.mark.asyncio
+async def test_drain_publisher_not_connected_uses_http_as_today(tmp_path):
+    """Broker unreachable (ensure_connected() False) → HTTP path, even with
+    mqtt_primary + bootstrapped both True."""
+    store = _store(tmp_path)
+    now = "2026-06-24T12:00:00Z"
+    store._append_sync({"inverterId": "inv-1", "timestamp": "2026-06-24T10:00:00Z"})
+    client = _FakeClient({"results": [{"ok": True}]})
+    pub = _PubAckPublisher(acks=True, connected=False)
+    control = MqttControlState(mqtt_primary=True, bootstrapped=True)
+
+    sent = await drain_once(
+        store=store, api_client=client, api_key="k", now_iso=now,
+        cadence=Cadence(interval_s=10), publisher=pub, control=control,
+    )
+
+    assert sent == 1
+    assert len(client.calls) == 1
+    assert pub.publish_and_wait_calls == []
