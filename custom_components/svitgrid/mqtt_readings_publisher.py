@@ -56,6 +56,13 @@ class ReadingsMqttClient:
         self._client: Any = None
         self._topic: str | None = None
         self._connected = False
+        self._loop: asyncio.AbstractEventLoop | None = None
+        # PUBACK-wait registry: paho `mid` -> the asyncio.Future awaited by
+        # publish_and_wait. Only ever mutated on the asyncio loop thread —
+        # _on_publish (paho's network thread) never touches this dict
+        # directly, it hops via call_soon_threadsafe(self._resolve, mid)
+        # first, so no lock is needed.
+        self._pending: dict[int, asyncio.Future[bool]] = {}
 
     async def ensure_connected(self) -> bool:
         """Idempotent: connect (mint token + open TLS) if not already up.
@@ -93,10 +100,12 @@ class ReadingsMqttClient:
                     _LOGGER.warning("MQTT readings CONNECT rc=%s", rc)
 
             client.on_connect = _on_connect
+            client.on_publish = self._on_publish
             client.connect_async(host, port, keepalive=60)
             client.loop_start()
             await asyncio.wait_for(connected.wait(), timeout=CONNECT_TIMEOUT_S)
             self._client, self._topic, self._connected = client, topic, True
+            self._loop = loop
             _LOGGER.info("MQTT readings publish active: topic=%s", topic)
             return True
         except Exception as exc:  # noqa: BLE001 — fail-open observability path
@@ -115,6 +124,52 @@ class ReadingsMqttClient:
         except Exception:  # noqa: BLE001 — never break the sender
             self._connected = False
             return False
+
+    async def publish_and_wait(self, payload: str, timeout: float = 5.0) -> bool:  # noqa: ASYNC109
+        """Publish one reading (QoS 1) and wait for the broker's PUBACK.
+
+        Returns True iff the broker actually acknowledges the publish
+        (paho's ``on_publish`` fires for this ``mid``) within ``timeout``
+        seconds. Fail-open in every other case — not connected, a publish
+        error, or no PUBACK in time all return False rather than raise, so
+        the caller can fall back to HTTP without special-casing exceptions.
+        """
+        if not self._connected or self._client is None or self._topic is None:
+            return False
+        try:
+            info = self._client.publish(self._topic, payload, qos=1)
+        except Exception:  # noqa: BLE001 — never break the sender
+            self._connected = False
+            return False
+        if getattr(info, "rc", 1) != 0:
+            return False
+        mid = info.mid
+        loop = self._loop or asyncio.get_running_loop()
+        future: asyncio.Future[bool] = loop.create_future()
+        self._pending[mid] = future
+        try:
+            return await asyncio.wait_for(future, timeout)
+        except Exception:  # noqa: BLE001 — timeout (or any other wait error): fail-open
+            return False
+        finally:
+            self._pending.pop(mid, None)
+
+    def _on_publish(self, _client: Any, _userdata: Any, mid: int, *_args: Any) -> None:
+        """paho network-thread callback on PUBACK. Never touches ``_pending``
+        directly — hops to the asyncio loop via ``call_soon_threadsafe`` so
+        the dict is only ever mutated on the loop thread. Accepts ``*_args``
+        for paho v2's extra ``reason_code``/``properties`` positional args.
+        """
+        loop = self._loop
+        if loop is not None:
+            loop.call_soon_threadsafe(self._resolve, mid)
+
+    def _resolve(self, mid: int) -> None:
+        """Runs on the asyncio loop thread. Defensive about unknown/duplicate
+        mids (already resolved, already popped, or never registered)."""
+        future = self._pending.get(mid)
+        if future is not None and not future.done():
+            future.set_result(True)
 
     def stop(self) -> None:
         client, self._client, self._connected = self._client, None, False
