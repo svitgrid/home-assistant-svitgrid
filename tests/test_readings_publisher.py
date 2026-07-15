@@ -222,28 +222,30 @@ async def _run_with_sleep_capture(monkeypatch, hass, store, cadence):
 @pytest.mark.asyncio
 async def test_publisher_clamps_extreme_intervals(monkeypatch):
     """A misbehaving cadence value (999_999_999) must NEVER produce a sleep
-    larger than the 30-min ceiling. interval >= 120 → idle branch, which
-    samples every 60s and does NOT add a final sleep — so the invariant we
-    prove is: every captured sleep is <= 1800.0 (no hour-long freeze)."""
+    larger than the 30-min ceiling. The first pass is an immediate snapshot
+    followed by a short transitional sleep; later iterations take the idle
+    branch and sample every 60s — so the invariant we prove is: every captured
+    sleep is <= 1800.0 (no hour-long freeze)."""
     hass = _mock_hass_one_iter()
-    # Let the idle sampling sub-loop run a few ticks before stopping so we can
-    # observe the sub-sleeps. (The default mock stops after one read, which
-    # would skip the sub-loop entirely.)
+    # Let the first snapshot land, then the idle sampling sub-loop run a couple
+    # ticks before stopping so we can observe both sleep kinds.
     call_count = {"n": 0}
 
     def _is_stopping(_self):
         call_count["n"] += 1
-        return call_count["n"] > 4  # top read + 3 sampling sub-loop reads
+        return call_count["n"] > 4  # iter1 snapshot + iter2 top + 2 sub reads
 
     type(hass).is_stopping = property(_is_stopping)
 
     cadence = Cadence(interval_s=999_999_999)
     sleeps = await _run_with_sleep_capture(monkeypatch, hass, _RecordingStore(), cadence)
-    assert sleeps, "expected the idle-branch sampling sub-loop to sleep"
-    # Idle path: sampling sub-sleeps are 60s; nothing freezes us at the
-    # un-clamped 999_999_999s. Ceiling clamp keeps every sleep <= 1800.
+    assert sleeps, "expected the first-pass transitional sleep + idle sub-loop sleeps"
+    # Ceiling clamp keeps every sleep <= 1800; nothing freezes us at 999_999_999.
     assert all(s <= 1800.0 for s in sleeps)
-    assert sleeps[0] == 60.0
+    # First reading → short transitional sleep, not the un-clamped cadence.
+    assert sleeps[0] == 5.0
+    # Later iterations aggregate → 60s sampling sub-sleeps.
+    assert 60.0 in sleeps
 
 
 @pytest.mark.asyncio
@@ -332,18 +334,18 @@ def test_aggregate_single_sample_returns_it_unchanged_plus_metadata():
 
 @pytest.mark.asyncio
 async def test_publisher_aggregates_when_interval_idle(monkeypatch):
-    """cadence.interval_s=300 (>=120) → the FIRST iteration is the idle
-    aggregation path directly: collect 5 samples 60s apart and capture ONE
-    aggregated reading with sampleCount=5, periodSec=300."""
+    """cadence.interval_s=300 (>=120): iteration 1 is the immediate snapshot
+    (ASAP first reading), and iteration 2 is the idle aggregation path —
+    collect 5 samples 60s apart and capture ONE aggregated reading with
+    sampleCount=5, periodSec=300."""
     hass = _mock_hass_one_iter()
-    # is_stopping is read once at the loop top, then once per sampling tick.
-    # Allow one full aggregation iteration: top read (#1) + 5 sub-loop reads
-    # (#2-#6); stop on the read that would start iteration 2 (#7).
+    # is_stopping reads: iter1 snapshot top (#1); iter2 top (#2) + 5 sampling
+    # sub-loop reads (#3-#7); stop on the read that would start iter3 (#8).
     call_count = {"n": 0}
 
     def _is_stopping(_self):
         call_count["n"] += 1
-        return call_count["n"] > 6
+        return call_count["n"] > 7
 
     type(hass).is_stopping = property(_is_stopping)
 
@@ -358,13 +360,136 @@ async def test_publisher_aggregates_when_interval_idle(monkeypatch):
     monkeypatch.setattr(asyncio, "sleep", _record_sleep)
     await run_loop(hass=hass, store=store, cadence=cadence, **_RUN_KWARGS)
 
-    # ONE aggregated reading captured.
-    assert len(store.appended) == 1
-    aggregated = store.appended[0]
+    # iter1: immediate snapshot (no aggregation metadata). iter2: aggregate.
+    assert len(store.appended) == 2
+    snapshot = store.appended[0]
+    assert "sampleCount" not in snapshot
+    aggregated = store.appended[1]
     assert aggregated["sampleCount"] == 5
     assert aggregated["periodSec"] == 300
-    # Idle path: 5 sampling sub-sleeps of 60s each, no final post-capture sleep.
-    assert sleeps == [60.0, 60.0, 60.0, 60.0, 60.0]
+    # iter1 snapshot transitional sleep (5s), then iter2's 5×60s sampling sub-sleeps.
+    assert sleeps == [5.0, 60.0, 60.0, 60.0, 60.0, 60.0]
+
+
+@pytest.mark.asyncio
+async def test_publisher_emits_first_reading_immediately_at_idle_cadence(monkeypatch):
+    """Cold-start ASAP: even at an idle cadence (>=120), the FIRST iteration
+    must capture a single instantaneous snapshot and store it right away —
+    like the edge connector's boot reading — so the "waiting for data" screen
+    clears in seconds instead of after a full aggregation window (~5 min).
+    Aggregation only kicks in on later iterations."""
+    hass = _mock_hass_one_iter()  # one iteration then stop
+    store = _RecordingStore()
+    cadence = Cadence(interval_s=300)
+
+    sleeps: list[float] = []
+
+    async def _record_sleep(delay):
+        sleeps.append(delay)
+
+    monkeypatch.setattr(asyncio, "sleep", _record_sleep)
+    await run_loop(hass=hass, store=store, cadence=cadence, **_RUN_KWARGS)
+
+    # First reading captured as a single snapshot — no aggregation metadata.
+    assert len(store.appended) == 1
+    first = store.appended[0]
+    assert "sampleCount" not in first
+    assert "periodSec" not in first
+    # No 60s sampling sub-loop before the first reading; one short transitional
+    # sleep (so the sender's real cadence is adopted on the next iteration).
+    assert sleeps == [5.0]
+
+
+@pytest.mark.asyncio
+async def test_publisher_retries_fast_for_first_reading_until_sensors_ready(monkeypatch):
+    """After an HA restart the source sensors are often not populated for the
+    first few seconds. While still waiting for the FIRST reading, the publisher
+    must retry on a short interval (not the full idle cadence) so data lands as
+    soon as the sensors come online — otherwise the first reading is parked for
+    a whole ~5-min cadence. Once the first reading is stored, normal cadence
+    resumes."""
+    soc_calls = {"n": 0}
+
+    def _get(eid):
+        if "battery_power" in eid:
+            return MagicMock(state="-200")
+        if "battery_voltage" in eid:
+            return MagicMock(state="52")
+        if "battery" in eid:  # batterySoc: unavailable on the 1st build, then ready
+            soc_calls["n"] += 1
+            return MagicMock(state="unavailable" if soc_calls["n"] == 1 else "80")
+        if "grid" in eid:
+            return MagicMock(state="100")
+        if "load" in eid:
+            return MagicMock(state="500")
+        return None
+
+    hass = MagicMock()
+    hass.states.get = _get
+    call_count = {"n": 0}
+
+    def _is_stopping(_self):
+        call_count["n"] += 1
+        # iter1 (missing → fast retry) #1; iter2 (ready → store) #2; stop #3.
+        return call_count["n"] > 2
+
+    type(hass).is_stopping = property(_is_stopping)
+
+    store = _RecordingStore()
+    cadence = Cadence(interval_s=300)
+
+    sleeps: list[float] = []
+
+    async def _record_sleep(delay):
+        sleeps.append(delay)
+
+    monkeypatch.setattr(asyncio, "sleep", _record_sleep)
+    await run_loop(hass=hass, store=store, cadence=cadence, **_RUN_KWARGS)
+
+    # The first reading was stored once sensors were ready — a single snapshot.
+    assert len(store.appended) == 1
+    assert "sampleCount" not in store.appended[0]
+    # Fast retry (5s floor) while sensors were missing, THEN the fast
+    # transitional sleep after the first reading landed — not two 300s parks.
+    assert sleeps == [5.0, 5.0]
+
+
+@pytest.mark.asyncio
+async def test_publisher_adopts_server_cadence_right_after_first_reading(monkeypatch):
+    """The sender confirms the real server cadence asynchronously (it drains
+    eagerly the moment a reading lands, ~1s later). The publisher must not park
+    on the stale cold-start default (300s) after its first reading: it sleeps a
+    short transitional interval, then re-reads the freshly-confirmed cadence at
+    the top of the loop and honors it. Here the server cadence (30s) is
+    confirmed during the first post-reading sleep."""
+    hass = _mock_hass_one_iter()
+    call_count = {"n": 0}
+
+    def _is_stopping(_self):
+        call_count["n"] += 1
+        return call_count["n"] > 2  # iter1 (first reading) + iter2 (steady), stop iter3
+
+    type(hass).is_stopping = property(_is_stopping)
+
+    store = _RecordingStore()
+    cadence = Cadence(interval_s=300)
+
+    sleeps: list[float] = []
+
+    async def _record_sleep(delay):
+        sleeps.append(delay)
+        # Sender confirms the real 30s cadence during the first post-reading sleep.
+        if len(sleeps) == 1:
+            cadence.interval_s = 30
+
+    monkeypatch.setattr(asyncio, "sleep", _record_sleep)
+    await run_loop(hass=hass, store=store, cadence=cadence, **_RUN_KWARGS)
+
+    # Two single snapshots — no 300s aggregation window sneaked in.
+    assert len(store.appended) == 2
+    assert all("sampleCount" not in r for r in store.appended)
+    # First reading → short transitional sleep; then the adopted 30s cadence.
+    assert sleeps == [5.0, 30.0]
 
 
 # ── Task 4: gate_payload wired into run_loop — skip ingest on missing core ──
@@ -417,7 +542,9 @@ async def test_publisher_skips_post_when_core_field_missing(monkeypatch):
     activity.record_ingest_skipped.assert_called_once()
     _, ckwargs = activity.record_ingest_skipped.call_args
     assert "batterySoc" in ckwargs["missing_fields"]
-    assert sleeps == [60.0]  # still slept the cadence interval
+    # Cold start (still no first reading) → fast retry, not the cadence interval,
+    # so the first reading lands the moment the sensors come online.
+    assert sleeps == [5.0]
 
 
 @pytest.mark.asyncio
@@ -470,17 +597,20 @@ async def test_publisher_posts_when_no_solar_but_core_present(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_publisher_skips_aggregated_post_when_core_field_missing(monkeypatch):
-    """Idle path (cadence>=120): the aggregated samples are incomplete
-    (batterySoc is unavailable for every sample) → the aggregated reading is
-    skipped, not captured as junk."""
+    """Idle path (cadence>=120): once past the immediate first snapshot, an
+    aggregation window whose samples are incomplete (batterySoc goes
+    unavailable) is skipped, not captured as junk. batterySoc is available for
+    the first-pass snapshot only, then drops out for the aggregation window."""
+    soc_calls = {"n": 0}
 
     def _get(eid):
         if "battery_power" in eid:
             return MagicMock(state="-200")
         if "battery_voltage" in eid:
             return MagicMock(state="52")
-        if "battery" in eid:  # batterySoc → always unavailable
-            return MagicMock(state="unavailable")
+        if "battery" in eid:  # batterySoc → available only for the 1st snapshot
+            soc_calls["n"] += 1
+            return MagicMock(state="80" if soc_calls["n"] == 1 else "unavailable")
         if "grid" in eid:
             return MagicMock(state="100")
         if "load" in eid:
@@ -493,9 +623,9 @@ async def test_publisher_skips_aggregated_post_when_core_field_missing(monkeypat
 
     def _is_stopping(_self):
         call_count["n"] += 1
-        # iter1 top read (#1) + iter1's 5 sampling sub-loop reads (#2-#6);
-        # stop on the read that would start iter2 (#7).
-        return call_count["n"] > 6
+        # iter1 snapshot top (#1); iter2 top (#2) + 5 sampling sub-loop reads
+        # (#3-#7); stop on the read that would start iter3 (#8).
+        return call_count["n"] > 7
 
     type(hass).is_stopping = property(_is_stopping)
 
@@ -512,13 +642,15 @@ async def test_publisher_skips_aggregated_post_when_core_field_missing(monkeypat
     monkeypatch.setattr(asyncio, "sleep", _record_sleep)
     await run_loop(hass=hass, store=store, cadence=cadence, **kwargs)
 
-    # Nothing captured; the aggregated reading was skipped.
-    assert store.appended == []
+    # Only the valid first-pass snapshot is stored; the incomplete aggregated
+    # window was skipped (no junk reading, no sampleCount payload).
+    assert len(store.appended) == 1
+    assert "sampleCount" not in store.appended[0]
     activity.record_ingest_skipped.assert_called_once()
     _, ckwargs = activity.record_ingest_skipped.call_args
     assert "batterySoc" in ckwargs["missing_fields"]
-    # 5×60s sampling ticks; idle skip adds no extra sleep.
-    assert sleeps == [60.0, 60.0, 60.0, 60.0, 60.0]
+    # iter1 snapshot transitional sleep (5s), then iter2's 5×60s sampling ticks.
+    assert sleeps == [5.0, 60.0, 60.0, 60.0, 60.0, 60.0]
 
 
 # ── Capture-then-drain: publisher appends to the store (Task 5) ────────────

@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.15.1 — 2026-07-15
+
+### Fixed
+- **First reading now lands within seconds of setup, not minutes.** On a fresh
+  install (or any restart) the add-on starts on the 5-minute idle cadence, and
+  the readings publisher used to spend that whole window collecting samples
+  before storing its first reading — so the app's "Waiting for data from Home
+  Assistant" screen could sit there for ~5 minutes. The publisher now always
+  captures and stores an immediate single-snapshot reading on its first pass
+  (mirroring the edge connector's boot reading), then settles into the normal
+  cadence on later iterations. While still waiting for that first reading,
+  incomplete snapshots (source sensors not yet populated — common for the first
+  few seconds after an HA restart) are retried every few seconds instead of
+  parking a full cadence, so data appears as soon as the sensors come online.
+  After the first reading the add-on also adopts the server's real cadence
+  within seconds (it no longer commits to the cold-start default while the
+  server response is still in flight), so readings keep flowing without a gap.
+
 ## 0.15.0 — 2026-07-15
 
 ### Changed

@@ -42,6 +42,12 @@ _AGGREGATION_THRESHOLD_S = 120
 # Inside the aggregation branch, samples are collected this often.
 _SAMPLE_TICK_S = 60
 
+# While still waiting for the very FIRST reading, an incomplete snapshot (source
+# sensors not yet populated — common for the first few seconds after an HA
+# restart) is retried on this short interval instead of the full idle cadence,
+# so the first reading lands as soon as the sensors come online.
+_FIRST_READING_RETRY_S = _INTERVAL_FLOOR_S
+
 # Fields that are identity / metadata rather than numeric measurements.
 # Aggregator takes the LAST sample's value for these instead of averaging.
 _NON_NUMERIC_FIELDS = frozenset({"inverterId", "timestamp", "source"})
@@ -237,6 +243,14 @@ async def run_loop(
       aggregated payload with sampleCount + periodSec. Better data (true
       period averages, not single-moment snapshots).
 
+    **First reading is always immediate.** On cold start the cadence holder
+    defaults to the idle 5-min interval, which would otherwise park the first
+    reading behind a full aggregation window (~5 min) — the "waiting for data
+    from Home Assistant" screen would sit there the whole time. So the FIRST
+    iteration always takes the single-snapshot path regardless of cadence,
+    mirroring the edge connector's boot reading: land data ASAP, let the sender
+    learn the real cadence, then settle into aggregation on later iterations.
+
     Exits when `hass.is_stopping` becomes True."""
     _LOGGER.info(
         "Readings publisher started (capture-then-drain; floor=%ss, ceiling=%ss, aggregation>=%ss)",
@@ -244,12 +258,22 @@ async def run_loop(
         _INTERVAL_CEILING_S,
         _AGGREGATION_THRESHOLD_S,
     )
-    # Cadence carries across iterations. Initial value = clamped holder value.
+    # Force the very first stored reading to be an immediate snapshot (see
+    # docstring). Cleared only once a reading is actually appended, so a
+    # cold start with not-yet-available sensors keeps retrying for that first
+    # instant reading rather than dropping into the aggregation window.
+    first_pass = True
     next_sleep_s = _clamp_interval(float(cadence.interval_s))
 
     while not hass.is_stopping and (lifecycle is None or lifecycle.active):
         try:
-            if next_sleep_s >= _AGGREGATION_THRESHOLD_S:
+            # Adopt the freshest server-driven cadence at the top of every
+            # iteration. The sender drains eagerly (it wakes the moment a
+            # reading lands) and updates the shared cadence ~1s later, so a
+            # value it just learned takes effect on the very next iteration
+            # instead of a stale one chosen before the server responded.
+            next_sleep_s = _clamp_interval(float(cadence.interval_s))
+            if not first_pass and next_sleep_s >= _AGGREGATION_THRESHOLD_S:
                 # T10b: idle path — collect N samples then push aggregated.
                 samples: list[dict[str, Any]] = []
                 elapsed = 0
@@ -307,17 +331,34 @@ async def run_loop(
                             missing_fields=missing,
                             entities={f: entity_map.get(f) for f in missing},
                         )
-                    await asyncio.sleep(next_sleep_s)
+                    # Still chasing the first reading? Retry fast so it lands the
+                    # moment the sensors come online, instead of parking a full
+                    # idle cadence (the first snapshot after an HA restart often
+                    # sees not-yet-populated sensors).
+                    await asyncio.sleep(
+                        _FIRST_READING_RETRY_S if first_pass else next_sleep_s
+                    )
                     continue
                 await store.append(payload)
-                next_sleep_s = _clamp_interval(float(cadence.interval_s))
+                # First instant reading is on the board; later iterations may
+                # now use the idle aggregation window.
+                was_first = first_pass
+                first_pass = False
                 if activity is not None:
                     activity.record_ingest_success(
                         sample_count=1,
                         period_sec=int(next_sleep_s),
                         summary=_summary_of(payload),
                     )
-                await asyncio.sleep(next_sleep_s)
+                # Right after the FIRST reading the sender hasn't yet echoed the
+                # server cadence (it drains eagerly but ~1s later). Sleep briefly
+                # and re-loop so we adopt the real cadence within seconds instead
+                # of parking on the cold-start default; if the cloud is offline
+                # and never echoes, this costs just one extra quick reading
+                # before the next iteration falls back to the normal cadence.
+                await asyncio.sleep(
+                    _FIRST_READING_RETRY_S if was_first else next_sleep_s
+                )
         except Exception as exc:  # noqa: BLE001
             _LOGGER.exception("Readings publish failed; will retry next tick")
             if activity is not None:
