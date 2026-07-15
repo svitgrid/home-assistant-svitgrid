@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- **"Refresh now" no longer gets silently dropped.** The app's poll-now
+  ("Refresh now") command has no admin signature, so the command poller was
+  discarding it as an "unsigned non-internal command" — which also left it
+  un-acknowledged, so the device's pending-command counter stayed above zero and
+  the poller re-fetched and re-skipped the same command every cycle. `poll_now`
+  is now handled internally as a no-op that acknowledges success: the readings
+  publisher already republishes on its own short cadence (≥5s), so there's
+  nothing to force, but the acknowledgement clears the counter and stops the
+  skip-loop. (No on-demand re-read yet; that would require waking the readings
+  loop — tracked as a follow-up.)
+
 ## 0.15.1 — 2026-07-15
 
 ### Fixed

@@ -158,6 +158,14 @@ SET_HARVEST_CONFIG_COMMAND = "set_harvest_config"
 # Modbus endpoint's TCP reachability before switching to native (fail-closed);
 # switching back to relay does not probe.
 SET_READ_SOURCE_COMMAND = "set_read_source"
+# "Refresh now" — the app queues this (API inverter-refresh-now) to force an
+# immediate reading, device-targeted like the edge firmware's poll_now. On HA
+# it's a no-op ACK: the readings publisher already republishes on its own short
+# cadence (floor 5s), so there's nothing to force — but it MUST be handled
+# internally (no admin signature) so it doesn't fall through to the signature
+# gate and get dropped as "unsigned", which would leave pendingCommandCount
+# stuck > 0 and the poller re-fetching + re-skipping it every cycle.
+POLL_NOW_COMMAND = "poll_now"
 
 INTERNAL_COMMANDS = frozenset(
     {
@@ -168,6 +176,7 @@ INTERNAL_COMMANDS = frozenset(
         DISABLE_ISLAND_COMMAND,
         SET_HARVEST_CONFIG_COMMAND,
         SET_READ_SOURCE_COMMAND,
+        POLL_NOW_COMMAND,
     }
 )
 

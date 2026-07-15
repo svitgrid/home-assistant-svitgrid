@@ -28,6 +28,7 @@ from .const import (
     DISABLE_ISLAND_COMMAND,
     DISPATCHABLE_COMMANDS,
     ENABLE_ISLAND_COMMAND,
+    POLL_NOW_COMMAND,
     REVOKE_TRUSTED_KEY_COMMAND,
     SET_CLOUD_ENDPOINT_COMMAND,
     SET_HARVEST_CONFIG_COMMAND,
@@ -604,6 +605,27 @@ async def process_command(
             cmd_id,
         )
         hass.async_create_task(hass.config_entries.async_reload(entry.entry_id))
+        return
+
+    # === Arm 1e: poll_now ("Refresh now") ===
+    # Internal (no admin signature) — the app queues this to force an immediate
+    # reading, device-targeted like the edge firmware's poll_now. The HA readings
+    # publisher republishes on its own short cadence (floor 5s), so there's
+    # nothing to force here; this is a no-op that just ACKs success. The ACK is
+    # what matters: without it the command falls through to the signature gate
+    # below and is dropped as "unsigned", leaving pendingCommandCount stuck > 0
+    # and the poller re-fetching + re-skipping it every cycle.
+    if cmd_type == POLL_NOW_COMMAND:
+        _LOGGER.debug("poll_now acknowledged (no-op — HA republishes on cadence). cmd_id=%s", cmd_id)
+        await _send_signed_ack(
+            api_client=api_client,
+            api_key=api_key,
+            command_id=cmd_id,
+            success=True,
+            our_private_key=our_private_key,
+            our_signing_key_id=our_signing_key_id,
+            executor_version=executor_version,
+        )
         return
 
     # === Arms 2 and 3 require a verified admin signature ===
