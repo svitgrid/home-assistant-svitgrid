@@ -36,6 +36,7 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 
 from .api_client import SvitgridApiClient
+from .mqtt_control import MqttControlState, apply_config
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -48,6 +49,21 @@ BACKOFF_MAX_S = 300
 
 # Time to wait for the MQTT CONNECT handshake before giving up.
 CONNECT_TIMEOUT_S = 15
+
+
+def _config_topic(broker: dict[str, Any], wake_topic: str) -> str:
+    """Derive ``devices/<deviceId>/config`` the same way
+    ``mqtt_readings_publisher.readings_topic`` derives the readings topic:
+    prefer the authoritative ``broker['deviceId']``, falling back to
+    swapping the wake topic's ``/wake`` suffix for older servers that don't
+    return ``deviceId``.
+    """
+    did = broker.get("deviceId")
+    if isinstance(did, str) and did:
+        return f"devices/{did}/config"
+    if wake_topic.endswith("/wake"):
+        return wake_topic[: -len("/wake")] + "/config"
+    return wake_topic + "/config"
 
 
 def _teardown_client(client: Any) -> None:
@@ -73,10 +89,19 @@ async def run_loop(
     api_client: SvitgridApiClient,
     api_key: str,
     wake_event: asyncio.Event,
+    control: MqttControlState | None = None,
 ) -> None:
     """Long-running coroutine. Maintains an MQTT subscription to the
     wake topic; on every message, sets `wake_event` so the
     command_poller fires a poll immediately.
+
+    Also (additively) subscribes `devices/{deviceId}/config` on the SAME
+    connection. A message on that topic updates the shared `control` state
+    (via `apply_config`) instead of firing the wake event — mirroring the
+    edge firmware's server config-push (W4a/W4b). `control` is optional
+    (defaults to None) so callers that don't yet wire a shared
+    `MqttControlState` (Task 3) are unaffected; when None, config messages
+    are still consumed off the topic (harmless) but no state is updated.
 
     Reconnect loop with exponential backoff; JWT re-minted on every
     reconnect. Exits when `hass.is_stopping` becomes True."""
@@ -101,6 +126,7 @@ async def run_loop(
             token_data = await api_client.get_mqtt_token(api_key)
             broker = token_data["broker"]
             host, port, topic = broker["host"], int(broker["port"]), broker["topic"]
+            cfg_topic = _config_topic(broker, topic)
 
             connected = asyncio.Event()
             disconnected = asyncio.Event()
@@ -131,17 +157,24 @@ async def run_loop(
                 rc,
                 client=client,
                 topic=topic,
+                cfg_topic=cfg_topic,
                 connected=connected,
                 disconnected=disconnected,
             ):
                 if rc == 0:
                     client.subscribe(topic, qos=1)
+                    client.subscribe(cfg_topic, qos=1)
                     loop.call_soon_threadsafe(connected.set)
                 else:
                     _LOGGER.warning("MQTT CONNECT rc=%s", rc)
                     loop.call_soon_threadsafe(disconnected.set)
 
-            def _on_message(_c, _u, msg):
+            def _on_message(_c, _u, msg, cfg_topic=cfg_topic):
+                if msg.topic == cfg_topic:
+                    _LOGGER.debug("MQTT config push topic=%s payload=%s", msg.topic, msg.payload[:256])
+                    if control is not None:
+                        apply_config(control, msg.payload)
+                    return
                 _LOGGER.debug("MQTT wake-bell topic=%s payload=%s", msg.topic, msg.payload[:32])
                 # Thread-safe set from paho's network thread → asyncio loop.
                 loop.call_soon_threadsafe(wake_event.set)

@@ -10,11 +10,14 @@ Strategy: mock paho.mqtt.client.Client at the module level so we can:
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 import types
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
+from custom_components.svitgrid.mqtt_control import MqttControlState
 
 # ─── paho.mqtt stub ────────────────────────────────────────────────────
 #
@@ -171,10 +174,131 @@ async def test_connects_subscribes_and_signals_wake_on_message(paho_fake, token_
     # the wake-bell never connected. Matches the ESP32 firmware (username=token).
     assert client.username == "eyJfake.jwt.payload"
     assert client.password != "eyJfake.jwt.payload"
-    assert client.subscriptions == [("devices/abc123/wake", 1)]
+    assert client.subscriptions == [
+        ("devices/abc123/wake", 1),
+        ("devices/abc123/config", 1),
+    ]
     assert client.loop_started is True
     assert client.loop_stopped is True
     assert wake_event.is_set(), "wake_event should be set after on_message"
+
+
+@pytest.mark.asyncio
+async def test_config_message_updates_control_state_and_does_not_wake(paho_fake, token_payload):
+    """A message on the config topic updates the shared MqttControlState via
+    apply_config and must NOT set wake_event."""
+    from custom_components.svitgrid.mqtt_wake import run_loop
+
+    api = MagicMock()
+    api.get_mqtt_token = AsyncMock(return_value=token_payload)
+    hass = _mock_hass_stops_after(1)
+    wake_event = asyncio.Event()
+    control = MqttControlState()
+
+    async def _drive():
+        for _ in range(40):
+            if paho_fake.instances:
+                break
+            await asyncio.sleep(0.01)
+        client = paho_fake.instances[-1]
+        client.trigger_connect(rc=0)
+        await asyncio.sleep(0)
+        client.trigger_message(
+            topic="devices/abc123/config",
+            payload=json.dumps({"mqttPublishReadings": True, "ingestIntervalMs": 30000}).encode(),
+        )
+        await asyncio.sleep(0)
+        client.trigger_disconnect(rc=0)
+        await asyncio.sleep(0)
+
+    await asyncio.gather(
+        run_loop(
+            hass=hass,
+            api_client=api,
+            api_key="k",
+            wake_event=wake_event,
+            control=control,
+        ),
+        _drive(),
+    )
+
+    assert control.mqtt_primary is True
+    assert control.interval_s == 30
+    assert not wake_event.is_set(), "a config message must not also fire the wake event"
+
+
+@pytest.mark.asyncio
+async def test_wake_message_still_fires_event_when_control_present(paho_fake, token_payload):
+    """A message on the wake topic still sets wake_event, even when a shared
+    MqttControlState is supplied (config subscription must not eat wakes)."""
+    from custom_components.svitgrid.mqtt_wake import run_loop
+
+    api = MagicMock()
+    api.get_mqtt_token = AsyncMock(return_value=token_payload)
+    hass = _mock_hass_stops_after(1)
+    wake_event = asyncio.Event()
+    control = MqttControlState()
+
+    async def _drive():
+        for _ in range(40):
+            if paho_fake.instances:
+                break
+            await asyncio.sleep(0.01)
+        client = paho_fake.instances[-1]
+        client.trigger_connect(rc=0)
+        await asyncio.sleep(0)
+        client.trigger_message()  # default topic="devices/abc/wake" — irrelevant, only checked for wake
+        await asyncio.sleep(0)
+        client.trigger_disconnect(rc=0)
+        await asyncio.sleep(0)
+
+    await asyncio.gather(
+        run_loop(
+            hass=hass,
+            api_client=api,
+            api_key="k",
+            wake_event=wake_event,
+            control=control,
+        ),
+        _drive(),
+    )
+
+    assert wake_event.is_set()
+    # No config payload was sent, so control state stays at defaults.
+    assert control.mqtt_primary is False
+    assert control.interval_s is None
+
+
+@pytest.mark.asyncio
+async def test_control_none_wake_message_still_fires_event(paho_fake, token_payload):
+    """Backward compatibility: run_loop works with no control state supplied
+    (control=None / omitted) — existing behavior is unchanged."""
+    from custom_components.svitgrid.mqtt_wake import run_loop
+
+    api = MagicMock()
+    api.get_mqtt_token = AsyncMock(return_value=token_payload)
+    hass = _mock_hass_stops_after(1)
+    wake_event = asyncio.Event()
+
+    async def _drive():
+        for _ in range(40):
+            if paho_fake.instances:
+                break
+            await asyncio.sleep(0.01)
+        client = paho_fake.instances[-1]
+        client.trigger_connect(rc=0)
+        await asyncio.sleep(0)
+        client.trigger_message()
+        await asyncio.sleep(0)
+        client.trigger_disconnect(rc=0)
+        await asyncio.sleep(0)
+
+    await asyncio.gather(
+        run_loop(hass=hass, api_client=api, api_key="k", wake_event=wake_event),
+        _drive(),
+    )
+
+    assert wake_event.is_set()
 
 
 @pytest.mark.asyncio
