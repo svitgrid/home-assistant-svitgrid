@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.15.0 — 2026-07-15
+
+### Changed
+- **Readings now go over MQTT first, HTTPS as a safety net.** The add-on
+  publishes each reading to the Svitgrid broker and waits for the broker to
+  confirm it (QoS-1 acknowledgement); only readings the broker does **not**
+  confirm are sent over HTTPS instead. This cuts redundant cloud round-trips
+  while guaranteeing nothing is lost — any unconfirmed, disconnected, or
+  timed-out reading still falls back to the HTTPS upload. The first upload
+  after each restart always goes over HTTPS to bootstrap control.
+- **Control now arrives over MQTT.** The reporting cadence and the
+  MQTT-primary enable flag are delivered on `devices/{id}/config` (in addition
+  to the existing HTTPS-response path), so a healthy install no longer needs
+  the periodic HTTPS call to learn its settings.
+- Off by default; Svitgrid enables MQTT-primary per install (same allowlist as
+  the edge connector). Island mode is unaffected (publishing rides the cloud
+  sender, which never runs in island mode).
+
 ## 0.14.0 — 2026-07-13
 
 ### Added
