@@ -532,6 +532,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     api_key = data["api_key"]
     activity = ActivityTracker()
     inverters = _inverters_from_entry(entry)
+    # v0.15.3: late-binding holder connecting the wake loop's server-pushed
+    # updateCheck nudge to the update coordinator (created much further down).
+    _update_nudge: dict = {}
 
     # Seed the keystore blob from entry data.
     # Purpose 1 (keystore-population fix, SP2): if entry.data["island_key"] is
@@ -781,6 +784,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 # set by this point; the None annotation covers that hoisted
                 # default for type-checking only).
                 control=control,
+                # v0.15.3: server-pushed `{"updateCheck": true}` on the config
+                # topic nudges the update coordinator to check GitHub NOW
+                # instead of waiting out the 12h cycle. Late-bound holder: the
+                # coordinator is created further down; until then the nudge is
+                # a silent no-op. The wake loop marshals this callback onto the
+                # asyncio loop, so async_create_task is safe here.
+                on_update_check=lambda: (
+                    (_c := _update_nudge.get("coordinator")) is not None
+                    and hass.async_create_task(_c.async_request_refresh())
+                ),
             ),
             name="svitgrid_mqtt_wake",
         )
@@ -819,6 +832,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         activity=activity,
         get_auto_update=lambda: entry.options.get(CONF_AUTO_UPDATE, True),
     )
+    # v0.15.3: arm the wake loop's updateCheck nudge.
+    _update_nudge["coordinator"] = update_coordinator
 
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = {

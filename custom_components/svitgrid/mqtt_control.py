@@ -36,11 +36,22 @@ class MqttControlState:
     bootstrapped: bool = False
 
 
-def apply_config(state: MqttControlState, payload: str | bytes | dict) -> None:
+def apply_config(
+    state: MqttControlState,
+    payload: str | bytes | dict,
+    on_update_check=None,
+) -> None:
     """Parse a `devices/{deviceId}/config` MQTT payload and update `state`
     in place. Never raises — a malformed/non-JSON/non-dict payload, or one
     with fields of the wrong type, is a no-op (missing/invalid fields leave
     the current value as-is). Does not touch `state.bootstrapped`.
+
+    `on_update_check` (v0.15.3): optional zero-arg callback fired when the
+    payload carries `"updateCheck": true` — the server-side "check for an
+    integration update NOW" nudge (wired to the update coordinator's refresh
+    in __init__). Strictly `is True` (no truthy coercion), and the callback
+    is fail-open: an exception inside it is swallowed and never blocks the
+    sibling config fields from applying.
     """
     try:
         data = payload if isinstance(payload, dict) else json.loads(payload)
@@ -59,3 +70,9 @@ def apply_config(state: MqttControlState, payload: str | bytes | dict) -> None:
         interval_ms = data["ingestIntervalMs"]
         if isinstance(interval_ms, (int, float)) and not isinstance(interval_ms, bool) and interval_ms > 0:
             state.interval_s = int(interval_ms / 1000)
+
+    if data.get("updateCheck") is True and on_update_check is not None:
+        try:
+            on_update_check()
+        except Exception:  # noqa: BLE001 — nudge is best-effort, never break config apply
+            _LOGGER.debug("mqtt config: on_update_check callback raised", exc_info=True)

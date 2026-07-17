@@ -457,3 +457,50 @@ async def test_returns_silently_if_paho_unavailable(monkeypatch, token_payload):
     # Should return without error, without calling get_mqtt_token.
     await run_loop(hass=hass, api_client=api, api_key="k", wake_event=wake_event)
     api.get_mqtt_token.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_config_update_check_fires_callback_on_loop_thread(paho_fake, token_payload):
+    """v0.15.3: `{"updateCheck": true}` on the config topic fires the
+    `on_update_check` callback (marshalled onto the asyncio loop), without
+    waking the poller or touching other control fields."""
+    from custom_components.svitgrid.mqtt_wake import run_loop
+
+    api = MagicMock()
+    api.get_mqtt_token = AsyncMock(return_value=token_payload)
+    hass = _mock_hass_stops_after(1)
+    wake_event = asyncio.Event()
+    control = MqttControlState()
+    nudges: list[int] = []
+
+    async def _drive():
+        for _ in range(40):
+            if paho_fake.instances:
+                break
+            await asyncio.sleep(0.01)
+        client = paho_fake.instances[-1]
+        client.trigger_connect(rc=0)
+        await asyncio.sleep(0)
+        client.trigger_message(
+            topic="devices/abc123/config",
+            payload=json.dumps({"updateCheck": True}).encode(),
+        )
+        await asyncio.sleep(0.05)  # let call_soon_threadsafe land on the loop
+        client.trigger_disconnect(rc=0)
+        await asyncio.sleep(0)
+
+    await asyncio.gather(
+        run_loop(
+            hass=hass,
+            api_client=api,
+            api_key="k",
+            wake_event=wake_event,
+            control=control,
+            on_update_check=lambda: nudges.append(1),
+        ),
+        _drive(),
+    )
+
+    assert nudges == [1]
+    assert control.mqtt_primary is False
+    assert not wake_event.is_set(), "updateCheck must not fire the wake event"

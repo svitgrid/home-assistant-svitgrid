@@ -467,7 +467,8 @@ class TestPushReadingsBatch:
         call = session.post.call_args
         assert call.args[0].endswith("/api/v1/ingest/readings")
         assert call.kwargs["json"] == {
-            "readings": [{"inverterId": "inv-1", "timestamp": "2026-06-24T10:00:00Z"}]
+            "readings": [{"inverterId": "inv-1", "timestamp": "2026-06-24T10:00:00Z"}],
+            "haVersion": "0.15.3",  # v0.15.3: install census rides every batch
         }
 
     async def test_5xx_returns_none(self):
@@ -491,3 +492,35 @@ class TestPushReadingsBatch:
                 api_key="k" * 64,
                 readings=[{"inverterId": "i", "timestamp": "2026-06-25T10:00:00Z"}],
             )
+
+
+class TestBatchHaVersion:
+    """v0.15.3: push_readings_batch reports the integration version so the
+    cloud can census HA installs (server writes edgeDevices.version on change)."""
+
+    async def test_batch_body_includes_ha_version(self, monkeypatch):
+        import custom_components.svitgrid.api_client as mod
+
+        monkeypatch.setattr(mod, "_integration_version", lambda: "0.15.3")
+        session, _ = _mock_session_with_response(200, {"results": []})
+        client = SvitgridApiClient(session, api_base="https://api.example")
+        await client.push_readings_batch(
+            api_key="k" * 64,
+            readings=[{"inverterId": "inv-1", "timestamp": "2026-07-17T10:00:00Z"}],
+        )
+        assert session.post.call_args.kwargs["json"]["haVersion"] == "0.15.3"
+
+    async def test_batch_body_omits_ha_version_when_unknown(self, monkeypatch):
+        import custom_components.svitgrid.api_client as mod
+
+        monkeypatch.setattr(mod, "_integration_version", lambda: None)
+        session, _ = _mock_session_with_response(200, {"results": []})
+        client = SvitgridApiClient(session, api_base="https://api.example")
+        await client.push_readings_batch(api_key="k" * 64, readings=[])
+        assert "haVersion" not in session.post.call_args.kwargs["json"]
+
+    def test_integration_version_reads_manifest(self):
+        from custom_components.svitgrid.api_client import _integration_version
+
+        _integration_version.cache_clear()
+        assert _integration_version() == "0.15.3"

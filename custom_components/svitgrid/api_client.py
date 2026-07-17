@@ -3,10 +3,27 @@ exceptions so callers can branch by meaning, not HTTP status code."""
 
 from __future__ import annotations
 
+import json
 import logging
+from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
 import aiohttp
+
+
+@lru_cache(maxsize=1)
+def _integration_version() -> str | None:
+    """The installed integration version (manifest.json next to this module),
+    reported as `haVersion` on batch ingests so the cloud can census HA
+    installs. Fail-open: any read/parse problem returns None and the field is
+    simply omitted — version reporting must never break ingestion."""
+    try:
+        manifest = json.loads((Path(__file__).parent / "manifest.json").read_text())
+        v = manifest.get("version")
+        return str(v) if v else None
+    except Exception:  # noqa: BLE001 — census is best-effort
+        return None
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -195,8 +212,14 @@ class SvitgridApiClient:
         """POST a batch of readings. Returns parsed body on 2xx, None on 5xx
         (transient), raises ReadingRejected on 4xx (permanent)."""
         url = f"{self._base}/api/v1/ingest/readings"
+        body: dict[str, Any] = {"readings": readings}
+        # v0.15.3: report the integration version so the cloud can census HA
+        # installs (server stamps edgeDevices.version only when it changes).
+        ha_version = _integration_version()
+        if ha_version:
+            body["haVersion"] = ha_version
         async with self._session.post(
-            url, headers={"x-api-key": api_key}, json={"readings": readings}
+            url, headers={"x-api-key": api_key}, json=body
         ) as resp:
             if resp.status >= 500:
                 _LOGGER.warning(

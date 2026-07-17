@@ -90,6 +90,7 @@ async def run_loop(
     api_key: str,
     wake_event: asyncio.Event,
     control: MqttControlState | None = None,
+    on_update_check=None,
 ) -> None:
     """Long-running coroutine. Maintains an MQTT subscription to the
     wake topic; on every message, sets `wake_event` so the
@@ -180,7 +181,19 @@ async def run_loop(
                         # written here, only read/written on the loop thread
                         # (reading_sender.drain_once), so there's no shared
                         # field being mutated from both threads.
-                        apply_config(control, msg.payload)
+                        #
+                        # v0.15.3: the updateCheck nudge is marshalled onto the
+                        # asyncio loop (call_soon_threadsafe) so the wired
+                        # callback may safely touch hass/the update coordinator.
+                        apply_config(
+                            control,
+                            msg.payload,
+                            on_update_check=(
+                                (lambda: loop.call_soon_threadsafe(on_update_check))
+                                if on_update_check is not None
+                                else None
+                            ),
+                        )
                     return
                 _LOGGER.debug("MQTT wake-bell topic=%s payload=%s", msg.topic, msg.payload[:32])
                 # Thread-safe set from paho's network thread → asyncio loop.
