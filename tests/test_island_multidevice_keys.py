@@ -177,3 +177,49 @@ async def test_add_island_key_replaces_same_device():
 async def test_get_island_keys_on_empty_store_returns_empty_list():
     ks = _keystore(None)
     assert await ks.async_get_island_keys() == []
+
+
+from custom_components.svitgrid.island_auth import island_key_present_and_valid
+
+
+class _FakeRequest(dict):
+    """aiohttp Request stand-in: a dict (for KEY_AUTHENTICATED) with headers."""
+
+    def __init__(self, headers=None, authenticated=False):
+        super().__init__()
+        self.headers = headers or {}
+        if authenticated:
+            from homeassistant.helpers.http import KEY_AUTHENTICATED
+
+            self[KEY_AUTHENTICATED] = True
+
+
+def test_accepts_any_key_in_the_list():
+    req = _FakeRequest({"X-Island-Key": "tablet-key"})
+    assert island_key_present_and_valid(req, ["phone-key", "tablet-key"]) is True
+
+
+def test_accepts_the_first_key_too():
+    req = _FakeRequest({"X-Island-Key": "phone-key"})
+    assert island_key_present_and_valid(req, ["phone-key", "tablet-key"]) is True
+
+
+def test_rejects_a_key_that_is_not_registered():
+    req = _FakeRequest({"X-Island-Key": "revoked-key"})
+    assert island_key_present_and_valid(req, ["phone-key", "tablet-key"]) is False
+
+
+def test_rejects_when_no_keys_registered():
+    req = _FakeRequest({"X-Island-Key": "anything"})
+    assert island_key_present_and_valid(req, []) is False
+
+
+def test_rejects_when_header_absent():
+    assert island_key_present_and_valid(_FakeRequest({}), ["phone-key"]) is False
+
+
+def test_still_accepts_a_bare_string_for_backward_compat():
+    """Call sites not yet migrated to the list form must keep working."""
+    req = _FakeRequest({"X-Island-Key": "solo"})
+    assert island_key_present_and_valid(req, "solo") is True
+    assert island_key_present_and_valid(req, None) is False

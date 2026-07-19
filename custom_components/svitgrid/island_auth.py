@@ -26,26 +26,46 @@ import hmac
 from homeassistant.helpers.http import KEY_AUTHENTICATED
 
 
-def island_key_present_and_valid(request: object, island_key: str | None) -> bool:
-    """Return True iff the request carries a valid X-Island-Key header.
+def island_key_present_and_valid(
+    request: object, island_keys: list[str] | str | None
+) -> bool:
+    """Return True iff the request carries an X-Island-Key header matching ANY
+    registered key.
 
-    Both conditions must hold:
-    - ``island_key`` is truthy (not None, not empty string).
-    - ``request.headers.get("X-Island-Key")`` equals ``island_key`` via
-      ``hmac.compare_digest`` (constant-time, timing-attack-safe).
+    `island_keys` accepts either the multi-device list (the current scheme) or
+    a bare string / None (the pre-multi-device scheme), so call sites can
+    migrate independently.
+
+    Every candidate is compared with `hmac.compare_digest` (constant-time).
+    We deliberately compare against ALL candidates rather than short-circuiting
+    on the first match — the loop's cost is bounded by the number of paired
+    devices, and not short-circuiting keeps the timing profile flat with
+    respect to *which* device is calling.
     """
-    if not island_key:
+    if island_keys is None:
         return False
+    candidates = [island_keys] if isinstance(island_keys, str) else list(island_keys)
+    candidates = [c for c in candidates if c]
+    if not candidates:
+        return False
+
     header_value: str | None = request.headers.get("X-Island-Key")
     if not header_value:
         return False
-    try:
-        return hmac.compare_digest(header_value, island_key)
-    except (TypeError, ValueError):
-        return False
+
+    matched = False
+    for candidate in candidates:
+        try:
+            if hmac.compare_digest(header_value, candidate):
+                matched = True
+        except (TypeError, ValueError):
+            continue
+    return matched
 
 
-def island_request_authorized(request: object, island_key: str | None) -> bool:
+def island_request_authorized(
+    request: object, island_keys: list[str] | str | None
+) -> bool:
     """Return True iff the request is authorized for island read endpoints.
 
     A request is authorized if EITHER:
@@ -56,4 +76,4 @@ def island_request_authorized(request: object, island_key: str | None) -> bool:
     """
     if request.get(KEY_AUTHENTICATED, False):
         return True
-    return island_key_present_and_valid(request, island_key)
+    return island_key_present_and_valid(request, island_keys)
