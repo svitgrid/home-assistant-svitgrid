@@ -1,11 +1,70 @@
 """Multi-device island keys: the add-on must accept a key from every paired
-app instance, not just the most recent one."""
+app instance, not just the most recent one.
+
+Import note: importing `custom_components.svitgrid.keystore` normally
+triggers `custom_components/svitgrid/__init__.py` -> `.http_views` -> `.panel`
+-> `homeassistant.components.http.StaticPathConfig`, which doesn't exist on
+this env's pinned homeassistant (pre-existing, documented collection
+failure — see other test files' `_load_views`/`_load_keystore` helpers). So
+`keystore.py` is loaded here by file path via importlib, with its sole
+sibling dependency (`const.py`) pre-registered in `sys.modules` under its
+expected dotted name so `from .const import ...` resolves without importing
+the real package `__init__.py`.
+"""
 
 from __future__ import annotations
 
+import importlib.util
+import os
+import sys
+import types
+
 import pytest
 
-from custom_components.svitgrid.keystore import KeystoreState
+BASE = os.path.join(os.path.dirname(__file__), "..", "custom_components", "svitgrid")
+
+
+def _load(mod_name: str, path: str):
+    spec = importlib.util.spec_from_file_location(mod_name, path)
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+
+
+def _load_keystore():
+    """Load keystore.py, working around the panel-import collection failure.
+
+    Try the plain package import first (works if the environment's HA
+    package happens to be compatible); fall back to file-path loading with
+    `const` pre-injected into sys.modules under
+    `custom_components.svitgrid.const` so `from .const import ...` resolves
+    without executing the real (broken-in-this-env) package `__init__.py`.
+    """
+    try:
+        import custom_components.svitgrid.keystore as ks
+
+        return ks
+    except ImportError:
+        pass
+
+    pkg_name = "custom_components.svitgrid"
+    if pkg_name not in sys.modules:
+        pkg = types.ModuleType(pkg_name)
+        pkg.__path__ = [BASE]
+        sys.modules["custom_components"] = types.ModuleType("custom_components")
+        sys.modules["custom_components"].__path__ = [os.path.join(BASE, "..")]
+        sys.modules[pkg_name] = pkg
+
+    for name in ("const",):
+        full_name = f"{pkg_name}.{name}"
+        if full_name not in sys.modules:
+            sys.modules[full_name] = _load(full_name, os.path.join(BASE, f"{name}.py"))
+
+    return _load(f"{pkg_name}.keystore", os.path.join(BASE, "keystore.py"))
+
+
+_keystore_module = _load_keystore()
+KeystoreState = _keystore_module.KeystoreState
 
 
 def _state(**overrides) -> KeystoreState:
@@ -64,7 +123,7 @@ class _FakeStore:
 
 
 def _keystore(data):
-    from custom_components.svitgrid.keystore import SvitgridKeystore
+    SvitgridKeystore = _keystore_module.SvitgridKeystore
 
     ks = SvitgridKeystore.__new__(SvitgridKeystore)
     ks._store = _FakeStore(data)
