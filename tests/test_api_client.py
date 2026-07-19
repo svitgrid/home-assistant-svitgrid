@@ -468,7 +468,7 @@ class TestPushReadingsBatch:
         assert call.args[0].endswith("/api/v1/ingest/readings")
         assert call.kwargs["json"] == {
             "readings": [{"inverterId": "inv-1", "timestamp": "2026-06-24T10:00:00Z"}],
-            "haVersion": "0.15.3",  # v0.15.3: install census rides every batch
+            "haVersion": "0.16.0",  # tracks manifest.json version; census rides every batch
         }
 
     async def test_5xx_returns_none(self):
@@ -523,4 +523,4 @@ class TestBatchHaVersion:
         from custom_components.svitgrid.api_client import _integration_version
 
         _integration_version.cache_clear()
-        assert _integration_version() == "0.15.3"
+        assert _integration_version() == "0.16.0"

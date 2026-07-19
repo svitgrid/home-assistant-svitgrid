@@ -49,6 +49,9 @@ class _FakeKeystore:
     async def async_get_island_key(self) -> str | None:
         return self._island_key
 
+    async def async_get_island_keys(self) -> list[str]:
+        return [self._island_key] if self._island_key else []
+
     async def load(self) -> _FakeKeystoreState:
         return _FakeKeystoreState(self._trusted)
 

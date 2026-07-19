@@ -5,7 +5,8 @@ These are "special" internal commands — trusted via the command channel
 set_cloud_endpoint (Arm 1c).
 
 Assertions:
-- enable_island: keystore.async_set_island_key seeded, entry updated with
+- enable_island: keystore.async_add_island_key seeded (bucketed under
+  "legacy" when the payload carries no deviceId), entry updated with
   cloud_ingest_enabled=False, reload scheduled, success ACK.
 - disable_island: entry updated with cloud_ingest_enabled=True, keystore
   island_key NOT cleared, success ACK.
@@ -33,6 +34,7 @@ def _make_api_client() -> MagicMock:
 def _make_keystore() -> MagicMock:
     ks = MagicMock()
     ks.async_set_island_key = AsyncMock()
+    ks.async_add_island_key = AsyncMock()
     return ks
 
 
@@ -57,7 +59,7 @@ def _make_hass_entry(entry_data: dict | None = None):
 @pytest.mark.asyncio
 async def test_enable_island_seeds_keystore_updates_entry_and_acks_success():
     """enable_island with a valid islandKey:
-    - calls keystore.async_set_island_key('K')
+    - calls keystore.async_add_island_key('legacy', 'K') (no deviceId in payload)
     - ACKs success=True BEFORE applying the config change + reload
     - calls hass.config_entries.async_update_entry with cloud_ingest_enabled=False
     - schedules a reload via hass.async_create_task
@@ -91,8 +93,10 @@ async def test_enable_island_seeds_keystore_updates_entry_and_acks_success():
         entry=entry,
     )
 
-    # Keystore seeded with the island key
-    keystore.async_set_island_key.assert_awaited_once_with("K")
+    # Keystore seeded with the island key, bucketed under "legacy" since no
+    # deviceId was sent (old-app payload shape).
+    keystore.async_add_island_key.assert_awaited_once_with("legacy", "K")
+    keystore.async_set_island_key.assert_not_awaited()
 
     # Entry updated with cloud_ingest_enabled=False
     hass.config_entries.async_update_entry.assert_called_once()
@@ -349,3 +353,94 @@ async def test_enable_island_rejects_when_island_key_empty():
     assert body["success"] is False
     assert body["rejected"] is True
     keystore.async_set_island_key.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# THE BUG, driven through the real handler (Task 3)
+#
+# The tests above stub `keystore` as a bare MagicMock, so they cannot observe
+# eviction — they only assert *which method* got called, not what happens to
+# state across two calls. This test runs `process_command` against a REAL
+# `SvitgridKeystore` (over a fake Store, same double `test_island_multidevice_
+# keys.py` uses) so that a second device's `enable_island` overwriting the
+# first device's key would show up as a missing key afterwards — exactly the
+# bug this task fixes.
+# ---------------------------------------------------------------------------
+
+from custom_components.svitgrid.keystore import SvitgridKeystore
+
+
+class _FakeStore:
+    """Stands in for HA's Store — async_load/async_save over a dict."""
+
+    def __init__(self, data=None):
+        self.data = data
+
+    async def async_load(self):
+        return self.data
+
+    async def async_save(self, data):
+        self.data = data
+
+
+def _real_keystore() -> SvitgridKeystore:
+    ks = SvitgridKeystore.__new__(SvitgridKeystore)
+    ks._store = _FakeStore(
+        {
+            "api_key": "ak",
+            "public_key_hex": "04ff",
+            "private_key_pem": "pem",
+            "signing_key_id": "ha-1",
+            "trusted_key_ids": [],
+            "trusted_public_keys_hex": {},
+            "island_key": None,
+            "island_keys": {},
+        }
+    )
+    return ks
+
+
+@pytest.mark.asyncio
+async def test_enable_island_on_second_device_does_not_evict_first_devices_key():
+    """THE BUG: pairing island mode on a second device (deviceId="tablet")
+    must not evict the first device's key (deviceId="phone"). Before the
+    fix, the handler calls `keystore.async_set_island_key`, which overwrites
+    the single scalar slot — so after tablet pairs, phone's key is gone from
+    `async_get_island_keys()`. This must FAIL against the unmodified handler
+    and PASS once it calls `async_add_island_key(device_id, key)` instead."""
+    priv, _pub_hex = generate_keypair()
+    api_client = _make_api_client()
+    keystore = _real_keystore()
+
+    async def _enable_island(device_id: str, key: str) -> None:
+        hass, entry = _make_hass_entry()
+        await process_command(
+            command={
+                "commandId": f"c-{device_id}",
+                "command": "enable_island",
+                "payload": {
+                    "islandKey": key,
+                    "deviceId": device_id,
+                    "cloudIngest": False,
+                },
+            },
+            api_client=api_client,
+            api_key="k",
+            trusted_public_keys_hex={},
+            our_private_key=priv,
+            our_signing_key_id="ours",
+            executor_version="0.3.0",
+            keystore=keystore,
+            hass=hass,
+            entry=entry,
+        )
+
+    await _enable_island("phone", "phone-key")
+    await _enable_island("tablet", "tablet-key")
+
+    keys = await keystore.async_get_island_keys()
+    assert "phone-key" in keys, (
+        f"phone's key was evicted when tablet paired — enable_island is still "
+        f"overwriting the single slot instead of adding a per-device key: {keys}"
+    )
+    assert "tablet-key" in keys

@@ -83,6 +83,9 @@ class _Req:
 def _hass_with(island_key, trusted):
     ks = MagicMock()
     ks.async_get_island_key = AsyncMock(return_value=island_key)
+    ks.async_get_island_keys = AsyncMock(
+        return_value=[island_key] if island_key else []
+    )
     state = MagicMock()
     state.trusted_public_keys_hex = dict(trusted)
     ks.load = AsyncMock(return_value=state)

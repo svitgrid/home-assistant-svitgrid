@@ -59,15 +59,15 @@ class _BaseView(HomeAssistantView):
 
         The keystore is looked up from ``hass.data[DOMAIN]["keystore"]``.  If
         the keystore is absent (e.g. integration not yet fully set up), the
-        island key path is disabled (``island_key=None``) and only an
+        island key path is disabled (``island_keys=[]``) and only an
         authenticated HA session grants access.
         """
         hass = request.app["hass"]
         keystore = hass.data.get(DOMAIN, {}).get("keystore")
-        island_key: str | None = (
-            await keystore.async_get_island_key() if keystore is not None else None
+        island_keys: list[str] = (
+            await keystore.async_get_island_keys() if keystore is not None else []
         )
-        return island_request_authorized(request, island_key)
+        return island_request_authorized(request, island_keys)
 
 
 class SvitgridLiveView(_BaseView):
@@ -204,10 +204,10 @@ class SvitgridCommandsView(HomeAssistantView):
 
         # --- Auth: island key ONLY ---
         keystore = hass.data.get(DOMAIN, {}).get("keystore")
-        island_key: str | None = (
-            await keystore.async_get_island_key() if keystore is not None else None
+        island_keys: list[str] = (
+            await keystore.async_get_island_keys() if keystore is not None else []
         )
-        if not island_key_present_and_valid(request, island_key):
+        if not island_key_present_and_valid(request, island_keys):
             return self._json_error(401, "unauthorized")
 
         # --- Parse body ---
@@ -307,10 +307,10 @@ class SvitgridTrustKeyView(HomeAssistantView):
     async def post(self, request) -> web.Response:  # noqa: D102
         hass = request.app["hass"]
         keystore = hass.data.get(DOMAIN, {}).get("keystore")
-        island_key: str | None = (
-            await keystore.async_get_island_key() if keystore is not None else None
+        island_keys: list[str] = (
+            await keystore.async_get_island_keys() if keystore is not None else []
         )
-        if not island_key_present_and_valid(request, island_key):
+        if not island_key_present_and_valid(request, island_keys):
             return self._json_error(401, "unauthorized")
 
         try:
@@ -370,10 +370,10 @@ class SvitgridTrustKeyDetailView(HomeAssistantView):
     async def delete(self, request, signing_key_id: str) -> web.Response:  # noqa: D102
         hass = request.app["hass"]
         keystore = hass.data.get(DOMAIN, {}).get("keystore")
-        island_key: str | None = (
-            await keystore.async_get_island_key() if keystore is not None else None
+        island_keys: list[str] = (
+            await keystore.async_get_island_keys() if keystore is not None else []
         )
-        if not island_key_present_and_valid(request, island_key):
+        if not island_key_present_and_valid(request, island_keys):
             return self._json_error(401, "unauthorized")
 
         state = await keystore.load()
@@ -424,10 +424,10 @@ class SvitgridEventsView(_IslandEventViewMixin, HomeAssistantView):
     async def get(self, request) -> web.Response:  # noqa: D102
         hass = request.app["hass"]
         keystore = await self._get_keystore(hass)
-        island_key: str | None = (
-            await keystore.async_get_island_key() if keystore is not None else None
+        island_keys: list[str] = (
+            await keystore.async_get_island_keys() if keystore is not None else []
         )
-        if not island_request_authorized(request, island_key):
+        if not island_request_authorized(request, island_keys):
             return self._json_error(401, "unauthorized")
 
         event_store = await self._get_event_store(hass)
@@ -441,10 +441,10 @@ class SvitgridEventsView(_IslandEventViewMixin, HomeAssistantView):
 
         # --- Auth: island key ONLY ---
         keystore = await self._get_keystore(hass)
-        island_key: str | None = (
-            await keystore.async_get_island_key() if keystore is not None else None
+        island_keys: list[str] = (
+            await keystore.async_get_island_keys() if keystore is not None else []
         )
-        if not island_key_present_and_valid(request, island_key):
+        if not island_key_present_and_valid(request, island_keys):
             return self._json_error(401, "unauthorized")
 
         # --- Parse body ---
@@ -512,10 +512,10 @@ class SvitgridEventDetailView(_IslandEventViewMixin, HomeAssistantView):
     async def _check_island_key(self, request, hass) -> tuple[bool, object]:
         """Return (authorized, keystore). Checks island key ONLY (no session bypass)."""
         keystore = await self._get_keystore(hass)
-        island_key: str | None = (
-            await keystore.async_get_island_key() if keystore is not None else None
+        island_keys: list[str] = (
+            await keystore.async_get_island_keys() if keystore is not None else []
         )
-        return island_key_present_and_valid(request, island_key), keystore
+        return island_key_present_and_valid(request, island_keys), keystore
 
     async def _verify_signature(
         self, keystore, signing_key_id, signed_event_data, signature

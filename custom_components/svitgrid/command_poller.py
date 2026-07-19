@@ -528,6 +528,11 @@ async def process_command(
 
         if cmd_type == ENABLE_ISLAND_COMMAND:
             island_key = payload.get("islandKey")
+            # Apps from before the multi-device change send no deviceId.  Bucket
+            # them together under a fixed id so their repeated setups reuse one
+            # slot (preserving the old single-slot behaviour for those apps)
+            # without evicting devices that DO identify themselves.
+            island_device_id = payload.get("deviceId") or "legacy"
             if not island_key:
                 _LOGGER.warning(
                     "enable_island rejected — missing/empty islandKey. cmd_id=%s",
@@ -570,7 +575,7 @@ async def process_command(
                 )
                 return
 
-            await keystore.async_set_island_key(island_key)
+            await keystore.async_add_island_key(island_device_id, island_key)
 
             cloud_ingest = False
         else:

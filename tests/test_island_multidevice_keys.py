@@ -223,3 +223,23 @@ def test_still_accepts_a_bare_string_for_backward_compat():
     req = _FakeRequest({"X-Island-Key": "solo"})
     assert island_key_present_and_valid(req, "solo") is True
     assert island_key_present_and_valid(req, None) is False
+
+
+@pytest.mark.asyncio
+async def test_enable_island_without_device_id_uses_legacy_bucket():
+    """An OLD app sends no deviceId.  It must still work — bucketed under a
+    fixed key so repeated setups from old apps reuse one slot (matching the
+    old single-slot behaviour) without disturbing new-app devices."""
+    ks = _keystore(_blob(island_keys={"tablet": "tablet-key"}))
+    await ks.async_add_island_key("legacy", "old-app-key")
+    keys = await ks.async_get_island_keys()
+    assert "tablet-key" in keys
+    assert "old-app-key" in keys
+
+
+@pytest.mark.asyncio
+async def test_repeated_legacy_setups_do_not_accumulate():
+    ks = _keystore(_blob())
+    await ks.async_add_island_key("legacy", "first")
+    await ks.async_add_island_key("legacy", "second")
+    assert await ks.async_get_island_keys() == ["second"]
