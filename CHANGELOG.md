@@ -13,8 +13,16 @@
   a solar peak at 08:00 rendered at 05:00. The same mismatch meant "a day" was
   fetched as the UTC day: the first three local hours of every day were missing
   from the chart and three hours of the next morning were folded onto its right
-  edge. Every day-scoped query now spans your LOCAL midnight-to-midnight, and
+  edge. The panel now asks for your LOCAL midnight-to-midnight window, and
   each hourly/5-minute bucket carries the local hour it belongs to.
+
+  The mobile app is unaffected by this release: it already compensates for the
+  UTC window on its side, so the local window is opt-in (`local_day=1`) and
+  only the panel opts in. Switching the endpoint under the app would have
+  blanked its charts every night between 00:00 and 03:00, and the add-on
+  auto-updates long before an app release could catch up. The new `localHour`
+  field is sent to every client regardless, so the app can adopt it on its own
+  schedule.
 - **Month and Year bars bucket energy to local days.** `readings_daily` was
   keyed by UTC date, misattributing a few hours of energy across midnight on
   every bar. Existing rows are re-keyed once, in place, from the retained

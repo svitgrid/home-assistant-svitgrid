@@ -141,12 +141,33 @@ class SvitgridHistoryView(_BaseView):
             return web.Response(status=401)
         q = request.query
         inverter_id = q.get("inverter_id", "")
-        # `day`/`start`/`end` are HOUSEHOLD-LOCAL calendar dates (the panel's
-        # anchor), so every branch below carries the tz down to the store.
         tz_name = _hass_tz(request)
+
+        # The intraday `day=` window is OPT-IN local (`local_day=1`).
+        #
+        # It is a shared contract. The panel ships inside the add-on and moves
+        # in lockstep with it, but the mobile app is a separate release train
+        # (app-store review, then user updates) while the add-on self-updates
+        # via HACS within ~12h -- so the add-on always lands first, and any
+        # change requiring both sides to move together leaves a long window of
+        # broken clients.
+        #
+        # The app already compensates for the UTC window client-side: it
+        # enumerates the UTC days its local range spans and merges them.
+        # Reinterpreting `day` as local silently changes what those labels
+        # mean, and it then under-requests at the recent end -- blank Day
+        # charts, hour drill-downs and voltage charts every night between
+        # 00:00 and 03:00 for a UTC+3 household. So the app keeps the UTC
+        # window until it opts in on its own schedule.
+        #
+        # `localHour` is emitted either way: it is additive and derived per
+        # bucket from that bucket's own UTC key, so it is correct under both
+        # windows and the app can adopt it without a coordinated release.
+        window_tz = tz_name if q.get("local_day") == "1" else None
+
         if q.get("granularity") == "hourly":
-            day = q.get("day", _today(tz_name))
-            rows = await self._store.hourly_range_live(inverter_id, day, tz_name)
+            day = q.get("day", _today(window_tz))
+            rows = await self._store.hourly_range_live(inverter_id, day, window_tz)
             return self.json(
                 {
                     "inverter_id": inverter_id,
@@ -156,14 +177,18 @@ class SvitgridHistoryView(_BaseView):
         if q.get("granularity") == "5min":
             # Fine-grained (5-minute) buckets for the Day charts, computed live
             # from readings_raw (14-day retention). Same wire shape as hourly.
-            day = q.get("day", _today(tz_name))
-            rows = await self._store.five_min_range_live(inverter_id, day, tz_name)
+            day = q.get("day", _today(window_tz))
+            rows = await self._store.five_min_range_live(inverter_id, day, window_tz)
             return self.json(
                 {
                     "inverter_id": inverter_id,
                     "hours": _with_local_hour(rows, tz_name),
                 }
             )
+        # The daily branch needs no gate: `readings_daily` is local-keyed at
+        # rest now, the key space is unchanged (YYYY-MM-DD), and only a few
+        # hours of content shift across midnight. There is no
+        # window-misalignment failure mode here the way there is for `day=`.
         start = q.get("start", _today(tz_name))
         end = q.get("end", _today(tz_name))
         return self.json(

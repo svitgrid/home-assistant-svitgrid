@@ -2908,7 +2908,7 @@ import {
             data = await this._call(
               "svitgrid/history?inverter_id=" +
                 encodeURIComponent(id) +
-                "&granularity=hourly&day=" +
+                "&granularity=hourly&local_day=1&day=" +
                 encodeURIComponent(day)
             );
           } catch (_) {
