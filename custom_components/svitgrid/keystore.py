@@ -4,7 +4,7 @@ signingKeyId, the cached trustedKeyIds list, and the island API key."""
 from __future__ import annotations
 
 import secrets
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from cryptography.hazmat.primitives import serialization
@@ -29,6 +29,22 @@ class KeystoreState:
     trusted_key_ids: list[str]
     trusted_public_keys_hex: dict[str, str]
     island_key: str | None = None
+    # deviceId -> island key.  One entry per paired app instance.  Replaces the
+    # single-slot `island_key`, which is retained read-only so a box upgraded
+    # from the old scheme keeps its existing device authorized.
+    island_keys: dict[str, str] = field(default_factory=dict)
+
+    def all_island_keys(self) -> list[str]:
+        """Every currently-valid island key: the per-device map plus the
+        legacy scalar.  Order is stable (map first, insertion order), and
+        duplicates are collapsed so re-pairing the same device is a no-op."""
+        keys: list[str] = []
+        for value in self.island_keys.values():
+            if value and value not in keys:
+                keys.append(value)
+        if self.island_key and self.island_key not in keys:
+            keys.append(self.island_key)
+        return keys
 
     def load_private_key(self) -> ec.EllipticCurvePrivateKey:
         return serialization.load_pem_private_key(
@@ -66,6 +82,7 @@ class SvitgridKeystore:
             trusted_key_ids=list(data.get("trusted_key_ids", [])),
             trusted_public_keys_hex=dict(data.get("trusted_public_keys_hex", {})),
             island_key=data.get("island_key"),
+            island_keys=dict(data.get("island_keys", {})),
         )
 
     async def save(
@@ -78,6 +95,7 @@ class SvitgridKeystore:
         trusted_key_ids: list[str],
         trusted_public_keys_hex: dict[str, str] | None = None,
         island_key: str | None = None,
+        island_keys: dict[str, str] | None = None,
     ) -> None:
         # Preserve the currently stored island_key when the caller does not
         # explicitly pass one (e.g. re-pairing / key-rotation flows that have
@@ -90,6 +108,11 @@ class SvitgridKeystore:
             current = await self.load()
             if current is not None:
                 resolved_island_key = current.island_key
+        resolved_island_keys = island_keys
+        if resolved_island_keys is None:
+            current = await self.load()
+            if current is not None:
+                resolved_island_keys = current.island_keys
         await self._store.async_save(
             asdict(
                 KeystoreState(
@@ -100,6 +123,7 @@ class SvitgridKeystore:
                     trusted_key_ids=trusted_key_ids,
                     trusted_public_keys_hex=trusted_public_keys_hex or {},
                     island_key=resolved_island_key,
+                    island_keys=resolved_island_keys or {},
                 )
             )
         )
@@ -136,3 +160,25 @@ class SvitgridKeystore:
             return
         current.island_key = key
         await self._store.async_save(asdict(current))
+
+    async def async_add_island_key(self, device_id: str, key: str) -> None:
+        """Authorize `key` for `device_id`, leaving every other device's key
+        intact.
+
+        This is the multi-device replacement for `async_set_island_key`.  The
+        old method overwrote the single slot, which silently revoked whichever
+        device had paired previously — the app then 401s forever with no way to
+        recover except re-pairing, which in turn revoked the other device.
+        """
+        current = await self.load()
+        if current is None:
+            return
+        current.island_keys = {**current.island_keys, device_id: key}
+        await self._store.async_save(asdict(current))
+
+    async def async_get_island_keys(self) -> list[str]:
+        """Every island key that should be accepted, newest scheme first."""
+        current = await self.load()
+        if current is None:
+            return []
+        return current.all_island_keys()
