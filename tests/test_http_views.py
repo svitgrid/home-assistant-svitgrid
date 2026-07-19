@@ -20,19 +20,19 @@ class _FakeStore:
     async def sync_status(self):
         return {"counts": {"sent": 3, "pending": 1}, "last_sent_ts": "2026-06-24T10:00:00Z"}
 
-    async def today_summary(self, day):
+    async def today_summary(self, day, tz_name=None):
         return [{"inverterId": "inv-1", "sample_count": 3, "peaks": {}, "energy": {}}]
 
-    async def history_range(self, inverter_id, start, end):
+    async def history_range(self, inverter_id, start, end, tz_name=None):
         self.history_args = (inverter_id, start, end)
         return [{"day": "2026-06-23", "sample_count": 5, "avgs": {}, "peaks": {}, "energy": {}}]
 
-    async def history_range_live(self, inverter_id, start, end):
+    async def history_range_live(self, inverter_id, start, end, tz_name=None):
         # The daily branch now routes through the live path (sealed prior + today live).
         self.history_args = (inverter_id, start, end)
         return [{"day": "2026-06-23", "sample_count": 5, "avgs": {}, "peaks": {}, "energy": {}}]
 
-    async def hourly_range(self, inverter_id, day):
+    async def hourly_range(self, inverter_id, day, tz_name=None):
         self.hourly_args = (inverter_id, day)
         return [
             {
@@ -51,7 +51,7 @@ class _FakeStore:
             },
         ]
 
-    async def hourly_range_live(self, inverter_id, day):
+    async def hourly_range_live(self, inverter_id, day, tz_name=None):
         # The history view's hourly branch now computes buckets live from raw.
         self.hourly_args = (inverter_id, day)
         return [
@@ -71,7 +71,7 @@ class _FakeStore:
             },
         ]
 
-    async def five_min_range_live(self, inverter_id, day):
+    async def five_min_range_live(self, inverter_id, day, tz_name=None):
         self.five_min_args = (inverter_id, day)
         return [
             {

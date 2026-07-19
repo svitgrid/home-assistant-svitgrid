@@ -24,6 +24,7 @@ import {
   canGoForward,
   periodFetchSpec,
   periodLabel,
+  collapseHourBuckets,
 } from "./history_periods.js";
 
 (function () {
@@ -2914,12 +2915,11 @@ import {
             continue;
           }
           const hours = data && Array.isArray(data.hours) ? data.hours : [];
-          for (const h of hours) {
-            if (!h.hour || typeof h.hour !== "string") continue;
-            // Derive hour index 0-23 from the ISO timestamp (YYYY-MM-DDTHH:00:00Z)
-            const hIdx = parseInt(h.hour.slice(11, 13), 10);
-            if (!isNum(hIdx) || hIdx < 0 || hIdx > 23) continue;
-            const avgs = h.avgs || {};
+          // The x-axis is the HOUSEHOLD-LOCAL wall clock: plot the server's
+          // localHour, not the UTC hour in the bucket key. Collapse per
+          // inverter first so a DST fall-back day's repeated local hour is
+          // averaged rather than double-counted by the cross-inverter sum.
+          for (const { hourIndex: hIdx, avgs } of collapseHourBuckets(hours)) {
             pvByHour.set(hIdx,    (pvByHour.get(hIdx)   || 0) + (isNum(avgs.pvPower)      ? avgs.pvPower      : 0));
             loadByHour.set(hIdx,  (loadByHour.get(hIdx) || 0) + (isNum(avgs.loadPower)    ? avgs.loadPower    : 0));
             battByHour.set(hIdx,  (battByHour.get(hIdx) || 0) + (isNum(avgs.batteryPower) ? avgs.batteryPower : 0));

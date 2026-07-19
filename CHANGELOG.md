@@ -1,8 +1,30 @@
 # Changelog
 
 ## 0.16.0 — 2026-07-20
-- Island mode: each device now keeps its own key. Setting up island mode on a
+
+### Changed
+- **Island mode: each device keeps its own key.** Setting up island mode on a
   second device no longer signs the first device out.
+
+### Fixed
+- **Charts now use your Home Assistant timezone instead of UTC.** The Day
+  chart's hourly profile was drawn on UTC hours while its axis reads as local
+  time, so a household at UTC+3 saw its whole curve shifted three hours early —
+  a solar peak at 08:00 rendered at 05:00. The same mismatch meant "a day" was
+  fetched as the UTC day: the first three local hours of every day were missing
+  from the chart and three hours of the next morning were folded onto its right
+  edge. Every day-scoped query now spans your LOCAL midnight-to-midnight, and
+  each hourly/5-minute bucket carries the local hour it belongs to.
+- **Month and Year bars bucket energy to local days.** `readings_daily` was
+  keyed by UTC date, misattributing a few hours of energy across midnight on
+  every bar. Existing rows are re-keyed once, in place, from the retained
+  hourly data; days too old to re-derive are left untouched rather than
+  dropped.
+- **DST days are handled exactly.** A local day is 23, 24, or 25 hours long
+  across a transition, and the windows are computed from local midnights so no
+  hour is lost or double-counted. On a fall-back day the repeated local hour is
+  averaged in the Day chart rather than summed (it used to render as a 2x
+  spike).
 
 ## 0.15.2 — 2026-07-15
 

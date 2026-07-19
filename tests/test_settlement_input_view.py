@@ -93,7 +93,7 @@ class _FakeStore:
         self._hourly_rows = hourly_rows
         self.args = None
 
-    async def month_hourly_range_live(self, inverter_id, month):
+    async def month_hourly_range_live(self, inverter_id, month, tz_name=None):
         self.args = (inverter_id, month)
         return self._hourly_rows
 
@@ -240,7 +240,7 @@ class _RaisingStore:
     """Store whose month fetch raises ValueError for a malformed month, exactly
     like the real ReadingStore._month_bounds does."""
 
-    async def month_hourly_range_live(self, inverter_id, month):
+    async def month_hourly_range_live(self, inverter_id, month, tz_name=None):
         raise ValueError(f"malformed month: {month!r}")
 
 

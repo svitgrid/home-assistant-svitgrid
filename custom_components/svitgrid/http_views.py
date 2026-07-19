@@ -32,6 +32,7 @@ from .command_auth import verify_signed_command
 from .const import DOMAIN
 from .hourly_energy import per_hour_deltas, to_local_hour_rows
 from .island_auth import island_key_present_and_valid, island_request_authorized
+from .local_time import local_day_of, local_hour_index
 from .signing import compute_key_id, public_key_from_hex, verify_payload
 
 _LOGGER = logging.getLogger(__name__)
@@ -39,12 +40,49 @@ _LOGGER = logging.getLogger(__name__)
 _DEDUPE_TTL_S = 300  # 5 minutes
 
 
-def _today() -> str:
-    return datetime.now(UTC).strftime("%Y-%m-%d")
+def _utc_now_iso() -> str:
+    """The current instant as a UTC ISO string. Seam for tests to pin "now"."""
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _current_month() -> str:
-    return datetime.now(UTC).strftime("%Y-%m")
+def _hass_tz(request) -> str | None:
+    """The household's configured timezone, or None if unset.
+
+    This is the ONLY place the user's wall clock enters the read path; every
+    day/hour a caller sees downstream is derived from it.
+    """
+    hass = request.app["hass"]
+    return getattr(hass.config, "time_zone", None)
+
+
+def _today(tz_name: str | None = None) -> str:
+    """Today's calendar date in the household's timezone (UTC if unset)."""
+    return local_day_of(_utc_now_iso(), tz_name)
+
+
+def _current_month(tz_name: str | None = None) -> str:
+    return _today(tz_name)[:7]
+
+
+def _with_local_hour(rows: list[dict], tz_name: str | None) -> list[dict]:
+    """Annotate intraday buckets with the LOCAL hour they belong to.
+
+    The ``hour`` field stays the UTC bucket key (an absolute instant, and the
+    wire contract the mobile bucket mapper relies on); ``localHour`` is the
+    0-23 index the Day chart plots at. The panel used to derive that itself by
+    slicing the UTC string, which drew every Kyiv household's solar curve
+    three hours early.
+    """
+    out = []
+    for row in rows:
+        hour = row.get("hour")
+        annotated = dict(row)
+        if isinstance(hour, str):
+            local_hour = local_hour_index(hour, tz_name)
+            if local_hour is not None:
+                annotated["localHour"] = local_hour
+        out.append(annotated)
+    return out
 
 
 class _BaseView(HomeAssistantView):
@@ -87,8 +125,11 @@ class SvitgridTodayView(_BaseView):
     async def get(self, request):
         if not await self._authorize(request):
             return web.Response(status=401)
-        day = _today()
-        return self.json({"day": day, "inverters": await self._store.today_summary(day)})
+        tz_name = _hass_tz(request)
+        day = _today(tz_name)
+        return self.json(
+            {"day": day, "inverters": await self._store.today_summary(day, tz_name)}
+        )
 
 
 class SvitgridHistoryView(_BaseView):
@@ -100,30 +141,35 @@ class SvitgridHistoryView(_BaseView):
             return web.Response(status=401)
         q = request.query
         inverter_id = q.get("inverter_id", "")
+        # `day`/`start`/`end` are HOUSEHOLD-LOCAL calendar dates (the panel's
+        # anchor), so every branch below carries the tz down to the store.
+        tz_name = _hass_tz(request)
         if q.get("granularity") == "hourly":
-            day = q.get("day", _today())
+            day = q.get("day", _today(tz_name))
+            rows = await self._store.hourly_range_live(inverter_id, day, tz_name)
             return self.json(
                 {
                     "inverter_id": inverter_id,
-                    "hours": await self._store.hourly_range_live(inverter_id, day),
+                    "hours": _with_local_hour(rows, tz_name),
                 }
             )
         if q.get("granularity") == "5min":
             # Fine-grained (5-minute) buckets for the Day charts, computed live
             # from readings_raw (14-day retention). Same wire shape as hourly.
-            day = q.get("day", _today())
+            day = q.get("day", _today(tz_name))
+            rows = await self._store.five_min_range_live(inverter_id, day, tz_name)
             return self.json(
                 {
                     "inverter_id": inverter_id,
-                    "hours": await self._store.five_min_range_live(inverter_id, day),
+                    "hours": _with_local_hour(rows, tz_name),
                 }
             )
-        start = q.get("start", _today())
-        end = q.get("end", _today())
+        start = q.get("start", _today(tz_name))
+        end = q.get("end", _today(tz_name))
         return self.json(
             {
                 "inverter_id": inverter_id,
-                "days": await self._store.history_range_live(inverter_id, start, end),
+                "days": await self._store.history_range_live(inverter_id, start, end, tz_name),
             }
         )
 
@@ -696,11 +742,13 @@ class SvitgridSettlementInputView(_BaseView):
             return web.Response(status=401)
         q = request.query
         inverter_id = q.get("inverter_id", "")
-        month = q.get("month", _current_month())
-        tz_name = request.app["hass"].config.time_zone
+        tz_name = _hass_tz(request)
+        month = q.get("month", _current_month(tz_name))
 
         try:
-            hourly_rows = await self._store.month_hourly_range_live(inverter_id, month)
+            # The month's UTC span is derived from LOCAL midnights, so a UTC+3
+            # household does not lose the first three local hours of the 1st.
+            hourly_rows = await self._store.month_hourly_range_live(inverter_id, month, tz_name)
         except ValueError:
             # Malformed month (e.g. "foo") — _month_bounds can't parse it.
             return web.Response(status=400)

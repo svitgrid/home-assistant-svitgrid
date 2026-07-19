@@ -501,14 +501,14 @@ class TestBatchHaVersion:
     async def test_batch_body_includes_ha_version(self, monkeypatch):
         import custom_components.svitgrid.api_client as mod
 
-        monkeypatch.setattr(mod, "_integration_version", lambda: "0.15.3")
+        monkeypatch.setattr(mod, "_integration_version", lambda: "0.16.0")
         session, _ = _mock_session_with_response(200, {"results": []})
         client = SvitgridApiClient(session, api_base="https://api.example")
         await client.push_readings_batch(
             api_key="k" * 64,
             readings=[{"inverterId": "inv-1", "timestamp": "2026-07-17T10:00:00Z"}],
         )
-        assert session.post.call_args.kwargs["json"]["haVersion"] == "0.15.3"
+        assert session.post.call_args.kwargs["json"]["haVersion"] == "0.16.0"
 
     async def test_batch_body_omits_ha_version_when_unknown(self, monkeypatch):
         import custom_components.svitgrid.api_client as mod

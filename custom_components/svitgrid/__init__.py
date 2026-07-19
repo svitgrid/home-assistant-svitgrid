@@ -177,7 +177,12 @@ async def _start_local_store(
     async def _rollup_tick(_now=None):
         now_iso = datetime.now(UTC).isoformat().replace("+00:00", "Z")
         try:
-            await store.rollup(now_iso)
+            # One-time (per timezone) re-key of pre-existing UTC-bucketed daily
+            # rows. Cheap no-op once the meta marker matches.
+            await store.rebuild_daily_local(hass.config.time_zone, now_iso)
+            # readings_daily is keyed by the HOUSEHOLD-LOCAL day, so the seal
+            # boundary follows the user's wall clock, not UTC midnight.
+            await store.rollup(now_iso, hass.config.time_zone)
             await store.prune(now_iso, RAW_RETENTION_S, HOURLY_RETENTION_S)
         except Exception:  # noqa: BLE001
             _LOGGER.exception("rollup/prune failed")

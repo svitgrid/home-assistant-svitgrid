@@ -11,6 +11,8 @@ from typing import Any
 
 from homeassistant.core import HomeAssistant
 
+from .local_time import local_day_of, local_day_window
+
 # Tracks db_paths whose schema has already been created in this process so that
 # _create_schema (DDL) is not executed on every connection open.
 _INITIALIZED: set[str] = set()
@@ -234,19 +236,31 @@ class ReadingStore:
     def _hour_of(self, ts: str) -> str:
         return ts[:13] + ":00:00Z"  # "2026-06-24T10:..." → "2026-06-24T10:00:00Z"
 
-    def _day_of(self, ts: str) -> str:
-        return ts[:10]  # "2026-06-24"
+    def _day_of(self, ts: str, tz_name: str | None = None) -> str:
+        """The calendar date owning *ts*.
+
+        With *tz_name* this is the HOUSEHOLD-LOCAL date -- the bucket key for
+        ``readings_daily`` and the boundary for "today". Without it, the plain
+        UTC prefix (the pre-fix behaviour), which every UTC household and the
+        existing test suite still exercise.
+        """
+        if not tz_name or tz_name == "UTC":
+            return ts[:10]  # "2026-06-24"
+        return local_day_of(ts, tz_name)
 
     def _five_min_of(self, ts: str) -> str:
         # Floor a UTC ISO timestamp to its 5-minute bucket start.
         # "2026-06-24T10:17:30Z" → "2026-06-24T10:15:00Z"
         return ts[:14] + f"{(int(ts[14:16]) // 5) * 5:02d}:00Z"
 
-    def _rollup_sync(self, now_iso: str) -> dict[str, int]:
+    def _rollup_sync(self, now_iso: str, tz_name: str | None = None) -> dict[str, int]:
         from . import rollup as _r
 
         cur_hour = self._hour_of(now_iso)
-        cur_day = self._day_of(now_iso)
+        # Days are HOUSEHOLD-LOCAL: readings_daily is what the Month/Year bars
+        # read, and a user's "day" is their wall clock, not UTC. Hours stay UTC
+        # (an hour_start is an absolute instant); only the day bucket is local.
+        cur_day = self._day_of(now_iso, tz_name)
         conn = _connect(self._db_path)
         hours = days = 0
         try:
@@ -285,7 +299,7 @@ class ReadingStore:
             )
             dbuckets: dict[tuple[str, str], list[dict]] = {}
             for r in cur.fetchall():
-                day = self._day_of(r["hour_start"])
+                day = self._day_of(r["hour_start"], tz_name)
                 if day >= cur_day:
                     continue
                 dbuckets.setdefault((r["inverter_id"], day), []).append(
@@ -316,6 +330,118 @@ class ReadingStore:
             return {"hours": hours, "days": days}
         finally:
             conn.close()
+
+    def _next_day(self, day: str) -> str:
+        from datetime import timedelta
+
+        return (datetime.strptime(day, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+
+    def _rebuild_daily_local_sync(self, tz_name: str | None, now_iso: str) -> dict[str, int]:
+        """Re-key ``readings_daily`` to household-local days, once per timezone.
+
+        Existing installs sealed daily rows with a UTC date key. Now that the
+        rollup keys by local date, the table would otherwise hold a mix of the
+        two schemes and the Month/Year bars would show ~3h of energy
+        misattributed across midnight for every pre-existing day.
+
+        This re-derives every day it still can from ``readings_hourly``
+        (retained ~2 years) under the local key. Days whose hourly rows have
+        already been pruned CANNOT be re-derived and are left untouched: a
+        slightly misattributed old bar is better than a missing one.
+
+        The current local day is skipped -- sealing it here would freeze a
+        partial day that ``_rollup_sync`` (which only seals completed days)
+        would then never revisit.
+
+        Idempotent via a ``meta`` marker holding the tz the table is keyed to,
+        so it runs once per install and again only if the household changes
+        its Home Assistant timezone.
+        """
+        from . import rollup as _r
+
+        marker = tz_name or "UTC"
+        if self._get_meta_sync("daily_tz_bucket") == marker:
+            return {"rebuilt": 0}
+
+        cur_day = self._day_of(now_iso, tz_name)
+        conn = _connect(self._db_path)
+        try:
+            cur = conn.execute(
+                "SELECT inverter_id, hour_start, sample_count, avgs, peaks, energy "
+                "FROM readings_hourly"
+            )
+            dbuckets: dict[tuple[str, str], list[dict]] = {}
+            earliest_hour: str | None = None
+            for r in cur.fetchall():
+                if earliest_hour is None or r["hour_start"] < earliest_hour:
+                    earliest_hour = r["hour_start"]
+                day = self._day_of(r["hour_start"], tz_name)
+                if day >= cur_day:
+                    continue
+                dbuckets.setdefault((r["inverter_id"], day), []).append(
+                    {
+                        "sample_count": r["sample_count"],
+                        "avgs": json.loads(r["avgs"]),
+                        "peaks": json.loads(r["peaks"]),
+                        "energy": json.loads(r["energy"]),
+                    }
+                )
+
+            # Clear only the span the hourly table can FULLY re-derive, so
+            # rows that would otherwise linger under their OLD key (e.g. a UTC
+            # day that no longer exists locally) go away, while anything the
+            # rebuild cannot reproduce survives untouched.
+            #
+            # The floor is the first local day the hourly table covers from its
+            # very first hour. readings_daily is never pruned but
+            # readings_hourly is (~2 years), so on an old install the earliest
+            # surviving hourly row sits mid-day: that day can only be rebuilt
+            # as a partial sliver, and any complete daily row below it cannot
+            # be rebuilt at all. Clearing down to it would replace a full bar
+            # with a sliver, or delete one outright -- and since _rollup_sync
+            # only ever seals COMPLETED days, neither ever comes back.
+            rebuilt = 0
+            if dbuckets and earliest_hour is not None:
+                boundary_day = self._day_of(earliest_hour, tz_name)
+                boundary_start, _ = local_day_window(boundary_day, tz_name)
+                floor_day = (
+                    boundary_day
+                    if earliest_hour <= boundary_start
+                    else self._next_day(boundary_day)
+                )
+                dbuckets = {
+                    key: rows for key, rows in dbuckets.items() if key[1] >= floor_day
+                }
+                if not dbuckets:
+                    conn.commit()
+                    self._set_meta_sync("daily_tz_bucket", marker)
+                    return {"rebuilt": 0}
+                conn.execute(
+                    "DELETE FROM readings_daily WHERE day >= ? AND day < ?",
+                    (floor_day, cur_day),
+                )
+                for (inv, day), hrows in dbuckets.items():
+                    agg = _r.merge_hourly(hrows)
+                    conn.execute(
+                        "INSERT OR REPLACE INTO readings_daily "
+                        "(inverter_id, day, sample_count, avgs, peaks, energy) "
+                        "VALUES (?,?,?,?,?,?)",
+                        (
+                            inv,
+                            day,
+                            agg["sample_count"],
+                            json.dumps(agg["avgs"]),
+                            json.dumps(agg["peaks"]),
+                            json.dumps(agg["energy"]),
+                        ),
+                    )
+                    rebuilt += 1
+            conn.commit()
+        finally:
+            conn.close()
+
+        self._set_meta_sync("daily_tz_bucket", marker)
+        return {"rebuilt": rebuilt}
 
     def _prune_sync(
         self, now_iso: str, raw_retention_s: int, hourly_retention_s: int
@@ -362,7 +488,7 @@ class ReadingStore:
         finally:
             conn.close()
 
-    def _today_summary_sync(self, day: str) -> list[dict]:
+    def _today_summary_sync(self, day: str, tz_name: str | None = None) -> list[dict]:
         conn = _connect(self._db_path)
         try:
             cur = conn.execute(
@@ -381,13 +507,12 @@ class ReadingStore:
             if rows:
                 return rows
             # Fallback: aggregate today's raw (daily row not rolled up yet).
-            from datetime import datetime, timedelta  # noqa: I001
             from . import rollup as _r
 
-            next_day = (datetime.strptime(day, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+            day_start, next_day_start = local_day_window(day, tz_name)
             cur = conn.execute(
                 "SELECT inverter_id, payload FROM readings_raw WHERE ts >= ? AND ts < ?",
-                (day + "T00:00:00Z", next_day + "T00:00:00Z"),
+                (day_start, next_day_start),
             )
             buckets: dict[str, list[dict]] = {}
             for r in cur.fetchall():
@@ -409,15 +534,18 @@ class ReadingStore:
         finally:
             conn.close()
 
-    def _hourly_range_sync(self, inverter_id: str, day: str) -> list[dict]:
-        day_start = day + "T00:00:00Z"
-        day_end = day + "T23:59:59Z"
+    def _hourly_range_sync(
+        self, inverter_id: str, day: str, tz_name: str | None = None
+    ) -> list[dict]:
+        # *day* is a HOUSEHOLD-LOCAL calendar date; the window is the UTC span
+        # of that local day (half-open, so it is 23/24/25h across DST).
+        day_start, day_end = local_day_window(day, tz_name)
         conn = _connect(self._db_path)
         try:
             cur = conn.execute(
                 "SELECT hour_start, sample_count, avgs, peaks, energy "
                 "FROM readings_hourly "
-                "WHERE inverter_id = ? AND hour_start >= ? AND hour_start <= ? "
+                "WHERE inverter_id = ? AND hour_start >= ? AND hour_start < ? "
                 "ORDER BY hour_start",
                 (inverter_id, day_start, day_end),
             )
@@ -434,7 +562,9 @@ class ReadingStore:
         finally:
             conn.close()
 
-    def _hourly_range_live_sync(self, inverter_id: str, day: str) -> list[dict]:
+    def _hourly_range_live_sync(
+        self, inverter_id: str, day: str, tz_name: str | None = None
+    ) -> list[dict]:
         """Compute hourly buckets on demand from readings_raw for *day*.
 
         Unlike ``_hourly_range_sync`` (which reads the pre-sealed
@@ -448,17 +578,13 @@ class ReadingStore:
         Returns the SAME shape as ``_hourly_range_sync``:
         ``[{"hour", "sample_count", "avgs", "peaks", "energy"}]`` sorted by hour.
         """
-        from datetime import datetime, timedelta
-
         from . import rollup as _r
 
-        day_start = day + "T00:00:00Z"
-        # Exclusive next-day-midnight bound: our readings carry sub-second ts
-        # (e.g. "...T23:59:59.743Z"), so a string "<= T23:59:59Z" bound would drop
-        # the last second of the day. Use ts < next_day_start.
-        next_day_start = (datetime.strptime(day, "%Y-%m-%d") + timedelta(days=1)).strftime(
-            "%Y-%m-%d"
-        ) + "T00:00:00Z"
+        # *day* is a HOUSEHOLD-LOCAL calendar date. The window is half-open on
+        # the next LOCAL midnight: readings carry sub-second ts
+        # (e.g. "...T23:59:59.743Z"), so an inclusive bound would drop the
+        # day's last second.
+        day_start, next_day_start = local_day_window(day, tz_name)
         conn = _connect(self._db_path)
         try:
             cur = conn.execute(
@@ -487,7 +613,9 @@ class ReadingStore:
         finally:
             conn.close()
 
-    def _five_min_range_live_sync(self, inverter_id: str, day: str) -> list[dict]:
+    def _five_min_range_live_sync(
+        self, inverter_id: str, day: str, tz_name: str | None = None
+    ) -> list[dict]:
         """Compute 5-minute buckets on demand from readings_raw for *day*.
 
         Same as ``_hourly_range_live_sync`` but at 5-minute resolution, so the
@@ -503,15 +631,11 @@ class ReadingStore:
         carries the 5-minute bucket start (kept named ``"hour"`` for wire
         compatibility with the hourly path).
         """
-        from datetime import datetime, timedelta
-
         from . import rollup as _r
 
-        day_start = day + "T00:00:00Z"
-        # Exclusive next-day bound (readings carry sub-second ts).
-        next_day_start = (datetime.strptime(day, "%Y-%m-%d") + timedelta(days=1)).strftime(
-            "%Y-%m-%d"
-        ) + "T00:00:00Z"
+        # *day* is a HOUSEHOLD-LOCAL calendar date; half-open on the next local
+        # midnight (readings carry sub-second ts).
+        day_start, next_day_start = local_day_window(day, tz_name)
         conn = _connect(self._db_path)
         try:
             cur = conn.execute(
@@ -561,7 +685,12 @@ class ReadingStore:
             conn.close()
 
     def _history_range_live_sync(
-        self, inverter_id: str, start_day: str, end_day: str, now_iso: str | None = None
+        self,
+        inverter_id: str,
+        start_day: str,
+        end_day: str,
+        now_iso: str | None = None,
+        tz_name: str | None = None,
     ) -> list[dict]:
         """Sealed ``readings_daily`` rows for days < today, plus today aggregated
         live from ``readings_raw`` (if today falls within [start_day, end_day]).
@@ -578,7 +707,7 @@ class ReadingStore:
 
         if now_iso is None:
             now_iso = datetime.now(UTC).isoformat()
-        today = self._day_of(now_iso)
+        today = self._day_of(now_iso, tz_name)
 
         # Yesterday = last completed day for the sealed query upper bound.
         today_dt: datetime | None = None
@@ -614,11 +743,10 @@ class ReadingStore:
 
             # 2. Today's live bucket (only if today is within the requested range)
             if today_dt is not None and start_day <= today <= end_day:
-                day_start = today + "T00:00:00Z"
-                # Exclusive next-day-midnight bound: our readings carry sub-second
-                # ts (e.g. "...T23:59:59.743Z"), so a string "<= T23:59:59Z" bound
-                # would drop the last second of the day. Use ts < next_day_start.
-                next_day_start = (today_dt + timedelta(days=1)).strftime("%Y-%m-%d") + "T00:00:00Z"
+                # Exclusive next-LOCAL-midnight bound: our readings carry
+                # sub-second ts (e.g. "...T23:59:59.743Z"), so an inclusive
+                # "<= T23:59:59Z" bound would drop the day's last second.
+                day_start, next_day_start = local_day_window(today, tz_name)
                 cur = conn.execute(
                     "SELECT ts, payload FROM readings_raw "
                     "WHERE inverter_id = ? AND ts >= ? AND ts < ? ORDER BY ts",
@@ -658,7 +786,11 @@ class ReadingStore:
         return start_day, end_day
 
     def _month_hourly_range_live_sync(
-        self, inverter_id: str, month: str, now_iso: str | None = None
+        self,
+        inverter_id: str,
+        month: str,
+        now_iso: str | None = None,
+        tz_name: str | None = None,
     ) -> list[dict]:
         """Sealed ``readings_hourly`` rows for the month's hours before today,
         plus today's hourly buckets computed live from ``readings_raw`` (if
@@ -676,18 +808,19 @@ class ReadingStore:
         sorted by ``hour_start``. ``now_iso`` defaults to the real UTC
         clock; tests pass an explicit value to pin "today".
         """
-        from datetime import datetime, timedelta
+        from datetime import datetime
 
         if now_iso is None:
             now_iso = datetime.now(UTC).isoformat()
-        today = self._day_of(now_iso)
+        today = self._day_of(now_iso, tz_name)
 
         start_day, end_day = self._month_bounds(month)
-        month_start = start_day + "T00:00:00Z"
-        month_end_exclusive = (datetime.strptime(end_day, "%Y-%m-%d") + timedelta(days=1)).strftime(
-            "%Y-%m-%d"
-        ) + "T00:00:00Z"
-        today_start = today + "T00:00:00Z"
+        # The month spans from the first local midnight of start_day to the
+        # local midnight after end_day -- so a UTC+3 household's month does not
+        # lose its first three local hours to the previous month.
+        month_start, _ = local_day_window(start_day, tz_name)
+        _, month_end_exclusive = local_day_window(end_day, tz_name)
+        today_start, _ = local_day_window(today, tz_name)
 
         result: list[dict] = []
 
@@ -719,7 +852,7 @@ class ReadingStore:
         # 2. Today's hourly buckets, computed live -- only if today is
         # within the requested month.
         if start_day <= today <= end_day:
-            for row in self._hourly_range_live_sync(inverter_id, today):
+            for row in self._hourly_range_live_sync(inverter_id, today, tz_name):
                 result.append(
                     {
                         "hour_start": row["hour"],
@@ -828,8 +961,13 @@ class ReadingStore:
         return _connect(self._db_path)
 
     # ── async wrappers ────────────────────────────────────────────────
-    async def rollup(self, now_iso: str) -> dict[str, int]:
-        return await self._hass.async_add_executor_job(self._rollup_sync, now_iso)
+    async def rebuild_daily_local(self, tz_name: str | None, now_iso: str) -> dict[str, int]:
+        return await self._hass.async_add_executor_job(
+            self._rebuild_daily_local_sync, tz_name, now_iso
+        )
+
+    async def rollup(self, now_iso: str, tz_name: str | None = None) -> dict[str, int]:
+        return await self._hass.async_add_executor_job(self._rollup_sync, now_iso, tz_name)
 
     async def prune(
         self, now_iso: str, raw_retention_s: int, hourly_retention_s: int
@@ -866,8 +1004,8 @@ class ReadingStore:
     async def live_snapshot(self) -> list[dict]:
         return await self._hass.async_add_executor_job(self._live_snapshot_sync)
 
-    async def today_summary(self, day: str) -> list[dict]:
-        return await self._hass.async_add_executor_job(self._today_summary_sync, day)
+    async def today_summary(self, day: str, tz_name: str | None = None) -> list[dict]:
+        return await self._hass.async_add_executor_job(self._today_summary_sync, day, tz_name)
 
     async def history_range(self, inverter_id: str, start_day: str, end_day: str) -> list[dict]:
         return await self._hass.async_add_executor_job(
@@ -875,28 +1013,38 @@ class ReadingStore:
         )
 
     async def history_range_live(
-        self, inverter_id: str, start_day: str, end_day: str
+        self, inverter_id: str, start_day: str, end_day: str, tz_name: str | None = None
     ) -> list[dict]:
         return await self._hass.async_add_executor_job(
-            self._history_range_live_sync, inverter_id, start_day, end_day
+            self._history_range_live_sync, inverter_id, start_day, end_day, None, tz_name
         )
 
-    async def hourly_range(self, inverter_id: str, day: str) -> list[dict]:
-        return await self._hass.async_add_executor_job(self._hourly_range_sync, inverter_id, day)
-
-    async def hourly_range_live(self, inverter_id: str, day: str) -> list[dict]:
+    async def hourly_range(
+        self, inverter_id: str, day: str, tz_name: str | None = None
+    ) -> list[dict]:
         return await self._hass.async_add_executor_job(
-            self._hourly_range_live_sync, inverter_id, day
+            self._hourly_range_sync, inverter_id, day, tz_name
         )
 
-    async def five_min_range_live(self, inverter_id: str, day: str) -> list[dict]:
+    async def hourly_range_live(
+        self, inverter_id: str, day: str, tz_name: str | None = None
+    ) -> list[dict]:
         return await self._hass.async_add_executor_job(
-            self._five_min_range_live_sync, inverter_id, day
+            self._hourly_range_live_sync, inverter_id, day, tz_name
         )
 
-    async def month_hourly_range_live(self, inverter_id: str, month: str) -> list[dict]:
+    async def five_min_range_live(
+        self, inverter_id: str, day: str, tz_name: str | None = None
+    ) -> list[dict]:
         return await self._hass.async_add_executor_job(
-            self._month_hourly_range_live_sync, inverter_id, month
+            self._five_min_range_live_sync, inverter_id, day, tz_name
+        )
+
+    async def month_hourly_range_live(
+        self, inverter_id: str, month: str, tz_name: str | None = None
+    ) -> list[dict]:
+        return await self._hass.async_add_executor_job(
+            self._month_hourly_range_live_sync, inverter_id, month, None, tz_name
         )
 
     async def sync_status(self) -> dict:

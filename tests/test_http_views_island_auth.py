@@ -37,13 +37,13 @@ class _FakeStore:
     async def live_snapshot(self):
         return [{"inverterId": "inv-1", "ts": "2026-06-24T10:00:00Z", "payload": {"pvPower": 2.0}}]
 
-    async def history_range(self, inverter_id, start, end):
+    async def history_range(self, inverter_id, start, end, tz_name=None):
         return [{"day": "2026-06-23", "sample_count": 5, "avgs": {}, "peaks": {}, "energy": {}}]
 
-    async def history_range_live(self, inverter_id, start, end):
+    async def history_range_live(self, inverter_id, start, end, tz_name=None):
         return [{"day": "2026-06-23", "sample_count": 5, "avgs": {}, "peaks": {}, "energy": {}}]
 
-    async def hourly_range(self, inverter_id, day):
+    async def hourly_range(self, inverter_id, day, tz_name=None):
         return []
 
 
