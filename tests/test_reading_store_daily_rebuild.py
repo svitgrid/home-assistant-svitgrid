@@ -246,3 +246,47 @@ def test_rebuild_does_not_truncate_a_partial_day_in_a_negative_offset_tz(tmp_pat
     ).fetchone()["sample_count"]
     conn.close()
     assert kept == 288
+
+
+def test_rebuild_seam_double_counts_the_boundary_hours(tmp_path):
+    """CHARACTERIZATION: the seam row below the rebuilt span is kept, and its
+    last `offset` hours are counted twice -- once there, once in the first
+    rebuilt local day.
+
+    This is the deliberate trade-off documented on _rebuild_daily_local_sync,
+    not a regression. Deleting that row would take its non-overlapping portion
+    with it, and nothing on disk distinguishes the two parts; an earlier
+    attempt to clear it deleted complete, unrecoverable bars (see
+    test_rebuild_never_deletes_a_day_it_cannot_rederive).
+
+    Pinned here so the cost stays visible and bounded: exactly `offset` hours,
+    in exactly one row, at the bottom of history. If a future change shrinks
+    or removes it, this test should be updated -- if it GROWS, that is a bug.
+    """
+    store = _store(tmp_path)
+    # Hourly coverage starts exactly on a local midnight (Kyiv local Jul 10
+    # 00:00 == 2026-07-09T21:00Z) and runs 8 full local days.
+    _seed_utc_bucketed(store, _hourly_span("2026-07-09T21:00:00Z", 24 * 8 + 3))
+
+    before = sum(
+        d["sample_count"] for d in store._history_range_sync("inv-1", "2000-01-01", "2099-12-31")
+    )
+    store._rebuild_daily_local_sync(KYIV, "2026-07-20T00:00:00Z")
+    after = sum(
+        d["sample_count"] for d in store._history_range_sync("inv-1", "2000-01-01", "2099-12-31")
+    )
+
+    # Kyiv is UTC+3 in July: exactly 3 hours are double-counted, no more.
+    assert after - before == 3
+
+    days = _days(store)
+    # The seam row is the stale UTC-keyed day just below the rebuilt span, and
+    # it holds exactly those 3 hours.
+    conn = store._connect_for_test()
+    seam = conn.execute(
+        "SELECT sample_count FROM readings_daily WHERE day = '2026-07-09'"
+    ).fetchone()
+    conn.close()
+    assert seam["sample_count"] == 3
+    # Everything above the seam is a clean, fully rebuilt local day.
+    assert "2026-07-10" in days

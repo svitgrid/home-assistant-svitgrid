@@ -19,7 +19,10 @@
   keyed by UTC date, misattributing a few hours of energy across midnight on
   every bar. Existing rows are re-keyed once, in place, from the retained
   hourly data; days too old to re-derive are left untouched rather than
-  dropped.
+  dropped. One known cosmetic seam: at the very bottom of your history (the
+  ~2-year hourly-retention floor) a small extra bar remains, overlapping the
+  first re-keyed day by your UTC offset — 3 hours for Ukraine. Removing it
+  would mean deleting real data that can no longer be rebuilt, so it stays.
 - **DST days are handled exactly.** A local day is 23, 24, or 25 hours long
   across a transition, and the windows are computed from local midnights so no
   hour is lost or double-counted. On a fall-back day the repeated local hour is

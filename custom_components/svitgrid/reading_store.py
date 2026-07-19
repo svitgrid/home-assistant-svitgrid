@@ -353,6 +353,20 @@ class ReadingStore:
         partial day that ``_rollup_sync`` (which only seals completed days)
         would then never revisit.
 
+        KNOWN SEAM (deliberate, measured): the last UTC-keyed row below the
+        rebuilt span is kept, and its final ``offset`` hours also live inside
+        the first rebuilt local day -- so those hours are counted twice, once
+        in each row. That is one small spurious bar at the very bottom of
+        history (the hourly-retention floor, ~2 years back on an old install)
+        and an all-time total inflated by ``offset`` hours: 3 for UTC+3, 4-5
+        for US zones. It is NOT removable here. Deleting that row would take
+        its non-overlapping portion with it, and nothing on disk says which
+        part is which -- daily rows carry no provenance, and the hourly rows
+        that would settle it are exactly the ones pruning removed. An earlier
+        attempt to clear it is what deleted complete, unrecoverable bars.
+        A double-counted seam beats a hole. See
+        ``test_rebuild_seam_double_counts_the_boundary_hours``.
+
         Idempotent via a ``meta`` marker holding the tz the table is keyed to,
         so it runs once per install and again only if the household changes
         its Home Assistant timezone.
