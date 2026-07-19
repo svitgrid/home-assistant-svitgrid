@@ -532,7 +532,21 @@ async def process_command(
             # them together under a fixed id so their repeated setups reuse one
             # slot (preserving the old single-slot behaviour for those apps)
             # without evicting devices that DO identify themselves.
-            island_device_id = payload.get("deviceId") or "legacy"
+            #
+            # `deviceId` is unvalidated end-to-end (the API hand-parses this
+            # body with no schema — see household-island-mode.ts). It is used
+            # directly as a dict key in async_add_island_key, so anything that
+            # isn't a non-empty string must also fall back to "legacy":
+            # dict/list would raise `TypeError: unhashable type` and crash the
+            # command-poller loop for the whole add-on; an int/bool "works" in
+            # memory but gets stringified by json.dump on persist, silently
+            # losing the credential after a restart.
+            raw_device_id = payload.get("deviceId")
+            island_device_id = (
+                raw_device_id
+                if isinstance(raw_device_id, str) and raw_device_id
+                else "legacy"
+            )
             if not island_key:
                 _LOGGER.warning(
                     "enable_island rejected — missing/empty islandKey. cmd_id=%s",

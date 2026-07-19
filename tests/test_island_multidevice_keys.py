@@ -243,3 +243,93 @@ async def test_repeated_legacy_setups_do_not_accumulate():
     await ks.async_add_island_key("legacy", "first")
     await ks.async_add_island_key("legacy", "second")
     assert await ks.async_get_island_keys() == ["second"]
+
+
+# ---------------------------------------------------------------------------
+# Hostile/malformed `deviceId` in the enable_island command payload
+#
+# `appDeviceId` is unvalidated end-to-end (API hand-parses the body; a plan
+# step meant to add zod validation there never landed). A dict/list `deviceId`
+# used directly as a dict key raises `TypeError: unhashable type` in
+# `async_add_island_key`'s `{**current.island_keys, device_id: key}` — taking
+# down the command-poller loop for the whole add-on. An int silently "works"
+# in memory but gets stringified by `json.dump` on persist, so the key is
+# unreachable after restart. The handler must coerce anything that isn't a
+# non-empty string down to the same "legacy" bucket used when deviceId is
+# absent, matching `command_poller.py`'s existing `payload.get("deviceId")
+# or "legacy"` fallback for the *missing* case.
+# ---------------------------------------------------------------------------
+
+from unittest.mock import AsyncMock, MagicMock  # noqa: E402
+
+from custom_components.svitgrid.command_poller import process_command  # noqa: E402
+from custom_components.svitgrid.signing import generate_keypair  # noqa: E402
+
+
+def _make_api_client() -> MagicMock:
+    c = MagicMock()
+    c.ack_command = AsyncMock()
+    return c
+
+
+def _make_hass_entry(entry_data: dict | None = None):
+    hass = MagicMock()
+    hass.is_stopping = False
+    hass.config_entries = MagicMock()
+    hass.async_create_task = MagicMock()
+
+    entry = MagicMock()
+    entry.data = entry_data if entry_data is not None else {"cloud_ingest_enabled": True}
+    entry.entry_id = "e1"
+    return hass, entry
+
+
+@pytest.mark.parametrize(
+    "hostile_device_id",
+    [
+        {"a": 1},
+        ["x"],
+        123,
+        True,
+    ],
+    ids=["dict", "list", "int", "bool"],
+)
+@pytest.mark.asyncio
+async def test_enable_island_with_non_string_device_id_falls_back_to_legacy(
+    hostile_device_id,
+):
+    """THE BUG: a non-string deviceId (object/array/number/bool) must not be
+    used as a dict key — that either raises TypeError (dict/list, unhashable)
+    or silently corrupts the store on persist (int/bool, stringified by
+    json.dump). The handler must treat it the same as a missing deviceId and
+    bucket the key under "legacy" instead of crashing."""
+    priv, _pub_hex = generate_keypair()
+    api_client = _make_api_client()
+    ks = _keystore(_blob(island_keys={}))
+    hass, entry = _make_hass_entry()
+
+    await process_command(
+        command={
+            "commandId": "c-hostile",
+            "command": "enable_island",
+            "payload": {
+                "islandKey": "hostile-key",
+                "deviceId": hostile_device_id,
+                "cloudIngest": False,
+            },
+        },
+        api_client=api_client,
+        api_key="k",
+        trusted_public_keys_hex={},
+        our_private_key=priv,
+        our_signing_key_id="ours",
+        executor_version="0.3.0",
+        keystore=ks,
+        hass=hass,
+        entry=entry,
+    )
+
+    keys = await ks.async_get_island_keys()
+    assert "hostile-key" in keys
+    stored = await ks._store.async_load()
+    assert list(stored["island_keys"].keys()) == ["legacy"]
