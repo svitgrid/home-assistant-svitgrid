@@ -30,7 +30,7 @@ from homeassistant.components.http import HomeAssistantView
 from homeassistant.core import HomeAssistant
 
 from .command_auth import verify_signed_command
-from .const import DOMAIN
+from .const import DOMAIN, LEGACY_ISLAND_DEVICE_ID
 from .hourly_energy import per_hour_deltas, to_local_hour_rows
 from .island_auth import island_key_present_and_valid, island_request_authorized
 from .local_time import local_day_of, local_hour_index
@@ -814,18 +814,49 @@ class SvitgridIslandDevicesView(_BaseView):
         if keystore is None:
             return self.json({"devices": []})
 
-        devices = await keystore.async_list_island_devices()
-
-        # Mark the caller's own row so the UI can say "this device".  A session
-        # -authenticated caller carries no key, so nothing matches — correct.
-        header_key = request.headers.get("X-Island-Key")
+        # Single read: build the roster AND the isCurrent comparison from one
+        # `load()` rather than `async_list_island_devices()` (its own read)
+        # plus a second `load()` — two reads leave a window where a revoke
+        # landing in between makes the response inconsistent with itself.
         state = await keystore.load()
-        for device in devices:
-            entry = (state.island_keys.get(device["deviceId"]) or {}) if state else {}
-            entry_key = entry.get("key")
-            device["isCurrent"] = bool(
-                header_key and entry_key and hmac.compare_digest(header_key, entry_key)
-            )
+
+        # Mark the caller's own row so the UI can say "this device". A session
+        # -authenticated caller carries no key, so nothing matches — correct.
+        # The legacy row's deviceId ("__legacy__") can never be a key in
+        # island_keys (reserved, see command_poller.py), so it is compared
+        # against the pre-0.16.0 scalar `state.island_key` instead — otherwise
+        # a device still authenticating via that scalar could never be tagged
+        # "this device" and would miss the self-revoke warning.
+        header_key = request.headers.get("X-Island-Key")
+        devices: list[dict] = []
+        if state is not None:
+            for device_id, entry in state.island_keys.items():
+                entry_key = entry.get("key")
+                devices.append(
+                    {
+                        "deviceId": device_id,
+                        "label": entry.get("label"),
+                        "pairedAt": entry.get("pairedAt"),
+                        "isLegacy": False,
+                        "isCurrent": bool(
+                            header_key and entry_key and hmac.compare_digest(header_key, entry_key)
+                        ),
+                    }
+                )
+            if state.island_key:
+                devices.append(
+                    {
+                        "deviceId": LEGACY_ISLAND_DEVICE_ID,
+                        "label": None,
+                        "pairedAt": None,
+                        "isLegacy": True,
+                        "isCurrent": bool(
+                            header_key
+                            and state.island_key
+                            and hmac.compare_digest(header_key, state.island_key)
+                        ),
+                    }
+                )
         return self.json({"devices": devices})
 
 

@@ -474,6 +474,24 @@ async def test_roster_marks_the_calling_device_as_current():
 
 
 @pytest.mark.asyncio
+async def test_roster_marks_the_legacy_row_as_current_when_caller_uses_the_scalar_key():
+    """A pre-0.16.0 device authenticates via the legacy scalar `island_key`
+    (still accepted by `all_island_keys()`), not a per-device entry -- the
+    `__legacy__` deviceId can never be a key in `island_keys` by design (see
+    `test_enable_island_rejects_the_reserved_legacy_id`). Its row must still
+    be tagged isCurrent, or that caller sees no "this device" tag and no
+    self-revoke warning when removing what looks like unidentified junk."""
+    view, hass = _island_devices_view(
+        island_key="legacy-secret",
+        island_keys={"phone": {"key": "k1", "label": "Pixel 7", "pairedAt": None}},
+    )
+    resp = await view.get(_req(hass, headers={"X-Island-Key": "legacy-secret"}))
+    devices = {d["deviceId"]: d for d in _body(resp)["devices"]}
+    assert devices["__legacy__"]["isCurrent"] is True
+    assert devices["phone"]["isCurrent"] is False
+
+
+@pytest.mark.asyncio
 async def test_roster_is_current_all_false_for_session_auth():
     """A browser session holds no island key, so nothing is 'this device'."""
     view, hass = _island_devices_view(island_keys={"phone": {"key": "k1", "label": None, "pairedAt": None}})
@@ -521,6 +539,28 @@ async def test_revoke_is_idempotent_over_http():
     req = lambda: _req(hass, headers={"X-Island-Key": "k2"}, json_body={"deviceId": "phone"})
     assert (await view.post(req())).status == 200
     assert (await view.post(req())).status == 200
+
+
+@pytest.mark.asyncio
+async def test_revoked_key_no_longer_authenticates():
+    """The security property the original brief's idempotency test happened
+    to cover before it was correctly rewritten to test idempotency alone
+    (see the DEVIATION note on `test_revoke_is_idempotent_over_http` above):
+    once a device is revoked, its key must stop authenticating immediately --
+    not just at the revoke endpoint, anywhere `_authorize` is checked."""
+    view, hass = _revoke_view(island_keys={
+        "phone": {"key": "k1", "label": None, "pairedAt": None},
+        "tablet": {"key": "k2", "label": None, "pairedAt": None},
+    })
+    resp = await view.post(_req(hass, headers={"X-Island-Key": "k2"}, json_body={"deviceId": "phone"}))
+    assert resp.status == 200
+
+    # "phone"'s key (k1) is now revoked. Reuse it against a DIFFERENT
+    # authenticated endpoint sharing the same keystore (the roster view) to
+    # confirm the revocation isn't scoped to the revoke endpoint alone.
+    roster_view = SvitgridIslandDevicesView(None)
+    roster_resp = await roster_view.get(_req(hass, headers={"X-Island-Key": "k1"}))
+    assert roster_resp.status == 401
 
 
 @pytest.mark.asyncio
