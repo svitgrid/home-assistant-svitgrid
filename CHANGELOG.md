@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.16.0
+## 0.16.0 — 2026-07-20
 - Island mode: each device now keeps its own key. Setting up island mode on a
   second device no longer signs the first device out.
 
