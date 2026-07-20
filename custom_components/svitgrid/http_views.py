@@ -19,6 +19,7 @@ Auth logic (``_BaseView._authorize``):
 
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 import time
@@ -791,6 +792,72 @@ class SvitgridSettlementInputView(_BaseView):
         return self.json({"inverter_id": inverter_id, "buckets": buckets})
 
 
+class SvitgridIslandDevicesView(_BaseView):
+    """Roster of devices holding island access.
+
+    Auth is `_BaseView._authorize` — a valid island key OR a logged-in HA
+    session.  This DIFFERS from the other control-ish endpoints, which are
+    key-only, and the difference is deliberate: being logged into the HA box is
+    stronger trust than holding a key, and it is the only way to manage the
+    roster if every app device has lost its key.  Do not "fix" this to
+    key-only.
+    """
+
+    url = "/api/svitgrid/island-devices"
+    name = "api:svitgrid:island-devices"
+
+    async def get(self, request):
+        if not await self._authorize(request):
+            return web.Response(status=401)
+        hass = request.app["hass"]
+        keystore = hass.data.get(DOMAIN, {}).get("keystore")
+        if keystore is None:
+            return self.json({"devices": []})
+
+        devices = await keystore.async_list_island_devices()
+
+        # Mark the caller's own row so the UI can say "this device".  A session
+        # -authenticated caller carries no key, so nothing matches — correct.
+        header_key = request.headers.get("X-Island-Key")
+        state = await keystore.load()
+        for device in devices:
+            entry = (state.island_keys.get(device["deviceId"]) or {}) if state else {}
+            entry_key = entry.get("key")
+            device["isCurrent"] = bool(
+                header_key and entry_key and hmac.compare_digest(header_key, entry_key)
+            )
+        return self.json({"devices": devices})
+
+
+class SvitgridIslandDeviceRevokeView(_BaseView):
+    """Remove one device's island access.  Same auth as the roster view."""
+
+    url = "/api/svitgrid/island-devices/revoke"
+    name = "api:svitgrid:island-devices:revoke"
+
+    async def post(self, request):
+        if not await self._authorize(request):
+            return web.Response(status=401)
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001
+            return self.json({"error": "bad_request"}, status_code=400)
+
+        device_id = body.get("deviceId")
+        if not isinstance(device_id, str) or not device_id:
+            return self.json({"error": "bad_request"}, status_code=400)
+
+        hass = request.app["hass"]
+        keystore = hass.data.get(DOMAIN, {}).get("keystore")
+        if keystore is None:
+            return self.json({"error": "unavailable"}, status_code=503)
+
+        removed = await keystore.async_revoke_island_key(device_id)
+        # Idempotent: `removed=False` means it was already gone, which is a
+        # success from the caller's point of view.
+        return self.json({"removed": removed})
+
+
 def register_views(hass: HomeAssistant, store) -> None:
     for view in (
         SvitgridLiveView(store),
@@ -805,6 +872,8 @@ def register_views(hass: HomeAssistant, store) -> None:
         SvitgridEventDetailView(),
         SvitgridCadenceView(store),
         SvitgridSettlementInputView(store),
+        SvitgridIslandDevicesView(store),
+        SvitgridIslandDeviceRevokeView(store),
     ):
         # View routes are GLOBAL to hass.http and PERSIST across config-entry
         # reloads, but the _views_registered guard in hass.data[DOMAIN] is

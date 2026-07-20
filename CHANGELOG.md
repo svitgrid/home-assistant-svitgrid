@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.17.0 — 2026-07-20
+
+### Added
+- **Remove a device's local-mode access.** The Svitgrid app now lists every
+  device holding local (island) access and lets you remove any of them.
+  Previously a device that had ever paired kept access permanently — there was
+  no way to revoke it. A device paired before 0.16.0 appears as an
+  unidentified entry and can also be removed.
+
 ## 0.16.0 — 2026-07-20
 
 ### Changed

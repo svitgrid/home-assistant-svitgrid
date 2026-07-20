@@ -14,6 +14,7 @@ env's pinned homeassistant (pre-existing, documented collection failure).
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import sys
 import types
@@ -346,3 +347,201 @@ async def test_enable_island_ignores_a_non_string_label():
     await _run_enable_island(ks, {"islandKey": "k1", "deviceId": "phone", "deviceLabel": {"a": 1}})
     state = await ks.load()
     assert state.island_keys["phone"]["label"] is None
+
+
+# ---------------------------------------------------------------------------
+# HTTP: GET /api/svitgrid/island-devices, POST /api/svitgrid/island-devices/revoke
+#
+# Request-faking approach modelled on `tests/test_http_views_island_auth.py`
+# (read that file first): a minimal fake request exposing exactly what
+# `_BaseView._authorize` and the view bodies touch — `.app["hass"]`,
+# `.headers` (case-insensitive `X-Island-Key` lookup), `request[...]`/`.get`
+# for the `ha_authenticated` session flag, plus an async `.json()` for POST
+# bodies (not needed by the GET-only auth tests but required for revoke).
+#
+# The keystore backing each view is the REAL `SvitgristKeystore` wired to the
+# in-memory `_FakeStore`/`_keystore`/`_blob` helpers already defined above in
+# this file (Task 1's own tests use them) — reusing the real revoke/list
+# logic here means these HTTP tests exercise the actual code path instead of
+# re-describing it in a second fake.
+# ---------------------------------------------------------------------------
+
+from custom_components.svitgrid.const import DOMAIN  # noqa: E402
+from custom_components.svitgrid.http_views import (  # noqa: E402
+    SvitgridIslandDevicesView,
+    SvitgridIslandDeviceRevokeView,
+)
+
+
+class _FakeHass:
+    """Stand-in for `hass`: only `.data` is touched by the views under test."""
+
+    def __init__(self) -> None:
+        self.data: dict = {}
+
+
+class _FakeHeaders(dict):
+    """Case-insensitive header dict matching aiohttp CIMultiDictProxy semantics."""
+
+    def get(self, key, default=None):  # noqa: D102
+        return super().get(key.lower(), default)
+
+    def __setitem__(self, key, value):  # noqa: D102
+        super().__setitem__(key.lower(), value)
+
+
+class _FakeIslandRequest:
+    """Minimal aiohttp-style request mock: HA session flag, X-Island-Key
+    header, and an optional JSON body for POSTs."""
+
+    def __init__(
+        self,
+        hass_obj,
+        *,
+        headers: dict | None = None,
+        authenticated: bool = False,
+        json_body=None,
+    ) -> None:
+        self.app = {"hass": hass_obj}
+        self.query: dict = {}
+        self._data: dict = {"ha_authenticated": authenticated}
+        self.headers = _FakeHeaders()
+        for key, value in (headers or {}).items():
+            self.headers[key] = value
+        self._json_body = json_body
+
+    def get(self, key, default=None):  # noqa: D102
+        return self._data.get(key, default)
+
+    def __getitem__(self, key):  # noqa: D105
+        return self._data[key]
+
+    async def json(self):
+        if self._json_body is None:
+            raise ValueError("no JSON body provided by test fake")
+        return self._json_body
+
+
+def _req(hass, *, headers=None, authenticated=False, json_body=None):
+    return _FakeIslandRequest(hass, headers=headers, authenticated=authenticated, json_body=json_body)
+
+
+def _body(resp):
+    return json.loads(resp.body)
+
+
+def _install_keystore(hass, *, island_key=None, island_keys=None):
+    ks = _keystore(_blob(island_key=island_key, island_keys=island_keys or {}))
+    hass.data[DOMAIN] = {"keystore": ks}
+    return ks
+
+
+def _island_devices_view(*, island_key=None, island_keys=None):
+    hass = _FakeHass()
+    _install_keystore(hass, island_key=island_key, island_keys=island_keys)
+    return SvitgridIslandDevicesView(None), hass
+
+
+def _revoke_view(*, island_keys=None):
+    hass = _FakeHass()
+    _install_keystore(hass, island_keys=island_keys)
+    return SvitgridIslandDeviceRevokeView(None), hass
+
+
+@pytest.mark.asyncio
+async def test_roster_endpoint_never_returns_a_key():
+    """Highest-value assertion in this change: assert against the WHOLE
+    serialised body, not a field allow-list."""
+    view, hass = _island_devices_view(island_key="old-secret", island_keys={
+        "phone": {"key": "super-secret", "label": "Pixel 7", "pairedAt": "2026-07-20T06:00:00Z"},
+    })
+    resp = await view.get(_req(hass, headers={"X-Island-Key": "super-secret"}))
+    body = _body(resp)
+    assert "super-secret" not in json.dumps(body)
+    assert "old-secret" not in json.dumps(body)
+
+
+@pytest.mark.asyncio
+async def test_roster_marks_the_calling_device_as_current():
+    view, hass = _island_devices_view(island_keys={
+        "phone": {"key": "k1", "label": "Pixel 7", "pairedAt": None},
+        "tablet": {"key": "k2", "label": "iPad Air", "pairedAt": None},
+    })
+    resp = await view.get(_req(hass, headers={"X-Island-Key": "k2"}))
+    devices = {d["deviceId"]: d for d in _body(resp)["devices"]}
+    assert devices["tablet"]["isCurrent"] is True
+    assert devices["phone"]["isCurrent"] is False
+
+
+@pytest.mark.asyncio
+async def test_roster_is_current_all_false_for_session_auth():
+    """A browser session holds no island key, so nothing is 'this device'."""
+    view, hass = _island_devices_view(island_keys={"phone": {"key": "k1", "label": None, "pairedAt": None}})
+    resp = await view.get(_req(hass, authenticated=True))
+    assert all(d["isCurrent"] is False for d in _body(resp)["devices"])
+
+
+@pytest.mark.asyncio
+async def test_roster_rejects_unauthenticated():
+    view, hass = _island_devices_view(island_keys={"phone": {"key": "k1", "label": None, "pairedAt": None}})
+    resp = await view.get(_req(hass))
+    assert resp.status == 401
+
+
+@pytest.mark.asyncio
+async def test_revoke_removes_the_device():
+    view, hass = _revoke_view(island_keys={
+        "phone": {"key": "k1", "label": None, "pairedAt": None},
+        "tablet": {"key": "k2", "label": None, "pairedAt": None},
+    })
+    resp = await view.post(_req(hass, headers={"X-Island-Key": "k2"}, json_body={"deviceId": "phone"}))
+    assert resp.status == 200
+    keystore = hass.data["svitgrid"]["keystore"]
+    assert await keystore.async_get_island_keys() == ["k2"]
+
+
+@pytest.mark.asyncio
+async def test_revoke_is_idempotent_over_http():
+    """Revoking an already-gone device must still return 200, not 404.
+
+    DEVIATION from the brief's draft of this test: the brief authenticated
+    both calls with the SAME key ("phone" revoking itself), so after the
+    first call succeeded that key was gone and the second call's own
+    X-Island-Key header no longer matched anything — a correct 401 (a
+    revoked key must stop authenticating; that's the entire point of this
+    feature), not evidence of broken idempotency. Re-using a dead key to
+    prove idempotency conflates the auth outcome with the revoke outcome.
+    Authenticating with a second, untouched device's key ("tablet") isolates
+    the thing actually under test: repeating the SAME revoke call is safe.
+    """
+    view, hass = _revoke_view(island_keys={
+        "phone": {"key": "k1", "label": None, "pairedAt": None},
+        "tablet": {"key": "k2", "label": None, "pairedAt": None},
+    })
+    req = lambda: _req(hass, headers={"X-Island-Key": "k2"}, json_body={"deviceId": "phone"})
+    assert (await view.post(req())).status == 200
+    assert (await view.post(req())).status == 200
+
+
+@pytest.mark.asyncio
+async def test_revoke_accepts_a_logged_in_ha_session():
+    """The recovery path: manage the roster from HA's own UI when no app
+    device holds a valid key."""
+    view, hass = _revoke_view(island_keys={"phone": {"key": "k1", "label": None, "pairedAt": None}})
+    resp = await view.post(_req(hass, authenticated=True, json_body={"deviceId": "phone"}))
+    assert resp.status == 200
+
+
+@pytest.mark.asyncio
+async def test_revoke_rejects_unauthenticated():
+    view, hass = _revoke_view(island_keys={"phone": {"key": "k1", "label": None, "pairedAt": None}})
+    resp = await view.post(_req(hass, json_body={"deviceId": "phone"}))
+    assert resp.status == 401
+
+
+@pytest.mark.asyncio
+async def test_revoke_rejects_a_missing_or_non_string_device_id():
+    view, hass = _revoke_view(island_keys={"phone": {"key": "k1", "label": None, "pairedAt": None}})
+    for body in ({}, {"deviceId": None}, {"deviceId": 12}, {"deviceId": {"a": 1}}, {"deviceId": ""}):
+        resp = await view.post(_req(hass, headers={"X-Island-Key": "k1"}, json_body=body))
+        assert resp.status == 400, body
