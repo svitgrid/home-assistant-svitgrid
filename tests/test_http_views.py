@@ -148,7 +148,12 @@ async def test_history_view_defaults_to_today_when_params_missing(hass):
     request = _FakeRequest(hass, query={})
     resp = await view.get(request)
     assert resp.status == 200
-    today = _today()
+    # The daily branch reads readings_daily, which is keyed by the HOUSEHOLD's
+    # local day -- so an omitted start/end defaults to the household's today,
+    # not UTC's. Asserting bare _today() here only passed while the fixture tz
+    # (US/Pacific) and UTC happened to share a date; it broke the first time
+    # the run straddled a local/UTC date boundary.
+    today = _today(hass.config.time_zone)
     assert store.history_args[1] == store.history_args[2]
     assert store.history_args[1] == today
 
