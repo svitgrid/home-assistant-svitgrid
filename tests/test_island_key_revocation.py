@@ -249,3 +249,100 @@ async def test_list_omits_legacy_row_when_no_scalar():
     ks = _keystore(_blob(island_keys={"phone": {"key": "k1", "label": None, "pairedAt": None}}))
     devices = await ks.async_list_island_devices()
     assert [d["deviceId"] for d in devices] == ["phone"]
+
+
+# ---------------------------------------------------------------------------
+# enable_island: records the device label + paired-at, and rejects the
+# reserved `__legacy__` id so a crafted client can't hide behind the
+# synthetic roster row and become un-revocable.
+#
+# Harness mirrors `test_island_multidevice_keys.py`'s
+# `test_enable_island_on_second_device_does_not_evict_first_devices_key` —
+# drives the poller's real `process_command` rather than reimplementing its
+# logic.
+# ---------------------------------------------------------------------------
+
+from unittest.mock import AsyncMock, MagicMock  # noqa: E402
+
+from custom_components.svitgrid.command_poller import process_command  # noqa: E402
+from custom_components.svitgrid.signing import generate_keypair  # noqa: E402
+
+
+def _make_api_client() -> MagicMock:
+    c = MagicMock()
+    c.ack_command = AsyncMock()
+    return c
+
+
+def _make_hass_entry(entry_data: dict | None = None):
+    hass = MagicMock()
+    hass.is_stopping = False
+    hass.config_entries = MagicMock()
+    hass.async_create_task = MagicMock()
+
+    entry = MagicMock()
+    entry.data = entry_data if entry_data is not None else {"cloud_ingest_enabled": True}
+    entry.entry_id = "e1"
+    return hass, entry
+
+
+async def _run_enable_island(keystore, payload):
+    """Thin helper: invokes the poller's real `process_command` with an
+    `enable_island` command carrying `payload`."""
+    priv, _pub_hex = generate_keypair()
+    api_client = _make_api_client()
+    hass, entry = _make_hass_entry()
+
+    await process_command(
+        command={
+            "commandId": "c-1",
+            "command": "enable_island",
+            "payload": payload,
+        },
+        api_client=api_client,
+        api_key="k",
+        trusted_public_keys_hex={},
+        our_private_key=priv,
+        our_signing_key_id="ours",
+        executor_version="0.3.0",
+        keystore=keystore,
+        hass=hass,
+        entry=entry,
+    )
+
+
+@pytest.mark.asyncio
+async def test_enable_island_stores_the_device_label():
+    ks = _keystore(_blob())
+    await _run_enable_island(ks, {"islandKey": "k1", "deviceId": "phone", "deviceLabel": "Pixel 7"})
+    state = await ks.load()
+    assert state.island_keys["phone"]["label"] == "Pixel 7"
+    assert state.island_keys["phone"]["pairedAt"] is not None
+
+
+@pytest.mark.asyncio
+async def test_enable_island_without_label_still_pairs():
+    ks = _keystore(_blob())
+    await _run_enable_island(ks, {"islandKey": "k1", "deviceId": "phone"})
+    state = await ks.load()
+    assert state.island_keys["phone"]["key"] == "k1"
+    assert state.island_keys["phone"]["label"] is None
+
+
+@pytest.mark.asyncio
+async def test_enable_island_rejects_the_reserved_legacy_id():
+    """A crafted client must not be able to pair AS the synthetic legacy row —
+    that would let it hide there and become un-revocable."""
+    ks = _keystore(_blob())
+    await _run_enable_island(ks, {"islandKey": "k1", "deviceId": "__legacy__"})
+    state = await ks.load()
+    assert "__legacy__" not in state.island_keys
+    assert state.island_keys["legacy"]["key"] == "k1"
+
+
+@pytest.mark.asyncio
+async def test_enable_island_ignores_a_non_string_label():
+    ks = _keystore(_blob())
+    await _run_enable_island(ks, {"islandKey": "k1", "deviceId": "phone", "deviceLabel": {"a": 1}})
+    state = await ks.load()
+    assert state.island_keys["phone"]["label"] is None

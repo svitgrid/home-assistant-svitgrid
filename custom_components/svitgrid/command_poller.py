@@ -28,6 +28,7 @@ from .const import (
     DISABLE_ISLAND_COMMAND,
     DISPATCHABLE_COMMANDS,
     ENABLE_ISLAND_COMMAND,
+    LEGACY_ISLAND_DEVICE_ID,
     POLL_NOW_COMMAND,
     REVOKE_TRUSTED_KEY_COMMAND,
     SET_CLOUD_ENDPOINT_COMMAND,
@@ -547,6 +548,21 @@ async def process_command(
                 if isinstance(raw_device_id, str) and raw_device_id
                 else "legacy"
             )
+
+            # `__legacy__` is reserved for the synthetic pre-0.16.0 row in the
+            # roster (see keystore.py's async_revoke_island_key /
+            # async_list_island_devices). A client pairing under it could hide
+            # behind that row and make its key un-revocable, so it falls back
+            # to the ordinary old-app bucket instead.
+            if island_device_id == LEGACY_ISLAND_DEVICE_ID:
+                island_device_id = "legacy"
+
+            raw_label = payload.get("deviceLabel")
+            island_device_label = (
+                raw_label if isinstance(raw_label, str) and raw_label else None
+            )
+            paired_at = _now_iso()
+
             if not island_key:
                 _LOGGER.warning(
                     "enable_island rejected — missing/empty islandKey. cmd_id=%s",
@@ -589,7 +605,12 @@ async def process_command(
                 )
                 return
 
-            await keystore.async_add_island_key(island_device_id, island_key)
+            await keystore.async_add_island_key(
+                island_device_id,
+                island_key,
+                label=island_device_label,
+                paired_at=paired_at,
+            )
 
             cloud_ingest = False
         else:

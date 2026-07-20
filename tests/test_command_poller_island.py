@@ -94,8 +94,14 @@ async def test_enable_island_seeds_keystore_updates_entry_and_acks_success():
     )
 
     # Keystore seeded with the island key, bucketed under "legacy" since no
-    # deviceId was sent (old-app payload shape).
-    keystore.async_add_island_key.assert_awaited_once_with("legacy", "K")
+    # deviceId was sent (old-app payload shape). Task 2 also stamps label
+    # (None — no deviceLabel in this payload) and pairedAt (non-None, real
+    # timestamp), so assert on call shape rather than exact kwargs.
+    keystore.async_add_island_key.assert_awaited_once()
+    call = keystore.async_add_island_key.await_args
+    assert call.args == ("legacy", "K")
+    assert call.kwargs["label"] is None
+    assert call.kwargs["paired_at"] is not None
     keystore.async_set_island_key.assert_not_awaited()
 
     # Entry updated with cloud_ingest_enabled=False
