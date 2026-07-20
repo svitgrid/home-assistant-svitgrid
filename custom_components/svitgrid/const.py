@@ -21,6 +21,12 @@ COMMAND_POLL_CEILING_S = 600
 STORAGE_KEY = "svitgrid"
 STORAGE_VERSION = 1
 
+# Synthetic device id for the pre-0.16.0 single-slot island key, which has no
+# real device id.  Reserved: `enable_island` must never store a device under it
+# (see command_poller), or a crafted client could hide behind the synthetic row
+# and make its own key un-revocable.
+LEGACY_ISLAND_DEVICE_ID = "__legacy__"
+
 # Required canonical entity-map fields
 REQUIRED_FIELDS = frozenset(
     {"batterySoc", "batteryPower", "batteryVoltage", "pv1Power", "gridPower", "loadPower"}

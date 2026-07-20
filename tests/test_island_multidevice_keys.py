@@ -90,7 +90,10 @@ def test_all_island_keys_includes_legacy_scalar():
 def test_all_island_keys_merges_scalar_and_map():
     state = _state(
         island_key="legacy-key",
-        island_keys={"phone": "phone-key", "tablet": "tablet-key"},
+        island_keys={
+            "phone": {"key": "phone-key", "label": None, "pairedAt": None},
+            "tablet": {"key": "tablet-key", "label": None, "pairedAt": None},
+        },
     )
     assert sorted(state.all_island_keys()) == [
         "legacy-key",
@@ -105,7 +108,9 @@ def test_all_island_keys_empty_when_nothing_set():
 
 def test_all_island_keys_dedupes():
     """Re-running setup on the same device must not produce a duplicate."""
-    state = _state(island_key="k", island_keys={"phone": "k"})
+    state = _state(
+        island_key="k", island_keys={"phone": {"key": "k", "label": None, "pairedAt": None}}
+    )
     assert state.all_island_keys() == ["k"]
 
 
