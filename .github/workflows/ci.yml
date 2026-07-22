@@ -18,7 +18,7 @@ jobs:
         # 3.12; this is a test-harness strictness issue. Will be re-enabled in
         # B2 once we add a config flow + proper async_unload_entry that fires
         # before the teardown fixture checks for leftover threads.
-        python-version: ["3.11"]
+        python-version: ["3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
