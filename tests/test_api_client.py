@@ -3,9 +3,19 @@ mocking via aioresponses pattern — here we directly mock the session."""
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
+# The real manifest version, so version bumps don't break these tests
+# (0.17.1 shipped with two hardcoded "0.17.0" assertions — never again).
+_MANIFEST_VERSION = json.loads(
+    (
+        Path(__file__).parent.parent / "custom_components" / "svitgrid" / "manifest.json"
+    ).read_text()
+)["version"]
 
 from custom_components.svitgrid.api_client import (
     BootstrapFailed,
@@ -468,7 +478,8 @@ class TestPushReadingsBatch:
         assert call.args[0].endswith("/api/v1/ingest/readings")
         assert call.kwargs["json"] == {
             "readings": [{"inverterId": "inv-1", "timestamp": "2026-06-24T10:00:00Z"}],
-            "haVersion": "0.17.0",  # tracks manifest.json version; census rides every batch
+            # tracks manifest.json version; census rides every batch
+            "haVersion": _MANIFEST_VERSION,
         }
 
     async def test_5xx_returns_none(self):
@@ -523,4 +534,4 @@ class TestBatchHaVersion:
         from custom_components.svitgrid.api_client import _integration_version
 
         _integration_version.cache_clear()
-        assert _integration_version() == "0.17.0"
+        assert _integration_version() == _MANIFEST_VERSION
