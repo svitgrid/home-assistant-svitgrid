@@ -335,9 +335,7 @@ async def run_loop(
                     # moment the sensors come online, instead of parking a full
                     # idle cadence (the first snapshot after an HA restart often
                     # sees not-yet-populated sensors).
-                    await asyncio.sleep(
-                        _FIRST_READING_RETRY_S if first_pass else next_sleep_s
-                    )
+                    await asyncio.sleep(_FIRST_READING_RETRY_S if first_pass else next_sleep_s)
                     continue
                 await store.append(payload)
                 # First instant reading is on the board; later iterations may
@@ -356,9 +354,7 @@ async def run_loop(
                 # of parking on the cold-start default; if the cloud is offline
                 # and never echoes, this costs just one extra quick reading
                 # before the next iteration falls back to the normal cadence.
-                await asyncio.sleep(
-                    _FIRST_READING_RETRY_S if was_first else next_sleep_s
-                )
+                await asyncio.sleep(_FIRST_READING_RETRY_S if was_first else next_sleep_s)
         except Exception as exc:  # noqa: BLE001
             _LOGGER.exception("Readings publish failed; will retry next tick")
             if activity is not None:

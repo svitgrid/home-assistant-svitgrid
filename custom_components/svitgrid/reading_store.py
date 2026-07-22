@@ -440,9 +440,7 @@ class ReadingStore:
                     if earliest_hour <= boundary_start
                     else self._next_day(boundary_day)
                 )
-                dbuckets = {
-                    key: rows for key, rows in dbuckets.items() if key[1] >= floor_day
-                }
+                dbuckets = {key: rows for key, rows in dbuckets.items() if key[1] >= floor_day}
                 if not dbuckets:
                     conn.commit()
                     self._set_meta_sync("daily_tz_bucket", marker)

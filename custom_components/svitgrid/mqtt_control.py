@@ -68,7 +68,11 @@ def apply_config(
 
     if "ingestIntervalMs" in data:
         interval_ms = data["ingestIntervalMs"]
-        if isinstance(interval_ms, (int, float)) and not isinstance(interval_ms, bool) and interval_ms > 0:
+        if (
+            isinstance(interval_ms, (int, float))
+            and not isinstance(interval_ms, bool)
+            and interval_ms > 0
+        ):
             state.interval_s = int(interval_ms / 1000)
 
     if data.get("updateCheck") is True and on_update_check is not None:

@@ -267,7 +267,12 @@ class SvitgridKeystore:
         ]
         if current.island_key:
             devices.append(
-                {"deviceId": LEGACY_ISLAND_DEVICE_ID, "label": None, "pairedAt": None, "isLegacy": True}
+                {
+                    "deviceId": LEGACY_ISLAND_DEVICE_ID,
+                    "label": None,
+                    "pairedAt": None,
+                    "isLegacy": True,
+                }
             )
         return devices
 

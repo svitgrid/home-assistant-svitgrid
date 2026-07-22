@@ -397,18 +397,28 @@ async def process_command(
 
         if hass is None or entry is None:
             await _send_signed_ack(
-                api_client=api_client, api_key=api_key, command_id=cmd_id,
-                success=False, rejected=True, reason="yaml_config_no_entry",
-                our_private_key=our_private_key, our_signing_key_id=our_signing_key_id,
+                api_client=api_client,
+                api_key=api_key,
+                command_id=cmd_id,
+                success=False,
+                rejected=True,
+                reason="yaml_config_no_entry",
+                our_private_key=our_private_key,
+                our_signing_key_id=our_signing_key_id,
                 executor_version=executor_version,
             )
             return
 
         if not inverter_id or mode not in ("native", "relay"):
             await _send_signed_ack(
-                api_client=api_client, api_key=api_key, command_id=cmd_id,
-                success=False, rejected=True, reason="invalid_payload",
-                our_private_key=our_private_key, our_signing_key_id=our_signing_key_id,
+                api_client=api_client,
+                api_key=api_key,
+                command_id=cmd_id,
+                success=False,
+                rejected=True,
+                reason="invalid_payload",
+                our_private_key=our_private_key,
+                our_signing_key_id=our_signing_key_id,
                 executor_version=executor_version,
             )
             return
@@ -421,12 +431,18 @@ async def process_command(
         if target_inv is None:
             _LOGGER.warning(
                 "set_read_source rejected — inverter %s not configured on this entry. cmd_id=%s",
-                inverter_id, cmd_id,
+                inverter_id,
+                cmd_id,
             )
             await _send_signed_ack(
-                api_client=api_client, api_key=api_key, command_id=cmd_id,
-                success=False, rejected=True, reason="unknown_inverter",
-                our_private_key=our_private_key, our_signing_key_id=our_signing_key_id,
+                api_client=api_client,
+                api_key=api_key,
+                command_id=cmd_id,
+                success=False,
+                rejected=True,
+                reason="unknown_inverter",
+                our_private_key=our_private_key,
+                our_signing_key_id=our_signing_key_id,
                 executor_version=executor_version,
             )
             return
@@ -442,12 +458,18 @@ async def process_command(
             _LOGGER.warning(
                 "set_read_source (relay) rejected — inverter %s has no entity_map; "
                 "reverting would leave it a dead relay. cmd_id=%s",
-                inverter_id, cmd_id,
+                inverter_id,
+                cmd_id,
             )
             await _send_signed_ack(
-                api_client=api_client, api_key=api_key, command_id=cmd_id,
-                success=False, rejected=True, reason="no_entity_map",
-                our_private_key=our_private_key, our_signing_key_id=our_signing_key_id,
+                api_client=api_client,
+                api_key=api_key,
+                command_id=cmd_id,
+                success=False,
+                rejected=True,
+                reason="no_entity_map",
+                our_private_key=our_private_key,
+                our_signing_key_id=our_signing_key_id,
                 executor_version=executor_version,
             )
             return
@@ -457,21 +479,33 @@ async def process_command(
             hc_wire = payload.get("harvestConfig") or {}
             if not hc_wire.get("ip") or not hc_wire.get("port"):
                 await _send_signed_ack(
-                    api_client=api_client, api_key=api_key, command_id=cmd_id,
-                    success=False, rejected=True, reason="invalid_payload",
-                    our_private_key=our_private_key, our_signing_key_id=our_signing_key_id,
+                    api_client=api_client,
+                    api_key=api_key,
+                    command_id=cmd_id,
+                    success=False,
+                    rejected=True,
+                    reason="invalid_payload",
+                    our_private_key=our_private_key,
+                    our_signing_key_id=our_signing_key_id,
                     executor_version=executor_version,
                 )
                 return
             if not await probe_modbus_reachable(hc_wire["ip"], hc_wire["port"]):
                 _LOGGER.error(
                     "set_read_source probe failed — %s:%s not reachable. cmd_id=%s",
-                    hc_wire.get("ip"), hc_wire.get("port"), cmd_id,
+                    hc_wire.get("ip"),
+                    hc_wire.get("port"),
+                    cmd_id,
                 )
                 await _send_signed_ack(
-                    api_client=api_client, api_key=api_key, command_id=cmd_id,
-                    success=False, rejected=True, reason="probe_failed",
-                    our_private_key=our_private_key, our_signing_key_id=our_signing_key_id,
+                    api_client=api_client,
+                    api_key=api_key,
+                    command_id=cmd_id,
+                    success=False,
+                    rejected=True,
+                    reason="probe_failed",
+                    our_private_key=our_private_key,
+                    our_signing_key_id=our_signing_key_id,
                     executor_version=executor_version,
                 )
                 return
@@ -486,9 +520,13 @@ async def process_command(
             }
 
         await _send_signed_ack(
-            api_client=api_client, api_key=api_key, command_id=cmd_id,
-            success=True, result={"mode": mode, "inverterId": inverter_id},
-            our_private_key=our_private_key, our_signing_key_id=our_signing_key_id,
+            api_client=api_client,
+            api_key=api_key,
+            command_id=cmd_id,
+            success=True,
+            result={"mode": mode, "inverterId": inverter_id},
+            our_private_key=our_private_key,
+            our_signing_key_id=our_signing_key_id,
             executor_version=executor_version,
         )
         try:
@@ -496,7 +534,10 @@ async def process_command(
         except Exception:  # noqa: BLE001
             _LOGGER.exception(
                 "set_read_source apply failed AFTER successful ACK — cmd_id=%s "
-                "inverter=%s mode=%s manual recovery required.", cmd_id, inverter_id, mode,
+                "inverter=%s mode=%s manual recovery required.",
+                cmd_id,
+                inverter_id,
+                mode,
             )
         return
 
@@ -544,9 +585,7 @@ async def process_command(
             # losing the credential after a restart.
             raw_device_id = payload.get("deviceId")
             island_device_id = (
-                raw_device_id
-                if isinstance(raw_device_id, str) and raw_device_id
-                else "legacy"
+                raw_device_id if isinstance(raw_device_id, str) and raw_device_id else "legacy"
             )
 
             # `__legacy__` is reserved for the synthetic pre-0.16.0 row in the
@@ -558,9 +597,7 @@ async def process_command(
                 island_device_id = "legacy"
 
             raw_label = payload.get("deviceLabel")
-            island_device_label = (
-                raw_label if isinstance(raw_label, str) and raw_label else None
-            )
+            island_device_label = raw_label if isinstance(raw_label, str) and raw_label else None
             paired_at = _now_iso()
 
             if not island_key:
@@ -656,7 +693,9 @@ async def process_command(
     # below and is dropped as "unsigned", leaving pendingCommandCount stuck > 0
     # and the poller re-fetching + re-skipping it every cycle.
     if cmd_type == POLL_NOW_COMMAND:
-        _LOGGER.debug("poll_now acknowledged (no-op — HA republishes on cadence). cmd_id=%s", cmd_id)
+        _LOGGER.debug(
+            "poll_now acknowledged (no-op — HA republishes on cadence). cmd_id=%s", cmd_id
+        )
         await _send_signed_ack(
             api_client=api_client,
             api_key=api_key,

@@ -23,7 +23,9 @@ def test_valid_full_payload_sets_both_fields():
 
 def test_valid_payload_as_bytes():
     state = MqttControlState()
-    apply_config(state, json.dumps({"mqttPublishReadings": True, "ingestIntervalMs": 60000}).encode())
+    apply_config(
+        state, json.dumps({"mqttPublishReadings": True, "ingestIntervalMs": 60000}).encode()
+    )
     assert state.mqtt_primary is True
     assert state.interval_s == 60
 
@@ -140,7 +142,9 @@ def test_update_check_true_fires_callback():
 def test_update_check_absent_or_falsy_does_not_fire():
     state = MqttControlState()
     calls = []
-    apply_config(state, json.dumps({"mqttPublishReadings": True}), on_update_check=lambda: calls.append(1))
+    apply_config(
+        state, json.dumps({"mqttPublishReadings": True}), on_update_check=lambda: calls.append(1)
+    )
     apply_config(state, json.dumps({"updateCheck": False}), on_update_check=lambda: calls.append(1))
     apply_config(state, json.dumps({"updateCheck": "yes"}), on_update_check=lambda: calls.append(1))
     assert calls == []
@@ -154,7 +158,9 @@ def test_update_check_callback_exception_is_swallowed():
         raise RuntimeError("boom")
 
     # must not raise, and must still apply sibling fields
-    apply_config(state, json.dumps({"updateCheck": True, "ingestIntervalMs": 30000}), on_update_check=boom)
+    apply_config(
+        state, json.dumps({"updateCheck": True, "ingestIntervalMs": 30000}), on_update_check=boom
+    )
     assert state.interval_s == 30
 
 

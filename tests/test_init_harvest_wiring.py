@@ -167,9 +167,7 @@ async def test_spec_load_failure_does_not_crash_setup(hass, enable_custom_integr
 
 
 @pytest.mark.asyncio
-async def test_config_entry_command_poller_receives_keystore(
-    hass, enable_custom_integrations
-):
+async def test_config_entry_command_poller_receives_keystore(hass, enable_custom_integrations):
     """The config-entry command poller MUST be spawned with the keystore that
     async_setup_entry builds and stores in hass.data[DOMAIN]["keystore"].
 
@@ -189,9 +187,7 @@ async def test_config_entry_command_poller_receives_keystore(
     with (
         patch("custom_components.svitgrid.run_readings_loop", new_callable=AsyncMock),
         patch("custom_components.svitgrid.run_direct_harvest_loop", new_callable=AsyncMock),
-        patch(
-            "custom_components.svitgrid.run_command_loop", new_callable=AsyncMock
-        ) as poller,
+        patch("custom_components.svitgrid.run_command_loop", new_callable=AsyncMock) as poller,
         patch("custom_components.svitgrid.run_mqtt_wake_loop", new_callable=AsyncMock),
         patch("custom_components.svitgrid.run_sender_loop", new_callable=AsyncMock),
         patch("custom_components.svitgrid.register_views"),

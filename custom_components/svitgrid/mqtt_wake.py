@@ -172,7 +172,9 @@ async def run_loop(
 
             def _on_message(_c, _u, msg, cfg_topic=cfg_topic):
                 if msg.topic == cfg_topic:
-                    _LOGGER.debug("MQTT config push topic=%s payload=%s", msg.topic, msg.payload[:256])
+                    _LOGGER.debug(
+                        "MQTT config push topic=%s payload=%s", msg.topic, msg.payload[:256]
+                    )
                     if control is not None:
                         # Runs on paho's network thread, not the asyncio loop —
                         # safe under CPython's GIL because apply_config only

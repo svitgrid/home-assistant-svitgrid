@@ -217,9 +217,7 @@ async def test_five_min_window_is_opt_in_too(hass):
     assert store.calls["five_min"] == ("", "2026-07-15", None)
 
     await SvitgridHistoryView(store).get(
-        _FakeRequest(
-            hass, query={"granularity": "5min", "day": "2026-07-15", "local_day": "1"}
-        )
+        _FakeRequest(hass, query={"granularity": "5min", "day": "2026-07-15", "local_day": "1"})
     )
     assert store.calls["five_min"] == ("", "2026-07-15", KYIV)
 
@@ -250,9 +248,7 @@ async def test_unflagged_day_default_stays_utc_today(hass, monkeypatch):
 
     monkeypatch.setattr(hv, "_utc_now_iso", lambda: "2026-07-14T22:30:00Z")
 
-    await SvitgridHistoryView(store).get(
-        _FakeRequest(hass, query={"granularity": "hourly"})
-    )
+    await SvitgridHistoryView(store).get(_FakeRequest(hass, query={"granularity": "hourly"}))
 
     # UTC day, and a UTC window -- exactly what the app expects today.
     assert store.calls["hourly"] == ("", "2026-07-14", None)

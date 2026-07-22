@@ -383,8 +383,12 @@ async def test_drain_publishes_mqtt_when_flag_set(tmp_path):
     pub = _RecordingPublisher()
 
     sent = await drain_once(
-        store=store, api_client=client, api_key="k", now_iso=now,
-        cadence=Cadence(interval_s=10), publisher=pub,
+        store=store,
+        api_client=client,
+        api_key="k",
+        now_iso=now,
+        cadence=Cadence(interval_s=10),
+        publisher=pub,
     )
 
     assert sent == 2
@@ -400,8 +404,12 @@ async def test_drain_no_mqtt_publish_when_flag_absent(tmp_path):
     pub = _RecordingPublisher()
 
     await drain_once(
-        store=store, api_client=client, api_key="k", now_iso=now,
-        cadence=Cadence(interval_s=10), publisher=pub,
+        store=store,
+        api_client=client,
+        api_key="k",
+        now_iso=now,
+        cadence=Cadence(interval_s=10),
+        publisher=pub,
     )
 
     assert pub.published == []  # server didn't opt this device in → no MQTT
@@ -416,8 +424,12 @@ async def test_drain_no_mqtt_publish_when_broker_unreachable(tmp_path):
     pub = _RecordingPublisher(connected=False)  # ensure_connected() -> False
 
     sent = await drain_once(
-        store=store, api_client=client, api_key="k", now_iso=now,
-        cadence=Cadence(interval_s=10), publisher=pub,
+        store=store,
+        api_client=client,
+        api_key="k",
+        now_iso=now,
+        cadence=Cadence(interval_s=10),
+        publisher=pub,
     )
 
     assert sent == 1  # HTTP send still succeeded (fail-open)
@@ -442,7 +454,7 @@ class _PubAckPublisher:
     async def ensure_connected(self) -> bool:
         return self._connected
 
-    async def publish_and_wait(self, payload: str, timeout: float = 5.0) -> bool:
+    async def publish_and_wait(self, payload: str, timeout: float = 5.0) -> bool:  # noqa: ASYNC109
         self.publish_and_wait_calls.append(payload)
         result = self._acks if isinstance(self._acks, bool) else self._acks[self._call_n]
         self._call_n += 1
@@ -467,8 +479,13 @@ async def test_drain_bootstrap_uses_http_even_when_mqtt_primary_and_connected(tm
     control = MqttControlState(mqtt_primary=True, bootstrapped=False)
 
     sent = await drain_once(
-        store=store, api_client=client, api_key="k", now_iso=now,
-        cadence=Cadence(interval_s=10), publisher=pub, control=control,
+        store=store,
+        api_client=client,
+        api_key="k",
+        now_iso=now,
+        cadence=Cadence(interval_s=10),
+        publisher=pub,
+        control=control,
     )
 
     assert sent == 2
@@ -490,8 +507,13 @@ async def test_drain_mqtt_primary_happy_path_skips_http(tmp_path):
     control = MqttControlState(mqtt_primary=True, bootstrapped=True)
 
     sent = await drain_once(
-        store=store, api_client=client, api_key="k", now_iso=now,
-        cadence=Cadence(interval_s=10), publisher=pub, control=control,
+        store=store,
+        api_client=client,
+        api_key="k",
+        now_iso=now,
+        cadence=Cadence(interval_s=10),
+        publisher=pub,
+        control=control,
     )
 
     assert sent == 2
@@ -513,8 +535,13 @@ async def test_drain_partial_puback_falls_back_to_http_for_unacked_only(tmp_path
     control = MqttControlState(mqtt_primary=True, bootstrapped=True)
 
     sent = await drain_once(
-        store=store, api_client=client, api_key="k", now_iso=now,
-        cadence=Cadence(interval_s=10), publisher=pub, control=control,
+        store=store,
+        api_client=client,
+        api_key="k",
+        now_iso=now,
+        cadence=Cadence(interval_s=10),
+        publisher=pub,
+        control=control,
     )
 
     assert len(client.calls) == 1 and len(client.calls[0]) == 1  # only the un-acked row
@@ -534,8 +561,13 @@ async def test_drain_flag_off_uses_http_as_today(tmp_path):
     control = MqttControlState(mqtt_primary=False, bootstrapped=True)
 
     sent = await drain_once(
-        store=store, api_client=client, api_key="k", now_iso=now,
-        cadence=Cadence(interval_s=10), publisher=pub, control=control,
+        store=store,
+        api_client=client,
+        api_key="k",
+        now_iso=now,
+        cadence=Cadence(interval_s=10),
+        publisher=pub,
+        control=control,
     )
 
     assert sent == 1
@@ -555,8 +587,13 @@ async def test_drain_publisher_not_connected_uses_http_as_today(tmp_path):
     control = MqttControlState(mqtt_primary=True, bootstrapped=True)
 
     sent = await drain_once(
-        store=store, api_client=client, api_key="k", now_iso=now,
-        cadence=Cadence(interval_s=10), publisher=pub, control=control,
+        store=store,
+        api_client=client,
+        api_key="k",
+        now_iso=now,
+        cadence=Cadence(interval_s=10),
+        publisher=pub,
+        control=control,
     )
 
     assert sent == 1
@@ -581,8 +618,13 @@ async def test_drain_applies_config_cadence_on_mqtt_primary_path(tmp_path):
     cadence = Cadence(interval_s=10)
 
     sent = await drain_once(
-        store=store, api_client=client, api_key="k", now_iso=now,
-        cadence=cadence, publisher=pub, control=control,
+        store=store,
+        api_client=client,
+        api_key="k",
+        now_iso=now,
+        cadence=cadence,
+        publisher=pub,
+        control=control,
     )
 
     assert sent == 1
@@ -603,8 +645,12 @@ async def test_drain_applies_config_cadence_on_http_path(tmp_path):
     cadence = Cadence(interval_s=10)
 
     sent = await drain_once(
-        store=store, api_client=client, api_key="k", now_iso=now,
-        cadence=cadence, control=control,
+        store=store,
+        api_client=client,
+        api_key="k",
+        now_iso=now,
+        cadence=cadence,
+        control=control,
     )
 
     assert sent == 1

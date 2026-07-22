@@ -26,9 +26,7 @@ import hmac
 from homeassistant.helpers.http import KEY_AUTHENTICATED
 
 
-def island_key_present_and_valid(
-    request: object, island_keys: list[str] | str | None
-) -> bool:
+def island_key_present_and_valid(request: object, island_keys: list[str] | str | None) -> bool:
     """Return True iff the request carries an X-Island-Key header matching ANY
     registered key.
 
@@ -63,9 +61,7 @@ def island_key_present_and_valid(
     return matched
 
 
-def island_request_authorized(
-    request: object, island_keys: list[str] | str | None
-) -> bool:
+def island_request_authorized(request: object, island_keys: list[str] | str | None) -> bool:
     """Return True iff the request is authorized for island read endpoints.
 
     A request is authorized if EITHER:

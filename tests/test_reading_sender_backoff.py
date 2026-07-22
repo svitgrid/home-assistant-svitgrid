@@ -96,8 +96,12 @@ async def test_401_leaves_rows_pending_and_enters_auth_cooldown(tmp_path):
     health = SenderHealth(now=now)
 
     sent = await drain_once(
-        store=store, api_client=client, api_key="k", now_iso=NOW,
-        cadence=Cadence(interval_s=10), health=health,
+        store=store,
+        api_client=client,
+        api_key="k",
+        now_iso=NOW,
+        cadence=Cadence(interval_s=10),
+        health=health,
     )
 
     assert sent == 0
@@ -115,16 +119,24 @@ async def test_auth_cooldown_blocks_http_entirely(tmp_path):
     health = SenderHealth(now=now)
 
     await drain_once(
-        store=store, api_client=client, api_key="k", now_iso=NOW,
-        cadence=Cadence(interval_s=10), health=health,
+        store=store,
+        api_client=client,
+        api_key="k",
+        now_iso=NOW,
+        cadence=Cadence(interval_s=10),
+        health=health,
     )
     assert len(client.calls) == 1
 
     # Every drain inside the cooldown must be a no-op — zero HTTP.
     for _ in range(5):
         sent = await drain_once(
-            store=store, api_client=client, api_key="k", now_iso=NOW,
-            cadence=Cadence(interval_s=10), health=health,
+            store=store,
+            api_client=client,
+            api_key="k",
+            now_iso=NOW,
+            cadence=Cadence(interval_s=10),
+            health=health,
         )
         assert sent == 0
     assert len(client.calls) == 1
@@ -132,8 +144,12 @@ async def test_auth_cooldown_blocks_http_entirely(tmp_path):
     # After the cooldown lapses, the sender tries again.
     advance(AUTH_COOLDOWN_S + 1)
     await drain_once(
-        store=store, api_client=client, api_key="k", now_iso=NOW,
-        cadence=Cadence(interval_s=10), health=health,
+        store=store,
+        api_client=client,
+        api_key="k",
+        now_iso=NOW,
+        cadence=Cadence(interval_s=10),
+        health=health,
     )
     assert len(client.calls) == 2
 
@@ -147,8 +163,12 @@ async def test_non_401_reject_still_marks_failed(tmp_path):
     health = SenderHealth(now=now)
 
     await drain_once(
-        store=store, api_client=client, api_key="k", now_iso=NOW,
-        cadence=Cadence(interval_s=10), health=health,
+        store=store,
+        api_client=client,
+        api_key="k",
+        now_iso=NOW,
+        cadence=Cadence(interval_s=10),
+        health=health,
     )
     assert store._count_by_state_sync() == {"failed": 1}
     assert health.in_cooldown()  # batch failure escalates the backoff
@@ -165,8 +185,12 @@ async def test_transient_5xx_leaves_rows_pending(tmp_path):
     health = SenderHealth(now=now)
 
     sent = await drain_once(
-        store=store, api_client=client, api_key="k", now_iso=NOW,
-        cadence=Cadence(interval_s=10), health=health,
+        store=store,
+        api_client=client,
+        api_key="k",
+        now_iso=NOW,
+        cadence=Cadence(interval_s=10),
+        health=health,
     )
     assert sent == 0
     assert store._count_by_state_sync() == {"pending": 1}
@@ -226,8 +250,12 @@ async def test_per_item_all_failed_escalates_backoff(tmp_path):
     health = SenderHealth(now=now)
 
     sent = await drain_once(
-        store=store, api_client=client, api_key="k", now_iso=NOW,
-        cadence=Cadence(interval_s=10), health=health,
+        store=store,
+        api_client=client,
+        api_key="k",
+        now_iso=NOW,
+        cadence=Cadence(interval_s=10),
+        health=health,
     )
     assert sent == 0
     assert store._count_by_state_sync() == {"failed": 1}
@@ -239,17 +267,19 @@ async def test_partial_success_resets_streak(tmp_path):
     store = _store(tmp_path)
     store._append_sync({"inverterId": "inv-1", "timestamp": TS})
     store._append_sync({"inverterId": "inv-1", "timestamp": "2026-07-22T10:00:05Z"})
-    client = _FakeClient(
-        {"results": [{"ok": True}, {"ok": False, "error": "nope"}]}
-    )
+    client = _FakeClient({"results": [{"ok": True}, {"ok": False, "error": "nope"}]})
     now, advance = _clock()
     health = SenderHealth(now=now)
     health.note_batch_failure()  # pre-existing streak...
     advance(11)  # ...whose cooldown has lapsed (else the guard blocks the drain)
 
     sent = await drain_once(
-        store=store, api_client=client, api_key="k", now_iso=NOW,
-        cadence=Cadence(interval_s=10), health=health,
+        store=store,
+        api_client=client,
+        api_key="k",
+        now_iso=NOW,
+        cadence=Cadence(interval_s=10),
+        health=health,
     )
     assert sent == 1
     assert not health.in_cooldown()  # any accepted row proves the pipe works
@@ -264,7 +294,10 @@ async def test_drain_without_health_is_unchanged(tmp_path):
     client = _FakeClient({"results": [{"ok": True}]})
 
     sent = await drain_once(
-        store=store, api_client=client, api_key="k", now_iso=NOW,
+        store=store,
+        api_client=client,
+        api_key="k",
+        now_iso=NOW,
         cadence=Cadence(interval_s=10),
     )
     assert sent == 1

@@ -197,7 +197,9 @@ async def test_revoke_removes_only_the_named_device():
 @pytest.mark.asyncio
 async def test_revoke_legacy_clears_the_scalar_only():
     ks = _keystore(
-        _blob(island_key="old", island_keys={"phone": {"key": "k1", "label": None, "pairedAt": None}})
+        _blob(
+            island_key="old", island_keys={"phone": {"key": "k1", "label": None, "pairedAt": None}}
+        )
     )
     removed = await ks.async_revoke_island_key("__legacy__")
     assert removed is True
@@ -368,8 +370,8 @@ async def test_enable_island_ignores_a_non_string_label():
 
 from custom_components.svitgrid.const import DOMAIN  # noqa: E402
 from custom_components.svitgrid.http_views import (  # noqa: E402
-    SvitgridIslandDevicesView,
     SvitgridIslandDeviceRevokeView,
+    SvitgridIslandDevicesView,
 )
 
 
@@ -423,7 +425,9 @@ class _FakeIslandRequest:
 
 
 def _req(hass, *, headers=None, authenticated=False, json_body=None):
-    return _FakeIslandRequest(hass, headers=headers, authenticated=authenticated, json_body=json_body)
+    return _FakeIslandRequest(
+        hass, headers=headers, authenticated=authenticated, json_body=json_body
+    )
 
 
 def _body(resp):
@@ -452,9 +456,16 @@ def _revoke_view(*, island_keys=None):
 async def test_roster_endpoint_never_returns_a_key():
     """Highest-value assertion in this change: assert against the WHOLE
     serialised body, not a field allow-list."""
-    view, hass = _island_devices_view(island_key="old-secret", island_keys={
-        "phone": {"key": "super-secret", "label": "Pixel 7", "pairedAt": "2026-07-20T06:00:00Z"},
-    })
+    view, hass = _island_devices_view(
+        island_key="old-secret",
+        island_keys={
+            "phone": {
+                "key": "super-secret",
+                "label": "Pixel 7",
+                "pairedAt": "2026-07-20T06:00:00Z",
+            },
+        },
+    )
     resp = await view.get(_req(hass, headers={"X-Island-Key": "super-secret"}))
     body = _body(resp)
     assert "super-secret" not in json.dumps(body)
@@ -463,10 +474,12 @@ async def test_roster_endpoint_never_returns_a_key():
 
 @pytest.mark.asyncio
 async def test_roster_marks_the_calling_device_as_current():
-    view, hass = _island_devices_view(island_keys={
-        "phone": {"key": "k1", "label": "Pixel 7", "pairedAt": None},
-        "tablet": {"key": "k2", "label": "iPad Air", "pairedAt": None},
-    })
+    view, hass = _island_devices_view(
+        island_keys={
+            "phone": {"key": "k1", "label": "Pixel 7", "pairedAt": None},
+            "tablet": {"key": "k2", "label": "iPad Air", "pairedAt": None},
+        }
+    )
     resp = await view.get(_req(hass, headers={"X-Island-Key": "k2"}))
     devices = {d["deviceId"]: d for d in _body(resp)["devices"]}
     assert devices["tablet"]["isCurrent"] is True
@@ -494,25 +507,33 @@ async def test_roster_marks_the_legacy_row_as_current_when_caller_uses_the_scala
 @pytest.mark.asyncio
 async def test_roster_is_current_all_false_for_session_auth():
     """A browser session holds no island key, so nothing is 'this device'."""
-    view, hass = _island_devices_view(island_keys={"phone": {"key": "k1", "label": None, "pairedAt": None}})
+    view, hass = _island_devices_view(
+        island_keys={"phone": {"key": "k1", "label": None, "pairedAt": None}}
+    )
     resp = await view.get(_req(hass, authenticated=True))
     assert all(d["isCurrent"] is False for d in _body(resp)["devices"])
 
 
 @pytest.mark.asyncio
 async def test_roster_rejects_unauthenticated():
-    view, hass = _island_devices_view(island_keys={"phone": {"key": "k1", "label": None, "pairedAt": None}})
+    view, hass = _island_devices_view(
+        island_keys={"phone": {"key": "k1", "label": None, "pairedAt": None}}
+    )
     resp = await view.get(_req(hass))
     assert resp.status == 401
 
 
 @pytest.mark.asyncio
 async def test_revoke_removes_the_device():
-    view, hass = _revoke_view(island_keys={
-        "phone": {"key": "k1", "label": None, "pairedAt": None},
-        "tablet": {"key": "k2", "label": None, "pairedAt": None},
-    })
-    resp = await view.post(_req(hass, headers={"X-Island-Key": "k2"}, json_body={"deviceId": "phone"}))
+    view, hass = _revoke_view(
+        island_keys={
+            "phone": {"key": "k1", "label": None, "pairedAt": None},
+            "tablet": {"key": "k2", "label": None, "pairedAt": None},
+        }
+    )
+    resp = await view.post(
+        _req(hass, headers={"X-Island-Key": "k2"}, json_body={"deviceId": "phone"})
+    )
     assert resp.status == 200
     keystore = hass.data["svitgrid"]["keystore"]
     assert await keystore.async_get_island_keys() == ["k2"]
@@ -532,11 +553,16 @@ async def test_revoke_is_idempotent_over_http():
     Authenticating with a second, untouched device's key ("tablet") isolates
     the thing actually under test: repeating the SAME revoke call is safe.
     """
-    view, hass = _revoke_view(island_keys={
-        "phone": {"key": "k1", "label": None, "pairedAt": None},
-        "tablet": {"key": "k2", "label": None, "pairedAt": None},
-    })
-    req = lambda: _req(hass, headers={"X-Island-Key": "k2"}, json_body={"deviceId": "phone"})
+    view, hass = _revoke_view(
+        island_keys={
+            "phone": {"key": "k1", "label": None, "pairedAt": None},
+            "tablet": {"key": "k2", "label": None, "pairedAt": None},
+        }
+    )
+
+    def req():
+        return _req(hass, headers={"X-Island-Key": "k2"}, json_body={"deviceId": "phone"})
+
     assert (await view.post(req())).status == 200
     assert (await view.post(req())).status == 200
 
@@ -548,11 +574,15 @@ async def test_revoked_key_no_longer_authenticates():
     (see the DEVIATION note on `test_revoke_is_idempotent_over_http` above):
     once a device is revoked, its key must stop authenticating immediately --
     not just at the revoke endpoint, anywhere `_authorize` is checked."""
-    view, hass = _revoke_view(island_keys={
-        "phone": {"key": "k1", "label": None, "pairedAt": None},
-        "tablet": {"key": "k2", "label": None, "pairedAt": None},
-    })
-    resp = await view.post(_req(hass, headers={"X-Island-Key": "k2"}, json_body={"deviceId": "phone"}))
+    view, hass = _revoke_view(
+        island_keys={
+            "phone": {"key": "k1", "label": None, "pairedAt": None},
+            "tablet": {"key": "k2", "label": None, "pairedAt": None},
+        }
+    )
+    resp = await view.post(
+        _req(hass, headers={"X-Island-Key": "k2"}, json_body={"deviceId": "phone"})
+    )
     assert resp.status == 200
 
     # "phone"'s key (k1) is now revoked. Reuse it against a DIFFERENT
@@ -582,6 +612,12 @@ async def test_revoke_rejects_unauthenticated():
 @pytest.mark.asyncio
 async def test_revoke_rejects_a_missing_or_non_string_device_id():
     view, hass = _revoke_view(island_keys={"phone": {"key": "k1", "label": None, "pairedAt": None}})
-    for body in ({}, {"deviceId": None}, {"deviceId": 12}, {"deviceId": {"a": 1}}, {"deviceId": ""}):
+    for body in (
+        {},
+        {"deviceId": None},
+        {"deviceId": 12},
+        {"deviceId": {"a": 1}},
+        {"deviceId": ""},
+    ):
         resp = await view.post(_req(hass, headers={"X-Island-Key": "k1"}, json_body=body))
         assert resp.status == 400, body

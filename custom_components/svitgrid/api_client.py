@@ -25,6 +25,7 @@ def _integration_version() -> str | None:
     except Exception:  # noqa: BLE001 — census is best-effort
         return None
 
+
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -218,9 +219,7 @@ class SvitgridApiClient:
         ha_version = _integration_version()
         if ha_version:
             body["haVersion"] = ha_version
-        async with self._session.post(
-            url, headers={"x-api-key": api_key}, json=body
-        ) as resp:
+        async with self._session.post(url, headers={"x-api-key": api_key}, json=body) as resp:
             if resp.status >= 500:
                 _LOGGER.warning(
                     "push_readings_batch failed (transient): status=%s body=%s",

@@ -30,9 +30,7 @@ def _reading(ts: str, pv: float, inverter_id: str = "inv-1") -> dict:
 
 
 def _days(store, inverter_id="inv-1"):
-    return [
-        d["day"] for d in store._history_range_sync(inverter_id, "2000-01-01", "2099-12-31")
-    ]
+    return [d["day"] for d in store._history_range_sync(inverter_id, "2000-01-01", "2099-12-31")]
 
 
 def _seed_utc_bucketed(store, readings, now_iso="2026-07-20T00:00:00Z"):

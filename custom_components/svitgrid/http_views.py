@@ -128,9 +128,7 @@ class SvitgridTodayView(_BaseView):
             return web.Response(status=401)
         tz_name = _hass_tz(request)
         day = _today(tz_name)
-        return self.json(
-            {"day": day, "inverters": await self._store.today_summary(day, tz_name)}
-        )
+        return self.json({"day": day, "inverters": await self._store.today_summary(day, tz_name)})
 
 
 class SvitgridHistoryView(_BaseView):

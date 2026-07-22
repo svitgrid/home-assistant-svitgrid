@@ -23,9 +23,7 @@ class TestReadingsTopic:
         )
 
     def test_falls_back_to_wake_topic_swap(self):
-        assert (
-            readings_topic({"topic": "devices/kBRkv3/wake"}) == "devices/kBRkv3/readings"
-        )
+        assert readings_topic({"topic": "devices/kBRkv3/wake"}) == "devices/kBRkv3/readings"
 
     def test_none_when_neither_usable(self):
         assert readings_topic({}) is None
