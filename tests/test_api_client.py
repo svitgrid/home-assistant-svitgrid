@@ -11,11 +11,9 @@ import pytest
 
 # The real manifest version, so version bumps don't break these tests
 # (0.17.1 shipped with two hardcoded "0.17.0" assertions — never again).
-_MANIFEST_VERSION = json.loads(
-    (
-        Path(__file__).parent.parent / "custom_components" / "svitgrid" / "manifest.json"
-    ).read_text()
-)["version"]
+_REPO_ROOT = Path(__file__).parent.parent
+_MANIFEST_PATH = _REPO_ROOT / "custom_components" / "svitgrid" / "manifest.json"
+_MANIFEST_VERSION = json.loads(_MANIFEST_PATH.read_text())["version"]
 
 from custom_components.svitgrid.api_client import (
     BootstrapFailed,
