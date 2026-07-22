@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.17.1 — 2026-07-23
+
+### Fixed
+- **Failed uploads now back off instead of retrying every 5 seconds.** If the
+  cloud rejected a reading — or the integration's API key had been revoked
+  (for example after re-pairing from another device) — the uploader retried
+  the same request every 5 seconds around the clock, silently generating tens
+  of thousands of pointless requests per day. Now: a rejected API key pauses
+  uploads for 15 minutes at a time (with a log message telling you to re-pair
+  if it persists), other failures back off progressively (10s doubling to a
+  5-minute cap, resetting on the first success), and a reading the server has
+  permanently refused ten times is set aside instead of blocking newer
+  readings behind it forever. Temporary server outages are unaffected:
+  readings still queue locally and the full backlog (up to 48h) uploads when
+  the connection recovers.
+
 ## 0.17.0 — 2026-07-20
 
 ### Added

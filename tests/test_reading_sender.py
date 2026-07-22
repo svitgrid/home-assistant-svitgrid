@@ -87,7 +87,11 @@ async def test_drain_respects_batch_max(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_drain_5xx_marks_failed(tmp_path):
+async def test_drain_5xx_leaves_rows_pending(tmp_path):
+    # Changed in 0.17.1: a transient 5xx no longer marks rows failed — it
+    # must not burn the MAX_SEND_ATTEMPTS give-up budget of readings that
+    # will succeed once the server recovers (48h backfill contract). Retry
+    # pacing now lives in SenderHealth (see test_reading_sender_backoff).
     store = _store(tmp_path)
     now = "2026-06-24T12:00:00Z"
     store._append_sync({"inverterId": "inv-1", "timestamp": "2026-06-24T10:00:00Z"})
@@ -97,7 +101,7 @@ async def test_drain_5xx_marks_failed(tmp_path):
         store=store, api_client=client, api_key="k", now_iso=now, cadence=cadence
     )
     assert sent == 0
-    assert store._count_by_state_sync() == {"failed": 1}
+    assert store._count_by_state_sync() == {"pending": 1}
 
 
 @pytest.mark.asyncio

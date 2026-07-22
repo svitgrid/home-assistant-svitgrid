@@ -27,6 +27,64 @@ class Cadence:
     interval_s: int = CADENCE_DEFAULT_INTERVAL_S
 
 
+# Cooldown after an auth failure (401): the API key is dead — retrying with
+# different readings can never succeed, and before 0.17.1 a dead-key install
+# hammered the cloud every 5s forever (~17k POSTs/day measured on one prod
+# install). 15 min bounds the recovery lag after the user re-pairs.
+AUTH_COOLDOWN_S = 15 * 60
+
+# Batch-failure backoff: base doubles per consecutive failure, capped.
+_FAILURE_BACKOFF_BASE_S = 10
+_FAILURE_BACKOFF_CAP_S = 5 * 60
+
+
+class SenderHealth:
+    """Sender-wide failure backoff, consulted by `drain_once`.
+
+    Row-level give-up lives in the store (MAX_SEND_ATTEMPTS); this class
+    paces the SENDER between batches so failures don't retry on the raw 5s
+    tick. Implements the "back off HARD" contract `ReadingRejected`'s
+    docstring has always promised:
+
+      - auth failure (401)      -> fixed long cooldown (AUTH_COOLDOWN_S)
+      - batch failure (4xx/5xx/all-items-failed)
+                                -> 10s, 20s, 40s ... capped at 5 min
+      - any accepted reading    -> reset
+
+    `now` is injectable (monotonic seconds) for tests.
+    """
+
+    def __init__(self, now=None) -> None:
+        import time
+
+        self._now = now or time.monotonic
+        self._cooldown_until: float | None = None
+        self._streak = 0
+
+    def in_cooldown(self) -> bool:
+        return self._cooldown_until is not None and self._now() < self._cooldown_until
+
+    def cooldown_remaining(self) -> float:
+        if self._cooldown_until is None:
+            return 0.0
+        return max(0.0, self._cooldown_until - self._now())
+
+    def note_auth_failure(self) -> None:
+        self._cooldown_until = self._now() + AUTH_COOLDOWN_S
+
+    def note_batch_failure(self) -> None:
+        self._streak += 1
+        delay = min(
+            _FAILURE_BACKOFF_CAP_S,
+            _FAILURE_BACKOFF_BASE_S * (2 ** (self._streak - 1)),
+        )
+        self._cooldown_until = self._now() + delay
+
+    def note_ok(self) -> None:
+        self._streak = 0
+        self._cooldown_until = None
+
+
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
@@ -42,6 +100,7 @@ async def _http_send(
     keys: list[tuple[str, str]],
     readings: list[Any],
     publisher,
+    health: SenderHealth | None = None,
 ) -> tuple[int, bool]:
     """POST ``readings`` (aligned with ``keys``) via the HTTP batch ingest,
     map the per-item results back onto the store, handle DeviceEvicted /
@@ -64,12 +123,31 @@ async def _http_send(
             lifecycle.deprovision(str(exc), now_iso)
             await _maybe(store.set_lifecycle(lifecycle.state, lifecycle.reason, lifecycle.since))
         return 0, False
-    except ReadingRejected:
+    except ReadingRejected as exc:
+        if exc.status == 401:
+            # AUTH failure, not a reading failure: the key is dead (rotated /
+            # re-paired elsewhere). The rows are fine — retrying them cannot
+            # help, so leave them pending, and back off HARD. Before 0.17.1
+            # this path re-sent every 5s forever.
+            _LOGGER.warning(
+                "cloud rejected the API key (401); backing off %ss. If this "
+                "persists, remove and re-pair the Svitgrid integration.",
+                AUTH_COOLDOWN_S,
+            )
+            if health is not None:
+                health.note_auth_failure()
+            return 0, False
         await _maybe(store.mark_failed(keys, now_iso))
+        if health is not None:
+            health.note_batch_failure()
         return 0, False
 
     if body is None:  # transient 5xx
-        await _maybe(store.mark_failed(keys, now_iso))
+        # Leave the rows PENDING — a server outage must not burn the per-row
+        # give-up budget (MAX_SEND_ATTEMPTS) of readings that will succeed on
+        # recovery. The sender-wide backoff below paces the retries instead.
+        if health is not None:
+            health.note_batch_failure()
         return 0, False
 
     if isinstance(body, dict) and body.get("stopped"):
@@ -98,6 +176,15 @@ async def _http_send(
         await _maybe(store.mark_sent(sent_keys))
     if failed_keys:
         await _maybe(store.mark_failed(failed_keys, now_iso))
+    # Any accepted reading proves the pipe works; a batch where EVERY item
+    # failed escalates the sender-wide backoff (these rows burn attempts and
+    # give up at MAX_SEND_ATTEMPTS, but pacing stops the 5s hammering the
+    # three prod installs exhibited before 0.17.1).
+    if health is not None:
+        if sent_keys:
+            health.note_ok()
+        elif failed_keys:
+            health.note_batch_failure()
 
     # Additive MQTT publish of the cloud-accepted readings. ISLAND-SAFE: this is
     # the cloud sender, which never runs for island-mode entries, so island
@@ -136,6 +223,7 @@ async def drain_once(
     discharge_positive_ids: set[str] | None = None,
     publisher=None,
     control: MqttControlState | None = None,
+    health: SenderHealth | None = None,
 ) -> int:
     """Drain at most one batch. Returns number of rows marked 'sent'.
 
@@ -170,6 +258,13 @@ async def drain_once(
     # cadence logic, so they agree.
     if control is not None and control.interval_s is not None and control.interval_s > 0:
         cadence.interval_s = control.interval_s
+
+    # Failure backoff (0.17.1): while cooling down, the drain is a complete
+    # no-op — no store queries, no HTTP. The store's data-available event may
+    # still wake the loop on every captured reading; this guard makes those
+    # wake-ups free.
+    if health is not None and health.in_cooldown():
+        return 0
 
     # Age out anything beyond the backfill cap so it never clogs the queue.
     await _maybe(store.skip_aged(now_iso, cap_s))
@@ -219,6 +314,7 @@ async def drain_once(
                 keys=unacked_keys,
                 readings=unacked_readings,
                 publisher=publisher,
+                health=health,
             )
         return len(acked_keys) + http_sent
 
@@ -235,6 +331,7 @@ async def drain_once(
         keys=keys,
         readings=readings,
         publisher=publisher,
+        health=health,
     )
     if control is not None and response_ok:
         control.bootstrapped = True
@@ -261,6 +358,8 @@ async def run_sender_loop(
     # island mode).
     publisher = ReadingsMqttClient(api_client=api_client, api_key=api_key)
     wait_for_data = getattr(store, "wait_for_data", None)
+    # One health tracker per loop: failure backoff spans drains (0.17.1).
+    health = SenderHealth()
     try:
         while not hass.is_stopping and (lifecycle is None or lifecycle.active):
             try:
@@ -274,6 +373,7 @@ async def run_sender_loop(
                     discharge_positive_ids=discharge_positive_ids,
                     publisher=publisher,
                     control=control,
+                    health=health,
                 )
             except Exception:  # never let the sender loop die
                 _LOGGER.exception("sender drain failed")

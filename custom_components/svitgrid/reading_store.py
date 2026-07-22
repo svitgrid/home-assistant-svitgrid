@@ -13,6 +13,16 @@ from homeassistant.core import HomeAssistant
 
 from .local_time import local_day_of, local_day_window
 
+# Give-up ceiling for per-row send retries (0.17.1). A row that has failed
+# this many times is permanently rejected server-side (per-item ok:false /
+# batch 4xx) — before this cap existed, such rows were re-sent every 5s
+# sender tick FOREVER (`attempts` was incremented but never read), and
+# `ORDER BY ts ASC` let the poisoned oldest rows monopolize every batch.
+# Prod measured 3 installs at ~17k no-op POSTs/day each. Transient 5xx and
+# auth (401) failures deliberately do NOT increment attempts (see
+# reading_sender), so an outage never burns this budget.
+MAX_SEND_ATTEMPTS = 10
+
 # Tracks db_paths whose schema has already been created in this process so that
 # _create_schema (DDL) is not executed on every connection open.
 _INITIALIZED: set[str] = set()
@@ -186,11 +196,14 @@ class ReadingStore:
         floor = self._cap_boundary(now_iso, cap_s)
         conn = _connect(self._db_path)
         try:
+            # `attempts < MAX_SEND_ATTEMPTS` is belt-and-braces: mark_failed
+            # flips a row to 'skipped' at the cap, but legacy rows written
+            # before 0.17.1 may sit at high attempts while still 'failed'.
             cur = conn.execute(
                 "SELECT inverter_id, ts, payload, sync_state, attempts "
                 "FROM readings_raw WHERE sync_state IN ('pending','failed') "
-                "AND ts >= ? ORDER BY ts ASC LIMIT ?",
-                (floor, limit),
+                "AND attempts < ? AND ts >= ? ORDER BY ts ASC LIMIT ?",
+                (MAX_SEND_ATTEMPTS, floor, limit),
             )
             return [_row_to_dict(r) for r in cur.fetchall()]
         finally:
@@ -210,10 +223,14 @@ class ReadingStore:
     def _mark_failed_sync(self, keys: list[tuple[str, str]], now_iso: str) -> None:
         conn = _connect(self._db_path)
         try:
+            # Give-up at the cap: the row stops being sendable and stops
+            # head-of-line-blocking fresh readings behind it.
             conn.executemany(
-                "UPDATE readings_raw SET sync_state='failed', attempts=attempts+1, "
+                "UPDATE readings_raw SET "
+                "sync_state = CASE WHEN attempts + 1 >= ? THEN 'skipped' ELSE 'failed' END, "
+                "attempts = attempts + 1, "
                 "last_attempt_at=? WHERE inverter_id=? AND ts=?",
-                [(now_iso, inv, ts) for (inv, ts) in keys],
+                [(MAX_SEND_ATTEMPTS, now_iso, inv, ts) for (inv, ts) in keys],
             )
             conn.commit()
         finally:
