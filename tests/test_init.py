@@ -417,9 +417,16 @@ async def test_async_setup_entry_starts_publisher_and_poller(hass, enable_custom
     sender_kwargs = sender.call_args.kwargs
     assert sender_kwargs["api_key"] == "test-key"
 
-    # command loop received keystore=None and entry_data with the key material
+    # command loop receives a real keystore since the island multi-key work
+    # (0.16.0 gave every device its own key; setup now always constructs the
+    # keystore and hands it to the poller). This assertion previously pinned
+    # keystore=None from the pre-island design — stale, but invisible because
+    # main CI was broken (lint + a Python 3.11 matrix modern HA won't install
+    # on) from 0.17.0 until 0.17.1's cleanup.
     cp_kwargs = cp.call_args.kwargs
-    assert cp_kwargs["keystore"] is None
+    from custom_components.svitgrid.keystore import SvitgridKeystore
+
+    assert isinstance(cp_kwargs["keystore"], SvitgridKeystore)
     assert cp_kwargs["entry_data"]["signing_key_id"] == "ha-home-01"
 
 
