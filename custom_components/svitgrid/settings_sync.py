@@ -45,12 +45,14 @@ def registers_hash(regs: list[int]) -> int:
 
     Identical to firmware `settings_registers_hash` and server algorithm.
     Each 16-bit register is folded into low byte then high byte.
+    Uses 32-bit unsigned integer arithmetic throughout.
     """
     h = 2166136261
     for v in regs:
-        # Low byte
+        # Low byte: XOR and multiply, then mask to 32-bit unsigned
         h = ((h ^ (v & 0xFF)) * 16777619) & 0xFFFFFFFF
-        # High byte
+
+        # High byte: XOR and multiply, then mask to 32-bit unsigned
         h = ((h ^ ((v >> 8) & 0xFF)) * 16777619) & 0xFFFFFFFF
     return h
 
@@ -65,14 +67,14 @@ def should_upload(
     """Determine if config registers should be uploaded to the server.
 
     Four clauses (OR):
-    1. Bootstrap: cached_hash == 0 (first poll, no cache)
+    1. Bootstrap: last_uploaded_monotonic == 0 (never uploaded)
     2. Changed: new_hash != cached_hash (register state changed)
-    3. Fresh + unchanged: last_uploaded_monotonic == 0 (never uploaded, even if unchanged)
+    3. Clock skew (fail-safe): now_monotonic < last_uploaded_monotonic (system clock went backward)
     4. Heartbeat: now_monotonic >= last_uploaded_monotonic + heartbeat_s (periodic refresh)
     """
     return (
-        cached_hash == 0  # Bootstrap
+        last_uploaded_monotonic == 0  # Bootstrap (never uploaded)
         or new_hash != cached_hash  # Changed
-        or last_uploaded_monotonic == 0  # Fresh (never uploaded)
+        or now_monotonic < last_uploaded_monotonic  # Clock skew (fail-safe)
         or now_monotonic >= last_uploaded_monotonic + heartbeat_s  # Heartbeat
     )
