@@ -241,6 +241,47 @@ class SvitgridApiClient:
                 _LOGGER.debug("push_readings_batch: 2xx with non-JSON body")
                 return {}
 
+    async def sync_settings(
+        self,
+        *,
+        api_key: str,
+        inverter_id: str,
+        model_id: str,
+        start_register: int,
+        registers: list[int],
+    ) -> bool:
+        """POST one inverter's config-register block (TOU/work-mode mirror).
+
+        Returns True on 2xx, False on any non-2xx status OR transport error.
+        Deliberately never raises: settings_sync's hash/heartbeat cache only
+        advances on True, so callers treat False exactly like "retry next
+        cycle" — there is no separate exception-handling path to maintain."""
+        url = f"{self._base}/api/v1/edge-devices/sync-settings"
+        body = {
+            "inverterId": inverter_id,
+            "modelId": model_id,
+            "startRegister": start_register,
+            "registers": registers,
+        }
+        try:
+            async with self._session.post(
+                url, headers={"x-api-key": api_key}, json=body
+            ) as resp:
+                if 200 <= resp.status < 300:
+                    return True
+                _LOGGER.warning(
+                    "sync_settings rejected: status=%s body=%s inverter=%s",
+                    resp.status,
+                    await _err(resp),
+                    inverter_id,
+                )
+                return False
+        except Exception:  # noqa: BLE001 — any transport failure -> retry next cycle
+            _LOGGER.warning(
+                "sync_settings failed (transport error) inverter=%s", inverter_id, exc_info=True
+            )
+            return False
+
     async def get_preset(self, preset_id: str) -> dict | None:
         """GET a live preset (entityMap + version) from the public presets endpoint.
 

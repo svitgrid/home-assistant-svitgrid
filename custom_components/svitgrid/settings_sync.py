@@ -7,7 +7,9 @@ Mostly a pure module — no HA imports, no I/O — except for
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 
 from .harvest import transport
 
@@ -187,3 +189,184 @@ async def read_config_registers(
         offset += chunk_count
 
     return registers
+
+
+def _eligible_for_settings_sync(inv: dict) -> tuple[str, dict] | None:
+    """Return ``(model_id, harvest_config)`` if this inverter should be
+    settings-synced, else ``None``.
+
+    Eligible = a direct native ``harvest_config`` (solarman_v5 or modbus_tcp)
+    whose ``model_id`` has a known register range. Relay/preset inverters
+    (HA-entity ``entity_map``, no ``harvest_config`` at all) and MQTT-only
+    inverters are never eligible — they carry no register address space to
+    mirror, so they must never POST.
+    """
+    hc = inv.get("harvest_config")
+    if not hc:
+        return None
+    protocol = hc.get("protocol", "solarman_v5")
+    if protocol not in ("solarman_v5", "modbus_tcp"):
+        return None
+    model_id = hc.get("model_id")
+    if not model_id or config_range_for_model(model_id) is None:
+        return None
+    return model_id, hc
+
+
+async def sync_inverter_once(
+    hass,
+    api_client,
+    api_key: str,
+    inverter_id: str,
+    model_id: str,
+    cfg: dict,
+    cache: dict[str, tuple[int, int]],
+    *,
+    heartbeat_s: int = 1800,
+    now_monotonic_fn=time.monotonic,
+) -> bool:
+    """One settings-sync cycle for a single already-eligible inverter.
+
+    Read -> hash -> ``should_upload`` -> POST. ``cache`` maps
+    ``inverter_id -> (last_hash, last_uploaded_monotonic)`` and is updated
+    ONLY when the POST returns True (2xx) — a failed POST, or a cycle where
+    ``should_upload`` said no, leaves the cache untouched so the next cycle
+    re-evaluates from the same last-known-good state (bootstrap/changed/
+    heartbeat clauses all still apply next time).
+
+    Returns True iff a POST was sent and accepted.
+    """
+    registers = await read_config_registers(hass, cfg, model_id)
+    if registers is None:
+        _LOGGER.debug(
+            "settings_sync: register read failed for inverter %s (model %s), skipping",
+            inverter_id,
+            model_id,
+        )
+        return False
+
+    config_range = config_range_for_model(model_id)
+    if config_range is None:  # pragma: no cover — caller already filtered this
+        return False
+    start, _count = config_range
+
+    new_hash = registers_hash(registers)
+    cached_hash, last_uploaded = cache.get(inverter_id, (0, 0))
+    now = now_monotonic_fn()
+
+    if not should_upload(new_hash, cached_hash, last_uploaded, now, heartbeat_s):
+        return False
+
+    ok = await api_client.sync_settings(
+        api_key=api_key,
+        inverter_id=inverter_id,
+        model_id=model_id,
+        start_register=start,
+        registers=registers,
+    )
+    if ok:
+        cache[inverter_id] = (new_hash, now)
+    else:
+        _LOGGER.warning(
+            "settings_sync: POST failed/rejected for inverter %s; cache left "
+            "untouched, will retry next cycle",
+            inverter_id,
+        )
+    return bool(ok)
+
+
+async def settings_sync_tick(
+    hass,
+    api_client,
+    api_key: str,
+    inverters: list[dict],
+    cache: dict[str, tuple[int, int]],
+    *,
+    heartbeat_s: int = 1800,
+    now_monotonic_fn=time.monotonic,
+) -> None:
+    """One pass over every inverter on an entry: sync each eligible one.
+
+    Ineligible inverters (relay/preset — no ``harvest_config`` — or a
+    ``harvest_config`` whose model has no ``CONFIG_RANGES`` entry) are
+    skipped with zero reads and zero POSTs; this is the enforcement point for
+    "preset/MQTT-only inverters must never POST". A per-inverter exception is
+    caught and logged so one bad inverter can't stall the rest of the tick.
+    """
+    for inv in inverters:
+        eligible = _eligible_for_settings_sync(inv)
+        if eligible is None:
+            continue
+        model_id, cfg = eligible
+        inverter_id = inv.get("inverter_id")
+        if not inverter_id:
+            continue
+        try:
+            await sync_inverter_once(
+                hass,
+                api_client,
+                api_key,
+                inverter_id,
+                model_id,
+                cfg,
+                cache,
+                heartbeat_s=heartbeat_s,
+                now_monotonic_fn=now_monotonic_fn,
+            )
+        except Exception:  # noqa: BLE001 — one inverter's failure must not block others
+            _LOGGER.exception("settings_sync: tick failed for inverter %s", inverter_id)
+
+
+async def settings_sync_loop(
+    hass,
+    entry,
+    *,
+    lifecycle=None,
+    interval_s: int = 300,
+    heartbeat_s: int = 1800,
+    api_client=None,
+    sleep_fn=asyncio.sleep,
+    now_monotonic_fn=time.monotonic,
+) -> None:
+    """Every ``interval_s`` (default 300s / 5 min), settings-sync every
+    register-capable inverter on this config entry.
+
+    Lifecycle: exits when ``hass.is_stopping`` is True or (when provided)
+    ``lifecycle.active`` becomes False — same contract as the other
+    long-running loops (readings publisher, direct-harvest, command poller).
+
+    ``api_client`` defaults to a fresh ``SvitgridApiClient`` sharing hass's
+    shared aiohttp session (same construction pattern used elsewhere in
+    ``__init__.py``); pass one explicitly in tests. Re-reads
+    ``entry.data.get("inverters")`` every tick so a live options/entry update
+    (add/remove/edit inverter, switch read source) takes effect on the next
+    cycle without a reload. The per-inverter hash/heartbeat cache lives only
+    for the lifetime of this loop instance — a reload/restart resets it,
+    which just re-triggers each inverter's bootstrap clause once more on the
+    next tick (one harmless extra POST, not a correctness issue).
+    """
+    if api_client is None:
+        from homeassistant.helpers import aiohttp_client
+
+        from .api_client import SvitgridApiClient
+
+        session = aiohttp_client.async_get_clientsession(hass)
+        api_client = SvitgridApiClient(session, api_base=entry.data["api_base"])
+
+    api_key = entry.data["api_key"]
+    cache: dict[str, tuple[int, int]] = {}
+
+    _LOGGER.info("Settings-sync loop started for entry %s", entry.entry_id)
+    while not hass.is_stopping and (lifecycle is None or lifecycle.active):
+        inverters = entry.data.get("inverters") or []
+        await settings_sync_tick(
+            hass,
+            api_client,
+            api_key,
+            inverters,
+            cache,
+            heartbeat_s=heartbeat_s,
+            now_monotonic_fn=now_monotonic_fn,
+        )
+        await sleep_fn(interval_s)
+    _LOGGER.info("Settings-sync loop stopped for entry %s", entry.entry_id)

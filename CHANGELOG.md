@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.18.0 — 2026-07-25
+
+### Added
+- **Settings sync: TOU/work-mode register mirror for Solarman/Modbus inverters
+  (5-min cadence, hash-gated).** Direct-harvest inverters (native Solarman V5
+  or Modbus TCP, not the relay/HA-entity path) now mirror their TOU/work-mode
+  config register block to the cloud every 5 minutes, so the app can show and
+  reason about the inverter's actual on-device schedule. A hash of the
+  register block is cached per inverter; an unchanged block is skipped, and a
+  30-minute heartbeat re-uploads even unchanged registers so the cloud copy
+  never silently goes stale. A failed upload never marks the cache — the next
+  cycle retries with the same block. Preset/relay-only and MQTT-only
+  inverters are never read or uploaded for this.
+
 ## 0.17.1 — 2026-07-23
 
 ### Fixed

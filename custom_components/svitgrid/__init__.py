@@ -60,6 +60,7 @@ from .preset_refresh import refresh_entry_inverters
 from .reading_sender import Cadence, run_sender_loop
 from .reading_store import ReadingStore
 from .readings_publisher import run_loop as run_readings_loop
+from .settings_sync import settings_sync_loop as run_settings_sync_loop
 from .update import SvitgridUpdateCoordinator
 from .updater import read_installed_version
 
@@ -672,6 +673,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     command_task = None
     mqtt_wake_task = None
     scheduler_task = None
+    settings_sync_task = None
 
     if loops_active:
         for inv in inverters:
@@ -803,6 +805,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             name="svitgrid_mqtt_wake",
         )
 
+        # Task 11: settings-sync loop — mirrors config registers (TOU/work-mode
+        # block) for every direct-harvest (solarman_v5/modbus_tcp) inverter with
+        # a known CONFIG_RANGES entry every 5 min, hash-gated + 30-min heartbeat.
+        # Relay/preset-only entries are a no-op tick (settings_sync_tick's
+        # eligibility filter skips them) — spawned unconditionally like
+        # command_task so a later set_read_source switch to native picks it up
+        # without a reload.
+        settings_sync_task = hass.async_create_background_task(
+            run_settings_sync_loop(hass=hass, entry=entry, lifecycle=lifecycle),
+            name="svitgrid_settings_sync",
+        )
+
         # Island event scheduler — spawned ONLY in pure island mode (cloud-sync off).
         # With cloud_ingest_enabled=True the cloud engine handles calendar events;
         # running both would double-fire commands.
@@ -847,6 +861,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "command_task": command_task,
         "mqtt_wake_task": mqtt_wake_task,
         "scheduler_task": scheduler_task,
+        "settings_sync_task": settings_sync_task,
         "executors_by_inverter": executors_by_inverter,
         "activity": activity,
         "entry_data": dict(data),
@@ -882,7 +897,13 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     for task in (state.get("readings_tasks") or {}).values():
         if task and not task.done():
             task.cancel()
-    for key in ("command_task", "mqtt_wake_task", "sender_task", "scheduler_task"):
+    for key in (
+        "command_task",
+        "mqtt_wake_task",
+        "sender_task",
+        "scheduler_task",
+        "settings_sync_task",
+    ):
         task = state.get(key)
         if task and not task.done():
             task.cancel()
