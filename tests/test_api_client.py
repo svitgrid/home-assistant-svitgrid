@@ -25,6 +25,7 @@ from custom_components.svitgrid.api_client import (
     PublicKeyMismatch,
     RateLimited,
     ReadingRejected,
+    SettingsSyncRejected,
     SvitgridApiClient,
     SvitgridApiError,
 )
@@ -501,6 +502,76 @@ class TestPushReadingsBatch:
                 api_key="k" * 64,
                 readings=[{"inverterId": "i", "timestamp": "2026-06-25T10:00:00Z"}],
             )
+
+
+@pytest.mark.asyncio
+class TestSyncSettings:
+    """Item 4, 2026-07-25 final review: distinguish 4xx (permanent —
+    settings_sync must back off this inverter) from 5xx/transport
+    (transient — retry next cycle, unchanged)."""
+
+    async def test_2xx_returns_true(self):
+        session, _ = _mock_session_with_response(200, {})
+        client = SvitgridApiClient(session, api_base="https://api.example")
+        ok = await client.sync_settings(
+            api_key="k" * 64,
+            inverter_id="inv-1",
+            model_id="deye_sg04lp3",
+            start_register=115,
+            registers=[1, 2, 3],
+        )
+        assert ok is True
+
+    async def test_5xx_returns_false(self):
+        session, _ = _mock_session_with_response(503, {"error": "overloaded"})
+        client = SvitgridApiClient(session, api_base="https://api.example")
+        ok = await client.sync_settings(
+            api_key="k" * 64,
+            inverter_id="inv-1",
+            model_id="deye_sg04lp3",
+            start_register=115,
+            registers=[1, 2, 3],
+        )
+        assert ok is False
+
+    async def test_403_raises_settings_sync_rejected_with_status(self):
+        session, _ = _mock_session_with_response(403, {"error": "forbidden"})
+        client = SvitgridApiClient(session, api_base="https://api.example")
+        with pytest.raises(SettingsSyncRejected) as exc_info:
+            await client.sync_settings(
+                api_key="k" * 64,
+                inverter_id="inv-1",
+                model_id="deye_sg04lp3",
+                start_register=115,
+                registers=[1, 2, 3],
+            )
+        assert exc_info.value.status == 403
+
+    async def test_other_4xx_also_raises_settings_sync_rejected(self):
+        session, _ = _mock_session_with_response(400, {"error": "bad request"})
+        client = SvitgridApiClient(session, api_base="https://api.example")
+        with pytest.raises(SettingsSyncRejected) as exc_info:
+            await client.sync_settings(
+                api_key="k" * 64,
+                inverter_id="inv-1",
+                model_id="deye_sg04lp3",
+                start_register=115,
+                registers=[1, 2, 3],
+            )
+        assert exc_info.value.status == 400
+
+    async def test_transport_error_returns_false(self):
+        session = MagicMock()
+        session.post = MagicMock(side_effect=OSError("connection refused"))
+        client = SvitgridApiClient(session, api_base="https://api.example")
+        ok = await client.sync_settings(
+            api_key="k" * 64,
+            inverter_id="inv-1",
+            model_id="deye_sg04lp3",
+            start_register=115,
+            registers=[1, 2, 3],
+        )
+        assert ok is False
 
 
 class TestBatchHaVersion:

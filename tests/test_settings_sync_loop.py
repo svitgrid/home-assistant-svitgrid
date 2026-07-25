@@ -6,8 +6,13 @@ monotonic clock so cycles are fully deterministic (no real sleeps / real time).
 
 from __future__ import annotations
 
+from custom_components.svitgrid.api_client import SettingsSyncRejected
 from custom_components.svitgrid.harvest import transport
-from custom_components.svitgrid.settings_sync import settings_sync_tick
+from custom_components.svitgrid.settings_sync import (
+    SETTINGS_SYNC_BACKOFF_S,
+    settings_sync_tick,
+    sync_inverter_once,
+)
 
 
 class _FakeHass:
@@ -21,10 +26,13 @@ class _FakeHass:
 
 
 class _FakeApiClient:
-    """Records every sync_settings call; returns a fixed 2xx/non-2xx outcome."""
+    """Records every sync_settings call; returns a fixed 2xx/non-2xx outcome,
+    or raises [SettingsSyncRejected] when ``rejected_status`` is set (mirrors
+    the real client's 4xx behavior — see api_client.sync_settings)."""
 
-    def __init__(self, ok: bool = True):
+    def __init__(self, ok: bool = True, rejected_status: int | None = None):
         self.ok = ok
+        self.rejected_status = rejected_status
         self.calls: list[dict] = []
 
     async def sync_settings(
@@ -45,6 +53,8 @@ class _FakeApiClient:
                 "registers": list(registers),
             }
         )
+        if self.rejected_status is not None:
+            raise SettingsSyncRejected(self.rejected_status, "rejected")
         return self.ok
 
 
@@ -75,9 +85,19 @@ def _stub_transport_read(monkeypatch, fail: bool = False) -> None:
     def fake_read_solarman(cfg, ranges):
         if fail:
             raise OSError("connection refused")
-        unit_id, start, count, fc = ranges[0]
-        assert fc == "FC03"
-        return {unit_id: {addr: addr for addr in range(start, start + count)}}
+        # Item 6 (2026-07-25 final review): read_config_registers batches
+        # every chunk's range into a single transport call now (one
+        # connection), so the fake must build the combined result across ALL
+        # ranges passed in, not just the first — mirrors the real
+        # _read_solarman/_read_modbus, which already read a whole ranges
+        # list inside one connection.
+        out: dict = {}
+        for unit_id, start, count, fc in ranges:
+            assert fc == "FC03"
+            slot = out.setdefault(unit_id, {})
+            for addr in range(start, start + count):
+                slot[addr] = addr
+        return out
 
     monkeypatch.setattr(transport, "_read_solarman", fake_read_solarman)
 
@@ -202,6 +222,139 @@ async def test_transport_read_failure_never_posts(monkeypatch):
         hass, api, "key", [_harvest_inv()], cache, now_monotonic_fn=lambda: 0.0
     )
     assert api.calls == []
+
+
+# ─── 4xx backoff (item 4, 2026-07-25 final review) ─────────────────────────
+#
+# Permanent 403 loop for unbound devices: a 4xx (e.g. the device's api-key no
+# longer resolves to a bound household) is rejected forever by the server, so
+# retrying every 5-min tick just hammers it. On a SettingsSyncRejected (4xx),
+# the inverter must be skipped (no read, no POST) until SETTINGS_SYNC_BACKOFF_S
+# elapses. A 5xx / transport error is unaffected -- unchanged retry-next-cycle.
+
+
+async def test_403_backs_off_inverter_for_next_cycles(monkeypatch):
+    _stub_transport_read(monkeypatch)
+    hass = _FakeHass()
+    api = _FakeApiClient(rejected_status=403)
+    cache: dict = {}
+    backoff_until: dict = {}
+    clock = [1000.0]
+
+    await settings_sync_tick(
+        hass,
+        api,
+        "key",
+        [_harvest_inv()],
+        cache,
+        now_monotonic_fn=lambda: clock[0],
+        backoff_until=backoff_until,
+    )
+    assert len(api.calls) == 1  # the rejected attempt itself
+    assert "inv-1" not in cache
+    assert backoff_until["inv-1"] == clock[0] + SETTINGS_SYNC_BACKOFF_S
+
+    # Next several cycles, well within the backoff window: no further reads
+    # or POSTs at all for this inverter.
+    for _ in range(3):
+        clock[0] += 300  # one settings-sync interval
+        await settings_sync_tick(
+            hass,
+            api,
+            "key",
+            [_harvest_inv()],
+            cache,
+            now_monotonic_fn=lambda: clock[0],
+            backoff_until=backoff_until,
+        )
+    assert len(api.calls) == 1  # still just the original rejected attempt
+
+    # Backoff elapsed: the inverter is retried again.
+    clock[0] += SETTINGS_SYNC_BACKOFF_S
+    await settings_sync_tick(
+        hass,
+        api,
+        "key",
+        [_harvest_inv()],
+        cache,
+        now_monotonic_fn=lambda: clock[0],
+        backoff_until=backoff_until,
+    )
+    assert len(api.calls) == 2
+
+
+async def test_403_backoff_is_per_inverter(monkeypatch):
+    """A 403 on one inverter must not back off a different inverter on the
+    same entry."""
+    _stub_transport_read(monkeypatch)
+    hass = _FakeHass()
+    cache: dict = {}
+    backoff_until: dict = {}
+
+    api_rejected = _FakeApiClient(rejected_status=403)
+    await sync_inverter_once(
+        hass,
+        api_rejected,
+        "key",
+        "inv-rejected",
+        "deye_sg04lp3",
+        _harvest_inv("inv-rejected")["harvest_config"],
+        cache,
+        now_monotonic_fn=lambda: 0.0,
+        backoff_until=backoff_until,
+    )
+    assert "inv-rejected" in backoff_until
+
+    api_ok = _FakeApiClient(ok=True)
+    ok = await sync_inverter_once(
+        hass,
+        api_ok,
+        "key",
+        "inv-other",
+        "deye_sg04lp3",
+        _harvest_inv("inv-other")["harvest_config"],
+        cache,
+        now_monotonic_fn=lambda: 0.0,
+        backoff_until=backoff_until,
+    )
+    assert ok is True
+    assert len(api_ok.calls) == 1
+    assert "inv-other" not in backoff_until
+
+
+async def test_500_still_retries_next_cycle_unaffected_by_backoff(monkeypatch):
+    """A 5xx/transient failure must behave exactly as before: no backoff, and
+    the very next cycle retries (bootstrap clause: cache never seeded)."""
+    _stub_transport_read(monkeypatch)
+    hass = _FakeHass()
+    api = _FakeApiClient(ok=False)  # False == non-2xx/5xx-style failure, not raised
+    cache: dict = {}
+    backoff_until: dict = {}
+    clock = [0.0]
+
+    await settings_sync_tick(
+        hass,
+        api,
+        "key",
+        [_harvest_inv()],
+        cache,
+        now_monotonic_fn=lambda: clock[0],
+        backoff_until=backoff_until,
+    )
+    assert len(api.calls) == 1
+    assert backoff_until == {}  # no backoff armed for a transient failure
+
+    clock[0] += 300
+    await settings_sync_tick(
+        hass,
+        api,
+        "key",
+        [_harvest_inv()],
+        cache,
+        now_monotonic_fn=lambda: clock[0],
+        backoff_until=backoff_until,
+    )
+    assert len(api.calls) == 2  # retried, unaffected by any backoff logic
     assert cache == {}
 
 

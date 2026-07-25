@@ -11,9 +11,17 @@ import asyncio
 import logging
 import time
 
+from .api_client import SettingsSyncRejected
 from .harvest import transport
 
 _LOGGER = logging.getLogger(__name__)
+
+# How long a settings-sync-rejected (4xx) inverter is skipped before the
+# next POST attempt. A 403 (unbound/evicted device api-key) or other
+# validation rejection is permanent — the request would be rejected forever
+# — so retrying every 5-min tick just hammers the server. See item 4,
+# 2026-07-25 final review ("permanent 403 loop for unbound devices").
+SETTINGS_SYNC_BACKOFF_S = 6 * 60 * 60  # 6 hours
 
 # Config register ranges: model family → (start, count)
 # 3-phase and 1-phase models share the same register count (63 each)
@@ -108,6 +116,17 @@ async def read_config_registers(
     partial config once wiped a customer's TOU configuration, so a clean
     failure here is strictly preferable to guessing with incomplete data.
 
+    All chunk ranges are passed to the transport in a SINGLE call — one TCP
+    connection, not one per chunk. ``transport._read_solarman`` /
+    ``transport._read_modbus`` already accept a list of ``(unit_id, start,
+    count, fc)`` ranges and read every one of them inside one connection
+    (this is exactly what ``transport.read_raw``'s ``plan_ranges`` output
+    relies on), so splitting the 63-register config block into
+    ``chunk_size``-sized pieces only needs to change how many registers are
+    requested per range — not how many connections are opened. The
+    full-batch-or-none guard is unchanged: every address in the requested
+    range must be present in the response, or the whole read is discarded.
+
     Dispatches directly to the low-level ``transport._read_solarman`` /
     ``transport._read_modbus`` helpers (the same ones ``transport.read_raw``
     uses) via ``hass.async_add_executor_job``, since we already have an
@@ -153,40 +172,40 @@ async def read_config_registers(
 
     unit_id = int(cfg.get("slave_id", 1))
 
-    registers: list[int] = []
+    # Build every chunk's range up front and read them all in ONE transport
+    # call (one TCP connection) — see the docstring above.
+    ranges: list[tuple[int, int, int, str]] = []
     offset = 0
     while offset < count:
         chunk_count = min(chunk_size, count - offset)
         chunk_start = start + offset
-        ranges = [(unit_id, chunk_start, chunk_count, "FC03")]
+        ranges.append((unit_id, chunk_start, chunk_count, "FC03"))
+        offset += chunk_count
 
-        try:
-            raw = await hass.async_add_executor_job(read_fn, cfg, ranges)
-        except Exception as exc:  # noqa: BLE001 — any transport failure aborts the read
+    try:
+        raw = await hass.async_add_executor_job(read_fn, cfg, ranges)
+    except Exception as exc:  # noqa: BLE001 — any transport failure aborts the read
+        _LOGGER.debug(
+            "read_config_registers: batched read failed at addr=%s count=%s: %s",
+            start,
+            count,
+            exc,
+        )
+        return None
+
+    slot = raw.get(unit_id, {}) if raw else {}
+    registers: list[int] = []
+    for addr in range(start, start + count):
+        if addr not in slot:
             _LOGGER.debug(
-                "read_config_registers: chunk read failed at addr=%s count=%s: %s",
-                chunk_start,
-                chunk_count,
-                exc,
+                "read_config_registers: short/incomplete batched read at addr=%s "
+                "count=%s (missing register %s) — aborting, no partial result",
+                start,
+                count,
+                addr,
             )
             return None
-
-        slot = raw.get(unit_id, {}) if raw else {}
-        chunk_values: list[int] = []
-        for addr in range(chunk_start, chunk_start + chunk_count):
-            if addr not in slot:
-                _LOGGER.debug(
-                    "read_config_registers: short chunk at addr=%s count=%s "
-                    "(missing register %s) — aborting, no partial result",
-                    chunk_start,
-                    chunk_count,
-                    addr,
-                )
-                return None
-            chunk_values.append(slot[addr])
-
-        registers.extend(chunk_values)
-        offset += chunk_count
+        registers.append(slot[addr])
 
     return registers
 
@@ -224,6 +243,7 @@ async def sync_inverter_once(
     *,
     heartbeat_s: int = 1800,
     now_monotonic_fn=time.monotonic,
+    backoff_until: dict[str, float] | None = None,
 ) -> bool:
     """One settings-sync cycle for a single already-eligible inverter.
 
@@ -234,8 +254,28 @@ async def sync_inverter_once(
     re-evaluates from the same last-known-good state (bootstrap/changed/
     heartbeat clauses all still apply next time).
 
+    ``backoff_until`` maps ``inverter_id -> monotonic timestamp`` until which
+    this inverter is skipped entirely (no register read, no POST) after a
+    4xx ``SettingsSyncRejected`` — permanent rejections (e.g. an unbound
+    device api-key) would otherwise retry every 5-min tick forever (the A2
+    permanent-403-loop gap). A 5xx / transport error is unaffected and still
+    retries next cycle as before.
+
     Returns True iff a POST was sent and accepted.
     """
+    now = now_monotonic_fn()
+
+    if backoff_until is not None:
+        until = backoff_until.get(inverter_id)
+        if until is not None and now < until:
+            _LOGGER.debug(
+                "settings_sync: inverter %s still in 4xx backoff (until=%.0f, now=%.0f), skipping",
+                inverter_id,
+                until,
+                now,
+            )
+            return False
+
     registers = await read_config_registers(hass, cfg, model_id)
     if registers is None:
         _LOGGER.debug(
@@ -252,18 +292,29 @@ async def sync_inverter_once(
 
     new_hash = registers_hash(registers)
     cached_hash, last_uploaded = cache.get(inverter_id, (0, 0))
-    now = now_monotonic_fn()
 
     if not should_upload(new_hash, cached_hash, last_uploaded, now, heartbeat_s):
         return False
 
-    ok = await api_client.sync_settings(
-        api_key=api_key,
-        inverter_id=inverter_id,
-        model_id=model_id,
-        start_register=start,
-        registers=registers,
-    )
+    try:
+        ok = await api_client.sync_settings(
+            api_key=api_key,
+            inverter_id=inverter_id,
+            model_id=model_id,
+            start_register=start,
+            registers=registers,
+        )
+    except SettingsSyncRejected as exc:
+        if backoff_until is not None:
+            backoff_until[inverter_id] = now + SETTINGS_SYNC_BACKOFF_S
+        _LOGGER.warning(
+            "settings_sync: inverter %s rejected (HTTP %s) — backing off for %ss",
+            inverter_id,
+            exc.status,
+            SETTINGS_SYNC_BACKOFF_S,
+        )
+        return False
+
     if ok:
         cache[inverter_id] = (new_hash, now)
     else:
@@ -284,6 +335,7 @@ async def settings_sync_tick(
     *,
     heartbeat_s: int = 1800,
     now_monotonic_fn=time.monotonic,
+    backoff_until: dict[str, float] | None = None,
 ) -> None:
     """One pass over every inverter on an entry: sync each eligible one.
 
@@ -292,6 +344,10 @@ async def settings_sync_tick(
     skipped with zero reads and zero POSTs; this is the enforcement point for
     "preset/MQTT-only inverters must never POST". A per-inverter exception is
     caught and logged so one bad inverter can't stall the rest of the tick.
+
+    ``backoff_until`` (per-inverter 4xx backoff — see ``sync_inverter_once``)
+    is threaded through unchanged so it persists across ticks within the same
+    loop instance, same as ``cache``.
     """
     for inv in inverters:
         eligible = _eligible_for_settings_sync(inv)
@@ -312,6 +368,7 @@ async def settings_sync_tick(
                 cache,
                 heartbeat_s=heartbeat_s,
                 now_monotonic_fn=now_monotonic_fn,
+                backoff_until=backoff_until,
             )
         except Exception:  # noqa: BLE001 — one inverter's failure must not block others
             _LOGGER.exception("settings_sync: tick failed for inverter %s", inverter_id)
@@ -340,10 +397,12 @@ async def settings_sync_loop(
     ``__init__.py``); pass one explicitly in tests. Re-reads
     ``entry.data.get("inverters")`` every tick so a live options/entry update
     (add/remove/edit inverter, switch read source) takes effect on the next
-    cycle without a reload. The per-inverter hash/heartbeat cache lives only
-    for the lifetime of this loop instance — a reload/restart resets it,
-    which just re-triggers each inverter's bootstrap clause once more on the
-    next tick (one harmless extra POST, not a correctness issue).
+    cycle without a reload. The per-inverter hash/heartbeat cache AND the
+    per-inverter 4xx-backoff cache both live only for the lifetime of this
+    loop instance — a reload/restart resets them, which just re-triggers
+    each inverter's bootstrap clause (and, for a still-403ing device, one
+    more rejected POST before backing off again) once more on the next tick
+    — not a correctness issue.
     """
     if api_client is None:
         from homeassistant.helpers import aiohttp_client
@@ -355,6 +414,7 @@ async def settings_sync_loop(
 
     api_key = entry.data["api_key"]
     cache: dict[str, tuple[int, int]] = {}
+    backoff_until: dict[str, float] = {}
 
     _LOGGER.info("Settings-sync loop started for entry %s", entry.entry_id)
     while not hass.is_stopping and (lifecycle is None or lifecycle.active):
@@ -367,6 +427,7 @@ async def settings_sync_loop(
             cache,
             heartbeat_s=heartbeat_s,
             now_monotonic_fn=now_monotonic_fn,
+            backoff_until=backoff_until,
         )
         await sleep_fn(interval_s)
     _LOGGER.info("Settings-sync loop stopped for entry %s", entry.entry_id)

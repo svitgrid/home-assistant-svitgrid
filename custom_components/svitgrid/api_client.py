@@ -78,6 +78,22 @@ class ReadingRejected(SvitgridApiError):
         self.status = status
 
 
+class SettingsSyncRejected(SvitgridApiError):
+    """`sync_settings` got a 4xx (client error — e.g. 403 for a device that's
+    unbound/evicted, or a validation rejection) on
+    `/edge-devices/sync-settings`.
+
+    Retrying every settings-sync cycle (every 5 min) just hammers the server
+    with a request it will keep rejecting forever — the settings_sync loop
+    backs this specific inverter off for several hours rather than retrying
+    at the normal cadence. Distinct from a 5xx / transport error, which is
+    transient and returns False (normal-cadence retry, unchanged behavior)."""
+
+    def __init__(self, status: int, body: str) -> None:
+        super().__init__(f"HTTP {status}: {body}")
+        self.status = status
+
+
 class DeviceStopped(SvitgridApiError):
     """Server responded 200 with body `{stopped: true, stoppedReason: "..."}` on
     an authenticated request. An operator flipped `disabled: true` on this
@@ -252,10 +268,13 @@ class SvitgridApiClient:
     ) -> bool:
         """POST one inverter's config-register block (TOU/work-mode mirror).
 
-        Returns True on 2xx, False on any non-2xx status OR transport error.
-        Deliberately never raises: settings_sync's hash/heartbeat cache only
-        advances on True, so callers treat False exactly like "retry next
-        cycle" — there is no separate exception-handling path to maintain."""
+        Returns True on 2xx, False on 5xx or a transport error (transient —
+        caller retries next cycle, unchanged from before). Raises
+        [SettingsSyncRejected] on 4xx (permanent — e.g. the device's api-key
+        no longer resolves to a bound household, so the same request would
+        be rejected forever): the caller backs this inverter off instead of
+        retrying every cycle, rather than looping on a request that can
+        never succeed (the A2 permanent-403-loop gap)."""
         url = f"{self._base}/api/v1/edge-devices/sync-settings"
         body = {
             "inverterId": inverter_id,
@@ -269,13 +288,24 @@ class SvitgridApiClient:
             ) as resp:
                 if 200 <= resp.status < 300:
                     return True
+                err_body = await _err(resp)
+                if 400 <= resp.status < 500:
+                    _LOGGER.warning(
+                        "sync_settings rejected (permanent): status=%s body=%s inverter=%s",
+                        resp.status,
+                        err_body,
+                        inverter_id,
+                    )
+                    raise SettingsSyncRejected(resp.status, err_body)
                 _LOGGER.warning(
-                    "sync_settings rejected: status=%s body=%s inverter=%s",
+                    "sync_settings failed (transient): status=%s body=%s inverter=%s",
                     resp.status,
-                    await _err(resp),
+                    err_body,
                     inverter_id,
                 )
                 return False
+        except SettingsSyncRejected:
+            raise
         except Exception:  # noqa: BLE001 — any transport failure -> retry next cycle
             _LOGGER.warning(
                 "sync_settings failed (transport error) inverter=%s", inverter_id, exc_info=True
