@@ -124,7 +124,16 @@ async def read_config_registers(
         The full list of ``count`` registers in address order, or ``None``
         if the model is unsupported, any chunk read raised, or any chunk
         returned fewer registers than requested.
+
+    Raises:
+        ValueError: if ``chunk_size`` is not positive. A zero/negative
+            chunk_size would never advance ``offset`` and silently hang the
+            HA event loop forever — a caller bug, not a device-read failure,
+            so it's raised rather than swallowed into ``None``.
     """
+    if chunk_size <= 0:
+        raise ValueError(f"chunk_size must be positive, got {chunk_size}")
+
     config_range = config_range_for_model(model_id)
     if config_range is None:
         _LOGGER.debug("read_config_registers: unsupported model %s", model_id)

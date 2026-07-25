@@ -7,6 +7,8 @@ tests/harvest/test_transport_write.py.
 
 from __future__ import annotations
 
+import pytest
+
 from custom_components.svitgrid.harvest import transport
 from custom_components.svitgrid.settings_sync import read_config_registers
 
@@ -92,3 +94,12 @@ async def test_unsupported_model_returns_none():
     )
 
     assert result is None
+
+
+@pytest.mark.parametrize("bad_chunk_size", [0, -1])
+async def test_nonpositive_chunk_size_raises(bad_chunk_size):
+    """chunk_size <= 0 would never advance offset -> raise instead of hanging."""
+    hass = _FakeHass()
+
+    with pytest.raises(ValueError):
+        await read_config_registers(hass, _cfg(), "deye_sg04lp3", chunk_size=bad_chunk_size)
