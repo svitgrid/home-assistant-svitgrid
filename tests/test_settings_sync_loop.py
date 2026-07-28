@@ -117,7 +117,7 @@ async def test_posts_on_first_cycle_and_skips_unchanged_second(monkeypatch):
     assert call["inverter_id"] == "inv-1"
     assert call["model_id"] == "deye_sg04lp3"
     assert call["start_register"] == 115
-    assert call["registers"] == list(range(115, 115 + 63))
+    assert call["registers"] == list(range(115, 115 + 77))
     assert "inv-1" in cache
 
     # Second cycle, registers unchanged, well within the heartbeat -> no repost.

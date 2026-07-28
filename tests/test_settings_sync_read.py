@@ -31,7 +31,8 @@ def _cfg(protocol: str = "solarman_v5") -> dict:
 
 
 async def test_stitches_three_chunks_in_order(monkeypatch):
-    """25+25+13 = 63 registers, stitched back in address order.
+    """25+25+25+2 = 77 registers (widened 2026-07-28 for peak-shaving regs
+    178/191), stitched back in address order.
 
     Item 6 (2026-07-25 final review): all chunk ranges are batched into a
     SINGLE transport call (one TCP connection), not one call per chunk — the
@@ -58,11 +59,11 @@ async def test_stitches_three_chunks_in_order(monkeypatch):
     hass = _FakeHass()
     result = await read_config_registers(hass, _cfg(), "deye_sg04lp3", chunk_size=25)
 
-    assert result == list(range(115, 115 + 63))
-    # Exactly ONE transport call (one connection), carrying all 3 chunk ranges.
+    assert result == list(range(115, 115 + 77))
+    # Exactly ONE transport call (one connection), carrying all 4 chunk ranges.
     assert len(calls) == 1
-    assert [r[2] for r in calls[0]] == [25, 25, 13]
-    assert [r[1] for r in calls[0]] == [115, 140, 165]
+    assert [r[2] for r in calls[0]] == [25, 25, 25, 2]
+    assert [r[1] for r in calls[0]] == [115, 140, 165, 190]
 
 
 async def test_returns_none_on_short_chunk(monkeypatch):

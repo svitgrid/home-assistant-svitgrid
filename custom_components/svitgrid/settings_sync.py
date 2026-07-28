@@ -24,19 +24,33 @@ _LOGGER = logging.getLogger(__name__)
 SETTINGS_SYNC_BACKOFF_S = 6 * 60 * 60  # 6 hours
 
 # Config register ranges: model family → (start, count)
-# 3-phase and 1-phase models share the same register count (63 each)
+#
+# 3-phase models were widened 2026-07-28 (peak-shaving read path, task 8)
+# from 63 to 77 registers (115-191) to reach register 178 (grid
+# peak-shaving enable, bit 4) and register 191 (grid peak-shaving power,
+# 1 W) — see docs/superpowers/specs/2026-07-26-peak-shaving-registers.md
+# in the main svitgrid repo. 1-phase is intentionally left at 63: 1-phase
+# peak-shaving addresses are unprobed and gated off everywhere, so we must
+# not sync values we don't trust. The server's `validateRegisterBatch`
+# accepts BOTH the legacy 63-count 3-phase batch and this widened 77-count
+# one, so an add-on that hasn't picked up this change yet is never rejected.
+#
+# `read_config_registers` above always reads in <=25-register chunks
+# regardless of this count, so widening here does not add single-frame
+# partial-read risk the way it does on the edge-connector firmware path
+# (which reads its config batch in one Solarman V5 frame).
 CONFIG_RANGES = {
-    # 3-phase models: registers 115-177 (63 registers)
-    'deye_sg04lp3': (115, 63),
-    'deye_sg01hp3': (115, 63),
-    'deye_sg01hp3_50k': (115, 63),
-    'deye_sg01hp3_30k': (115, 63),
-    'deye_sg02hp3_80k': (115, 63),
-    'deye_sg05lp3': (115, 63),
-    'deye_gb_s20k': (115, 63),
-    'sunsynk_3phase': (115, 63),
-    'sunsynk_3phase_15k': (115, 63),
-    # 1-phase models: registers 217-279 (63 registers)
+    # 3-phase models: registers 115-191 (77 registers)
+    'deye_sg04lp3': (115, 77),
+    'deye_sg01hp3': (115, 77),
+    'deye_sg01hp3_50k': (115, 77),
+    'deye_sg01hp3_30k': (115, 77),
+    'deye_sg02hp3_80k': (115, 77),
+    'deye_sg05lp3': (115, 77),
+    'deye_gb_s20k': (115, 77),
+    'sunsynk_3phase': (115, 77),
+    'sunsynk_3phase_15k': (115, 77),
+    # 1-phase models: registers 217-279 (63 registers, unwidened)
     'deye_sg03lp1': (217, 63),
     'deye_sg01lp1': (217, 63),
     'deye_sg02lp1': (217, 63),
