@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.19.0 — 2026-08-04
+
+### Fixed
+- **"Keep data in Home Assistant" no longer forces cloud sync off for good.**
+  Choosing local (island) mode always switched cloud upload off, whatever you
+  picked alongside it — so "store it here *and* send it to the cloud" could only
+  ever be set while first pairing, and never changed afterwards. If you ended up
+  local-only, the app showed nothing once you left the house, and the only ways
+  out were to give up local mode or re-pair from scratch. Turning local mode on
+  now respects your cloud-sync choice, and cloud sync can be switched on or off
+  at any time from the app without re-pairing or disturbing local access.
+
+  Your data was never lost while this was happening: the add-on kept collecting
+  and storing everything in Home Assistant throughout — it simply wasn't
+  uploading, so only the app's away-from-home view was affected. Once cloud sync
+  is switched back on, the stored backlog (up to 48h) uploads on its own.
+
+### Added
+- **`set_cloud_ingest` command.** Turns the cloud sender on or off on its own,
+  without touching your local-mode key or local access. This is what makes the
+  setting changeable after pairing. Older add-ons don't understand it, so the
+  app only offers the switch once you're on 0.19.0 or newer.
+
 ## 0.18.0 — 2026-07-25
 
 ### Added

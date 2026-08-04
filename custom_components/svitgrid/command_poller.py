@@ -32,6 +32,7 @@ from .const import (
     POLL_NOW_COMMAND,
     REVOKE_TRUSTED_KEY_COMMAND,
     SET_CLOUD_ENDPOINT_COMMAND,
+    SET_CLOUD_INGEST_COMMAND,
     SET_HARVEST_CONFIG_COMMAND,
     SET_READ_SOURCE_COMMAND,
 )
@@ -649,7 +650,15 @@ async def process_command(
                 paired_at=paired_at,
             )
 
-            cloud_ingest = False
+            # Honour the payload's cloudIngest so island can be enabled while
+            # cloud upload keeps running ("store in HA *and* send to the
+            # cloud"). This used to be hardcoded False, which silently
+            # overrode that choice and left the household with no remote data.
+            #
+            # Strict `is True` rather than truthiness: absent (an API older
+            # than this flag) and malformed values both fail CLOSED to pure
+            # island, which is the pre-existing behaviour.
+            cloud_ingest = payload.get("cloudIngest") is True
         else:
             # disable_island — island key intentionally retained in keystore
             cloud_ingest = True
@@ -679,6 +688,80 @@ async def process_command(
             "%s: cloud_ingest_enabled -> %s, reloading entry. cmd_id=%s",
             cmd_type,
             cloud_ingest,
+            cmd_id,
+        )
+        hass.async_create_task(hass.config_entries.async_reload(entry.entry_id))
+        return
+
+    # === Arm 1d-bis: set_cloud_ingest ===
+    # Flips the cloud sender ONLY — island key and island routing untouched.
+    # This is what makes "island + cloud" reachable (and revocable) after
+    # pairing; enable_island/disable_island each pin the flag to one value and
+    # so can never express it. Trusted via the command channel like its
+    # neighbours (RBAC-gated at the API level).
+    if cmd_type == SET_CLOUD_INGEST_COMMAND:
+        if hass is None or entry is None:
+            _LOGGER.warning(
+                "set_cloud_ingest rejected — no ConfigEntry (YAML install?). cmd_id=%s",
+                cmd_id,
+            )
+            await _send_signed_ack(
+                api_client=api_client,
+                api_key=api_key,
+                command_id=cmd_id,
+                success=False,
+                rejected=True,
+                reason="yaml_config_no_entry",
+                our_private_key=our_private_key,
+                our_signing_key_id=our_signing_key_id,
+                executor_version=executor_version,
+            )
+            return
+
+        payload = command.get("payload") or {}
+        enabled = payload.get("enabled")
+        # Strict bool. A truthiness coerce would let a malformed payload
+        # ("", 0, "false", None) silently flip where a household's data goes,
+        # and absent-means-False would turn a garbled command into a data
+        # blackout. Reject instead of guessing.
+        if not isinstance(enabled, bool):
+            _LOGGER.warning(
+                "set_cloud_ingest rejected — 'enabled' must be a bool, got %r. cmd_id=%s",
+                enabled,
+                cmd_id,
+            )
+            await _send_signed_ack(
+                api_client=api_client,
+                api_key=api_key,
+                command_id=cmd_id,
+                success=False,
+                rejected=True,
+                reason="invalid_enabled",
+                our_private_key=our_private_key,
+                our_signing_key_id=our_signing_key_id,
+                executor_version=executor_version,
+            )
+            return
+
+        # ACK BEFORE applying — the reload cancels this poller task while it is
+        # suspended on the ACK's network I/O, so an apply-first ordering would
+        # abort the ACK mid-flight and strand the command in `delivered`.
+        # Same ordering rule as enable_island/disable_island above.
+        await _send_signed_ack(
+            api_client=api_client,
+            api_key=api_key,
+            command_id=cmd_id,
+            success=True,
+            our_private_key=our_private_key,
+            our_signing_key_id=our_signing_key_id,
+            executor_version=executor_version,
+        )
+
+        new_data = {**entry.data, "cloud_ingest_enabled": enabled}
+        hass.config_entries.async_update_entry(entry, data=new_data)
+        _LOGGER.info(
+            "set_cloud_ingest: cloud_ingest_enabled -> %s, reloading entry. cmd_id=%s",
+            enabled,
             cmd_id,
         )
         hass.async_create_task(hass.config_entries.async_reload(entry.entry_id))

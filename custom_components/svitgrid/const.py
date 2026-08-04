@@ -151,6 +151,17 @@ SET_CLOUD_ENDPOINT_COMMAND = "set_cloud_endpoint"
 # channel itself is the trust boundary here.
 ENABLE_ISLAND_COMMAND = "enable_island"
 DISABLE_ISLAND_COMMAND = "disable_island"
+# Cloud-sender switch, orthogonal to island mode — flips cloud_ingest_enabled
+# and NOTHING else (no island key seeded, no island routing touched).
+#
+# enable_island/disable_island each pin cloud ingest to one value, so between
+# them they can only express "island without cloud" and "cloud without island".
+# The third real state — data kept in Home Assistant AND uploaded, which is
+# what a user who wants the app to work away from home needs — was reachable
+# only at pairing time and could never be set or unset afterwards. This command
+# is that missing control. Internal (no admin signature required), same trust
+# posture as enable_island: RBAC-gated at the API level.
+SET_CLOUD_INGEST_COMMAND = "set_cloud_ingest"
 # Direct-Modbus harvest connection change (SP-D follow-up) — updates
 # ip/port/slaveId on a harvest_config entry. Internal (no admin signature
 # required) — RBAC-gated at the API level (household owner/admin), same
@@ -180,6 +191,7 @@ INTERNAL_COMMANDS = frozenset(
         SET_CLOUD_ENDPOINT_COMMAND,
         ENABLE_ISLAND_COMMAND,
         DISABLE_ISLAND_COMMAND,
+        SET_CLOUD_INGEST_COMMAND,
         SET_HARVEST_CONFIG_COMMAND,
         SET_READ_SOURCE_COMMAND,
         POLL_NOW_COMMAND,
