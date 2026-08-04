@@ -30,7 +30,7 @@ from homeassistant.components.http import HomeAssistantView
 from homeassistant.core import HomeAssistant
 
 from .command_auth import verify_signed_command
-from .const import DOMAIN, LEGACY_ISLAND_DEVICE_ID
+from .const import DOMAIN, INTEGRATION_COMMANDS, LEGACY_ISLAND_DEVICE_ID, SET_CLOUD_INGEST_COMMAND
 from .hourly_energy import per_hour_deltas, to_local_hour_rows
 from .island_auth import island_key_present_and_valid, island_request_authorized
 from .local_time import local_day_of, local_hour_index
@@ -266,6 +266,60 @@ class SvitgridCommandsView(HomeAssistantView):
         return web.Response(status=status, text=body, content_type="application/json")
 
     # ------------------------------------------------------------------
+    # Integration-level commands
+    # ------------------------------------------------------------------
+
+    async def _apply_integration_command(
+        self, hass, command: str, payload: dict
+    ) -> web.Response:
+        """Apply a ConfigEntry-level command. Currently only set_cloud_ingest.
+
+        Mirrors the command-poller arm of the same name: strict bool, write to
+        entry.data (the source of truth — `__init__` reads data first and only
+        falls back to options), then schedule a reload so the sender loop is
+        spawned or torn down.
+        """
+        if command != SET_CLOUD_INGEST_COMMAND:  # pragma: no cover — set is the guard
+            return self._json_error(422, "unsupported")
+
+        enabled = payload.get("enabled")
+        # Strict bool for the same reason as the cloud path: a truthiness
+        # coerce would let a malformed payload silently relocate where this
+        # household's data goes.
+        if not isinstance(enabled, bool):
+            return self._json_error(400, "bad_request", detail="enabled must be a boolean")
+
+        entries = list(hass.config_entries.async_entries(DOMAIN))
+        if not entries:
+            return self._json_error(404, "no_config_entry")
+
+        for entry in entries:
+            hass.config_entries.async_update_entry(
+                entry, data={**entry.data, "cloud_ingest_enabled": enabled}
+            )
+
+        # Build the response BEFORE scheduling the reload, and never await the
+        # reload: it tears this integration down, so awaiting it would block the
+        # request on its own teardown and the caller could not tell whether the
+        # change applied. Same ordering rule as the command poller's ACK.
+        response = self.json({"ok": True, "result": {"cloudIngestEnabled": enabled}})
+
+        for entry in entries:
+            entry_id = entry.entry_id
+
+            async def _do_reload(_entry_id=entry_id) -> None:
+                await hass.config_entries.async_reload(_entry_id)
+
+            hass.async_create_task(_do_reload())
+
+        _LOGGER.info(
+            "set_cloud_ingest applied locally over LAN: cloud_ingest_enabled -> %s (%d entry/ies)",
+            enabled,
+            len(entries),
+        )
+        return response
+
+    # ------------------------------------------------------------------
     # POST handler
     # ------------------------------------------------------------------
 
@@ -333,6 +387,20 @@ class SvitgridCommandsView(HomeAssistantView):
             self._prune_seen(now)
             if command_id in self._seen_commands:
                 return self.json({"ok": True, "deduped": True})
+
+        # --- Integration-level commands (no inverter, no executor) ---
+        # Branch BEFORE the executor lookup: these act on the ConfigEntry, and
+        # would otherwise 404 on the inverterId they legitimately don't carry.
+        # Auth above is unchanged and already enforced — island key + admin
+        # signature + signed/top-level binding — so the LAN alone is never
+        # sufficient to reach this.
+        if signed_command in INTEGRATION_COMMANDS:
+            response = await self._apply_integration_command(
+                hass, signed_command, signed_payload
+            )
+            if response.status == 200 and command_id is not None:
+                self._seen_commands[command_id] = now
+            return response
 
         # --- Dispatch using the signed values (authoritative source) ---
         inverter_id = signed_payload.get("inverterId")

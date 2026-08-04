@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.20.0 — 2026-08-04
+
+### Added
+- **Cloud sync can now be switched on again from your phone on the same WiFi,
+  with no internet involved.** Re-enabling uploads previously required a command
+  delivered *through the cloud* — the very connection that was switched off — so
+  a household that turned cloud sync off could be left unable to turn it back on.
+  The Svitgrid app now sends that change straight to the add-on over your local
+  network. Same security as every other local command: it only works with a
+  paired device's local key and a valid signature, so being on the WiFi is not
+  enough on its own.
+
 ## 0.19.0 — 2026-08-04
 
 ### Fixed

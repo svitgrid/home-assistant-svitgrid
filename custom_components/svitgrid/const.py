@@ -162,6 +162,19 @@ DISABLE_ISLAND_COMMAND = "disable_island"
 # is that missing control. Internal (no admin signature required), same trust
 # posture as enable_island: RBAC-gated at the API level.
 SET_CLOUD_INGEST_COMMAND = "set_cloud_ingest"
+
+# Commands that act on the INTEGRATION itself rather than on one inverter.
+#
+# The local command endpoint (POST /api/svitgrid/commands) otherwise routes
+# everything to a per-inverter WriteExecutor keyed on payload.inverterId — so
+# an integration-level command has no executor and would 404. These are
+# branched off before that lookup and applied to the ConfigEntry.
+#
+# This is what makes cloud sync recoverable over the LAN alone: re-enabling it
+# through the cloud command channel needs the very connection that was turned
+# off, which is circular in the one mode designed for the cloud being
+# unreachable.
+INTEGRATION_COMMANDS = frozenset({SET_CLOUD_INGEST_COMMAND})
 # Direct-Modbus harvest connection change (SP-D follow-up) — updates
 # ip/port/slaveId on a harvest_config entry. Internal (no admin signature
 # required) — RBAC-gated at the API level (household owner/admin), same
