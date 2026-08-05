@@ -169,3 +169,42 @@ def test_lifecycle_overrides_status():
     a.set_lifecycle("paused", "disabled")
     assert a.status == "paused"
     assert "paused" in a.diagnostics_line().lower()
+
+
+# ── Mapped-but-unresolved sensors surface on the Diagnostics sensor ────────
+
+
+def test_diagnostics_line_flags_unresolved_sensors_even_on_success():
+    """A reading that sends fine but silently drops a mapped sensor must say
+    so — otherwise a mapped-but-dead PV sensor just reads as 0 W forever."""
+    t = ActivityTracker(now=_now)
+    t.record_ingest_success(
+        sample_count=1,
+        period_sec=60,
+        summary={"pvPower": 0.0},
+        unresolved={"pv1Power": "sensor.victron_pv_power"},
+    )
+    line = t.diagnostics_line()
+    assert line.startswith("ok")
+    assert "pv1Power" in line
+    assert "sensor.victron_pv_power" in line
+    assert len(line) <= 255
+
+
+def test_diagnostics_line_plain_ok_when_nothing_unresolved():
+    t = ActivityTracker(now=_now)
+    t.record_ingest_success(
+        sample_count=1, period_sec=60, summary={"pvPower": 1.0}, unresolved={}
+    )
+    assert t.diagnostics_line() == "ok"
+
+
+def test_recent_ingest_carries_unresolved_entities():
+    t = ActivityTracker(now=_now)
+    t.record_ingest_success(
+        sample_count=1,
+        period_sec=60,
+        summary={},
+        unresolved={"pv1Power": "sensor.pv"},
+    )
+    assert list(t.recent_ingests())[-1]["unresolved"] == {"pv1Power": "sensor.pv"}

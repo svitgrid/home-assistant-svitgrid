@@ -3,7 +3,11 @@ unavailable/non-numeric fields, flushes every 10s to /ingest/reading."""
 
 from __future__ import annotations
 
-from custom_components.svitgrid.readings_publisher import build_reading_payload, gate_payload
+from custom_components.svitgrid.readings_publisher import (
+    build_reading_payload,
+    gate_payload,
+    unresolved_fields,
+)
 
 
 def test_build_payload_includes_mapped_entities(hass):
@@ -132,9 +136,10 @@ def test_gate_payload_keeps_existing_pv_power():
 def test_gate_payload_reports_missing_core_fields_sorted():
     payload = {"inverterId": "inv-1", "timestamp": "t", "source": "edge"}
     finalized, missing = gate_payload(payload)
-    # pvPower defaulted, but the five core fields are absent.
+    # pvPower defaulted, but the four core fields are absent. batterySoc is
+    # NOT among them — it is optional server-side (see CORE_PAYLOAD_FIELDS).
     assert finalized["pvPower"] == 0.0
-    assert missing == ["batteryPower", "batterySoc", "batteryVoltage", "gridPower", "loadPower"]
+    assert missing == ["batteryPower", "batteryVoltage", "gridPower", "loadPower"]
 
 
 # ── Phase 2 T10a: adaptive ingest cadence ─────────────────────────────
@@ -408,16 +413,16 @@ async def test_publisher_retries_fast_for_first_reading_until_sensors_ready(monk
     soon as the sensors come online — otherwise the first reading is parked for
     a whole ~5-min cadence. Once the first reading is stored, normal cadence
     resumes."""
-    soc_calls = {"n": 0}
+    volt_calls = {"n": 0}
 
     def _get(eid):
         if "battery_power" in eid:
             return MagicMock(state="-200")
-        if "battery_voltage" in eid:
-            return MagicMock(state="52")
-        if "battery" in eid:  # batterySoc: unavailable on the 1st build, then ready
-            soc_calls["n"] += 1
-            return MagicMock(state="unavailable" if soc_calls["n"] == 1 else "80")
+        if "battery_voltage" in eid:  # unavailable on the 1st build, then ready
+            volt_calls["n"] += 1
+            return MagicMock(state="unavailable" if volt_calls["n"] == 1 else "52")
+        if "battery" in eid:
+            return MagicMock(state="80")  # batterySoc — always ready, never gates
         if "grid" in eid:
             return MagicMock(state="100")
         if "load" in eid:
@@ -496,8 +501,9 @@ async def test_publisher_adopts_server_cadence_right_after_first_reading(monkeyp
 
 
 def _mock_hass_incomplete_one_iter() -> MagicMock:
-    """hass mock where the battery SOC entity is unavailable → core field
-    missing → reading must be skipped (not POSTed)."""
+    """hass mock where the battery VOLTAGE entity is unavailable → core field
+    missing → reading must be skipped (not POSTed). (SOC is deliberately not
+    the lever here: it is optional server-side and no longer gates.)"""
     hass = MagicMock()
 
     def _get(eid):
@@ -541,7 +547,8 @@ async def test_publisher_skips_post_when_core_field_missing(monkeypatch):
     assert store.appended == []  # never captured junk
     activity.record_ingest_skipped.assert_called_once()
     _, ckwargs = activity.record_ingest_skipped.call_args
-    assert "batterySoc" in ckwargs["missing_fields"]
+    assert "batteryVoltage" in ckwargs["missing_fields"]
+    assert "batterySoc" not in ckwargs["missing_fields"]
     # Cold start (still no first reading) → fast retry, not the cadence interval,
     # so the first reading lands the moment the sensors come online.
     assert sleeps == [5.0]
@@ -598,19 +605,20 @@ async def test_publisher_posts_when_no_solar_but_core_present(monkeypatch):
 @pytest.mark.asyncio
 async def test_publisher_skips_aggregated_post_when_core_field_missing(monkeypatch):
     """Idle path (cadence>=120): once past the immediate first snapshot, an
-    aggregation window whose samples are incomplete (batterySoc goes
-    unavailable) is skipped, not captured as junk. batterySoc is available for
-    the first-pass snapshot only, then drops out for the aggregation window."""
-    soc_calls = {"n": 0}
+    aggregation window whose samples are incomplete (batteryVoltage goes
+    unavailable) is skipped, not captured as junk. batteryVoltage is available
+    for the first-pass snapshot only, then drops out for the aggregation
+    window."""
+    volt_calls = {"n": 0}
 
     def _get(eid):
         if "battery_power" in eid:
             return MagicMock(state="-200")
-        if "battery_voltage" in eid:
-            return MagicMock(state="52")
-        if "battery" in eid:  # batterySoc → available only for the 1st snapshot
-            soc_calls["n"] += 1
-            return MagicMock(state="80" if soc_calls["n"] == 1 else "unavailable")
+        if "battery_voltage" in eid:  # available only for the 1st snapshot
+            volt_calls["n"] += 1
+            return MagicMock(state="52" if volt_calls["n"] == 1 else "unavailable")
+        if "battery" in eid:
+            return MagicMock(state="80")  # batterySoc — always ready, never gates
         if "grid" in eid:
             return MagicMock(state="100")
         if "load" in eid:
@@ -648,7 +656,7 @@ async def test_publisher_skips_aggregated_post_when_core_field_missing(monkeypat
     assert "sampleCount" not in store.appended[0]
     activity.record_ingest_skipped.assert_called_once()
     _, ckwargs = activity.record_ingest_skipped.call_args
-    assert "batterySoc" in ckwargs["missing_fields"]
+    assert "batteryVoltage" in ckwargs["missing_fields"]
     # iter1 snapshot transitional sleep (5s), then iter2's 5×60s sampling ticks.
     assert sleeps == [5.0, 60.0, 60.0, 60.0, 60.0, 60.0]
 
@@ -689,3 +697,176 @@ async def test_run_loop_does_not_capture_when_deprovisioned(monkeypatch):
         hass=hass, store=store, cadence=Cadence(interval_s=60), lifecycle=lc, **_RUN_KWARGS
     )
     assert store.appended == []  # loop exited immediately, nothing captured
+
+
+# ── Core gate: batterySoc is NOT required (Rostyslav Dudka, 2026-08-05) ────
+#
+# The Svitgrid API's InverterReadingSchema marks `batterySoc` optional — a
+# missing SOC means "unknown" and the app shows "Calculating". The client gate
+# used to require it anyway, so an install whose SOC sensor went unavailable
+# discarded EVERY reading: nothing reached the cloud AND nothing reached the
+# local store, blanking both the app and the in-HA panel.
+
+
+def test_gate_accepts_a_reading_with_no_battery_soc():
+    payload, missing = gate_payload(
+        {
+            "inverterId": "inv-1",
+            "batteryPower": -1500.0,
+            "batteryVoltage": 48.6,
+            "gridPower": 2016.0,
+            "loadPower": 2025.0,
+            "pvPower": 1128.0,
+        }
+    )
+    assert missing == []
+    assert "batterySoc" not in payload
+
+
+@pytest.mark.parametrize(
+    "dropped", ["batteryPower", "batteryVoltage", "gridPower", "loadPower"]
+)
+def test_gate_still_rejects_a_reading_missing_any_api_required_field(dropped):
+    complete = {
+        "inverterId": "inv-1",
+        "batterySoc": 55.0,
+        "batteryPower": -1500.0,
+        "batteryVoltage": 48.6,
+        "gridPower": 2016.0,
+        "loadPower": 2025.0,
+        "pvPower": 1128.0,
+    }
+    del complete[dropped]
+    _payload, missing = gate_payload(complete)
+    assert missing == [dropped]
+
+
+# ── Mapped-but-unresolved reporting ───────────────────────────────────────
+#
+# A field the user explicitly mapped that yields no value is invisible today:
+# it is silently omitted, the reading still sends, and the user sees a flat 0
+# (PV) with no clue why. Report it so the Diagnostics sensor can name it.
+
+
+def test_unresolved_fields_names_mapped_entities_that_produced_nothing(hass):
+    hass.states.async_set("sensor.soc", "55")
+    hass.states.async_set("sensor.pv", "unavailable")
+    entity_map = {
+        "batterySoc": "sensor.soc",
+        "pv1Power": "sensor.pv",
+        "dailyPvEnergy": "sensor.never_registered",
+    }
+
+    payload = build_reading_payload(hass=hass, inverter_id="inv-1", entity_map=entity_map)
+
+    assert unresolved_fields(payload, entity_map) == ["dailyPvEnergy", "pv1Power"]
+
+
+def test_unresolved_fields_understands_the_pv_string_rename(hass):
+    """`pv1Power` is emitted as `pvPower1`; a resolved string must not be
+    reported as unresolved just because the key was renamed on the way out."""
+    hass.states.async_set("sensor.pv", "1128.76")
+    entity_map = {"pv1Power": "sensor.pv"}
+
+    payload = build_reading_payload(hass=hass, inverter_id="inv-1", entity_map=entity_map)
+
+    assert payload["pvPower1"] == 1128.76
+    assert unresolved_fields(payload, entity_map) == []
+
+
+def test_unresolved_fields_empty_when_everything_resolves(hass):
+    hass.states.async_set("sensor.soc", "55")
+    entity_map = {"batterySoc": "sensor.soc"}
+    payload = build_reading_payload(hass=hass, inverter_id="inv-1", entity_map=entity_map)
+    assert unresolved_fields(payload, entity_map) == []
+
+
+@pytest.mark.asyncio
+async def test_run_loop_reports_unresolved_mapped_sensors_on_success(monkeypatch):
+    """A mapped PV sensor that yields nothing must be named on the success
+    record — the reading is fine and still sends, but the app would otherwise
+    show a flat 0 W with nothing anywhere explaining why."""
+    hass = MagicMock()
+
+    def _get(eid):
+        if "pv1" in eid:
+            return MagicMock(state="unavailable")  # mapped but dead
+        if "battery_power" in eid:
+            return MagicMock(state="-200")
+        if "battery_voltage" in eid:
+            return MagicMock(state="52")
+        if "battery" in eid:
+            return MagicMock(state="80")
+        if "grid" in eid:
+            return MagicMock(state="100")
+        if "load" in eid:
+            return MagicMock(state="500")
+        return None
+
+    hass.states.get = _get
+    cc = {"n": 0}
+
+    def _is_stopping(_self):
+        cc["n"] += 1
+        return cc["n"] > 1
+
+    type(hass).is_stopping = property(_is_stopping)
+
+    store = _RecordingStore()
+    activity = MagicMock()
+    monkeypatch.setattr(asyncio, "sleep", AsyncMock())
+    await run_loop(
+        hass=hass,
+        store=store,
+        cadence=Cadence(interval_s=60),
+        **dict(_RUN_KWARGS, activity=activity),
+    )
+
+    assert len(store.appended) == 1  # still sent — not a failure
+    _, ckwargs = activity.record_ingest_success.call_args
+    assert ckwargs["unresolved"] == {"pv1Power": "sensor.inverter_pv1_power"}
+
+
+@pytest.mark.asyncio
+async def test_run_loop_warns_once_per_change_about_unresolved_sensors(monkeypatch, caplog):
+    """The log line is what a support session actually greps for, but it must
+    not repeat every tick — warn when the unresolved SET changes, not per
+    reading."""
+    hass = MagicMock()
+
+    def _get(eid):
+        if "pv1" in eid:
+            return MagicMock(state="unavailable")
+        if "battery_power" in eid:
+            return MagicMock(state="-200")
+        if "battery_voltage" in eid:
+            return MagicMock(state="52")
+        if "battery" in eid:
+            return MagicMock(state="80")
+        if "grid" in eid:
+            return MagicMock(state="100")
+        if "load" in eid:
+            return MagicMock(state="500")
+        return None
+
+    hass.states.get = _get
+    cc = {"n": 0}
+
+    def _is_stopping(_self):
+        cc["n"] += 1
+        return cc["n"] > 3  # three iterations, same unresolved set each time
+
+    type(hass).is_stopping = property(_is_stopping)
+
+    monkeypatch.setattr(asyncio, "sleep", AsyncMock())
+    with caplog.at_level("WARNING"):
+        await run_loop(
+            hass=hass,
+            store=_RecordingStore(),
+            cadence=Cadence(interval_s=60),
+            **_RUN_KWARGS,
+        )
+
+    hits = [r for r in caplog.records if "pv1Power" in r.getMessage()]
+    assert len(hits) == 1, [r.getMessage() for r in hits]
+    assert "sensor.inverter_pv1_power" in hits[0].getMessage()

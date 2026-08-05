@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.20.1 — 2026-08-05
+
+### Fixed
+- **One unavailable sensor no longer hides all of your data.** If a single
+  sensor you had mapped stopped reporting — a battery state-of-charge that
+  briefly went unavailable was enough — the integration threw away the *whole*
+  reading, including perfectly good solar, grid and load values. Because
+  readings are stored locally before they are uploaded, this blanked both the
+  Svitgrid panel inside Home Assistant *and* the app at the same time, with no
+  visible error: sensors looked fine on your own dashboards, and Svitgrid simply
+  showed nothing. Battery state of charge is no longer treated as essential (it
+  is optional for Svitgrid — the app shows "Calculating" while it is unknown),
+  so a reading now goes through whenever the values Svitgrid genuinely requires
+  are there.
+
+### Added
+- **Mapped sensors that go quiet are now named instead of silently ignored.**
+  A sensor you mapped that stops producing a value used to just vanish from the
+  data — a dead PV sensor read as a flat 0 W with nothing anywhere explaining
+  why. The **Diagnostics** sensor on the Svitgrid device page now says which
+  field and which entity is affected (`ok — but no value from mapped sensor(s):
+  pv1Power (sensor.victron_pv_power)`), and one matching warning is written to
+  the Home Assistant log each time that set changes.
+
 ## 0.20.0 — 2026-08-04
 
 ### Added

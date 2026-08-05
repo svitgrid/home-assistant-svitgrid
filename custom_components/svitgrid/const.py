@@ -36,9 +36,18 @@ REQUIRED_FIELDS = frozenset(
 # HA entity before we POST. `pvPower` is API-required too, but the readings
 # publisher defaults it to 0 for battery-only / no-solar systems (see
 # readings_publisher.gate_payload), so it is intentionally NOT listed here.
-CORE_PAYLOAD_FIELDS = frozenset(
-    {"batterySoc", "batteryPower", "batteryVoltage", "gridPower", "loadPower"}
-)
+#
+# This set must mirror the server's InverterReadingSchema and go no further.
+# Every field listed here beyond what the API actually requires is a way to
+# throw away a reading the server would have accepted — and because the
+# publisher is capture-then-drain, a discarded reading never reaches the local
+# store either, so the in-HA panel goes blank alongside the app.
+#
+# `batterySoc` used to be listed and is NOT API-required (absent SOC means
+# "unknown"; the app shows "Calculating"). One unavailable BMS sensor there
+# silently blanked an entire install — including its perfectly good PV data.
+# Removed 2026-08-05 (found on rostislav.dudka@gmail.com, Victron GX).
+CORE_PAYLOAD_FIELDS = frozenset({"batteryPower", "batteryVoltage", "gridPower", "loadPower"})
 
 # All recognized canonical fields (required + optional)
 ALL_FIELDS = REQUIRED_FIELDS | frozenset(

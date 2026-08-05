@@ -21,16 +21,24 @@ def test_mappable_fields_have_nonempty_labels():
     assert len(labels) == len(set(labels)), "duplicate label in MAPPABLE_FIELDS"
 
 
-def test_core_payload_fields_are_the_five_non_pv_required():
+def test_core_payload_fields_mirror_the_api_required_set_exactly():
+    """The gate must require exactly what the API's InverterReadingSchema
+    requires and nothing more — every extra field is a way to discard a
+    reading the server would have accepted."""
     from custom_components.svitgrid.const import CORE_PAYLOAD_FIELDS
 
     assert (
-        frozenset({"batterySoc", "batteryPower", "batteryVoltage", "gridPower", "loadPower"})
+        frozenset({"batteryPower", "batteryVoltage", "gridPower", "loadPower"})
         == CORE_PAYLOAD_FIELDS
     )
-    # pvPower is NOT in the set — the gate defaults it to 0 for no-solar systems.
+    # pvPower is API-required but NOT in the set — the gate defaults it to 0
+    # for no-solar systems.
     assert "pvPower" not in CORE_PAYLOAD_FIELDS
     assert "pv1Power" not in CORE_PAYLOAD_FIELDS
+    # batterySoc is OPTIONAL server-side (absent = "unknown", app shows
+    # "Calculating"). Requiring it here discarded whole readings — including
+    # good PV — whenever a BMS sensor blipped unavailable.
+    assert "batterySoc" not in CORE_PAYLOAD_FIELDS
 
 
 def test_per_phase_power_fields_are_mappable():

@@ -79,10 +79,17 @@ class ActivityTracker:
         sample_count: int,
         period_sec: int,
         summary: dict[str, Any],
+        unresolved: dict[str, str] | None = None,
     ) -> None:
         """Called by readings_publisher after a 2xx ack from /ingest/reading.
         `summary` should contain a few headline fields (pvPower, loadPower,
-        batterySoc) for at-a-glance status — full payload not stored."""
+        batterySoc) for at-a-glance status — full payload not stored.
+
+        `unresolved` maps each MAPPED field that produced no value this tick
+        to its entity id. The reading still went out, so this is not a
+        failure — but a mapped-and-dead sensor otherwise just reads as a flat
+        0 in the app with nothing anywhere naming it, so it is carried onto
+        the Diagnostics line."""
         now = self.now()
         self._status = "ok"
         self.last_ingest_at = now
@@ -96,6 +103,7 @@ class ActivityTracker:
                 "sample_count": sample_count,
                 "period_sec": period_sec,
                 "summary": dict(summary),
+                "unresolved": dict(unresolved or {}),
             }
         )
 
@@ -159,7 +167,12 @@ class ActivityTracker:
             line = f"waiting — incomplete reading; missing: {', '.join(missing)}"
             return line[:255]
         if self.last_ingest_status == "ok":
-            return "ok"
+            recent = self._recent_ingests
+            unresolved = recent[-1].get("unresolved", {}) if recent else {}
+            if not unresolved:
+                return "ok"
+            named = ", ".join(f"{field} ({eid})" for field, eid in sorted(unresolved.items()))
+            return f"ok — but no value from mapped sensor(s): {named}"[:255]
         if self.last_ingest_status == "error":
             recent = self._recent_ingests
             reason = recent[-1].get("reason", "") if recent else ""

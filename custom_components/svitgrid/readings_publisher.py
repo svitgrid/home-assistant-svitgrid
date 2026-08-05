@@ -142,6 +142,27 @@ def build_reading_payload(
     return payload
 
 
+def unresolved_fields(payload: dict[str, Any], entity_map: dict[str, str]) -> list[str]:
+    """Fields the user explicitly mapped that produced no value this tick.
+
+    A mapped entity that is missing / unavailable / non-numeric is omitted
+    from the payload rather than sent as null. That is the right wire
+    behaviour, but on its own it is invisible: the reading still sends, the
+    app shows a flat 0 (PV especially, which `gate_payload` defaults), and
+    nothing anywhere names the culprit. Returning the list lets the
+    Diagnostics sensor say which sensor to go look at.
+
+    Accounts for the pv1Power->pvPower1 rename `assemble_payload` applies on
+    the way out, so a resolved string isn't reported just because its key
+    changed.
+    """
+    return sorted(
+        field
+        for field in entity_map
+        if field not in payload and _PV_STRING_API_NAMES.get(field, field) not in payload
+    )
+
+
 def gate_payload(payload: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
     """Finalize a built payload and report whether it's safe to POST.
 
@@ -211,6 +232,34 @@ def _clamp_interval(seconds: float) -> float:
 _SUMMARY_FIELDS = ("pvPower", "loadPower", "batterySoc", "gridPower", "batteryPower")
 
 
+def _warn_unresolved(
+    unresolved: list[str],
+    entity_map: dict[str, str],
+    previously_warned: frozenset[str] | None,
+) -> frozenset[str]:
+    """Log one WARNING whenever the mapped-but-unresolved SET changes.
+
+    Returns the new set so the caller can carry it to the next iteration.
+    Silent while the set is unchanged — a permanently-dead sensor must not
+    write a line at the produce cadence — and silent when nothing is
+    unresolved, except for the one line that reports recovery.
+    """
+    current = frozenset(unresolved)
+    if current == previously_warned:
+        return current
+    if current:
+        _LOGGER.warning(
+            "Reading sent, but %d mapped sensor(s) produced no value: %s. "
+            "These fields are missing from the data Svitgrid stores — check "
+            "the entity id and that the sensor is available in HA.",
+            len(unresolved),
+            ", ".join(f"{f} -> {entity_map[f]}" for f in unresolved),
+        )
+    elif previously_warned:
+        _LOGGER.warning("All mapped sensors are producing values again.")
+    return current
+
+
 def _summary_of(payload: dict[str, Any]) -> dict[str, Any]:
     """Pick the 5 headline fields for the ActivityTracker recent-events buffer.
     Avoids storing the whole payload (mostly numeric noise on the device page)."""
@@ -264,6 +313,11 @@ async def run_loop(
     # instant reading rather than dropping into the aggregation window.
     first_pass = True
     next_sleep_s = _clamp_interval(float(cadence.interval_s))
+    # Last-warned set of mapped-but-unresolved fields. Warning on CHANGE (not
+    # per reading) keeps a permanently-dead sensor from filling the log at the
+    # produce cadence while still landing one greppable line the moment a
+    # mapped sensor starts — or stops — yielding values.
+    warned_unresolved: frozenset[str] | None = None
 
     while not hass.is_stopping and (lifecycle is None or lifecycle.active):
         try:
@@ -305,11 +359,16 @@ async def run_loop(
                         continue
                     await store.append(aggregated)
                     next_sleep_s = _clamp_interval(float(cadence.interval_s))
+                    unresolved = unresolved_fields(aggregated, entity_map)
+                    warned_unresolved = _warn_unresolved(
+                        unresolved, entity_map, warned_unresolved
+                    )
                     if activity is not None:
                         activity.record_ingest_success(
                             sample_count=len(samples),
                             period_sec=elapsed,
                             summary=_summary_of(aggregated),
+                            unresolved={f: entity_map[f] for f in unresolved},
                         )
             else:
                 # Active path — single snapshot, gate, then sleep.
@@ -342,11 +401,14 @@ async def run_loop(
                 # now use the idle aggregation window.
                 was_first = first_pass
                 first_pass = False
+                unresolved = unresolved_fields(payload, entity_map)
+                warned_unresolved = _warn_unresolved(unresolved, entity_map, warned_unresolved)
                 if activity is not None:
                     activity.record_ingest_success(
                         sample_count=1,
                         period_sec=int(next_sleep_s),
                         summary=_summary_of(payload),
+                        unresolved={f: entity_map[f] for f in unresolved},
                     )
                 # Right after the FIRST reading the sender hasn't yet echoed the
                 # server cadence (it drains eagerly but ~1s later). Sleep briefly
