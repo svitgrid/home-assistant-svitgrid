@@ -1,9 +1,8 @@
 """Tests for settings-sync gate functions: hash, upload decision, model ranges."""
-import pytest
 from custom_components.svitgrid.settings_sync import (
+    config_range_for_model,
     registers_hash,
     should_upload,
-    config_range_for_model,
 )
 
 

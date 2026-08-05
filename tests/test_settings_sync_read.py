@@ -75,7 +75,7 @@ async def test_returns_none_on_short_chunk(monkeypatch):
 
     def fake_read_solarman(cfg, ranges):
         out: dict = {}
-        for i, (unit_id, start, count, fc) in enumerate(ranges):
+        for i, (unit_id, start, count, _fc) in enumerate(ranges):
             slot = out.setdefault(unit_id, {})
             n = 20 if i == 1 else count  # chunk index 1 == "chunk 2" comes back short
             for addr in range(start, start + n):
