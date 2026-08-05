@@ -723,9 +723,7 @@ def test_gate_accepts_a_reading_with_no_battery_soc():
     assert "batterySoc" not in payload
 
 
-@pytest.mark.parametrize(
-    "dropped", ["batteryPower", "batteryVoltage", "gridPower", "loadPower"]
-)
+@pytest.mark.parametrize("dropped", ["batteryPower", "batteryVoltage", "gridPower", "loadPower"])
 def test_gate_still_rejects_a_reading_missing_any_api_required_field(dropped):
     complete = {
         "inverterId": "inv-1",

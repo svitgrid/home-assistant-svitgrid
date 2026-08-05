@@ -193,9 +193,7 @@ def test_diagnostics_line_flags_unresolved_sensors_even_on_success():
 
 def test_diagnostics_line_plain_ok_when_nothing_unresolved():
     t = ActivityTracker(now=_now)
-    t.record_ingest_success(
-        sample_count=1, period_sec=60, summary={"pvPower": 1.0}, unresolved={}
-    )
+    t.record_ingest_success(sample_count=1, period_sec=60, summary={"pvPower": 1.0}, unresolved={})
     assert t.diagnostics_line() == "ok"
 
 

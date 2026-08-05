@@ -449,8 +449,7 @@ class SvitgridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 # predates the field does not put every healthy household into
                 # a false "waiting for approval" state (fail-OPEN: a missing
                 # warning is far cheaper than a wrong one shown to everyone).
-                "trusted_key_status": self._final_payload.get("trustedKeyStatus")
-                or "approved",
+                "trusted_key_status": self._final_payload.get("trustedKeyStatus") or "approved",
                 "preset_id": self._final_payload.get("presetId"),
                 # Canonical v2 shape read by _inverters_from_entry.
                 "inverters": [inverter],

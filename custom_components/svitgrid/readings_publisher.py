@@ -360,9 +360,7 @@ async def run_loop(
                     await store.append(aggregated)
                     next_sleep_s = _clamp_interval(float(cadence.interval_s))
                     unresolved = unresolved_fields(aggregated, entity_map)
-                    warned_unresolved = _warn_unresolved(
-                        unresolved, entity_map, warned_unresolved
-                    )
+                    warned_unresolved = _warn_unresolved(unresolved, entity_map, warned_unresolved)
                     if activity is not None:
                         activity.record_ingest_success(
                             sample_count=len(samples),
