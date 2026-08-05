@@ -831,3 +831,68 @@ async def test_set_cloud_endpoint_rejects_when_no_hass_or_entry(hass):
     assert body["rejected"] is True
     assert body["reason"] == "yaml_config_no_entry"
     mock_apply.assert_not_called()
+
+
+# ── A pending signing key clears itself on approval ───────────────────────
+
+
+@pytest.mark.asyncio
+async def test_add_trusted_key_for_our_own_key_marks_us_approved():
+    """Approving this integration in the app makes the server send an
+    add_trusted_key carrying OUR key. That is the approval signal — no polling
+    and no extra Firestore reads needed to notice it."""
+    from custom_components.svitgrid.activity import ActivityTracker
+
+    activity = ActivityTracker()
+    activity.set_signing_key_approved(False)
+    api_client = MagicMock()
+    api_client.ack_command = AsyncMock(return_value={})
+    priv, _pub_hex = generate_keypair()
+
+    await process_command(
+        command={
+            "commandId": "c-1",
+            "command": "add_trusted_key",
+            "payload": {"signingKeyId": "ha-me", "publicKeyHex": "04" + "b" * 128},
+        },
+        api_client=api_client,
+        api_key="k",
+        trusted_public_keys_hex={},
+        our_private_key=priv,
+        our_signing_key_id="ha-me",
+        executor_version="0.20.1",
+        keystore=None,
+        activity=activity,
+    )
+
+    assert activity.signing_key_approved is True
+
+
+@pytest.mark.asyncio
+async def test_add_trusted_key_for_someone_elses_key_leaves_us_pending():
+    """A phone being approved says nothing about OUR key."""
+    from custom_components.svitgrid.activity import ActivityTracker
+
+    activity = ActivityTracker()
+    activity.set_signing_key_approved(False)
+    api_client = MagicMock()
+    api_client.ack_command = AsyncMock(return_value={})
+    priv, _pub_hex = generate_keypair()
+
+    await process_command(
+        command={
+            "commandId": "c-2",
+            "command": "add_trusted_key",
+            "payload": {"signingKeyId": "phone-01", "publicKeyHex": "04" + "c" * 128},
+        },
+        api_client=api_client,
+        api_key="k",
+        trusted_public_keys_hex={},
+        our_private_key=priv,
+        our_signing_key_id="ha-me",
+        executor_version="0.20.1",
+        keystore=None,
+        activity=activity,
+    )
+
+    assert activity.signing_key_approved is False

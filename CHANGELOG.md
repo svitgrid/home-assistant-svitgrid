@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.21.0 — 2026-08-05
+
+### Added
+- **You are now told when this integration is still waiting to be approved.**
+  When you add Svitgrid to a home that already has an approved phone, the new
+  integration's key has to be approved from the app before Svitgrid will accept
+  any control instruction from it — but nothing ever said so. Everything looked
+  perfectly healthy (your readings kept arriving as normal) right up until the
+  moment a control action mysteriously did nothing. The **Diagnostics** sensor on
+  the Svitgrid device page now says `waiting for approval — open the Svitgrid app
+  -> Household -> Your devices and approve this integration`, and the message
+  clears itself the moment you approve. Readings were never affected by this and
+  still aren't.
+
+  Requires the matching server release; on older servers nothing changes and no
+  warning is shown.
+
 ## 0.20.1 — 2026-08-05
 
 ### Fixed

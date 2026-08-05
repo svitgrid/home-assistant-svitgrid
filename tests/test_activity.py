@@ -208,3 +208,45 @@ def test_recent_ingest_carries_unresolved_entities():
         unresolved={"pv1Power": "sensor.pv"},
     )
     assert list(t.recent_ingests())[-1]["unresolved"] == {"pv1Power": "sensor.pv"}
+
+
+# ── Signing-key approval state ────────────────────────────────────────────
+#
+# An integration paired into a household that already has an approved phone
+# gets a PENDING key by design. The ACK path on the server loads keys with
+# status == 'approved' only, so every control-command ACK 401s while telemetry
+# keeps flowing — the install looks healthy and control is silently dead.
+
+
+def test_signing_key_is_assumed_approved_until_told_otherwise():
+    """Fail-OPEN: an older API that never sends the status must not put 90
+    healthy households into a false 'waiting for approval' state."""
+    t = ActivityTracker(now=_now)
+    t.record_ingest_success(sample_count=1, period_sec=60, summary={})
+    assert t.diagnostics_line() == "ok"
+
+
+def test_diagnostics_line_reports_a_pending_signing_key():
+    t = ActivityTracker(now=_now)
+    t.set_signing_key_approved(False)
+    t.record_ingest_success(sample_count=1, period_sec=60, summary={})
+    line = t.diagnostics_line()
+    assert "approv" in line.lower()
+    assert len(line) <= 255
+
+
+def test_incomplete_reading_outranks_a_pending_signing_key():
+    """No data at all is more urgent than control commands being refused."""
+    t = ActivityTracker(now=_now)
+    t.set_signing_key_approved(False)
+    t.record_ingest_skipped(missing_fields=["gridPower"], entities={"gridPower": "sensor.g"})
+    assert "gridPower" in t.diagnostics_line()
+
+
+def test_approving_the_key_clears_the_line():
+    t = ActivityTracker(now=_now)
+    t.set_signing_key_approved(False)
+    t.record_ingest_success(sample_count=1, period_sec=60, summary={})
+    assert "approv" in t.diagnostics_line().lower()
+    t.set_signing_key_approved(True)
+    assert t.diagnostics_line() == "ok"

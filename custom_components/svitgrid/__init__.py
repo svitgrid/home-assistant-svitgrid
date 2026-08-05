@@ -537,6 +537,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     api_client = SvitgridApiClient(session, api_base=data["api_base"])
     api_key = data["api_key"]
     activity = ActivityTracker()
+    # Surface a still-unapproved signing key on the Diagnostics sensor. Absent
+    # (older entry, or an API that predates the field) means approved — see the
+    # fail-OPEN note in config_flow. command_poller clears this by itself when
+    # the `add_trusted_key` carrying our own key arrives on approval.
+    activity.set_signing_key_approved(data.get("trusted_key_status", "approved") != "pending")
     inverters = _inverters_from_entry(entry)
     # v0.15.3: late-binding holder connecting the wake loop's server-pushed
     # updateCheck nudge to the update coordinator (created much further down).

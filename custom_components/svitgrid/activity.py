@@ -43,6 +43,14 @@ class ActivityTracker:
     lifecycle_state: str = "active"
     lifecycle_reason: str | None = None
 
+    # Whether the cloud has APPROVED this install's signing key. Defaults True
+    # and is only ever set False by an explicit `trustedKeyStatus: "pending"`
+    # from /finalize — fail-OPEN, because an API that doesn't send the field at
+    # all (older deployment) must not put every healthy household into a false
+    # "waiting for approval" state. A pending key does not stop telemetry (that
+    # rides the API key); it makes the server refuse every command ACK.
+    signing_key_approved: bool = True
+
     last_ingest_at: datetime | None = None
     last_ingest_status: str | None = None
     _ingest_times: deque[datetime] = field(default_factory=deque)
@@ -70,6 +78,13 @@ class ActivityTracker:
         """Mirror lifecycle changes from LifecycleState (Task 2)."""
         self.lifecycle_state = state
         self.lifecycle_reason = reason
+
+    def set_signing_key_approved(self, approved: bool) -> None:
+        """Set from /finalize's `trustedKeyStatus`, and flipped back to True by
+        command_poller when the `add_trusted_key` carrying THIS install's own
+        key arrives — which is exactly what the server sends on approval, so
+        the warning clears itself with no polling and no extra reads."""
+        self.signing_key_approved = approved
 
     # ── ingest path ────────────────────────────────────────────────────
 
@@ -166,6 +181,14 @@ class ActivityTracker:
             missing = recent[-1].get("missing_fields", []) if recent else []
             line = f"waiting — incomplete reading; missing: {', '.join(missing)}"
             return line[:255]
+        # Ranked BELOW an incomplete reading on purpose: a gated reading means
+        # no data at all, which is more urgent than control commands being
+        # refused.
+        if not self.signing_key_approved:
+            return (
+                "waiting for approval — open the Svitgrid app -> Household -> "
+                "Your devices and approve this integration"
+            )[:255]
         if self.last_ingest_status == "ok":
             recent = self._recent_ingests
             unresolved = recent[-1].get("unresolved", {}) if recent else {}

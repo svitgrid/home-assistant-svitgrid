@@ -549,3 +549,83 @@ async def test_options_flow_rejects_empty_map(
     # entity_map is unchanged
     updated_inv = next(i for i in entry.data["inverters"] if i["inverter_id"] == inv_id)
     assert updated_inv["entity_map"] == original_map
+
+
+# ── /finalize's trustedKeyStatus is persisted (2026-08-05) ────────────────
+#
+# A `pending` signing key is otherwise invisible to the add-on: /finalize's
+# `trustedKeys` echoes our own key back whatever the server decided, so
+# approval cannot be inferred from it. The server refuses every command ACK
+# from an unapproved key while telemetry keeps flowing normally.
+
+
+async def _run_pair_flow_with_finalize(hass, finalize_payload):
+    """Drive the pairing flow to CREATE_ENTRY with a stubbed /finalize and
+    return the created entry's data."""
+    from cryptography.hazmat.primitives.asymmetric import ec
+
+    from custom_components.svitgrid.pairing_client import PairingClaimed
+
+    fake_priv = ec.generate_private_key(ec.SECP256R1())
+
+    async def _instant_sleep(_: float) -> None:
+        """No-op sleep so the poll loop runs immediately."""
+
+    with (
+        patch("custom_components.svitgrid.config_flow.PairingClient") as mock_client_cls,
+        patch(
+            "custom_components.svitgrid.config_flow.generate_keypair",
+            return_value=(fake_priv, "04" + "a" * 128),
+        ),
+        patch(
+            "custom_components.svitgrid.config_flow.asyncio.sleep",
+            side_effect=_instant_sleep,
+        ),
+    ):
+        mock_client = mock_client_cls.return_value
+        mock_client.start = AsyncMock(
+            return_value={"secret": "secret-1", "code": "7K9PA2", "expiresIn": 300}
+        )
+        mock_client.get_status = AsyncMock(
+            return_value=PairingClaimed(household_id="h-abc", preset_id=None)
+        )
+        mock_client.finalize = AsyncMock(return_value=finalize_payload)
+
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": config_entries.SOURCE_USER}
+        )
+        await hass.config_entries.flow.async_configure(
+            result["flow_id"], user_input={"next_step_id": "pair"}
+        )
+        await hass.async_block_till_done()
+        # Snapshot INSIDE the patch context: leaving it lets HA re-enter setup
+        # with the real store, which has no writable db path under pytest.
+        return dict(hass.config_entries.async_entries(DOMAIN)[0].data)
+
+
+_BASE_FINALIZE = {
+    "edgeDeviceId": "ed-1",
+    "hardwareId": "ha-xyz",
+    "apiKey": "test-key",
+    "householdId": "h-abc",
+    "presetId": None,
+    "trustedKeys": [{"keyId": "ha-home-01", "publicKeyHex": "04" + "a" * 128}],
+}
+
+
+async def test_pair_finalize_persists_pending_trusted_key_status(
+    hass: HomeAssistant, enable_custom_integrations
+) -> None:
+    data = await _run_pair_flow_with_finalize(
+        hass, {**_BASE_FINALIZE, "trustedKeyStatus": "pending"}
+    )
+    assert data["trusted_key_status"] == "pending"
+
+
+async def test_pair_finalize_defaults_trusted_key_status_to_approved(
+    hass: HomeAssistant, enable_custom_integrations
+) -> None:
+    """Fail-OPEN against an API deployment that predates the field: absent must
+    mean approved, or every healthy household shows a false approval warning."""
+    data = await _run_pair_flow_with_finalize(hass, dict(_BASE_FINALIZE))
+    assert data["trusted_key_status"] == "approved"

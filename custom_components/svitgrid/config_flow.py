@@ -443,6 +443,14 @@ class SvitgridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 "private_key_pem": serialize_private_key(self._private_key),
                 "public_key_hex": self._public_key_hex,
                 "trusted_keys": self._final_payload["trustedKeys"],
+                # 'approved' | 'pending'. NOT inferable from trusted_keys above
+                # — that list echoes our own key back whatever the server
+                # decided. Defaults to 'approved' so an API deployment that
+                # predates the field does not put every healthy household into
+                # a false "waiting for approval" state (fail-OPEN: a missing
+                # warning is far cheaper than a wrong one shown to everyone).
+                "trusted_key_status": self._final_payload.get("trustedKeyStatus")
+                or "approved",
                 "preset_id": self._final_payload.get("presetId"),
                 # Canonical v2 shape read by _inverters_from_entry.
                 "inverters": [inverter],

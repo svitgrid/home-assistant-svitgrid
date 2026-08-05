@@ -114,6 +114,7 @@ async def process_command(
     executors_by_inverter: dict[str, BaseExecutor] | None = None,
     hass: HomeAssistant | None = None,
     entry: ConfigEntry | None = None,
+    activity: Any | None = None,
 ) -> None:
     """Process one polled command. Three dispatch arms:
       1. Internal trust commands (add_trusted_key, revoke_trusted_key) —
@@ -148,6 +149,14 @@ async def process_command(
             key_id,
             len(trusted_public_keys_hex),
         )
+        # Our OWN key arriving means the household just approved this
+        # integration — the server fans an add_trusted_key out to every
+        # executor when a key is approved, so this is the approval signal.
+        # Clearing here costs nothing: no poll, no extra read, and it cannot
+        # go stale the way a value captured at pairing would.
+        if activity is not None and key_id == our_signing_key_id:
+            activity.set_signing_key_approved(True)
+            _LOGGER.info("This integration's signing key is now approved.")
         await _send_signed_ack(
             api_client=api_client,
             api_key=api_key,
@@ -1033,6 +1042,7 @@ async def run_loop(
                     executors_by_inverter=executors_by_inverter,
                     hass=hass,
                     entry=entry,
+                    activity=activity,
                 )
         except DeviceEvicted:
             # 410 Gone — owning household deleted. Authoritative eviction:
