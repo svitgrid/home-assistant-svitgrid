@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.21.2 — 2026-08-07
 
 ### Fixed
 - **Home Assistant logged a wall of "Detected blocking call" warnings whenever
