@@ -1,0 +1,44 @@
+# Svitgrid HA Preset — Solis (Ginlong) 5G three-phase grid-tie string, no battery.
+#
+# Solarman HACS profile: solis_3p-4g.yaml (the three-phase Solis definition in
+# StephanJoubert/home_assistant_solarman). Entity ids below follow that
+# profile's sensor names under the default "inverter" config-entry prefix.
+#
+# Grid-tie string inverter: no battery, no load port, no work-mode toggle —
+# read-only (commands: []), same posture as deye-sun-60k-g03 and deye-string.
+#
+# UNVERIFIED, on two counts. The Solarman profile is the 3P **4G** (5-10K)
+# definition and its applicability to a 5G 30K is assumed; and Solis reports DC
+# per string as VOLTAGE and CURRENT rather than power, so there is no per-string
+# power sensor to map — `pvPower` is taken from the profile's aggregate DC power
+# instead. Treat the set below as a starting point; the user remaps in HA's
+# config flow if their profile differs.
+
+id: solis-30k-5g-solarman-v1
+version: "1"
+brand: Solis
+model: Solis-30K-5G
+phases: 3
+hasBattery: false
+pvStrings: 1  # see the pv1Power note below — the array is reported as one aggregate
+protocolId: home_assistant_solarman
+
+entityMap:
+  # Solis exposes DC per string as VOLTAGE and CURRENT, never as power, so
+  # there is no per-string power sensor to map. The profile's aggregate DC
+  # power goes to pv1Power — the only canonical PV key — which means a
+  # two-string plant reports its whole array under "string 1". Accepted
+  # deliberately: the alternative is no PV power at all, and the household
+  # total is right either way.
+  pv1Power: sensor.inverter_total_dc_power
+  # AC active power. On a grid-tie every watt produced leaves through the grid
+  # side, so this doubles as the plant's output.
+  gridPower: sensor.inverter_active_power
+  dailyPvEnergy: sensor.inverter_daily_generation
+  gridVoltageL1: sensor.inverter_a_phase_voltage
+  gridVoltageL2: sensor.inverter_b_phase_voltage
+  gridVoltageL3: sensor.inverter_c_phase_voltage
+  gridFrequency: sensor.inverter_inverter_frequency
+  inverterTemperature: sensor.inverter_inverter_temperature
+
+commands: []

@@ -46,6 +46,8 @@ EXPECTED_FLEET: dict[str, str] = {
     "deye_string": "deye-string-solarman-v1",
     "deye_micro": "deye-micro-solarman-v1",
     "deye_sun_60k_g03": "deye-sun-60k-g03-solarman-v1",
+    # ── Solis (Ginlong) 3-phase grid-tie string ──
+    "solis_30k_5g": "solis-30k-5g-solarman-v1",
     # ── Victron (home_assistant) ──
     "victron_multiplus_ii_gx_6k5": "victron-multiplus-ii-gx-6k5-v1",
     "victron_multiplus_ii_3k": "victron-multiplus-ii-3k-v1",
@@ -71,7 +73,7 @@ def _load(doc_id: str) -> dict:
 
 def test_expected_fleet_size():
     # 29 pickerModels. Guards against a half-edited EXPECTED_FLEET.
-    assert len(EXPECTED_FLEET) == 29
+    assert len(EXPECTED_FLEET) == 30
 
 
 @pytest.mark.parametrize("model_id,doc_id", sorted(EXPECTED_FLEET.items()))
