@@ -30,6 +30,7 @@ Fallback:
 from __future__ import annotations
 
 import asyncio
+import importlib
 import logging
 from typing import Any
 
@@ -109,8 +110,17 @@ async def run_loop(
     # Lazy import — paho-mqtt may not be installed in all HA setups, and
     # we don't want a module-level import error to break the rest of the
     # integration. The manifest declares it as a requirement.
+    #
+    # Dispatched to the executor, NOT imported inline. `run_loop` is started
+    # via hass.async_create_background_task, which creates an EAGER task: the
+    # body runs synchronously on the event loop until the first suspending
+    # await. A first import walks site-packages (listdir + read_text on every
+    # dist-info), so importing here stalled the loop during async_setup_entry
+    # and tripped HA's blocking-call detector on every integration setup.
     try:
-        import paho.mqtt.client as paho  # noqa: PLC0415
+        paho = await hass.async_add_executor_job(
+            importlib.import_module, "paho.mqtt.client"
+        )
     except ImportError:
         _LOGGER.error(
             "paho-mqtt not available — MQTT wake-bell disabled. "
@@ -145,7 +155,11 @@ async def run_loop(
             # CONNECT with no CONNACK (rc=7) — the wake-bell never connected.
             # Matches the ESP32 firmware (.username = token, .password = "ignored").
             client.username_pw_set(username=token_data["token"], password="ignored")
-            client.tls_set()  # default system trust store
+            # Executor, not inline: tls_set() builds an SSLContext and loads the
+            # system trust store from disk (load_default_certs /
+            # set_default_verify_paths) — blocking I/O that HA's detector flags,
+            # and that stalls the loop on every reconnect, not just at setup.
+            await hass.async_add_executor_job(client.tls_set)
 
             # Bind the per-iteration client/topic/events as default args so each
             # callback closes over *this* iteration's objects (the client is torn

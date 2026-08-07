@@ -1,6 +1,21 @@
 # Changelog
 
-## 0.21.1 — 2026-08-07
+## Unreleased
+
+### Fixed
+- **Home Assistant logged a wall of "Detected blocking call" warnings whenever
+  the Svitgrid integration was set up or reloaded.** Seven at a time, naming
+  `listdir`, `read_text`, `load_default_certs` and `set_default_verify_paths`,
+  all pointing at `mqtt_wake.py`. They were not cosmetic: both offenders ran
+  directly on Home Assistant's event loop, so everything else in Home Assistant
+  — every integration, the whole interface — was frozen for as long as they
+  took. The wake-bell loop is started as an *eager* background task, meaning its
+  first stretch of work runs immediately and inline rather than being scheduled
+  for later, and that stretch contained two pieces of disk I/O: importing the
+  MQTT library for the first time (which walks every installed package) and
+  setting up TLS (which reads the system certificate store). Both now run on a
+  worker thread. The TLS one also happened on every reconnect, not just at
+  startup. Nothing about the MQTT connection itself changes.
 
 ### Fixed
 - **Control actions stopped working after a restart, with no error anywhere.**

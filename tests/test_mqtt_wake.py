@@ -107,7 +107,13 @@ def paho_fake():
 
 
 def _mock_hass_stops_after(reads: int) -> MagicMock:
-    """hass mock whose is_stopping returns False for `reads` calls then True."""
+    """hass mock whose is_stopping returns False for `reads` calls then True.
+
+    Also emulates HA's ``async_add_executor_job`` by genuinely running the
+    callable off the event loop, and records every callable dispatched to it so
+    tests can assert that blocking work went through the pool rather than being
+    called inline (see test_blocking_work_is_dispatched_to_the_executor).
+    """
     hass = MagicMock()
     counter = {"n": 0}
 
@@ -116,6 +122,14 @@ def _mock_hass_stops_after(reads: int) -> MagicMock:
         return counter["n"] > reads
 
     type(hass).is_stopping = property(_is_stopping)
+
+    hass.executor_jobs = []
+
+    async def _executor(func, *args):
+        hass.executor_jobs.append(func)
+        return await asyncio.get_running_loop().run_in_executor(None, func, *args)
+
+    hass.async_add_executor_job = _executor
     return hass
 
 
@@ -145,7 +159,10 @@ async def test_connects_subscribes_and_signals_wake_on_message(paho_fake, token_
     async def _drive():
         # Wait briefly for the FakeClient to exist, then drive callbacks.
         for _ in range(40):
-            if paho_fake.instances:
+            # Wait for the client to be fully wired, not merely constructed:
+            # tls_set() now goes through the executor, so there is an await
+            # between Client() and the callbacks being attached.
+            if paho_fake.instances and paho_fake.instances[-1].on_connect:
                 break
             await asyncio.sleep(0.01)
         client = paho_fake.instances[-1]
@@ -197,7 +214,10 @@ async def test_config_message_updates_control_state_and_does_not_wake(paho_fake,
 
     async def _drive():
         for _ in range(40):
-            if paho_fake.instances:
+            # Wait for the client to be fully wired, not merely constructed:
+            # tls_set() now goes through the executor, so there is an await
+            # between Client() and the callbacks being attached.
+            if paho_fake.instances and paho_fake.instances[-1].on_connect:
                 break
             await asyncio.sleep(0.01)
         client = paho_fake.instances[-1]
@@ -241,7 +261,10 @@ async def test_wake_message_still_fires_event_when_control_present(paho_fake, to
 
     async def _drive():
         for _ in range(40):
-            if paho_fake.instances:
+            # Wait for the client to be fully wired, not merely constructed:
+            # tls_set() now goes through the executor, so there is an await
+            # between Client() and the callbacks being attached.
+            if paho_fake.instances and paho_fake.instances[-1].on_connect:
                 break
             await asyncio.sleep(0.01)
         client = paho_fake.instances[-1]
@@ -282,7 +305,10 @@ async def test_control_none_wake_message_still_fires_event(paho_fake, token_payl
 
     async def _drive():
         for _ in range(40):
-            if paho_fake.instances:
+            # Wait for the client to be fully wired, not merely constructed:
+            # tls_set() now goes through the executor, so there is an await
+            # between Client() and the callbacks being attached.
+            if paho_fake.instances and paho_fake.instances[-1].on_connect:
                 break
             await asyncio.sleep(0.01)
         client = paho_fake.instances[-1]
@@ -319,7 +345,10 @@ async def test_remints_token_on_reconnect(paho_fake, token_payload):
     async def _drive():
         # First connect + disconnect
         for _ in range(40):
-            if paho_fake.instances:
+            # Wait for the client to be fully wired, not merely constructed:
+            # tls_set() now goes through the executor, so there is an await
+            # between Client() and the callbacks being attached.
+            if paho_fake.instances and paho_fake.instances[-1].on_connect:
                 break
             await asyncio.sleep(0.01)
         client1 = paho_fake.instances[-1]
@@ -475,7 +504,10 @@ async def test_config_update_check_fires_callback_on_loop_thread(paho_fake, toke
 
     async def _drive():
         for _ in range(40):
-            if paho_fake.instances:
+            # Wait for the client to be fully wired, not merely constructed:
+            # tls_set() now goes through the executor, so there is an await
+            # between Client() and the callbacks being attached.
+            if paho_fake.instances and paho_fake.instances[-1].on_connect:
                 break
             await asyncio.sleep(0.01)
         client = paho_fake.instances[-1]
@@ -504,3 +536,92 @@ async def test_config_update_check_fires_callback_on_loop_thread(paho_fake, toke
     assert nudges == [1]
     assert control.mqtt_primary is False
     assert not wake_event.is_set(), "updateCheck must not fire the wake event"
+
+
+# ─── Event-loop hygiene ────────────────────────────────────────────────
+#
+# Regression: HA's blocking-call detector fired on every integration setup —
+#   "Detected blocking call to listdir ... inside the event loop by custom
+#    integration 'svitgrid' at mqtt_wake.py, line 113: import paho.mqtt.client"
+#   "Detected blocking call to load_default_certs ... at line 148: tls_set()"
+#
+# `run_loop` is started with hass.async_create_background_task, which uses an
+# EAGER task — the coroutine body runs synchronously on the event loop until its
+# first suspending await. So the lazy paho import ran inline during
+# async_setup_entry, stat-ing site-packages; and tls_set() reads the system
+# trust store off disk. Both stall the whole event loop, which is why the
+# warnings coincided with adding the integration.
+
+
+@pytest.mark.asyncio
+async def test_blocking_work_is_dispatched_to_the_executor(paho_fake, token_payload):
+    """The paho import and tls_set must not run on the event loop."""
+    from custom_components.svitgrid.mqtt_wake import run_loop
+
+    api = MagicMock()
+    api.get_mqtt_token = AsyncMock(return_value=token_payload)
+    hass = _mock_hass_stops_after(1)
+    wake_event = asyncio.Event()
+
+    async def _drive():
+        for _ in range(40):
+            # Wait for the client to be fully wired, not merely constructed:
+            # tls_set() now goes through the executor, so there is an await
+            # between Client() and the callbacks being attached.
+            if paho_fake.instances and paho_fake.instances[-1].on_connect:
+                break
+            await asyncio.sleep(0.01)
+        if paho_fake.instances:
+            client = paho_fake.instances[-1]
+            client.trigger_connect(rc=0)
+            await asyncio.sleep(0.05)
+            client.trigger_disconnect(rc=0)
+            await asyncio.sleep(0)
+
+    await asyncio.gather(
+        run_loop(hass=hass, api_client=api, api_key="k", wake_event=wake_event),
+        _drive(),
+    )
+
+    client = paho_fake.instances[-1]
+    assert client.tls_set_called, "precondition: TLS still configured"
+
+    dispatched = hass.executor_jobs
+    assert dispatched, "no blocking work was handed to the executor at all"
+
+    # The import: dispatched as importlib.import_module(...).
+    assert any(
+        getattr(f, "__name__", "") == "import_module" for f in dispatched
+    ), f"the paho import must go through the executor; got {dispatched}"
+
+    # tls_set: dispatched as the bound method of this iteration's client.
+    assert any(
+        getattr(f, "__name__", "") == "tls_set" for f in dispatched
+    ), f"tls_set must go through the executor; got {dispatched}"
+
+
+@pytest.mark.asyncio
+async def test_missing_paho_still_disables_wake_bell_gracefully(token_payload):
+    """A genuinely absent paho must log and return, not raise.
+
+    The import moved into the executor, so the ImportError now surfaces from an
+    awaited call rather than an inline statement — it must still be caught.
+    """
+    from custom_components.svitgrid import mqtt_wake
+
+    for name in ("paho.mqtt.client", "paho.mqtt", "paho"):
+        sys.modules.pop(name, None)
+    sys.modules["paho"] = None  # forces ImportError on import_module
+
+    api = MagicMock()
+    api.get_mqtt_token = AsyncMock(return_value=token_payload)
+    hass = _mock_hass_stops_after(1)
+
+    try:
+        await mqtt_wake.run_loop(
+            hass=hass, api_client=api, api_key="k", wake_event=asyncio.Event()
+        )
+    finally:
+        sys.modules.pop("paho", None)
+
+    api.get_mqtt_token.assert_not_awaited()
