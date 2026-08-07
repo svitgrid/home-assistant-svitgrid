@@ -590,14 +590,14 @@ async def test_blocking_work_is_dispatched_to_the_executor(paho_fake, token_payl
     assert dispatched, "no blocking work was handed to the executor at all"
 
     # The import: dispatched as importlib.import_module(...).
-    assert any(
-        getattr(f, "__name__", "") == "import_module" for f in dispatched
-    ), f"the paho import must go through the executor; got {dispatched}"
+    assert any(getattr(f, "__name__", "") == "import_module" for f in dispatched), (
+        f"the paho import must go through the executor; got {dispatched}"
+    )
 
     # tls_set: dispatched as the bound method of this iteration's client.
-    assert any(
-        getattr(f, "__name__", "") == "tls_set" for f in dispatched
-    ), f"tls_set must go through the executor; got {dispatched}"
+    assert any(getattr(f, "__name__", "") == "tls_set" for f in dispatched), (
+        f"tls_set must go through the executor; got {dispatched}"
+    )
 
 
 @pytest.mark.asyncio
@@ -618,9 +618,7 @@ async def test_missing_paho_still_disables_wake_bell_gracefully(token_payload):
     hass = _mock_hass_stops_after(1)
 
     try:
-        await mqtt_wake.run_loop(
-            hass=hass, api_client=api, api_key="k", wake_event=asyncio.Event()
-        )
+        await mqtt_wake.run_loop(hass=hass, api_client=api, api_key="k", wake_event=asyncio.Event())
     finally:
         sys.modules.pop("paho", None)
 

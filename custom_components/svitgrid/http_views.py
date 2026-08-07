@@ -269,9 +269,7 @@ class SvitgridCommandsView(HomeAssistantView):
     # Integration-level commands
     # ------------------------------------------------------------------
 
-    async def _apply_integration_command(
-        self, hass, command: str, payload: dict
-    ) -> web.Response:
+    async def _apply_integration_command(self, hass, command: str, payload: dict) -> web.Response:
         """Apply a ConfigEntry-level command. Currently only set_cloud_ingest.
 
         Mirrors the command-poller arm of the same name: strict bool, write to
@@ -395,9 +393,7 @@ class SvitgridCommandsView(HomeAssistantView):
         # signature + signed/top-level binding — so the LAN alone is never
         # sufficient to reach this.
         if signed_command in INTEGRATION_COMMANDS:
-            response = await self._apply_integration_command(
-                hass, signed_command, signed_payload
-            )
+            response = await self._apply_integration_command(hass, signed_command, signed_payload)
             if response.status == 200 and command_id is not None:
                 self._seen_commands[command_id] = now
             return response

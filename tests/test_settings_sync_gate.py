@@ -1,4 +1,5 @@
 """Tests for settings-sync gate functions: hash, upload decision, model ranges."""
+
 from custom_components.svitgrid.settings_sync import (
     config_range_for_model,
     registers_hash,
@@ -49,6 +50,6 @@ def test_should_upload_cached_hash_zero_alone_insufficient():
 
 def test_range_for_models():
     """Model → (start, count) range lookup."""
-    assert config_range_for_model('deye_sg04lp3') == (115, 77)
-    assert config_range_for_model('deye_sg03lp1') == (217, 63)
-    assert config_range_for_model('victron_multiplus_ii_gx_6k5') is None
+    assert config_range_for_model("deye_sg04lp3") == (115, 77)
+    assert config_range_for_model("deye_sg03lp1") == (217, 63)
+    assert config_range_for_model("victron_multiplus_ii_gx_6k5") is None

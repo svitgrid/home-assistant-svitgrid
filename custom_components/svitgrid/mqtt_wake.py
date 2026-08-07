@@ -118,9 +118,7 @@ async def run_loop(
     # dist-info), so importing here stalled the loop during async_setup_entry
     # and tripped HA's blocking-call detector on every integration setup.
     try:
-        paho = await hass.async_add_executor_job(
-            importlib.import_module, "paho.mqtt.client"
-        )
+        paho = await hass.async_add_executor_job(importlib.import_module, "paho.mqtt.client")
     except ImportError:
         _LOGGER.error(
             "paho-mqtt not available — MQTT wake-bell disabled. "

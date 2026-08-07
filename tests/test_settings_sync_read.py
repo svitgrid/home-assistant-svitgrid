@@ -107,9 +107,7 @@ async def test_returns_none_on_transport_error(monkeypatch):
 async def test_unsupported_model_returns_none():
     """Model not in CONFIG_RANGES -> None, no transport call at all."""
     hass = _FakeHass()
-    result = await read_config_registers(
-        hass, _cfg(), "victron_multiplus_ii_gx_6k5", chunk_size=25
-    )
+    result = await read_config_registers(hass, _cfg(), "victron_multiplus_ii_gx_6k5", chunk_size=25)
 
     assert result is None
 

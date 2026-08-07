@@ -181,9 +181,7 @@ async def test_preset_without_registers_never_posts(monkeypatch):
     api = _FakeApiClient(ok=True)
     cache: dict = {}
 
-    await settings_sync_tick(
-        hass, api, "key", [_preset_inv()], cache, now_monotonic_fn=lambda: 0.0
-    )
+    await settings_sync_tick(hass, api, "key", [_preset_inv()], cache, now_monotonic_fn=lambda: 0.0)
     assert api.calls == []
     assert cache == {}
 
