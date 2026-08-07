@@ -985,16 +985,31 @@ async def run_loop(
     write-back; trust mutations are not persisted in Phase 1)."""
     _LOGGER.info("Command poller started (interval=%ss)", interval_s)
     # Mutable cache — shared across iterations so add/revoke live-mutations work.
-    # In the config-entry path (keystore=None) we seed from entry_data once.
+    # Seeded once, from the keystore when there is one and from entry_data
+    # otherwise. The keystore WINS whenever it holds anything: it is the live
+    # trust store (add_trusted_key / revoke_trusted_key write straight to it),
+    # whereas entry_data["trusted_keys"] is frozen at pairing and never updated.
+    # Preferring it also honours revocation — falling back to the pairing
+    # snapshot would resurrect a key the household had deliberately removed.
     if trusted_public_keys_hex is None:
         trusted_public_keys_hex = {}
-        if entry_data:
+        if keystore is not None:
+            seed_state = await keystore.load()
+            if seed_state is not None:
+                trusted_public_keys_hex.update(seed_state.trusted_public_keys_hex)
+        if not trusted_public_keys_hex and entry_data:
             for item in entry_data.get("trusted_keys", []):
                 if isinstance(item, dict):
-                    kid = item.get("signingKeyId") or item.get("key_id")
+                    # `keyId` is the shape /finalize sends and config_flow
+                    # stores verbatim. Reading only the other two spellings
+                    # silently produced an empty cache on EVERY config-entry
+                    # install, so every signed command was skipped after a
+                    # reload with "not in trusted keys (cache has 0)".
+                    kid = item.get("keyId") or item.get("signingKeyId") or item.get("key_id")
                     pub = item.get("publicKeyHex") or item.get("public_key_hex")
                     if kid and pub:
                         trusted_public_keys_hex[kid] = pub
+    _LOGGER.info("Trusted admin keys loaded: %d", len(trusted_public_keys_hex))
 
     while not hass.is_stopping and (lifecycle is None or lifecycle.active):
         next_interval_s = float(interval_s)  # floor; updated from each poll response

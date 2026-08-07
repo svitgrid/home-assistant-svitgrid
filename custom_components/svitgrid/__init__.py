@@ -567,6 +567,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _trusted_public_keys_hex = {
         tk["keyId"]: tk["publicKeyHex"] for tk in _trusted_keys_raw if "publicKeyHex" in tk
     }
+    # entry.data["trusted_keys"] is a PAIRING-TIME SNAPSHOT and is never updated
+    # afterwards; keys approved later arrive as `add_trusted_key` and land only
+    # in the keystore. Writing the snapshot over a populated keystore therefore
+    # threw those away on every reload — island toggle, cloud-ingest toggle,
+    # add-on update, HA restart — and the household lost inverter control with
+    # no error anywhere but the add-on log. The keystore wins whenever it holds
+    # anything; the snapshot only seeds a keystore that has none (fresh install,
+    # or a blob written before this field existed).
+    _existing = await keystore.load()
+    if _existing is not None and _existing.trusted_public_keys_hex:
+        _trusted_public_keys_hex = dict(_existing.trusted_public_keys_hex)
+        _trusted_key_ids = sorted(_trusted_public_keys_hex)
     await keystore.save(
         api_key=data["api_key"],
         public_key_hex=data["public_key_hex"],

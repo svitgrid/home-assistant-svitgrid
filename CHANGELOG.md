@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.21.1 — 2026-08-07
+
+### Fixed
+- **Control actions stopped working after a restart, with no error anywhere.**
+  Changing your charge schedule, battery settings or grid-charge switch from the
+  app appeared to do nothing: the app sat spinning next to the setting you had
+  just changed, the inverter never changed, and the only trace was a warning in
+  the Home Assistant log — `Skipping command … not in trusted keys (cache has
+  0)`. Your phone *was* approved; the integration had simply forgotten it.
+
+  Two causes, both fixed. The list of approved phones was read back under the
+  wrong name when the integration started, so it always came up empty; and
+  every restart or reload overwrote the approved phones with the (usually
+  shorter) list captured at the moment you first paired. Anything approved
+  afterwards was lost the next time Home Assistant restarted, the add-on
+  updated, or you flipped local mode or cloud sync — which is why control could
+  work for a while and then quietly stop.
+
+  Readings were never affected: telemetry is authenticated differently and kept
+  arriving throughout, which is what made this so hard to spot from the app.
+
+  Installing this version stops the loss happening again, but it cannot invent
+  a key the integration has already forgotten. A household that is *currently*
+  in this state needs its phone key sent to the integration once more before
+  control works; that happens by itself the next time a key is registered or
+  approved in the household, and Svitgrid support can trigger it on request.
+
 ## 0.21.0 — 2026-08-05
 
 ### Added
