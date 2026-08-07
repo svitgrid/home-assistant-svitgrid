@@ -163,6 +163,225 @@ async def test_poller_prefers_keystore_over_pairing_snapshot(monkeypatch):
     executor.dispatch.assert_awaited_once()
 
 
+# --- Self-repair: pull the authoritative key set back from the server ---
+#
+# The two fixes above stop the cache being LOST, but cannot recover a household
+# that has already lost it — the keystore is empty and the pairing snapshot is
+# whatever it was. `GET /api/v3/executors/trusted-keys` is the pull half of a
+# push-only design, so an install repairs itself with nobody touching prod.
+
+
+def _entry_data_for(our_priv, our_pub_hex, trusted_keys=None) -> dict:
+    return {
+        "api_key": "k",
+        "public_key_hex": our_pub_hex,
+        "private_key_pem": _pem(our_priv),
+        "signing_key_id": "our-key",
+        "trusted_keys": trusted_keys if trusted_keys is not None else [],
+    }
+
+
+@pytest.mark.asyncio
+async def test_poller_resyncs_trusted_keys_from_server_at_startup(monkeypatch):
+    """An install with nothing cached anywhere still executes a signed command:
+    the poller asks the server for the household's approved keys first."""
+    admin_priv, admin_pub_hex = generate_keypair()
+    our_priv, our_pub_hex = generate_keypair()
+
+    signed_event_data = {"commandId": "cmd-3", "command": "set_battery_charge"}
+    command = {
+        "commandId": "cmd-3",
+        "command": "set_battery_charge",
+        "payload": {"inverterId": "ha-aaa", "enabled": True},
+        "signature": sign_payload(signed_event_data, admin_priv),
+        "signingKeyId": "server-only-key",
+        "signedEventData": signed_event_data,
+    }
+
+    api = MagicMock()
+    api.poll_commands = AsyncMock(return_value={"commands": [command]})
+    api.ack_command = AsyncMock()
+    api.get_trusted_keys = AsyncMock(
+        return_value=[{"keyId": "server-only-key", "publicKeyHex": admin_pub_hex}]
+    )
+    executor = MagicMock()
+    executor.dispatch = AsyncMock(return_value={"ok": True})
+
+    # The reporting household's real state: a keystore that exists (it holds
+    # the API key and private key) but whose trusted map was emptied.
+    keystore = AsyncMock()
+    keystore.load = AsyncMock(
+        return_value=MagicMock(
+            api_key="k",
+            signing_key_id="our-key",
+            trusted_public_keys_hex={},
+            load_private_key=MagicMock(return_value=our_priv),
+        )
+    )
+    keystore.update_trusted_keys_hex = AsyncMock()
+
+    monkeypatch.setattr(asyncio, "sleep", AsyncMock())
+
+    await poller_run_loop(
+        hass=_hass_one_iter(),
+        api_client=api,
+        keystore=keystore,
+        entry_data=_entry_data_for(our_priv, our_pub_hex),
+        executors_by_inverter={"ha-aaa": executor},
+        wake_event=None,
+    )
+
+    api.get_trusted_keys.assert_awaited_once()
+    executor.dispatch.assert_awaited_once()
+    # The recovered set is persisted, so the next start needs no round trip.
+    keystore.update_trusted_keys_hex.assert_awaited_with({"server-only-key": admin_pub_hex})
+
+
+@pytest.mark.asyncio
+async def test_resync_failure_leaves_the_existing_cache_intact(monkeypatch):
+    """Old API (404) or a flaky network must not disarm a working install."""
+    admin_priv, admin_pub_hex = generate_keypair()
+    our_priv, our_pub_hex = generate_keypair()
+
+    signed_event_data = {"commandId": "cmd-4", "command": "set_battery_charge"}
+    command = {
+        "commandId": "cmd-4",
+        "command": "set_battery_charge",
+        "payload": {"inverterId": "ha-aaa", "enabled": True},
+        "signature": sign_payload(signed_event_data, admin_priv),
+        "signingKeyId": "admin-key-id",
+        "signedEventData": signed_event_data,
+    }
+
+    api = MagicMock()
+    api.poll_commands = AsyncMock(return_value={"commands": [command]})
+    api.ack_command = AsyncMock()
+    api.get_trusted_keys = AsyncMock(side_effect=RuntimeError("404 Not Found"))
+    executor = MagicMock()
+    executor.dispatch = AsyncMock(return_value={"ok": True})
+
+    monkeypatch.setattr(asyncio, "sleep", AsyncMock())
+
+    await poller_run_loop(
+        hass=_hass_one_iter(),
+        api_client=api,
+        keystore=None,
+        entry_data=_entry_data_for(
+            our_priv,
+            our_pub_hex,
+            [{"keyId": "admin-key-id", "publicKeyHex": admin_pub_hex}],
+        ),
+        executors_by_inverter={"ha-aaa": executor},
+        wake_event=None,
+    )
+
+    executor.dispatch.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_resync_drops_a_key_missing_from_a_non_empty_server_set(monkeypatch):
+    """A non-empty response is authoritative and complete, so the resync also
+    propagates revocations — it is a replace, not a merge."""
+    revoked_priv, revoked_pub_hex = generate_keypair()
+    _, survivor_pub_hex = generate_keypair()
+    our_priv, our_pub_hex = generate_keypair()
+
+    signed_event_data = {"commandId": "cmd-5", "command": "set_battery_charge"}
+    command = {
+        "commandId": "cmd-5",
+        "command": "set_battery_charge",
+        "payload": {"inverterId": "ha-aaa", "enabled": True},
+        "signature": sign_payload(signed_event_data, revoked_priv),
+        "signingKeyId": "revoked-key",
+        "signedEventData": signed_event_data,
+    }
+
+    api = MagicMock()
+    api.poll_commands = AsyncMock(return_value={"commands": [command]})
+    api.ack_command = AsyncMock()
+    api.get_trusted_keys = AsyncMock(
+        return_value=[{"keyId": "survivor-key", "publicKeyHex": survivor_pub_hex}]
+    )
+    executor = MagicMock()
+    executor.dispatch = AsyncMock(return_value={"ok": True})
+
+    keystore = AsyncMock()
+    keystore.load = AsyncMock(
+        return_value=MagicMock(
+            api_key="k",
+            signing_key_id="our-key",
+            trusted_public_keys_hex={"revoked-key": revoked_pub_hex},
+            load_private_key=MagicMock(return_value=our_priv),
+        )
+    )
+    keystore.update_trusted_keys_hex = AsyncMock()
+
+    monkeypatch.setattr(asyncio, "sleep", AsyncMock())
+
+    await poller_run_loop(
+        hass=_hass_one_iter(),
+        api_client=api,
+        keystore=keystore,
+        entry_data=_entry_data_for(our_priv, our_pub_hex),
+        executors_by_inverter={"ha-aaa": executor},
+        wake_event=None,
+    )
+
+    executor.dispatch.assert_not_awaited()
+    keystore.update_trusted_keys_hex.assert_awaited_with({"survivor-key": survivor_pub_hex})
+
+
+@pytest.mark.asyncio
+async def test_an_empty_server_set_never_empties_a_populated_cache(monkeypatch):
+    """The one response that could disarm control fleet-wide if the endpoint
+    ever got it wrong. Revocation has its own push path (`revoke_trusted_key`),
+    so refusing to act on an empty set costs nothing."""
+    admin_priv, admin_pub_hex = generate_keypair()
+    our_priv, our_pub_hex = generate_keypair()
+
+    signed_event_data = {"commandId": "cmd-6", "command": "set_battery_charge"}
+    command = {
+        "commandId": "cmd-6",
+        "command": "set_battery_charge",
+        "payload": {"inverterId": "ha-aaa", "enabled": True},
+        "signature": sign_payload(signed_event_data, admin_priv),
+        "signingKeyId": "admin-key-id",
+        "signedEventData": signed_event_data,
+    }
+
+    api = MagicMock()
+    api.poll_commands = AsyncMock(return_value={"commands": [command]})
+    api.ack_command = AsyncMock()
+    api.get_trusted_keys = AsyncMock(return_value=[])
+    executor = MagicMock()
+    executor.dispatch = AsyncMock(return_value={"ok": True})
+
+    keystore = AsyncMock()
+    keystore.load = AsyncMock(
+        return_value=MagicMock(
+            api_key="k",
+            signing_key_id="our-key",
+            trusted_public_keys_hex={"admin-key-id": admin_pub_hex},
+            load_private_key=MagicMock(return_value=our_priv),
+        )
+    )
+    keystore.update_trusted_keys_hex = AsyncMock()
+
+    monkeypatch.setattr(asyncio, "sleep", AsyncMock())
+
+    await poller_run_loop(
+        hass=_hass_one_iter(),
+        api_client=api,
+        keystore=keystore,
+        entry_data=_entry_data_for(our_priv, our_pub_hex),
+        executors_by_inverter={"ha-aaa": executor},
+        wake_event=None,
+    )
+
+    executor.dispatch.assert_awaited_once()
+    keystore.update_trusted_keys_hex.assert_not_awaited()
+
+
 # --- Defect 2: setup must not discard keys the poller learned after pairing ---
 
 

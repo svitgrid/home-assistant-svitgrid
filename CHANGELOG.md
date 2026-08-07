@@ -21,11 +21,19 @@
   Readings were never affected: telemetry is authenticated differently and kept
   arriving throughout, which is what made this so hard to spot from the app.
 
-  Installing this version stops the loss happening again, but it cannot invent
-  a key the integration has already forgotten. A household that is *currently*
-  in this state needs its phone key sent to the integration once more before
-  control works; that happens by itself the next time a key is registered or
-  approved in the household, and Svitgrid support can trigger it on request.
+### Added
+- **Svitgrid now repairs its own list of approved phones.** Until now that list
+  could only ever be *pushed* to your Home Assistant, and nothing re-sent it —
+  so once it was lost, it was lost for good. The integration now asks Svitgrid
+  for the approved list when it starts, and again if a control instruction
+  arrives signed by a phone it doesn't recognise. A household already stuck in
+  the state described above therefore fixes itself once this version is
+  installed; no support request, no re-pairing.
+
+  Two deliberate limits: a failed check (no internet, older Svitgrid server)
+  leaves your existing list untouched rather than clearing it, and an answer of
+  "no approved phones at all" is ignored for the same reason — removing a phone
+  still works the way it always has, through the app.
 
 ## 0.21.0 — 2026-08-05
 

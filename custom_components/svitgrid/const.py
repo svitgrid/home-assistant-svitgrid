@@ -17,6 +17,13 @@ COMMAND_POLL_INTERVAL_S = 5
 # clamp ceiling (600_000 ms).
 COMMAND_POLL_CEILING_S = 600
 
+# Floor between two trusted-key resyncs triggered by an unknown signing key.
+# A legitimately-rejected command (revoked key, wrong household) repeats on
+# every poll until it expires, so without a floor one would become a request
+# per command per poll. Five minutes keeps recovery prompt while capping the
+# worst case at ~12 requests/hour.
+TRUSTED_KEY_RESYNC_MIN_INTERVAL_S = 300
+
 # HA Store
 STORAGE_KEY = "svitgrid"
 STORAGE_VERSION = 1

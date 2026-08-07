@@ -322,6 +322,29 @@ class TestGetMqttToken:
 
 @pytest.mark.asyncio
 class TestDeviceStopped:
+    async def test_get_trusted_keys_returns_the_approved_set(self):
+        keys = [{"keyId": "phone-1", "publicKeyHex": "04" + "aa" * 64}]
+        session, _ = _mock_session_with_response(200, {"trustedKeys": keys})
+        client = SvitgridApiClient(session, api_base="https://api.example")
+        assert await client.get_trusted_keys(api_key="secret") == keys
+
+    async def test_get_trusted_keys_raises_on_404_from_an_older_api(self):
+        """MUST raise, not return []. The caller replaces its trusted-key cache
+        with the result, so a silent empty on an API that predates the route
+        would disarm every signed command on a working install."""
+        session, _ = _mock_session_with_response(404, {"error": "Not Found"})
+        client = SvitgridApiClient(session, api_base="https://api.example")
+        with pytest.raises(SvitgridApiError):
+            await client.get_trusted_keys(api_key="secret")
+
+    async def test_get_trusted_keys_raises_on_a_malformed_body(self):
+        """Same reasoning: a body with no `trustedKeys` list is not evidence
+        that the household has no approved keys."""
+        session, _ = _mock_session_with_response(200, {"unexpected": True})
+        client = SvitgridApiClient(session, api_base="https://api.example")
+        with pytest.raises(SvitgridApiError):
+            await client.get_trusted_keys(api_key="secret")
+
     async def test_poll_commands_raises_device_stopped_on_signal(self):
         """`poll_commands` raises DeviceStopped when server body has stopped: true."""
         session, _ = _mock_session_with_response(

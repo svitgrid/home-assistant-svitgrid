@@ -35,6 +35,7 @@ from .const import (
     SET_CLOUD_INGEST_COMMAND,
     SET_HARVEST_CONFIG_COMMAND,
     SET_READ_SOURCE_COMMAND,
+    TRUSTED_KEY_RESYNC_MIN_INTERVAL_S,
 )
 from .harvest_config_apply import (
     apply_harvest_config_change,
@@ -1009,7 +1010,71 @@ async def run_loop(
                     pub = item.get("publicKeyHex") or item.get("public_key_hex")
                     if kid and pub:
                         trusted_public_keys_hex[kid] = pub
-    _LOGGER.info("Trusted admin keys loaded: %d", len(trusted_public_keys_hex))
+    _LOGGER.info("Trusted admin keys loaded from local state: %d", len(trusted_public_keys_hex))
+
+    # Then repair from the server, which holds the authoritative set. Trusted
+    # keys otherwise only ever arrive as pushed `add_trusted_key` commands with
+    # no replay, so an install that lost its cache was deaf to every signed
+    # command for good — the user saw a spinner that never resolved and no
+    # error. This is the one call that gets it back, with nobody touching prod.
+    _resync_state = {"at": None}
+
+    async def _resync_trusted_keys(reason: str) -> None:
+        """Replace the cache with the server's approved set. REPLACE, not
+        merge: the response is complete, so this also propagates revocations.
+        Any failure (404 from an older API, network blip) leaves the existing
+        cache untouched — a resync must never be able to disarm a working
+        install."""
+        _resync_state["at"] = asyncio.get_running_loop().time()
+        api_key = (entry_data or {}).get("api_key")
+        if keystore is not None:
+            ks_state = await keystore.load()
+            if ks_state is not None:
+                api_key = ks_state.api_key
+        if not api_key:
+            return
+        try:
+            keys = await api_client.get_trusted_keys(api_key)
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.warning(
+                "Trusted-key resync (%s) failed, keeping the %d cached key(s): %s",
+                reason,
+                len(trusted_public_keys_hex),
+                err,
+            )
+            return
+        fetched = {
+            k["keyId"]: k["publicKeyHex"]
+            for k in keys
+            if isinstance(k, dict) and k.get("keyId") and k.get("publicKeyHex")
+        }
+        if fetched == trusted_public_keys_hex:
+            return
+        # An EMPTY set is the one answer that could silently disarm control for
+        # a whole fleet if the endpoint ever got it wrong, and it is not a
+        # response a real household produces (its own integration key is
+        # approved too). Revocation keeps its own working push path
+        # (`revoke_trusted_key`), so refusing to act here costs nothing and
+        # removes the only way this repair could cause the outage it fixes.
+        if not fetched and trusted_public_keys_hex:
+            _LOGGER.warning(
+                "Trusted-key resync (%s) returned no approved keys; keeping the %d "
+                "cached key(s). Revocation arrives as revoke_trusted_key, not here.",
+                reason,
+                len(trusted_public_keys_hex),
+            )
+            return
+        trusted_public_keys_hex.clear()
+        trusted_public_keys_hex.update(fetched)
+        if keystore is not None:
+            await keystore.update_trusted_keys_hex(dict(trusted_public_keys_hex))
+        _LOGGER.info(
+            "Trusted-key resync (%s): now %d approved key(s)",
+            reason,
+            len(trusted_public_keys_hex),
+        )
+
+    await _resync_trusted_keys("startup")
 
     while not hass.is_stopping and (lifecycle is None or lifecycle.active):
         next_interval_s = float(interval_s)  # floor; updated from each poll response
@@ -1045,6 +1110,24 @@ async def run_loop(
                         result=None,
                         success=True,
                     )
+                # A signed command whose key we don't know is the exact
+                # signature of a lost cache. Repair before judging it, so the
+                # user's very first control action after the loss succeeds
+                # instead of vanishing. Throttled: a household really can send
+                # a command signed by a key we're right to reject, and that
+                # must not turn into a request per command per poll.
+                _sig_key_id = command.get("signingKeyId")
+                if (
+                    _sig_key_id
+                    and command.get("signature")
+                    and _sig_key_id not in trusted_public_keys_hex
+                    and (
+                        _resync_state["at"] is None
+                        or asyncio.get_running_loop().time() - _resync_state["at"]
+                        >= TRUSTED_KEY_RESYNC_MIN_INTERVAL_S
+                    )
+                ):
+                    await _resync_trusted_keys(f"unknown key {_sig_key_id[:12]}")
                 await process_command(
                     command=command,
                     api_client=api_client,

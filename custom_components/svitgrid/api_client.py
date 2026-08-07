@@ -195,6 +195,27 @@ class SvitgridApiClient:
                 raise DeviceStopped(str(data.get("stoppedReason") or "unknown"))
             return data
 
+    async def get_trusted_keys(self, api_key: str) -> list[dict[str, Any]]:
+        """Fetch the household's APPROVED admin keys — the authoritative set.
+
+        The pull half of a design that was push-only: trusted keys normally
+        arrive as `add_trusted_key` commands, and nothing ever re-sent them, so
+        an executor that lost its cache stayed deaf to every signed command with
+        no way back. Raises on any non-2xx (including 404 from an API that
+        predates the route) so callers can keep whatever they already had —
+        never treat a failed resync as "the household has no keys"."""
+        url = f"{self._base}/api/v3/executors/trusted-keys"
+        async with self._session.get(url, headers={"x-api-key": api_key}) as resp:
+            if resp.status >= 400:
+                raise SvitgridApiError(
+                    f"get_trusted_keys failed: status={resp.status} body={await _err(resp)}"
+                )
+            data = await resp.json()
+        keys = data.get("trustedKeys")
+        if not isinstance(keys, list):
+            raise SvitgridApiError(f"get_trusted_keys: malformed body {data!r}")
+        return keys
+
     async def get_mqtt_token(self, api_key: str) -> dict[str, Any]:
         """Mint a short-lived JWT for the MQTT wake-bell broker. Returns
         `{token, expiresAt, broker: {host, port, topic}}`.
@@ -283,9 +304,7 @@ class SvitgridApiClient:
             "registers": registers,
         }
         try:
-            async with self._session.post(
-                url, headers={"x-api-key": api_key}, json=body
-            ) as resp:
+            async with self._session.post(url, headers={"x-api-key": api_key}, json=body) as resp:
                 if 200 <= resp.status < 300:
                     return True
                 err_body = await _err(resp)
