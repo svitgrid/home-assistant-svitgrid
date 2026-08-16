@@ -86,7 +86,7 @@ commands:
       hub: config.hub_name
       slave: config.slave_id
       address: 154
-      value: "int(payload.chargePowerLimitW)"
+      value: "int(payload.powerLimit)"
 
   # 0=Selling First, 1=Zero Export to Load, 2=Self Use.
   - id: set_work_mode
@@ -111,6 +111,23 @@ commands:
   # naive write zeroes them. Acceptable for the immediate "toggle on/off"
   # use case; full preserve-bits semantics will land when we add
   # read-modify-write to the dispatcher.
+  # DELIBERATELY BROKEN — do NOT "fix" this key name.
+  #
+  # The app sends `gridChargeEnabled`, not `enabled`, so this recipe never
+  # resolves and the command fails closed. That mismatch is the only thing
+  # keeping it safe.
+  #
+  # Register 248 is bit 0 = TOU/timer enable, but bits 1-7 are the
+  # DAY-OF-WEEK mask. `modbus.write_register` STAMPS the whole word, and the
+  # relay transport cannot read a register first, so writing `0`/`1` here
+  # would erase the user's day-of-week schedule on every toggle. The
+  # firmware and the direct-harvest path both read-modify-write for exactly
+  # this reason (clearMask: 1); relay has no such facility.
+  #
+  # The real fix is server-side: persist the raw 248 word in the settings
+  # mirror (today only the `timerEnabled` BOOLEAN survives —
+  # register-mapping.ts:308) and have the API send the whole bit-preserving
+  # value for this recipe to stamp. Until then, failing closed is correct.
   - id: set_grid_charge_toggle
     service: modbus.write_register
     args:
