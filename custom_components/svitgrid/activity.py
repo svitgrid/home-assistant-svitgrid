@@ -51,6 +51,12 @@ class ActivityTracker:
     # rides the API key); it makes the server refuse every command ACK.
     signing_key_approved: bool = True
 
+    # Set when a direct-harvest inverter's register spec cannot be executed
+    # (unknown builtin / malformed document / never fetched). Sticky until
+    # cleared, because the symptom — no readings at all, for ever — never
+    # produces an ingest event of its own to overwrite the status with.
+    spec_problem: str | None = None
+
     last_ingest_at: datetime | None = None
     last_ingest_status: str | None = None
     _ingest_times: deque[datetime] = field(default_factory=deque)
@@ -85,6 +91,15 @@ class ActivityTracker:
         key arrives — which is exactly what the server sends on approval, so
         the warning clears itself with no polling and no extra reads."""
         self.signing_key_approved = approved
+
+    # ── register-spec health ───────────────────────────────────────────
+
+    def record_spec_problem(self, *, model_id: str, detail: str) -> None:
+        """Called by harvest.spec_health when a spec cannot be executed."""
+        self.spec_problem = f"{model_id}: {detail}"
+
+    def clear_spec_problem(self) -> None:
+        self.spec_problem = None
 
     # ── ingest path ────────────────────────────────────────────────────
 
@@ -176,6 +191,12 @@ class ActivityTracker:
             return "Device removed from its household — re-pair to resume."
         if self.lifecycle_state == "paused":
             return f"Paused by operator: {self.lifecycle_reason or 'disabled'}"[:255]
+        # Ranked above everything below: a spec the decoder cannot execute means
+        # that inverter publishes NOTHING, ever — worse than an incomplete
+        # reading, and unlike every other failure it never produces an ingest
+        # event of its own to move the line off "idle".
+        if self.spec_problem:
+            return f"register spec problem — {self.spec_problem}"[:255]
         if self.last_ingest_status == "skipped":
             recent = self._recent_ingests
             missing = recent[-1].get("missing_fields", []) if recent else []

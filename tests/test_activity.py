@@ -248,3 +248,58 @@ def test_approving_the_key_clears_the_line():
     assert "approv" in t.diagnostics_line().lower()
     t.set_signing_key_approved(True)
     assert t.diagnostics_line() == "ok"
+
+
+# ---------------------------------------------------------------------------
+# Spec problems — a register spec the decoder cannot execute produces NO
+# readings at all, so it must outrank every other diagnostics line except the
+# lifecycle states. Without this the sensor reads a cheerful "idle" for ever.
+# ---------------------------------------------------------------------------
+
+
+def test_spec_problem_defaults_to_none():
+    assert ActivityTracker().spec_problem is None
+
+
+def test_record_spec_problem_shows_on_the_diagnostics_line():
+    a = ActivityTracker()
+    a.record_spec_problem(model_id="srne_asf_10k", detail="unknown builtin: grid_sign_normalize")
+    line = a.diagnostics_line()
+    assert "srne_asf_10k" in line
+    assert "grid_sign_normalize" in line
+
+
+def test_spec_problem_outranks_a_pending_signing_key():
+    a = ActivityTracker()
+    a.set_signing_key_approved(False)
+    a.record_spec_problem(model_id="srne_asf_10k", detail="unknown builtin")
+    assert "srne_asf_10k" in a.diagnostics_line()
+
+
+def test_spec_problem_outranks_an_ok_ingest():
+    """A second, healthy inverter reporting must not hide a dead one."""
+    a = ActivityTracker()
+    a.record_ingest_success(sample_count=1, period_sec=60, summary={})
+    a.record_spec_problem(model_id="srne_asf_10k", detail="unknown builtin")
+    assert "srne_asf_10k" in a.diagnostics_line()
+
+
+def test_lifecycle_still_outranks_a_spec_problem():
+    a = ActivityTracker()
+    a.record_spec_problem(model_id="srne_asf_10k", detail="unknown builtin")
+    a.set_lifecycle("deprovisioned", None)
+    assert "re-pair" in a.diagnostics_line()
+
+
+def test_clear_spec_problem_restores_the_normal_line():
+    a = ActivityTracker()
+    a.record_spec_problem(model_id="srne_asf_10k", detail="unknown builtin")
+    a.clear_spec_problem()
+    a.record_ingest_success(sample_count=1, period_sec=60, summary={})
+    assert a.diagnostics_line() == "ok"
+
+
+def test_diagnostics_line_stays_within_255_chars_with_a_long_spec_problem():
+    a = ActivityTracker()
+    a.record_spec_problem(model_id="m" * 200, detail="x" * 400)
+    assert len(a.diagnostics_line()) <= 255

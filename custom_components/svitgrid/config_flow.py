@@ -379,15 +379,18 @@ class SvitgridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             # endpoint requires no auth.  If the fetch fails for any reason
             # spec stays None and the checker falls back gracefully.
             from .harvest.reachability import check_inverter_reachable
-            from .harvest.register_spec import RegisterSpec
+            from .harvest.spec_health import build_spec
 
             spec = None
             try:
                 _spec_session = aiohttp_client.async_get_clientsession(self.hass)
                 _spec_api = SvitgridApiClient(_spec_session, api_base=DEFAULT_API_BASE)
                 spec_dict = await _spec_api.get_register_spec(self._harvest_config["model_id"])
-                if spec_dict:
-                    spec = RegisterSpec.from_dict(spec_dict)
+                # build_spec validates as well as parses and logs any problem at
+                # ERROR naming the model — so a model this add-on cannot decode
+                # is visible from the pairing attempt onward, not only after the
+                # user notices no data hours later.
+                spec = build_spec(spec_dict, model_id=self._harvest_config["model_id"])
             except Exception:  # noqa: BLE001 — spec fetch is best-effort
                 spec = None
 

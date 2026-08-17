@@ -18,6 +18,7 @@ from ..readings_publisher import (
     gate_payload,
 )
 from .decoder import decode, sanitize
+from .spec_health import report_spec_unavailable
 from .transport import read_raw
 
 _LOGGER = logging.getLogger(__name__)
@@ -71,13 +72,29 @@ async def run_direct_harvest_loop(
     read + decode, never an aggregation window.
     """
     _LOGGER.info("Direct harvest loop started for inverter %s", inverter_id)
+    # Consecutive ticks skipped because no spec is loaded. A missing spec is
+    # the SAME user-visible symptom as a broken one (nothing at all, for ever),
+    # so it gets the same escalation instead of an eternal debug line.
+    specless_ticks = 0
     while not hass.is_stopping and (lifecycle is None or lifecycle.active):
         next_sleep_s = _clamp_interval(float(cadence.interval_s))
         try:
             spec = getattr(spec_holder, "spec", None)
             if spec is None:
-                _LOGGER.debug("harvest %s: spec not ready yet, skipping tick", inverter_id)
+                specless_ticks += 1
+                report_spec_unavailable(
+                    model_id=str(cfg.get("model_id", "unknown")),
+                    inverter_id=inverter_id,
+                    consecutive=specless_ticks,
+                    activity=activity,
+                )
             else:
+                if specless_ticks:
+                    # The cache filled in — retract the warning so the
+                    # diagnostics sensor stops accusing a healthy install.
+                    specless_ticks = 0
+                    if activity is not None and getattr(activity, "spec_problem", None):
+                        activity.clear_spec_problem()
                 payload = await poll_once(
                     hass=hass,
                     spec=spec,

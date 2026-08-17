@@ -352,7 +352,16 @@ class SvitgridApiClient:
         async with self._session.get(url) as resp:
             if resp.status == 200:
                 return await resp.json()
-            _LOGGER.debug("get_register_spec(%s) returned status=%s", model_id, resp.status)
+            # NOT debug: without a spec the direct-harvest loop publishes
+            # nothing at all, for ever. A 404 means the model is not seeded in
+            # the cloud; a 500 means it failed the API's own schema. Either way
+            # the user's inverter goes dark and this is the only breadcrumb.
+            _LOGGER.warning(
+                "get_register_spec(%s) returned status=%s — this model has no usable "
+                "register spec, so direct harvesting for it cannot start",
+                model_id,
+                resp.status,
+            )
             return None
 
     async def add_inverter(

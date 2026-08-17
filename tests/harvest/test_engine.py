@@ -147,3 +147,88 @@ async def test_run_direct_harvest_loop_exception_is_fail_soft(monkeypatch):
     )
 
     assert call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# A spec that never arrives (404 / 500 / parse refusal) must stop being silent.
+# Today `spec is None` idles the loop behind logger.debug for ever: the user
+# sees an inverter that set up fine and reports nothing, with no way to tell
+# that apart from an unreachable logger.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_missing_spec_escalates_after_repeated_ticks(monkeypatch):
+    from custom_components.svitgrid.activity import ActivityTracker
+    from custom_components.svitgrid.harvest.spec_health import SPEC_UNAVAILABLE_TICKS
+
+    ticks = 0
+
+    async def fake_sleep(_s):
+        nonlocal ticks
+        ticks += 1
+        if ticks >= SPEC_UNAVAILABLE_TICKS:
+            fake_hass.is_stopping = True
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    class FakeHass:
+        is_stopping = False
+
+    fake_hass = FakeHass()
+    activity = ActivityTracker()
+
+    await eng.run_direct_harvest_loop(
+        hass=fake_hass,
+        store=None,
+        cadence=type("C", (), {"interval_s": 60})(),
+        inverter_id="inv-1",
+        cfg={"ip": "x", "logger_serial": "1", "model_id": "srne_asf_10k"},
+        spec_holder=type("SH", (), {"spec": None})(),
+        activity=activity,
+    )
+
+    assert activity.spec_problem is not None
+    assert "srne_asf_10k" in activity.spec_problem
+
+
+@pytest.mark.asyncio
+async def test_a_spec_arriving_late_clears_the_problem(monkeypatch):
+    """The cache can fill in on a later tick — the warning must not stick."""
+    from custom_components.svitgrid.activity import ActivityTracker
+    from custom_components.svitgrid.harvest.spec_health import SPEC_UNAVAILABLE_TICKS
+
+    holder = type("SH", (), {"spec": None})()
+    ticks = 0
+
+    async def fake_sleep(_s):
+        nonlocal ticks
+        ticks += 1
+        if ticks == SPEC_UNAVAILABLE_TICKS:
+            holder.spec = SPEC  # cache filled in
+        if ticks >= SPEC_UNAVAILABLE_TICKS + 1:
+            fake_hass.is_stopping = True
+
+    async def fake_poll_once(**kwargs):
+        return {"inverterId": "inv-1"}
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(eng, "poll_once", fake_poll_once)
+
+    class FakeHass:
+        is_stopping = False
+
+    fake_hass = FakeHass()
+    activity = ActivityTracker()
+
+    await eng.run_direct_harvest_loop(
+        hass=fake_hass,
+        store=None,
+        cadence=type("C", (), {"interval_s": 60})(),
+        inverter_id="inv-1",
+        cfg={"ip": "x", "logger_serial": "1", "model_id": "srne_asf_10k"},
+        spec_holder=holder,
+        activity=activity,
+    )
+
+    assert activity.spec_problem is None

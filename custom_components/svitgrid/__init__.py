@@ -46,8 +46,8 @@ from .executors import create_executor
 from .executors.yaml_dispatcher import YamlDispatcher
 from .harvest.engine import run_direct_harvest_loop
 from .harvest.event_scheduler_loop import run_event_scheduler_loop
-from .harvest.register_spec import RegisterSpec
 from .harvest.spec_cache import load_spec
+from .harvest.spec_health import build_spec
 from .harvest.write_executor import WriteExecutor
 from .http_views import register_views
 from .island_event_store import IslandEventStore
@@ -709,8 +709,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         harvest_config["model_id"],
                         cached=None,
                     )
-                    if spec_dict is not None:
-                        spec_holder.spec = RegisterSpec.from_dict(spec_dict)
+                    # build_spec parses AND validates, and surfaces any problem
+                    # at ERROR + on the diagnostics sensor. A spec this add-on
+                    # cannot execute is refused here rather than installed to
+                    # raise on every tick behind the loop's catch-all.
+                    spec_holder.spec = build_spec(
+                        spec_dict,
+                        model_id=harvest_config["model_id"],
+                        activity=activity,
+                    )
                 except Exception:  # never block setup — fail-open
                     _LOGGER.exception(
                         "harvest spec load/parse failed for inverter %s; loop "
