@@ -95,6 +95,25 @@ def assemble_payload(*, inverter_id: str, fields: dict[str, Any]) -> dict[str, A
             has_any_pv = True
     if has_any_pv:
         payload["pvPower"] = pv_total
+    else:
+        # Some specs (Huawei SUN2000 x4, swatten_sih_th_10k — issue #127)
+        # read a single combined `totalPvPower` register instead of
+        # per-MPPT power fields, so has_any_pv above is never True for
+        # them. Without this fallback pvPower stays unset and
+        # gate_payload() defaults it to 0.0 — 0 W solar forever, silently.
+        # The per-string sum above is still preferred when it's available
+        # (finer-grained, matches the mobile-harvester/edge paths); this
+        # only fires when no per-string field was produced at all.
+        #
+        # totalPvPower present with value None means the decoder attempted
+        # the read but had no data this tick (decoder.py distinguishes
+        # "not read" from "read but missing" — see its
+        # _STANDARD_ZERO_FIELDS comment). `.get()` returns None for both
+        # "absent" and "present-but-None", and in both cases we must NOT
+        # synthesize a pvPower value here.
+        total_pv = payload.get("totalPvPower")
+        if total_pv is not None:
+            payload["pvPower"] = total_pv
     # Emit the per-string fields under the server's canonical names
     # (pvPower1..pvPower4), matching the mobile harvester
     # (apps/mobile/.../upload_payload.dart) and edge firmware

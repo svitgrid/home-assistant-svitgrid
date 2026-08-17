@@ -31,6 +31,15 @@
   on the *Svitgrid Diagnostics* sensor and at error level in the log, naming the
   model. A spec that never arrives escalates to a warning after a few polls.
 
+- **Solar generation showed 0 W forever on models that report one combined PV
+  total instead of per-string power** — the four Huawei SUN2000 variants, and
+  now `swatten_sih_th_10k` too. The add-on's payload builder only ever summed
+  `pv1Power`..`pv6Power` into the `pvPower` figure the app displays; a model
+  that reads a single `totalPvPower` register never had any of those fields to
+  sum, so `pvPower` was silently defaulted to zero on every reading. It now
+  falls back to the combined reading when no per-string figure is available,
+  and still prefers the finer per-string sum when both are present.
+
 ### Fixed
 - **Home Assistant logged a wall of "Detected blocking call" warnings whenever
   the Svitgrid integration was set up or reloaded.** Seven at a time, naming
