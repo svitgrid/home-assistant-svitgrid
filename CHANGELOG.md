@@ -1,6 +1,35 @@
 # Changelog
 
-## 0.21.2 — 2026-08-07
+## Unreleased
+
+### Fixed
+- **Some inverter models paired successfully, showed as configured in the app,
+  and then reported nothing at all — indefinitely.** No error, no warning,
+  nothing in the Home Assistant log above debug level. It affected 31 of the 70
+  models Svitgrid now publishes: every SRNE, Megarevo, KSTAR and Afore, plus
+  Solis 30K-5G. Three separate causes, all fixed together.
+
+  Two of the decoding rules the cloud sends (`grid_sign_normalize` and
+  `battery_power_from_vi`) were missing from this add-on, and hitting an unknown
+  rule made the whole poll throw — which the harvest loop caught and hid. In the
+  same change, 32-bit meter readings now honour the word order the model
+  declares (`lowWordFirst`); the two Megarevo models put the low half first, and
+  without this their six daily-energy totals came out word-swapped — a large,
+  believable, wrong number rather than an error. These two had to ship together:
+  fixing only the first would have turned a loud failure into a quiet one.
+
+  Separately, models that read their data from *input* registers (function code
+  4) were being read from *holding* registers instead — a different bank
+  entirely. That is 16 Afore, 3 KSTAR and Solis 30K-5G, on 100% of their
+  readings. The add-on now issues the right request, and refuses to guess if it
+  ever meets a function code it cannot serve.
+
+- **A model this add-on cannot decode, or one the cloud has no data for, now
+  says so.** Previously it looked exactly like an inverter that was working
+  fine: setup completed, the integration loaded, and nothing was ever published.
+  The register spec is now validated when it is loaded, and any problem appears
+  on the *Svitgrid Diagnostics* sensor and at error level in the log, naming the
+  model. A spec that never arrives escalates to a warning after a few polls.
 
 ### Fixed
 - **Home Assistant logged a wall of "Detected blocking call" warnings whenever
