@@ -159,3 +159,47 @@ async def test_solarman_v5_no_port_defaults_to_8899():
 
     _hass_arg, _spec_arg, cfg_arg, _unit_id_arg, _addr_arg = mock_rw.call_args.args
     assert cfg_arg["port"] == 8899
+
+
+# ---------------------------------------------------------------------------
+# Function-code selection — an FC04 model must be probed in the INPUT bank.
+# Probing an FC04 model's first address with FC03 can reject setup outright
+# with `cannot_reach_inverter` (16 Afore + 3 KSTAR + solis_30k_5g).
+# ---------------------------------------------------------------------------
+
+
+def _spec_with_fc(function_code: str):
+    return RegisterSpec.from_dict(
+        {
+            "modelId": "afore_hybrid_6k",
+            "version": 1,
+            "protocol": "solarman_v5",
+            "port": 8899,
+            "defaultSlaveId": 1,
+            "flags": {},
+            "reads": [{"field": "batterySoc", "address": 40, "functionCode": function_code}],
+            "derivations": [],
+            "writes": [],
+        }
+    )
+
+
+async def test_probe_uses_the_first_reads_function_code():
+    mock_rw = AsyncMock(return_value=80)
+    with patch(f"{MODULE}.transport.read_word", mock_rw):
+        assert await check_inverter_reachable(_HASS, _HARVEST_CFG, spec=_spec_with_fc("FC04"))
+    assert mock_rw.call_args.kwargs.get("function_code") == "FC04"
+
+
+async def test_probe_uses_fc03_for_an_fc03_model():
+    mock_rw = AsyncMock(return_value=80)
+    with patch(f"{MODULE}.transport.read_word", mock_rw):
+        await check_inverter_reachable(_HASS, _HARVEST_CFG, spec=_spec_with_fc("FC03"))
+    assert mock_rw.call_args.kwargs.get("function_code") == "FC03"
+
+
+async def test_probe_falls_back_to_fc03_without_a_spec():
+    mock_rw = AsyncMock(return_value=0)
+    with patch(f"{MODULE}.transport.read_word", mock_rw):
+        await check_inverter_reachable(_HASS, _HARVEST_CFG, spec=None)
+    assert mock_rw.call_args.kwargs.get("function_code") == "FC03"

@@ -72,9 +72,15 @@ async def check_inverter_reachable(
     }
     unit_id: int = int(harvest_config.get("slave_id", 1))
 
+    function_code: str = "FC03"
     if spec is not None:
         probe_spec = spec
         address: int = spec.reads[0].address if spec.reads else _PROBE_ADDRESS
+        # FC03 (holding) and FC04 (input) are different register banks. An
+        # Afore/KSTAR/Solis-5G model reads 100% FC04, so probing its first
+        # address as FC03 can reject a perfectly reachable inverter.
+        if spec.reads:
+            function_code = spec.reads[0].function_code
     else:
         # Build a minimal RegisterSpec so transport.read_word can determine
         # the protocol (solarman_v5 vs modbus_tcp).  No reads are needed
@@ -93,22 +99,27 @@ async def check_inverter_reachable(
         address = _PROBE_ADDRESS
 
     try:
-        result = await transport.read_word(hass, probe_spec, cfg, unit_id, address)
+        result = await transport.read_word(
+            hass, probe_spec, cfg, unit_id, address, function_code=function_code
+        )
         if result is None:
             _LOGGER.warning(
-                "reachability check returned None for %s:%s (address=%s) — inverter unreachable",
+                "reachability check returned None for %s:%s (address=%s fc=%s) — "
+                "inverter unreachable",
                 harvest_config.get("ip"),
                 harvest_config.get("port"),
                 address,
+                function_code,
             )
             return False
         return True
     except Exception as exc:  # noqa: BLE001
         _LOGGER.warning(
-            "reachability check raised for %s:%s (address=%s): %s",
+            "reachability check raised for %s:%s (address=%s fc=%s): %s",
             harvest_config.get("ip"),
             harvest_config.get("port"),
             address,
+            function_code,
             exc,
         )
         return False

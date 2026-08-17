@@ -320,3 +320,114 @@ def test_read_modbus_fc04_uses_input_registers(monkeypatch):
     fake_client.read_input_registers.assert_called_once_with(10, count=1, device_id=1)
     fake_client.read_holding_registers.assert_not_called()
     assert result == {1: {10: 0x55}}
+
+
+# ---------------------------------------------------------------------------
+# FC04 (read input registers) on Solarman V5.
+#
+# 20 of the corpus's models declare FC04 on 100% of their reads (16 Afore,
+# 3 KSTAR, and solis_30k_5g which has a live customer). Until 2026-08-17
+# _read_solarman logged a debug line about them and then issued FC03 anyway —
+# either a Modbus exception on every range (presenting as an unreachable
+# inverter) or a real value from the WRONG register bank.
+# ---------------------------------------------------------------------------
+
+
+def test_read_solarman_fc04_uses_input_registers():
+    from custom_components.svitgrid.harvest.transport import _read_solarman
+
+    fake_instance = MagicMock()
+    fake_instance.read_input_registers.return_value = [0x11, 0x22]
+    fake_mod, _, _ = _fake_solarman_module(fake_instance=fake_instance)
+
+    with patch.dict(sys.modules, {"pysolarmanv5": fake_mod}):
+        cfg = {"ip": "1.2.3.4", "logger_serial": "1", "port": "8899", "slave_id": "1"}
+        result = _read_solarman(cfg, [(1, 100, 2, "FC04")])
+
+    fake_instance.read_input_registers.assert_called_once_with(register_addr=100, quantity=2)
+    fake_instance.read_holding_registers.assert_not_called()
+    assert result == {1: {100: 0x11, 101: 0x22}}
+
+
+def test_read_solarman_mixed_fc03_and_fc04_use_their_own_banks():
+    from custom_components.svitgrid.harvest.transport import _read_solarman
+
+    fake_instance = MagicMock()
+    fake_instance.read_holding_registers.return_value = [0xAA]
+    fake_instance.read_input_registers.return_value = [0xBB]
+    fake_mod, _, _ = _fake_solarman_module(fake_instance=fake_instance)
+
+    with patch.dict(sys.modules, {"pysolarmanv5": fake_mod}):
+        cfg = {"ip": "1.2.3.4", "logger_serial": "1", "port": "8899", "slave_id": "1"}
+        result = _read_solarman(cfg, [(1, 10, 1, "FC03"), (1, 20, 1, "FC04")])
+
+    fake_instance.read_holding_registers.assert_called_once_with(register_addr=10, quantity=1)
+    fake_instance.read_input_registers.assert_called_once_with(register_addr=20, quantity=1)
+    assert result == {1: {10: 0xAA, 20: 0xBB}}
+
+
+def test_read_solarman_fc04_retry_stays_on_input_registers():
+    """The one-retry resilience path must NOT fall back to the holding bank."""
+    from custom_components.svitgrid.harvest.transport import _read_solarman
+
+    fake_instance = MagicMock()
+    calls = {"n": 0}
+
+    def _side_effect(*, register_addr, quantity):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise ConnectionError("broken pipe")
+        return [0xCC]
+
+    fake_instance.read_input_registers.side_effect = _side_effect
+    fake_mod, _, _ = _fake_solarman_module(fake_instance=fake_instance)
+
+    with patch.dict(sys.modules, {"pysolarmanv5": fake_mod}), patch("time.sleep"):
+        cfg = {"ip": "1.2.3.4", "logger_serial": "1", "port": "8899", "slave_id": "1"}
+        result = _read_solarman(cfg, [(1, 100, 1, "FC04")])
+
+    assert result == {1: {100: 0xCC}}
+    assert calls["n"] == 2
+    fake_instance.read_holding_registers.assert_not_called()
+
+
+def test_read_solarman_unsupported_function_code_is_loud_not_silently_fc03():
+    """An fc we can't serve must fail visibly, never read the wrong bank."""
+    import pytest
+
+    from custom_components.svitgrid.harvest.transport import _read_solarman
+
+    fake_instance = MagicMock()
+    fake_mod, _, _ = _fake_solarman_module(fake_instance=fake_instance)
+
+    with patch.dict(sys.modules, {"pysolarmanv5": fake_mod}), patch("time.sleep"):
+        cfg = {"ip": "1.2.3.4", "logger_serial": "1", "port": "8899", "slave_id": "1"}
+        with pytest.raises(RuntimeError):
+            _read_solarman(cfg, [(1, 100, 1, "FC01")])
+
+    fake_instance.read_holding_registers.assert_not_called()
+    fake_instance.read_input_registers.assert_not_called()
+
+
+def test_read_solarman_logs_a_warning_when_a_range_is_dropped(caplog):
+    """Losing a whole range is data loss — it must not sit at debug level."""
+    import logging
+
+    from custom_components.svitgrid.harvest.transport import _read_solarman
+
+    fake_instance = MagicMock()
+
+    def _side_effect(*, register_addr, quantity):
+        if register_addr == 100:
+            return [0xAB]
+        raise OSError("logger hiccup")
+
+    fake_instance.read_holding_registers.side_effect = _side_effect
+    fake_mod, _, _ = _fake_solarman_module(fake_instance=fake_instance)
+
+    with patch.dict(sys.modules, {"pysolarmanv5": fake_mod}), patch("time.sleep"):
+        with caplog.at_level(logging.WARNING):
+            cfg = {"ip": "1.2.3.4", "logger_serial": "1", "port": "8899", "slave_id": "1"}
+            _read_solarman(cfg, [(1, 100, 1, "FC03"), (1, 200, 1, "FC03")])
+
+    assert any("addr=200" in r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING)

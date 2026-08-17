@@ -327,3 +327,50 @@ async def test_read_word_modbus_returns_none_on_error():
         result = await transport.read_word(hass, spec, cfg, unit_id=1, address=100)
 
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# read_word — function_code passthrough (FC04 models)
+# ---------------------------------------------------------------------------
+
+
+async def test_read_word_defaults_to_fc03_for_the_write_path():
+    """Pre-write / verify reads target HOLDING registers — the default stays FC03."""
+    from custom_components.svitgrid.harvest import transport
+
+    hass = _FakeHass()
+    spec = _spec("solarman_v5")
+    cfg = {"ip": "1.2.3.4", "logger_serial": "1", "port": 8899, "slave_id": 1}
+    captured: dict = {}
+
+    def _fake(cfg_arg, ranges):
+        captured["ranges"] = ranges
+        return {1: {500: 7}}
+
+    with patch.object(transport, "_read_solarman", _fake):
+        result = await transport.read_word(hass, spec, cfg, unit_id=1, address=500)
+
+    assert result == 7
+    assert captured["ranges"] == [(1, 500, 1, "FC03")]
+
+
+async def test_read_word_honours_an_explicit_fc04():
+    """check_inverter_reachable must probe the bank the model actually uses."""
+    from custom_components.svitgrid.harvest import transport
+
+    hass = _FakeHass()
+    spec = _spec("solarman_v5")
+    cfg = {"ip": "1.2.3.4", "logger_serial": "1", "port": 8899, "slave_id": 1}
+    captured: dict = {}
+
+    def _fake(cfg_arg, ranges):
+        captured["ranges"] = ranges
+        return {1: {40: 9}}
+
+    with patch.object(transport, "_read_solarman", _fake):
+        result = await transport.read_word(
+            hass, spec, cfg, unit_id=1, address=40, function_code="FC04"
+        )
+
+    assert result == 9
+    assert captured["ranges"] == [(1, 40, 1, "FC04")]

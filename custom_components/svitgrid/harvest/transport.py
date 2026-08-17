@@ -73,6 +73,29 @@ _SOLARMAN_CONNECT_BACKOFF = 0.5  # seconds between connection-setup retries
 _SOLARMAN_SOCKET_TIMEOUT_S = 3
 
 
+def _solarman_reader_for(sm, fc: str):
+    """Return the pysolarmanv5 read method for *fc*.
+
+    Raises RuntimeError for anything we cannot serve. That is deliberate: the
+    previous behaviour — log at debug and read holding registers anyway — turned
+    an unsupported function code into a plausible value read from the wrong
+    bank, which is undetectable from the data.
+    """
+    method = {"FC03": "read_holding_registers", "FC04": "read_input_registers"}.get(fc)
+    if method is None:
+        raise RuntimeError(
+            f"solarman: unsupported function code {fc!r} — refusing to read the wrong "
+            f"register bank. Only FC03 (holding) and FC04 (input) are implemented."
+        )
+    reader = getattr(sm, method, None)
+    if reader is None:
+        raise RuntimeError(
+            f"solarman: pysolarmanv5 has no {method}() — cannot serve {fc}. "
+            f"Upgrade pysolarmanv5 (>=3.0 provides it)."
+        )
+    return reader
+
+
 def _read_solarman(cfg: dict, ranges: list[tuple[int, int, int, str]]) -> RawRegisters:
     """Open one Solarman V5 connection and read all *ranges*.
 
@@ -139,18 +162,22 @@ def _read_solarman(cfg: dict, ranges: list[tuple[int, int, int, str]]) -> RawReg
     out: RawRegisters = {}
     try:
         for unit_id, start, count, fc in ranges:
-            if fc != "FC03":
-                _LOGGER.debug(
-                    "solarman: ignoring %s range at addr=%s (Solarman V5 reads holding registers only)",
-                    fc,
-                    start,
-                )
+            # FC03 = holding registers, FC04 = input registers. These are two
+            # DIFFERENT register banks: reading one at the other's address
+            # silently returns an unrelated number. 20 corpus models (16 Afore,
+            # 3 KSTAR, solis_30k_5g) declare FC04 on 100% of their reads, and
+            # pysolarmanv5 has served read_input_registers all along — until
+            # 2026-08-17 this branch logged a debug line and issued FC03 anyway.
+            reader = _solarman_reader_for(sm, fc)
+
             # --- Per-range read with one retry on any transient failure ---
             try:
-                words = sm.read_holding_registers(register_addr=start, quantity=count)
+                words = reader(register_addr=start, quantity=count)
             except Exception as exc:
                 _LOGGER.debug(
-                    "solarman: addr=%s count=%s read failed (%s); reconnecting and retrying once",
+                    "solarman: %s addr=%s count=%s read failed (%s); "
+                    "reconnecting and retrying once",
+                    fc,
                     start,
                     count,
                     exc,
@@ -159,10 +186,17 @@ def _read_solarman(cfg: dict, ranges: list[tuple[int, int, int, str]]) -> RawReg
                     sm.disconnect()
                 try:
                     sm = _make_client()
-                    words = sm.read_holding_registers(register_addr=start, quantity=count)
+                    # Re-resolve against the NEW client, but on the SAME bank —
+                    # a retry must never silently fall back to FC03.
+                    words = _solarman_reader_for(sm, fc)(register_addr=start, quantity=count)
                 except Exception as exc2:
-                    _LOGGER.debug(
-                        "solarman: addr=%s count=%s retry failed (%s); skipping range",
+                    # Dropping a whole range is data loss, not noise: on a
+                    # 100%-FC04 model every range failing is what an inverter
+                    # that cannot serve input registers looks like.
+                    _LOGGER.warning(
+                        "solarman: %s addr=%s count=%s retry failed (%s); skipping range — "
+                        "these registers will be missing from this reading",
+                        fc,
                         start,
                         count,
                         exc2,
@@ -220,26 +254,36 @@ def _read_modbus(cfg: dict, ranges: list[tuple[int, int, int, str]]) -> RawRegis
 # ---------------------------------------------------------------------------
 
 
-async def read_word(hass, spec: RegisterSpec, cfg: dict, unit_id: int, address: int) -> int | None:
+async def read_word(
+    hass,
+    spec: RegisterSpec,
+    cfg: dict,
+    unit_id: int,
+    address: int,
+    function_code: str = "FC03",
+) -> int | None:
     """Read a single register and return its value, or ``None`` on any error.
 
     Reuses the protocol-level read helpers so callers can use it for
     pre-write verify reads and bit-RMW prior-value reads.
+
+    ``function_code`` defaults to FC03 because the write path (pre-write prior
+    reads, post-write verify reads) always targets holding registers. The
+    reachability probe passes the model's own function code instead — probing
+    an FC04 model in the holding bank can reject setup with
+    ``cannot_reach_inverter`` on an inverter that is perfectly reachable.
     """
     try:
+        ranges = [(unit_id, address, 1, function_code)]
         if spec.protocol == "solarman_v5":
-            raw = await hass.async_add_executor_job(
-                _read_solarman, cfg, [(unit_id, address, 1, "FC03")]
-            )
+            raw = await hass.async_add_executor_job(_read_solarman, cfg, ranges)
         elif spec.protocol == "modbus_tcp":
-            raw = await hass.async_add_executor_job(
-                _read_modbus, cfg, [(unit_id, address, 1, "FC03")]
-            )
+            raw = await hass.async_add_executor_job(_read_modbus, cfg, ranges)
         else:
             return None
         return raw.get(unit_id, {}).get(address)
     except Exception:
-        _LOGGER.debug("read_word error unit=%s addr=%s", unit_id, address)
+        _LOGGER.debug("read_word error unit=%s addr=%s fc=%s", unit_id, address, function_code)
         return None
 
 
