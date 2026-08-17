@@ -32,11 +32,19 @@ def decode(spec: RegisterSpec, raw: RawRegisters) -> dict[str, float | None]:
     # 1. raw reads
     for d in spec.reads:
         if d.words == 2:
-            hi = _raw_of(raw, d.unit_id, d.address)
-            lo = _raw_of(raw, d.unit_id, d.address + 1)
-            if hi is None or lo is None:
+            # 32-bit read spanning `address` and `address + 1`. Which of the two
+            # holds the high half is DECLARED by lowWordFirst, not assumed
+            # (reference_decoder.dart:46-47). The presence guard stays
+            # order-INDEPENDENT — both words are required either way, so a
+            # half-read batch yields nothing rather than a value built from one
+            # real word and one missing one.
+            at_address = _raw_of(raw, d.unit_id, d.address)
+            at_address_plus_1 = _raw_of(raw, d.unit_id, d.address + 1)
+            if at_address is None or at_address_plus_1 is None:
                 out[d.field] = None
                 continue
+            hi = at_address_plus_1 if d.low_word_first else at_address
+            lo = at_address if d.low_word_first else at_address_plus_1
             v = (hi << 16) | lo
             if d.signed and v >= 0x80000000:
                 v -= 0x100000000
@@ -128,7 +136,35 @@ def _apply_builtin(d: Derivation, out: dict[str, float | None], spec: RegisterSp
         if abs(p) > 50000:
             p = 0.0
         out[d.field] = p
+    elif b == "battery_power_from_vi":
+        # inputs = [batteryVoltageField, batteryCurrentField].
+        # Mirrors reference_decoder.dart:106-118 (and SolarmanReader's derive
+        # branch) EXACTLY: V×I on the RAW converted values, THEN the sign
+        # normalise, THEN the 50 kW clamp. Because a spec carries at most one
+        # derivation per field, this builtin REPLACES battery_sign_normalize —
+        # it never chains with it, so the sign step has to live here.
+        v = out.get(d.inputs[0]) or 0.0
+        i = out.get(d.inputs[1]) or 0.0
+        bp = v * i
+        if spec.flags.battery_positive_is_discharge:
+            bp = -bp
+        if abs(bp) > 50000:
+            bp = 0.0
+        out[d.field] = bp
+    elif b == "grid_sign_normalize":
+        # inputs = ['gridPower'] for a family with a real total register, or the
+        # per-phase legs for one that publishes none. Summing a single input is
+        # identity, so one branch covers both (reference_decoder.dart:119-131).
+        gp = 0.0
+        for f in d.inputs:
+            gp += out.get(f) or 0.0
+        if spec.flags.grid_positive_is_export:
+            # `+ 0.0` collapses IEEE-754 negative zero, mirroring the reader.
+            gp = -gp + 0.0
+        out[d.field] = gp
     elif b == "pv_power_from_vi":
+        # Deliberately NOT the same shape as battery_power_from_vi: a bare V×I
+        # with no sign step and no clamp (reference_decoder.dart:132-137).
         v = out.get(d.inputs[0]) or 0.0
         i = out.get(d.inputs[1]) or 0.0
         out[d.field] = v * i

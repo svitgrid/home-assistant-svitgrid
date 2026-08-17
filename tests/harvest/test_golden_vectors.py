@@ -41,4 +41,46 @@ def test_python_decoder_matches_dart_reader_for_every_vector() -> None:
 
 
 def test_vendored_vectors_have_source_commit() -> None:
-    assert _load().get("sourceCommit"), "golden-vectors.json missing sourceCommit header"
+    sc = _load().get("sourceCommit")
+    assert sc, "golden-vectors.json missing sourceCommit header"
+    assert sc != "dev", "pin sourceCommit to a real main-repo sha so drift is detectable"
+
+
+# ---------------------------------------------------------------------------
+# Coverage guards. The 2026-08-17 gap class (two missing builtins, an ignored
+# lowWordFirst, an ignored FC04) was invisible for seven weeks because the
+# vendored vectors covered only the Deye family. A regeneration that silently
+# drops these classes must fail here rather than in the field.
+# ---------------------------------------------------------------------------
+
+
+def _specs() -> list[dict]:
+    return [v["spec"] for v in _load()["vectors"]]
+
+
+def test_vectors_cover_every_builtin_the_corpus_uses() -> None:
+    used = {
+        d["builtin"] for s in _specs() for d in s.get("derivations", []) if d.get("op") == "builtin"
+    }
+    for name in ("grid_sign_normalize", "battery_power_from_vi"):
+        assert name in used, f"no vector exercises the {name} builtin"
+
+
+def test_vectors_cover_a_low_word_first_read() -> None:
+    assert any(r.get("lowWordFirst") for s in _specs() for r in s.get("reads", [])), (
+        "no vector exercises a lowWordFirst 32-bit read (Megarevo)"
+    )
+
+
+def test_vectors_cover_an_fc04_model() -> None:
+    assert any(r.get("functionCode") == "FC04" for s in _specs() for r in s.get("reads", [])), (
+        "no vector exercises an FC04 (input-register) model (Afore/KSTAR/Solis)"
+    )
+
+
+def test_every_vendored_spec_validates() -> None:
+    """validate() must be clean for the whole vendored corpus — this is exactly
+    the check __init__/config_flow now run at spec load time."""
+    for v in _load()["vectors"]:
+        problems = RegisterSpec.from_dict(v["spec"]).validate()
+        assert problems == [], f"{v['modelId']}: {problems}"

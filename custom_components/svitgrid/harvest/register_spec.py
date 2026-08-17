@@ -8,10 +8,24 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+# MUST stay identical to Dart's kBuiltinCatalog
+# (packages/inverter_protocol/lib/src/spec/builtin_catalog.dart). A name that
+# exists there but not here makes decoder._apply_builtin raise on EVERY tick;
+# the harvest loop swallows it, so the inverter pairs fine and then reports
+# nothing at all, indefinitely, behind a debug-level log.
 BUILTIN_CATALOG = frozenset(
     {
         "pv_power_from_vi",
+        # Battery power as V×I for families with no battery-power register
+        # (SRNE, Megarevo). Unlike pv_power_from_vi it ALSO applies the sign
+        # normalise and the 50 kW clamp — it stands in for
+        # battery_sign_normalize, it never chains with it.
+        "battery_power_from_vi",
         "battery_sign_normalize",
+        # Grid power assembled from its inputs (one raw read, or the per-phase
+        # legs when the family publishes no summed total) and negated when the
+        # raw register is positive=export (SRNE 0x023A, KSTAR, Megarevo).
+        "grid_sign_normalize",
         "battery_temp_clamp",
         "phase_voltage_grid_or_load",
         "phase_load_ct_or_inverter",
@@ -32,6 +46,12 @@ class ReadDef:
     unit_id: int = 1
     sentinel: int | None = None
     function_code: str = "FC03"
+    # words==2 only: which of `address` / `address+1` holds the HIGH half.
+    # False (default) = the lower address is the high word — every model that
+    # shipped before 2026-08. True = the lower address is the LOW word
+    # (Megarevo, SRNE/Swatten, LuxPower/EG4). Getting this wrong fails
+    # SILENTLY: the counter is a large, plausible, wrong number.
+    low_word_first: bool = False
 
     @staticmethod
     def from_dict(d: dict) -> ReadDef:
@@ -45,6 +65,7 @@ class ReadDef:
             unit_id=int(d.get("unitId", 1)),
             sentinel=d.get("sentinel"),
             function_code=d.get("functionCode", "FC03"),
+            low_word_first=bool(d.get("lowWordFirst", False)),
         )
 
 
@@ -71,6 +92,11 @@ class Derivation:
 class SpecFlags:
     pv_power_from_voltage_current: bool = False
     battery_positive_is_discharge: bool = False
+    battery_power_from_voltage_current: bool = False
+    # Read by the grid_sign_normalize builtin. Without it the 10 models that
+    # set it decode the right magnitude with the WRONG sign — import shows as
+    # export and back again.
+    grid_positive_is_export: bool = False
     daily_grid_unavailable: bool = False
     uses_input_registers: bool = False
     grid_relay_address: int | None = None
@@ -82,6 +108,8 @@ class SpecFlags:
         return SpecFlags(
             pv_power_from_voltage_current=bool(d.get("pvPowerFromVoltageCurrent", False)),
             battery_positive_is_discharge=bool(d.get("batteryPositiveIsDischarge", False)),
+            battery_power_from_voltage_current=bool(d.get("batteryPowerFromVoltageCurrent", False)),
+            grid_positive_is_export=bool(d.get("gridPositiveIsExport", False)),
             daily_grid_unavailable=bool(d.get("dailyGridUnavailable", False)),
             uses_input_registers=bool(d.get("usesInputRegisters", False)),
             grid_relay_address=d.get("gridRelayAddress"),

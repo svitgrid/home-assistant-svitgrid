@@ -82,12 +82,20 @@ def test_validate_allows_pipe_group_marker():
     assert RegisterSpec.from_dict(d).validate() == []
 
 
-def test_builtin_catalog_has_seven():
+def test_builtin_catalog_matches_dart_kbuiltincatalog():
+    """Must equal packages/inverter_protocol/lib/src/spec/builtin_catalog.dart.
+
+    A name present in Dart but missing here makes _apply_builtin RAISE on every
+    tick, which the harvest loop swallows — the inverter reports nothing, for
+    ever, behind a debug log. Keep the two lists identical.
+    """
     assert (
         frozenset(
             {
                 "pv_power_from_vi",
+                "battery_power_from_vi",
                 "battery_sign_normalize",
+                "grid_sign_normalize",
                 "battery_temp_clamp",
                 "phase_voltage_grid_or_load",
                 "phase_load_ct_or_inverter",
@@ -97,3 +105,57 @@ def test_builtin_catalog_has_seven():
         )
         == BUILTIN_CATALOG
     )
+
+
+def test_validate_accepts_grid_sign_normalize():
+    d = {
+        **DEYE,
+        "derivations": [
+            {
+                "field": "gridPower",
+                "op": "builtin",
+                "builtin": "grid_sign_normalize",
+                "inputs": ["batterySoc"],
+            },
+        ],
+    }
+    assert RegisterSpec.from_dict(d).validate() == []
+
+
+def test_validate_accepts_battery_power_from_vi():
+    d = {
+        **DEYE,
+        "derivations": [
+            {
+                "field": "batteryPower",
+                "op": "builtin",
+                "builtin": "battery_power_from_vi",
+                "inputs": ["batterySoc", "batteryPower"],
+            },
+        ],
+    }
+    assert RegisterSpec.from_dict(d).validate() == []
+
+
+def test_flags_parse_grid_positive_is_export():
+    spec = RegisterSpec.from_dict({**DEYE, "flags": {"gridPositiveIsExport": True}})
+    assert spec.flags.grid_positive_is_export is True
+
+
+def test_flags_grid_positive_is_export_defaults_false():
+    assert RegisterSpec.from_dict(DEYE).flags.grid_positive_is_export is False
+
+
+def test_read_def_parses_low_word_first():
+    d = {
+        **DEYE,
+        "reads": [
+            {"field": "dailyPvEnergy", "address": 12627, "words": 2, "lowWordFirst": True},
+            {"field": "batterySoc", "address": 588},
+        ],
+    }
+    spec = RegisterSpec.from_dict(d)
+    daily = next(r for r in spec.reads if r.field == "dailyPvEnergy")
+    soc = next(r for r in spec.reads if r.field == "batterySoc")
+    assert daily.low_word_first is True
+    assert soc.low_word_first is False  # default
