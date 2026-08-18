@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.21.3 — 2026-08-18
 
 ### Fixed
 - **Some inverter models paired successfully, showed as configured in the app,
