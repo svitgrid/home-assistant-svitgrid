@@ -40,6 +40,23 @@
   falls back to the combined reading when no per-string figure is available,
   and still prefers the finer per-string sum when both are present.
 
+- **The solar card never showed a voltage or current under a PV string.** Tap
+  the sun on the dashboard and each string listed only its watts — the
+  "354.0 V · 1.0 A" line underneath was blank, on every Home Assistant
+  household, always. It read like a display bug in the app and was not one: the
+  integration had no per-string voltage or current field at all, so there was
+  nothing to point at your inverter's sensors and nothing to send. A check
+  across the fleet on 2026-08-18 found the figures present on all 65 inverters
+  reporting through a Svitgrid edge device and on none of the Home Assistant
+  ones.
+
+  Per-string voltage and current are now mappable fields (strings 1–4), and the
+  Deye-via-Solarman presets map them for you. If your inverter was set up from
+  a preset you need do nothing — the new mappings arrive on their own. If you
+  mapped your sensors by hand, add them under the integration's options.
+
+## 0.21.2 — 2026-08-07
+
 ### Fixed
 - **Home Assistant logged a wall of "Detected blocking call" warnings whenever
   the Svitgrid integration was set up or reloaded.** Seven at a time, naming

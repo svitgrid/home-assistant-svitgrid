@@ -9,8 +9,12 @@
 # address divergence). Treat the sensor set below as a starting point; the user
 # remaps in HA's config flow if their string profile differs.
 
+# v2 (2026-08-18): added per-string PV voltage/current.
+#   The app's per-string "V / A" subline was blank on EVERY HA household —
+#   no per-string voltage/current field was mappable until now.
+
 id: deye-sun-60k-g03-solarman-v1
-version: "1"
+version: "2"
 brand: Deye
 model: SUN-60K-G03
 phases: 3
@@ -21,6 +25,13 @@ protocolId: home_assistant_solarman
 entityMap:
   pv1Power: sensor.inverter_pv1_power
   pv2Power: sensor.inverter_pv2_power
+  # Per-string voltage/current (Solarman profile: "PV1 Voltage" /
+  # "PV1 Current" sit alongside the "PV1 Power" sensor mapped above).
+  # Feeds the app's per-string "V / A" subline on the solar detail card.
+  pv1Voltage: sensor.inverter_pv1_voltage
+  pv1Current: sensor.inverter_pv1_current
+  pv2Voltage: sensor.inverter_pv2_voltage
+  pv2Current: sensor.inverter_pv2_current
   gridPower: sensor.inverter_grid_power
   loadPower: sensor.inverter_load_power
   dailyPvEnergy: sensor.inverter_today_production

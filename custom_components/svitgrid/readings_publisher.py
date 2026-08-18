@@ -68,6 +68,20 @@ _PV_STRING_API_NAMES = {
     "pv4Power": "pvPower4",
     "pv5Power": "pvPower5",
     "pv6Power": "pvPower6",
+    # Per-string voltage/current, same internal-vs-API naming split as the
+    # powers above. The API also carries a `pv1Voltage -> pvVoltage1` alias
+    # (svitgrid #114), but renaming here means the add-on does not depend on a
+    # server-side rescue staying in place for a field it can name correctly
+    # itself — and it keeps `unresolved_fields` honest, since that consults
+    # this very map to decide whether a mapped field resolved.
+    "pv1Voltage": "pvVoltage1",
+    "pv2Voltage": "pvVoltage2",
+    "pv3Voltage": "pvVoltage3",
+    "pv4Voltage": "pvVoltage4",
+    "pv1Current": "pvCurrent1",
+    "pv2Current": "pvCurrent2",
+    "pv3Current": "pvCurrent3",
+    "pv4Current": "pvCurrent4",
 }
 
 

@@ -62,6 +62,20 @@ ALL_FIELDS = REQUIRED_FIELDS | frozenset(
         "pv2Power",
         "pv3Power",
         "pv4Power",
+        # Per-string voltage/current. `assemble_payload` renames these to the
+        # API's canonical pvVoltageN / pvCurrentN on the way out, the same way
+        # it renames pvNPower -> pvPowerN. Without them nothing could ever map
+        # a per-string V/I sensor, so the app's "354.0 V . 1.0 A" subline was
+        # blank for every HA household (prod census 2026-08-18: present on
+        # 65 of 65 edge-firmware inverters, 0 of 7 HA ones).
+        "pv1Voltage",
+        "pv2Voltage",
+        "pv3Voltage",
+        "pv4Voltage",
+        "pv1Current",
+        "pv2Current",
+        "pv3Current",
+        "pv4Current",
         "batteryCurrent",
         "batteryTemperature",
         "gridVoltageL1",
@@ -109,6 +123,14 @@ MAPPABLE_FIELDS: list[tuple[str, str]] = [
     ("pv2Power", "PV string 2 power (W)"),
     ("pv3Power", "PV string 3 power (W)"),
     ("pv4Power", "PV string 4 power (W)"),
+    ("pv1Voltage", "PV string 1 voltage (V)"),
+    ("pv1Current", "PV string 1 current (A)"),
+    ("pv2Voltage", "PV string 2 voltage (V)"),
+    ("pv2Current", "PV string 2 current (A)"),
+    ("pv3Voltage", "PV string 3 voltage (V)"),
+    ("pv3Current", "PV string 3 current (A)"),
+    ("pv4Voltage", "PV string 4 voltage (V)"),
+    ("pv4Current", "PV string 4 current (A)"),
     ("gridPower", "Grid power (W — positive = import)"),
     ("gridVoltageL1", "Grid voltage L1 (V)"),
     ("gridVoltageL2", "Grid voltage L2 (V)"),
