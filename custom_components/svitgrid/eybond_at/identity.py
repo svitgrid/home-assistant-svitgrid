@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from .modbus_rtu import words_to_ascii
-from .register_map import PLATFORMS, RegisterMap
+from .register_map import PLATFORMS, OutputMode, RegisterMap
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -56,6 +56,10 @@ class DeviceIdentity:
     device_type: int
     serial: str
     firmware: str
+    # How this unit is wired in -- standalone, one of a parallel bank, or one
+    # phase of three. Read from the device rather than configured, so a
+    # rewire is picked up without anyone editing anything.
+    output_mode: OutputMode = OutputMode.UNKNOWN
 
 
 async def identify(link: ReadsRegisters) -> DeviceIdentity:
@@ -72,11 +76,24 @@ async def identify(link: ReadsRegisters) -> DeviceIdentity:
     except Exception as err:  # noqa: BLE001 - best effort by design
         _LOGGER.debug("firmware string unavailable: %s", err)
 
+    # The output-mode register is protocol-version specific (300 on protocol
+    # 11, documented at 600 on protocols 3-6), so it is read from the MAP --
+    # which means it can only be read once the protocol number is known.
+    output_mode = OutputMode.UNKNOWN
+    register_map = PLATFORMS.get(protocol_number)
+    if register_map is not None and register_map.topology_register is not None:
+        try:
+            raw = await link.read_registers(register_map.topology_register, 1)
+            output_mode = OutputMode.from_raw(raw[0])
+        except Exception as err:  # noqa: BLE001 - best effort, like firmware
+            _LOGGER.debug("output mode unavailable: %s", err)
+
     identity = DeviceIdentity(
         protocol_number=protocol_number,
         device_type=device_type,
         serial=serial,
         firmware=firmware,
+        output_mode=output_mode,
     )
     if firmware and f"{device_type:04x}" != firmware[:4]:
         # Not fatal, but worth surfacing: on every unit measured so far these

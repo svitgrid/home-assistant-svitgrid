@@ -62,11 +62,51 @@ class FieldSpec:
     confidence: Confidence = Confidence.IDENTIFIED
 
 
+class OutputMode(Enum):
+    """How this inverter is wired into the installation.
+
+    Read from the device, never configured. Measured values from
+    `syssi/esphome-smg-ii` register 300; our bench unit reports SINGLE.
+
+    This is what decides whether three Anenji are three independent units, a
+    parallel bank sharing one battery, or one-per-phase of a three-phase
+    supply -- and the inverter knows, so nobody has to be asked.
+    """
+
+    SINGLE = 0
+    PARALLEL = 1
+    PHASE_P1 = 2
+    PHASE_P2 = 3
+    PHASE_P3 = 4
+    UNKNOWN = -1
+
+    @classmethod
+    def from_raw(cls, value: int | None) -> OutputMode:
+        if value is None:
+            return cls.UNKNOWN
+        try:
+            return cls(value)
+        except ValueError:
+            return cls.UNKNOWN
+
+    @property
+    def is_three_phase_member(self) -> bool:
+        return self in (self.PHASE_P1, self.PHASE_P2, self.PHASE_P3)
+
+    @property
+    def phase_index(self) -> int | None:
+        """1, 2 or 3 for a three-phase member; None otherwise."""
+        return {self.PHASE_P1: 1, self.PHASE_P2: 2, self.PHASE_P3: 3}.get(self)
+
+
 @dataclass(frozen=True)
 class RegisterMap:
     name: str
     protocol_numbers: tuple[int, ...]
     fields: tuple[FieldSpec, ...]
+    # Where this protocol version keeps the output mode. Protocol 11 uses 300;
+    # protocols 3-6 document it at 600, so it is per-map rather than a constant.
+    topology_register: int | None = None
 
     def decode_block(self, base_address: int, words: list[int]) -> dict[str, float]:
         """Decode the fields this block covers. Others are simply absent.
@@ -111,6 +151,7 @@ class RegisterMap:
 SMG_II_PROTOCOL_11 = RegisterMap(
     name="EASUN/ISolar SMG II, protocol 11",
     protocol_numbers=(11,),
+    topology_register=300,
     fields=(
         FieldSpec("runningState", 201),
         FieldSpec("gridVoltageL1", 202, 0.1, unit="V", confidence=Confidence.CONFIRMED),

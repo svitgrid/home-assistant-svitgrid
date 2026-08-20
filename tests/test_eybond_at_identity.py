@@ -30,6 +30,7 @@ from custom_components.svitgrid.eybond_at.register_map import (
     SMG_II_PROTOCOL_11,
     Confidence,
     FieldSpec,
+    OutputMode,
     RegisterMap,
 )
 
@@ -70,6 +71,7 @@ def captured_link(overrides: dict[int, list[int]] | None = None) -> FakeLink:
         REG_PROTOCOL: [CAPTURED_PROTOCOL],
         REG_SERIAL: CAPTURED_SERIAL_WORDS,
         REG_FIRMWARE: CAPTURED_FIRMWARE_WORDS,
+        300: [0],  # output mode -- captured value is 0 = Single
     }
     table.update(overrides or {})
     return FakeLink(table)
@@ -84,6 +86,7 @@ class TestIdentify:
             device_type=0x7803,
             serial="99432604107106",
             firmware="7803_A6260126v1",
+            output_mode=OutputMode.SINGLE,
         )
 
     async def test_the_device_type_matches_the_firmware_prefix(self):
@@ -209,3 +212,57 @@ class TestReadPlan:
             covered.update(range(address, address + count))
         for spec in wide.fields:
             assert spec.address in covered
+
+
+class TestTopologyDetection:
+    """Three Anenji can be three standalone units, a parallel bank, or one per
+    phase -- and the INVERTER knows which, so nobody has to be asked.
+
+    Values from `syssi/esphome-smg-ii` register 300. Our bench unit reads 0.
+    """
+
+    async def test_reads_the_captured_single_unit_mode(self):
+        identity = await identify(captured_link())
+        assert identity.output_mode is OutputMode.SINGLE
+        assert identity.output_mode.phase_index is None
+        assert identity.output_mode.is_three_phase_member is False
+
+    @pytest.mark.parametrize(
+        ("raw", "mode", "phase"),
+        [
+            (0, OutputMode.SINGLE, None),
+            (1, OutputMode.PARALLEL, None),
+            (2, OutputMode.PHASE_P1, 1),
+            (3, OutputMode.PHASE_P2, 2),
+            (4, OutputMode.PHASE_P3, 3),
+        ],
+    )
+    async def test_maps_every_documented_mode(self, raw, mode, phase):
+        identity = await identify(captured_link({300: [raw]}))
+        assert identity.output_mode is mode
+        assert identity.output_mode.phase_index == phase
+
+    async def test_a_three_phase_member_is_flagged_as_such(self):
+        for raw in (2, 3, 4):
+            identity = await identify(captured_link({300: [raw]}))
+            assert identity.output_mode.is_three_phase_member is True
+
+    async def test_an_undocumented_value_is_unknown_not_a_guess(self):
+        # Firmware we have not met must not be silently mapped onto a mode we
+        # have. A wrong topology models the household wrongly.
+        identity = await identify(captured_link({300: [99]}))
+        assert identity.output_mode is OutputMode.UNKNOWN
+
+    async def test_an_unreadable_register_is_not_fatal(self):
+        # Topology is useful, not required: the readings still work without it.
+        link = captured_link()
+        del link.table[300]
+        identity = await identify(link)
+        assert identity.output_mode is OutputMode.UNKNOWN
+        assert identity.serial == "99432604107106"
+
+    def test_the_register_is_map_scoped_not_a_constant(self):
+        """Protocol 11 keeps output mode at 300; protocols 3-6 document it at
+        600. Hardcoding 300 would read a different setting entirely on another
+        protocol version."""
+        assert SMG_II_PROTOCOL_11.topology_register == 300
