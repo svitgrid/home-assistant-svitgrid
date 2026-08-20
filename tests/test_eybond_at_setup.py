@@ -285,3 +285,27 @@ class TestFlowDecisions:
         # can fill it in from the device.
         config = link_config_from(build_manual_config({"model_id": "x"}))
         assert config.upstream_host is None
+
+
+class TestAnnounceOverrides:
+    def test_advertised_ip_reaches_the_link_config(self):
+        """The fix for Home Assistant in a bridge-mode container.
+
+        Without it the announce carries the container's 172.x address, the
+        collector cannot reach it, and nothing ever connects -- silently.
+        """
+        config = link_config_from({"protocol": EYBOND_PROTOCOL, "advertised_ip": "192.168.1.50"})
+        assert config.advertised_ip == "192.168.1.50"
+
+    def test_no_advertised_ip_means_auto_detect(self):
+        assert link_config_from({"protocol": EYBOND_PROTOCOL}).advertised_ip is None
+
+    def test_an_empty_advertised_ip_is_treated_as_absent(self):
+        # A blank form field must not become the literal announce address.
+        config = link_config_from({"protocol": EYBOND_PROTOCOL, "advertised_ip": ""})
+        assert config.advertised_ip is None
+
+    def test_a_unicast_announce_target_reaches_the_link_config(self):
+        # For a LAN where broadcast does not cross a VLAN boundary.
+        config = link_config_from({"protocol": EYBOND_PROTOCOL, "announce_target": "192.168.1.116"})
+        assert config.announce_target == "192.168.1.116"

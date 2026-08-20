@@ -130,6 +130,7 @@ def link_config_from(harvest_config: dict) -> LinkConfig:
         listen_port=listen_port,
         announce_target=harvest_config.get("announce_target", DEFAULT_ANNOUNCE_TARGET),
         announce_port=announce_port,
+        advertised_ip=harvest_config.get("advertised_ip") or None,
         upstream_host=upstream_host,
         upstream_port=upstream_port,
         slave_id=slave_id,

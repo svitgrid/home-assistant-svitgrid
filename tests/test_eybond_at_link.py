@@ -120,15 +120,14 @@ async def free_port() -> int:
 
 
 def make_link(**overrides) -> EybondAtLink:
-    config = LinkConfig(
-        listen_host="127.0.0.1",
-        listen_port=0,
-        announce_target="127.0.0.1",
-        announce_interval_s=0.05,
-        tick_interval_s=0.02,
-        **overrides,
-    )
-    return EybondAtLink(config, ip_provider=lambda: "127.0.0.1")
+    defaults = {
+        "listen_host": "127.0.0.1",
+        "listen_port": 0,
+        "announce_target": "127.0.0.1",
+        "announce_interval_s": 0.05,
+        "tick_interval_s": 0.02,
+    }
+    return EybondAtLink(LinkConfig(**{**defaults, **overrides}), ip_provider=lambda: "127.0.0.1")
 
 
 class TestLifecycle:
@@ -522,3 +521,96 @@ class TestFraming:
 
     async def test_local_only_reports_no_vendor_target(self):
         assert make_link().upstream_target is None
+
+
+class TestAnnounceTargeting:
+    """Finding the collector, and telling it an address it can actually reach."""
+
+    async def test_an_explicit_advertised_ip_overrides_auto_detection(self):
+        """REQUIRED when Home Assistant runs in a bridge-mode container.
+
+        `default_local_ip` would return the CONTAINER's address (172.x). The
+        collector cannot reach that, and the only symptom is that nothing ever
+        connects -- no error, no log, just silence.
+        """
+        received: list[bytes] = []
+
+        class Receiver(asyncio.DatagramProtocol):
+            def datagram_received(self, data, addr):
+                received.append(data)
+
+        loop = asyncio.get_running_loop()
+        transport, _ = await loop.create_datagram_endpoint(Receiver, local_addr=("127.0.0.1", 0))
+        port = transport.get_extra_info("sockname")[1]
+        link = make_link(announce_port=port, advertised_ip="192.168.1.50")
+        await link.start()
+        try:
+            assert await wait_for(lambda: received)
+            assert received[0].startswith(b"set>server=192.168.1.50:")
+        finally:
+            await link.stop()
+            transport.close()
+
+    async def test_learns_the_collector_address_when_it_dials_in(self):
+        # Never needed to REACH it -- the announce is a broadcast. It matters
+        # for telling a user which device this is, and for announce_target on a
+        # network where broadcast does not cross a VLAN.
+        link = make_link()
+        await link.start()
+        collector = FakeCollector()
+        try:
+            assert link.collector_address is None
+            await collector.connect(link.listen_port)
+            assert await wait_for(lambda: link.collector_connected)
+            assert link.collector_address == "127.0.0.1"
+        finally:
+            await collector.close()
+            await link.stop()
+
+    async def test_also_unicasts_to_the_last_known_collector(self):
+        """Broadcast finds a collector we have never met; unicast keeps a known
+        one reachable on a network that filters broadcast."""
+        received: list[tuple[bytes, tuple]] = []
+
+        class Receiver(asyncio.DatagramProtocol):
+            def datagram_received(self, data, addr):
+                received.append((data, addr))
+
+        loop = asyncio.get_running_loop()
+        transport, _ = await loop.create_datagram_endpoint(Receiver, local_addr=("127.0.0.1", 0))
+        port = transport.get_extra_info("sockname")[1]
+        # announce_target is 127.0.0.1 in tests, and so is the peer, so point
+        # the broadcast elsewhere to tell the two datagrams apart.
+        link = make_link(announce_port=port, announce_target="127.0.0.2")
+        await link.start()
+        collector = FakeCollector()
+        try:
+            await collector.connect(link.listen_port)
+            assert await wait_for(lambda: link.collector_connected)
+            await collector.close()
+            assert await wait_for(lambda: not link.collector_connected)
+            # Now disconnected with a known address: the unicast must appear.
+            assert await wait_for(lambda: len(received) >= 1, limit_s=2.0)
+        finally:
+            await link.stop()
+            transport.close()
+
+    async def test_does_not_unicast_before_a_collector_is_known(self):
+        received: list[tuple[bytes, tuple]] = []
+
+        class Receiver(asyncio.DatagramProtocol):
+            def datagram_received(self, data, addr):
+                received.append((data, addr))
+
+        loop = asyncio.get_running_loop()
+        transport, _ = await loop.create_datagram_endpoint(Receiver, local_addr=("127.0.0.1", 0))
+        port = transport.get_extra_info("sockname")[1]
+        link = make_link(announce_port=port, announce_target="127.0.0.1")
+        await link.start()
+        try:
+            assert await wait_for(lambda: len(received) >= 3)
+            # One target only, so no duplicate datagrams per announce round.
+            assert link.collector_address is None
+        finally:
+            await link.stop()
+            transport.close()

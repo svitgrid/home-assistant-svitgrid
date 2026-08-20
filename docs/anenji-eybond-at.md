@@ -79,11 +79,41 @@ Set `harvest_config` on the inverter:
 | --- | --- | --- |
 | `protocol` | — | Must be `eybond_at` |
 | `listen_port` | 8899 | Our TCP listener. 0 lets the OS choose |
-| `announce_target` | `255.255.255.255` | Set a unicast address once the collector IP is known |
+| `announce_target` | `255.255.255.255` | Set a unicast address when broadcast cannot reach the collector |
+| `advertised_ip` | auto-detected | The address we tell the collector to dial. **Required for HA in a bridge-mode container** |
 | `announce_port` | 58899 | The collector's fixed command port |
 | `slave_id` | 1 | Modbus slave of the inverter behind the collector |
 | `cloud_proxy_host` | none | Vendor cloud to relay to. See below |
 | `cloud_proxy_port` | none | Required whenever the host is set |
+
+### Finding the collector
+
+**You do not need its IP.** The announce is a broadcast to
+`255.255.255.255:58899`, so every collector on the LAN hears it and dials in.
+On the bench unit that took **0.6 seconds**, before we knew which host it was.
+
+Three cases where that is not enough:
+
+**Home Assistant in a bridge-mode container.** `default_local_ip()` returns the
+*container's* address (172.x). The collector cannot reach it, so it never
+connects — and there is no error, because the announce was sent successfully.
+Set `advertised_ip` to the host's LAN address.
+
+**Broadcast that does not cross a VLAN.** Set `announce_target` to the
+collector's address. To find it, the decisive test is a UDP port-state probe:
+a host with 58899 closed replies with ICMP port-unreachable, and a collector
+stays silent. `tools/anenji-probe/` in the main repo does this; on the bench
+LAN it ruled out 24 of 26 hosts in one pass. An OUI lookup corroborates —
+the bench collector is a Shenzhen SC Technologies MAC and drops every TCP
+port, which is what an EyBond collector looks like from outside.
+
+**More than one collector on the same LAN.** A broadcast redirects all of
+them, and the link accepts exactly ONE connection and closes the rest. Give
+each inverter its own `listen_port` and a unicast `announce_target`.
+
+Once a collector has connected, `link.collector_address` reports where it came
+from, and the announcer also unicasts there — so after first contact the
+broadcast stops being load-bearing.
 
 ### The vendor relay is off by default
 

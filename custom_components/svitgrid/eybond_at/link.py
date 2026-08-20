@@ -79,6 +79,11 @@ class LinkConfig:
     announce_target: str = DEFAULT_ANNOUNCE_TARGET
     announce_port: int = ANNOUNCE_UDP_PORT
     announce_interval_s: float = 3.0
+    # Overrides the auto-detected local address in the announce. REQUIRED when
+    # Home Assistant runs in a bridge-mode container: `default_local_ip` then
+    # returns the CONTAINER's address (172.x), the collector cannot reach it,
+    # and the only symptom is that nothing ever connects.
+    advertised_ip: str | None = None
     upstream_host: str | None = None
     upstream_port: int | None = None
     upstream_backoff_initial_s: float = 5.0
@@ -113,6 +118,7 @@ class EybondAtLink:
         self._tasks: list[asyncio.Task] = []
         self._lock = asyncio.Lock()
         self._actual_port: int | None = None
+        self._collector_address: str | None = None
 
     # ── properties ────────────────────────────────────────────────────────
     @property
@@ -122,6 +128,18 @@ class EybondAtLink:
     @property
     def collector_connected(self) -> bool:
         return self._collector_writer is not None
+
+    @property
+    def collector_address(self) -> str | None:
+        """The collector's IP, learned when it dialled in.
+
+        We never need this to reach the collector -- the announce is a
+        broadcast and the collector connects to us. It matters for two other
+        things: telling a user WHICH device on their LAN this is, and giving
+        them the address to put in `announce_target` on a network where
+        broadcast does not cross a VLAN boundary.
+        """
+        return self._collector_address
 
     @property
     def upstream_connected(self) -> bool:
@@ -186,11 +204,21 @@ class EybondAtLink:
     def _send_announce(self) -> None:
         if self._udp is None or self._actual_port is None:
             return
-        # ip_provider is called FRESH every time, never cached, so a DHCP
-        # renewal repairs itself without a restart.
-        command = f"set>server={self._ip_provider()}:{self._actual_port};".encode()
-        with contextlib.suppress(OSError):
-            self._udp.sendto(command, (self._config.announce_target, self._config.announce_port))
+        # An explicit advertised_ip wins. Otherwise ip_provider is called FRESH
+        # every time, never cached, so a DHCP renewal repairs itself without a
+        # restart.
+        our_ip = self._config.advertised_ip or self._ip_provider()
+        command = f"set>server={our_ip}:{self._actual_port};".encode()
+
+        # Broadcast finds a collector we have never met. Once one has dialled
+        # in we ALSO unicast to its last known address, which keeps working on
+        # a network that filters broadcast and costs one extra datagram.
+        targets = [self._config.announce_target]
+        if self._collector_address and self._collector_address not in targets:
+            targets.append(self._collector_address)
+        for target in targets:
+            with contextlib.suppress(OSError):
+                self._udp.sendto(command, (target, self._config.announce_port))
 
     # ── collector connection ──────────────────────────────────────────────
     async def _on_collector(
@@ -203,10 +231,13 @@ class EybondAtLink:
             with contextlib.suppress(Exception):
                 await writer.wait_closed()
             return
+        peer = writer.get_extra_info("peername")
+        if peer:
+            self._collector_address = peer[0]
         self._collector_writer = writer
         self._collector_buf = b""
         self._scheduler.reset()
-        self._diag("collector connected")
+        self._diag(f"collector connected from {self._collector_address or 'unknown'}")
         if self._config.upstream_host and self._config.upstream_port:
             self._spawn(self._upstream_loop())
         await self._pump_collector(reader)
