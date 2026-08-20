@@ -96,6 +96,14 @@ def build_manual_config(user_input: dict) -> dict:
     serial = (user_input.get("inverter_serial") or "").strip()
     if serial:
         config["inverter_serial"] = serial
+    # Network settings the onboarding form collected. This dict is built
+    # field by field, so anything not listed here is SILENTLY DROPPED -- and
+    # dropping these leaves the hub announcing from a container address that
+    # no collector can reach, with nothing to explain the silence.
+    for key in ("advertised_ip", "announce_target", "listen_host"):
+        value = (user_input.get(key) or "").strip()
+        if value:
+            config[key] = value
     return config
 
 

@@ -605,3 +605,53 @@ class TestBothFlowsShareTheSteps:
             steps = d[section]["step"]
             assert "eybond_collector" in steps, section
             assert "eybond_network" in steps, section
+
+
+class TestFinalizeDoesNotClobberThePicker:
+    """The cloud payload does not contain what the picker collected.
+
+    inverter_serial, advertised_ip and announce_target are chosen locally --
+    the serial from the device list, the addresses from the network form.
+    Rebuilding harvest_config from the cloud response would drop all three,
+    leaving the hub announcing from a container address with no routing key.
+    The inverter would never publish and nothing would say why.
+    """
+
+    def test_locally_chosen_values_survive_a_cloud_payload(self):
+        picker = build_manual_config(
+            {
+                "model_id": "anenji_anj_6200",
+                "inverter_serial": "99432604107106",
+                "advertised_ip": "192.168.1.34",
+                "announce_target": "192.168.1.116",
+            }
+        )
+        from_cloud = build_manual_config({"model_id": "anenji_anj_6200"})
+        merged = {**from_cloud, **{k: v for k, v in picker.items() if v}}
+
+        assert merged["inverter_serial"] == "99432604107106"
+        assert merged["advertised_ip"] == "192.168.1.34"
+        assert merged["announce_target"] == "192.168.1.116"
+
+    def test_the_cloud_still_fills_a_gap(self):
+        # A blank model id IS a gap; a serial the user picked is not.
+        picker = build_manual_config({"model_id": "", "inverter_serial": "111"})
+        from_cloud = build_manual_config({"model_id": "anenji_anj_11kw"})
+        merged = {**from_cloud, **{k: v for k, v in picker.items() if v}}
+
+        assert merged["model_id"] == "anenji_anj_11kw"
+        assert merged["inverter_serial"] == "111"
+
+    def test_the_network_settings_reach_the_hub_config(self):
+        # End to end: what the picker collected must survive translation.
+        picker = build_manual_config(
+            {
+                "model_id": "x",
+                "inverter_serial": "111",
+                "advertised_ip": "192.168.1.34",
+                "announce_target": "192.168.1.116",
+            }
+        )
+        config = link_config_from(picker)
+        assert config.advertised_ip == "192.168.1.34"
+        assert config.announce_target == "192.168.1.116"

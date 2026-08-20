@@ -549,15 +549,27 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
         hc = self._final_payload.get("harvestConfig")
         if hc is not None:
             if hc.get("protocol") == EYBOND_PROTOCOL:
-                # No ip, and `port` may be absent entirely -- int(None) would
+                # What the PICKER collected wins. It carries inverter_serial,
+                # advertised_ip and announce_target -- none of which the cloud
+                # payload contains -- and overwriting them would leave the hub
+                # announcing from a container address with no routing key. The
+                # inverter would simply never publish, with nothing to explain
+                # why.
+                #
+                # No ip, and `port` may be absent entirely: int(None) would
                 # raise here and abort an otherwise valid pairing.
-                self._harvest_config = build_manual_config(
+                from_cloud = build_manual_config(
                     {
                         "port": hc.get("listenPort") or hc.get("port"),
                         "slave_id": hc.get("slaveId", 1),
                         "model_id": hc.get("modelId"),
                     }
                 )
+                local = self._harvest_config or {}
+                # Cloud fills only the gaps; a blank model id is a gap, a
+                # serial the picker chose is not.
+                merged = {**from_cloud, **{k: v for k, v in local.items() if v}}
+                self._harvest_config = merged
             else:
                 self._harvest_config = {
                     "protocol": hc.get("protocol"),
