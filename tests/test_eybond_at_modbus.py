@@ -122,10 +122,17 @@ class TestParseResponse:
             parse_read_response(RESP_AC[:10])
 
     def test_rejects_a_byte_count_that_disagrees_with_the_frame(self):
-        forged = bytearray(RESP_TYPE)
-        forged[2] = 40  # claims 40 data bytes in a 7-byte frame
+        """The CRC is RECOMPUTED, so the frame is internally consistent.
+
+        Without that, `_check_crc` fires first and this test proves nothing
+        about byte-count handling -- mutation testing found exactly that: the
+        length check could be deleted and this test still passed.
+        """
+        pdu = bytearray(RESP_TYPE[:-2])
+        pdu[2] = 40  # claims 40 data bytes in a 7-byte frame
+        forged = bytes(pdu) + crc16(bytes(pdu)).to_bytes(2, "little")
         with pytest.raises(ModbusError):
-            parse_read_response(bytes(forged))
+            parse_read_response(forged)
 
     def test_raises_a_typed_error_for_an_exception_response(self):
         # SYNTHETIC: exception frames were observed during the register sweep
