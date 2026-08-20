@@ -52,6 +52,7 @@ from .eybond_at.setup import (
     needs_inverter_ip,
     needs_reachability_check,
     network_advice,
+    no_collectors_advice,
 )
 from .keystore import SvitgridKeystore
 from .pairing_client import (
@@ -73,7 +74,151 @@ _LOGGER = logging.getLogger(__name__)
 _MANUAL_FIELDS = tuple(MAPPABLE_FIELDS)
 
 
-class SvitgridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+class EybondCollectorSteps:
+    """The two EyBond onboarding steps, shared by BOTH flows.
+
+    A new household goes through the config flow and a second inverter goes
+    through the options flow. Both need to pick a collector, and both need the
+    network form when Home Assistant cannot be reached. Duplicating them would
+    guarantee they drift -- and the initial flow is the one every new user
+    meets, so a gap there is the expensive one.
+
+    Subclasses supply three things:
+      `_eybond_exclude_serials()` -- serials already configured, hidden from
+          the picker so adding the second inverter is unambiguous.
+      `_eybond_running_hub()` -- the hub already serving, if any. Discovery
+          MUST reuse it: a second listener collides on the port, and its
+          broadcast would yank working collectors onto a listener about to be
+          torn down.
+      `_eybond_finish(harvest_config)` -- what to do with the result.
+    """
+
+    _eybond_network: dict[str, str] | None = None
+    _eybond_discovery_failed: bool = False
+
+    def _eybond_exclude_serials(self) -> set[str]:
+        return set()
+
+    def _eybond_running_hub(self):
+        return None
+
+    async def _eybond_finish(self, harvest_config: dict) -> FlowResult:
+        raise NotImplementedError
+
+    async def async_step_eybond_network(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Ask for the addresses discovery needs, and say what to fix.
+
+        Reached either because Home Assistant reports a container-internal
+        address, or because discovery found nothing at all. The advice differs
+        accordingly -- see `no_collectors_advice` for why detecting the cause
+        does not generalise.
+        """
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            advertised = (user_input.get("advertised_ip") or "").strip()
+            collector = (user_input.get("collector_ip") or "").strip()
+            if not advertised:
+                errors["advertised_ip"] = "required"
+            if not collector:
+                errors["collector_ip"] = "required"
+            if not errors:
+                self._eybond_network = {
+                    "advertised_ip": advertised,
+                    "announce_target": collector,
+                }
+                # Cleared so a second empty result returns here with the
+                # addresses just given, rather than looping silently.
+                self._eybond_discovery_failed = False
+                return await self.async_step_eybond_collector()
+
+        local_ip = default_local_ip()
+        advice = (
+            no_collectors_advice(local_ip)
+            if self._eybond_discovery_failed
+            else (network_advice(local_ip) or "")
+        )
+        return self.async_show_form(
+            step_id="eybond_network",
+            data_schema=vol.Schema(
+                {
+                    vol.Required("advertised_ip"): TextSelector(TextSelectorConfig()),
+                    vol.Required("collector_ip"): TextSelector(TextSelectorConfig()),
+                }
+            ),
+            errors=errors,
+            description_placeholders={"advice": advice},
+        )
+
+    async def async_step_eybond_collector(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Pick which physical inverter this is, from what is on the network.
+
+        The collector reports its own serial (register 186) and how it is
+        wired (register 300), so the user picks from a list instead of typing
+        an address they do not have.
+        """
+        errors: dict[str, str] = {}
+        network = self._eybond_network
+
+        # Skip a scan that cannot work: a container-internal address means the
+        # announce cannot reach any collector.
+        if network is None and network_advice(default_local_ip()):
+            return await self.async_step_eybond_network()
+
+        if user_input is not None:
+            serial = user_input.get("inverter_serial")
+            if not serial:
+                errors["base"] = "no_collector_selected"
+            else:
+                return await self._eybond_finish(
+                    build_manual_config(
+                        {
+                            "model_id": user_input.get("model_id", ""),
+                            "inverter_serial": serial,
+                            **(network or {}),
+                        }
+                    )
+                )
+
+        try:
+            found = await discover_collectors(
+                self.hass,
+                running_hub=self._eybond_running_hub(),
+                harvest_config={"protocol": EYBOND_PROTOCOL, **(network or {})},
+                exclude=self._eybond_exclude_serials(),
+            )
+        except Exception:  # noqa: BLE001 -- discovery must not abort the flow
+            _LOGGER.exception("EyBond discovery failed")
+            found = []
+
+        if not found:
+            # A dead end helps nobody. Every cause -- a NAT'd virtual machine,
+            # a host-only adapter, a VLAN without broadcast, a port already in
+            # use, an inverter switched off -- looks the same from here, so
+            # react to the outcome and say what to check.
+            self._eybond_discovery_failed = True
+            return await self.async_step_eybond_network()
+
+        return self.async_show_form(
+            step_id="eybond_collector",
+            data_schema=vol.Schema(
+                {
+                    vol.Required("inverter_serial"): SelectSelector(
+                        SelectSelectorConfig(
+                            options=[{"value": c.serial, "label": c.label} for c in found],
+                        ),
+                    ),
+                    vol.Required("model_id"): TextSelector(TextSelectorConfig()),
+                }
+            ),
+            errors=errors,
+        )
+
+
+class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain=DOMAIN):
     """Svitgrid setup."""
 
     VERSION = 2
@@ -113,6 +258,23 @@ class SvitgridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         # as instance state so async_create_entry can include it in entry.data
         # even though the variable is local to the finalize block above.
         self._island_key: str | None = None
+
+    # ── EyBond hooks (see EybondCollectorSteps) ──────────────────────────
+    def _eybond_running_hub(self):
+        """A hub from an already-loaded entry, if this is not the first one.
+
+        Discovery must never open a second listener while one is serving: it
+        collides on the port, and its broadcast would pull working collectors
+        onto a listener about to be torn down.
+        """
+        for state in (self.hass.data.get(DOMAIN) or {}).values():
+            if isinstance(state, dict) and state.get("eybond_hub") is not None:
+                return state["eybond_hub"]
+        return None
+
+    async def _eybond_finish(self, harvest_config: dict) -> FlowResult:
+        self._harvest_config = harvest_config
+        return await self.async_step_pair()
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """First step — present Pair vs Manual vs direct-harvest."""
@@ -228,8 +390,9 @@ class SvitgridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 errors["logger_serial"] = "logger_serial_required"
 
             if not errors and protocol == EYBOND_PROTOCOL:
-                self._harvest_config = build_manual_config(user_input)
-                return await self.async_step_pair()
+                # The collector dials US, so there is nothing to type: pick it
+                # from the network instead. Same steps the options flow uses.
+                return await self.async_step_eybond_collector()
 
             if not errors:
                 self._harvest_config = {
@@ -564,7 +727,7 @@ class SvitgridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         raise PairingExpired("pairing window expired during polling")
 
 
-class SvitgridOptionsFlow(config_entries.OptionsFlow):
+class SvitgridOptionsFlow(EybondCollectorSteps, config_entries.OptionsFlow):
     """Add / edit / remove inverters on an already-paired add-on."""
 
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
@@ -601,7 +764,7 @@ class SvitgridOptionsFlow(config_entries.OptionsFlow):
             # never have two direct-harvest inverters of any protocol, not
             # just EyBond.
             if user_input.get("connection") == EYBOND_PROTOCOL:
-                return await self.async_step_add_inverter_collector()
+                return await self.async_step_eybond_collector()
             return await self.async_step_add_inverter_entities()
         schema = vol.Schema(
             {
@@ -685,124 +848,19 @@ class SvitgridOptionsFlow(config_entries.OptionsFlow):
         )
 
     # ── add: EyBond/SmartESS collector (the collector dials US) ──────────
-    async def async_step_add_inverter_collector(
-        self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
-        """Pick which physical inverter this is, from what is on the LAN.
-
-        The collector reports its own serial (register 186) and how it is
-        wired (register 300), so the user picks from a list instead of typing
-        an address. Serials already configured are hidden, which is what makes
-        adding the second and third inverter unambiguous.
-        """
-        errors: dict[str, str] = {}
-        configured = {
+    # ── EyBond hooks (see EybondCollectorSteps) ──────────────────────────
+    def _eybond_exclude_serials(self) -> set[str]:
+        """Hide inverters already configured, so the pick is unambiguous."""
+        return {
             (inv.get("harvest_config") or {}).get("inverter_serial") for inv in self._inverters()
         } - {None}
 
-        # Home Assistant in a container reports a container-internal address.
-        # A collector cannot reach it, and a broadcast cannot leave the
-        # container -- so discovery would find nothing and report only "no
-        # collectors found", which explains nothing. Ask first instead.
-        network = getattr(self, "_eybond_network", None)
-        if network is None and network_advice(default_local_ip()):
-            return await self.async_step_add_inverter_network()
-
-        if user_input is not None:
-            serial = user_input.get("inverter_serial")
-            if not serial:
-                errors["base"] = "no_collector_selected"
-            else:
-                harvest_config = build_manual_config(
-                    {
-                        "model_id": user_input.get("model_id", ""),
-                        "inverter_serial": serial,
-                        **(network or {}),
-                    }
-                )
-                return await self._append_direct_inverter(harvest_config)
-
+    def _eybond_running_hub(self):
         state = self.hass.data.get(DOMAIN, {}).get(self._entry.entry_id) or {}
-        try:
-            found = await discover_collectors(
-                self.hass,
-                running_hub=state.get("eybond_hub"),
-                harvest_config={"protocol": EYBOND_PROTOCOL, **(network or {})},
-                exclude=configured,
-            )
-        except Exception:  # noqa: BLE001 -- discovery must not abort the flow
-            _LOGGER.exception("EyBond discovery failed")
-            found = []
+        return state.get("eybond_hub")
 
-        if not found:
-            # Nothing found sends the user to the network form rather than a
-            # dead end. Detecting the CAUSE does not generalise -- a NAT'd
-            # virtual machine, a host-only adapter, a VLAN without broadcast,
-            # a port already in use and a switched-off inverter all look the
-            # same from here -- so react to the outcome and say what to check.
-            self._eybond_discovery_failed = True
-            return await self.async_step_add_inverter_network()
-
-        schema = vol.Schema(
-            {
-                vol.Required("inverter_serial"): SelectSelector(
-                    SelectSelectorConfig(
-                        options=[{"value": c.serial, "label": c.label} for c in found],
-                    ),
-                ),
-                vol.Required("model_id"): TextSelector(TextSelectorConfig()),
-            }
-        )
-        return self.async_show_form(
-            step_id="add_inverter_collector", data_schema=schema, errors=errors
-        )
-
-    async def async_step_add_inverter_network(
-        self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
-        """Collect the addresses discovery needs when broadcast cannot work.
-
-        Home Assistant in a container reports something like 172.17.0.2. The
-        announce would carry that address, the collector could not reach it,
-        and NOTHING would report an error -- the datagram is sent
-        successfully. That silent failure is the whole reason for this step.
-
-        There is deliberately no subnet scan. A UDP port-state probe does
-        identify a collector, but only among hosts already known to exist; a
-        blind /24 sweep returned 215 candidates out of 254, and inside a NAT'd
-        container there is no ARP visibility to narrow it down. Asking is
-        honest; guessing is not.
-        """
-        errors: dict[str, str] = {}
-        if user_input is not None:
-            advertised = (user_input.get("advertised_ip") or "").strip()
-            collector = (user_input.get("collector_ip") or "").strip()
-            if not advertised:
-                errors["advertised_ip"] = "required"
-            if not collector:
-                errors["collector_ip"] = "required"
-            if not errors:
-                self._eybond_network = {
-                    "advertised_ip": advertised,
-                    "announce_target": collector,
-                }
-                # Cleared so a second empty result comes back here with the
-                # addresses the user just gave, rather than looping silently.
-                self._eybond_discovery_failed = False
-                return await self.async_step_add_inverter_collector()
-
-        schema = vol.Schema(
-            {
-                vol.Required("advertised_ip"): TextSelector(TextSelectorConfig()),
-                vol.Required("collector_ip"): TextSelector(TextSelectorConfig()),
-            }
-        )
-        return self.async_show_form(
-            step_id="add_inverter_network",
-            data_schema=schema,
-            errors=errors,
-            description_placeholders={"advice": network_advice(default_local_ip()) or ""},
-        )
+    async def _eybond_finish(self, harvest_config: dict) -> FlowResult:
+        return await self._append_direct_inverter(harvest_config)
 
     async def _append_direct_inverter(self, harvest_config: dict) -> FlowResult:
         """Create the inverter server-side, then append it with its config.

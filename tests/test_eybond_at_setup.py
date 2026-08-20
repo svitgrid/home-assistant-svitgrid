@@ -1,3 +1,5 @@
+import pathlib
+
 """Turning a harvest_config into a running link, and reading the vendor endpoint."""
 
 import asyncio
@@ -533,3 +535,73 @@ class TestNoCollectorsAdvice:
         assert "powered on" in advice  # inverter off
         assert "already using port" in advice  # 8899 taken
         assert "broadcast" in advice  # VLAN
+
+
+class TestBothFlowsShareTheSteps:
+    """A new household uses the CONFIG flow; a second inverter uses OPTIONS.
+
+    Both need to pick a collector and both need the network form. Duplicating
+    the steps would guarantee they drift, and the config flow is the one every
+    new user meets -- so a gap there is the expensive one.
+    """
+
+    def test_both_flow_classes_inherit_the_shared_steps(self):
+        from custom_components.svitgrid.config_flow import (
+            EybondCollectorSteps,
+            SvitgridConfigFlow,
+            SvitgridOptionsFlow,
+        )
+
+        assert issubclass(SvitgridConfigFlow, EybondCollectorSteps)
+        assert issubclass(SvitgridOptionsFlow, EybondCollectorSteps)
+
+    def test_each_flow_supplies_its_own_finish(self):
+        # The steps are identical; only what happens with the result differs.
+        from custom_components.svitgrid.config_flow import (
+            EybondCollectorSteps,
+            SvitgridConfigFlow,
+            SvitgridOptionsFlow,
+        )
+
+        base = EybondCollectorSteps._eybond_finish
+        assert SvitgridConfigFlow._eybond_finish is not base
+        assert SvitgridOptionsFlow._eybond_finish is not base
+
+    def test_only_the_options_flow_hides_configured_serials(self):
+        # A new household has none to hide.
+        from custom_components.svitgrid.config_flow import (
+            EybondCollectorSteps,
+            SvitgridConfigFlow,
+            SvitgridOptionsFlow,
+        )
+
+        base = EybondCollectorSteps._eybond_exclude_serials
+        assert SvitgridConfigFlow._eybond_exclude_serials is base
+        assert SvitgridOptionsFlow._eybond_exclude_serials is not base
+
+    def test_both_flows_resolve_a_running_hub(self):
+        """Discovery must never open a second listener while one serves.
+
+        It collides on the port, and its broadcast would pull working
+        collectors onto a listener about to be torn down.
+        """
+        from custom_components.svitgrid.config_flow import (
+            EybondCollectorSteps,
+            SvitgridConfigFlow,
+            SvitgridOptionsFlow,
+        )
+
+        base = EybondCollectorSteps._eybond_running_hub
+        assert SvitgridConfigFlow._eybond_running_hub is not base
+        assert SvitgridOptionsFlow._eybond_running_hub is not base
+
+    def test_the_shared_step_ids_are_translated_in_both_sections(self):
+        """The config flow reads `config.step.*` and options reads
+        `options.step.*`. A shared step needs both, or one renders raw keys."""
+        import json
+
+        d = json.loads(pathlib.Path("custom_components/svitgrid/translations/en.json").read_text())
+        for section in ("config", "options"):
+            steps = d[section]["step"]
+            assert "eybond_collector" in steps, section
+            assert "eybond_network" in steps, section

@@ -57,6 +57,22 @@
       },
       "pair": {
         "title": "Waiting for the mobile app"
+      },
+      "eybond_network": {
+        "title": "Network settings",
+        "description": "{advice}",
+        "data": {
+          "advertised_ip": "Home Assistant's address on your home network",
+          "collector_ip": "Collector's address"
+        }
+      },
+      "eybond_collector": {
+        "title": "Choose the inverter",
+        "description": "These SmartESS collectors are on your network. Each reports its own serial number and how it is wired, so pick the inverter you are adding. Ones you have already configured are not listed.",
+        "data": {
+          "inverter_serial": "Inverter",
+          "model_id": "Model id"
+        }
       }
     },
     "progress": {
@@ -71,7 +87,9 @@
     "error": {
       "cannot_connect": "Cannot reach the Svitgrid cloud. Check your internet.",
       "no_entities_selected": "Pick at least one sensor — otherwise the dashboard has nothing to show.",
-      "cannot_reach_inverter": "Couldn't reach the inverter at {ip}. Check the address and make sure Home Assistant is on the same network as the inverter, then try again."
+      "cannot_reach_inverter": "Couldn't reach the inverter at {ip}. Check the address and make sure Home Assistant is on the same network as the inverter, then try again.",
+      "no_collector_selected": "Choose which inverter this is.",
+      "required": "This is required."
     }
   },
   "entity": {
@@ -190,26 +208,25 @@
           "auto_update": "Automatically install updates"
         }
       },
-      "add_inverter_collector": {
-        "title": "Choose the inverter",
-        "description": "These SmartESS collectors are on your network. Each one reports its own serial number and how it is wired, so pick the inverter you are adding. Ones you have already configured are not listed.",
-        "data": {
-          "inverter_serial": "Inverter",
-          "model_id": "Model id"
-        }
-      },
-      "add_inverter_network": {
+      "eybond_network": {
         "title": "Network settings",
         "description": "{advice}",
         "data": {
           "advertised_ip": "Home Assistant's address on your home network",
           "collector_ip": "Collector's address"
         }
+      },
+      "eybond_collector": {
+        "title": "Choose the inverter",
+        "description": "These SmartESS collectors are on your network. Each reports its own serial number and how it is wired, so pick the inverter you are adding. Ones you have already configured are not listed.",
+        "data": {
+          "inverter_serial": "Inverter",
+          "model_id": "Model id"
+        }
       }
     },
     "error": {
       "no_entities_selected": "Pick at least one sensor — otherwise the dashboard has nothing to show.",
-      "no_collectors_found": "No SmartESS collector answered. Check the inverter is powered and on the same network, then try again.",
       "no_collector_selected": "Choose which inverter this is.",
       "required": "This is required."
     },
