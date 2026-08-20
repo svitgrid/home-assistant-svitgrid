@@ -107,13 +107,26 @@ LAN it ruled out 24 of 26 hosts in one pass. An OUI lookup corroborates —
 the bench collector is a Shenzhen SC Technologies MAC and drops every TCP
 port, which is what an EyBond collector looks like from outside.
 
-**More than one collector on the same LAN.** A broadcast redirects all of
-them, and the link accepts exactly ONE connection and closes the rest. Give
-each inverter its own `listen_port` and a unicast `announce_target`.
+**More than one collector on the same LAN.** Handled: one hub serves them
+all. See "Several inverters" below.
 
-Once a collector has connected, `link.collector_address` reports where it came
-from, and the announcer also unicasts there — so after first contact the
-broadcast stops being load-bearing.
+Once a collector has connected the hub remembers its address, so a missing
+one can be recalled by unicast without disturbing the others.
+
+**The announce is demand-driven, and that is not cosmetic.** Measured
+2026-08-20: a collector that receives `set>server=` while already connected
+**redials**. Announcing every 3 s produced **18 reconnects in 45 seconds**;
+announcing only while someone is missing produced **one**, held for the whole
+window. So:
+
+| State | Announce |
+| --- | --- |
+| Someone expected is missing, never seen | Broadcast |
+| Someone expected is missing, address known | Unicast to that one only |
+| All expected connected | Silence |
+
+The unicast case is what stops one dead inverter making the healthy ones
+churn.
 
 ### The vendor relay is off by default
 
@@ -186,3 +199,62 @@ panels attached.
 See `docs/inverter-registers-deye-vs-anenji.md` and
 `docs/inverter-research/2026-08-20-anenji-smg-ii-register-families.md` in the
 main svitgrid repo for the measurements behind all of this.
+
+## Several inverters
+
+**One hub per config entry, N sessions, routed by inverter serial.**
+
+One listener per inverter does not work, and fails twice: every listener wants
+TCP 8899 so the second and third get `address already in use`, and three
+announcers each tell every collector a different port, so they flap between
+servers forever.
+
+The protocol's "one transaction at a time" rule is **per collector, not per
+network** — three collectors are three independent serialized lines, and each
+gets its own `CollectorSession` with its own framing buffer, scheduler and
+vendor relay. Sharing a scheduler would attribute one collector's response to
+another's request, and with no transaction id nothing downstream could detect
+it.
+
+### Which inverter is which
+
+The collector says so. `harvest_config.inverter_serial` is the routing key,
+matched against the serial each collector reports at register **186**. Never
+connection order, never IP: order is whatever the collectors do after a power
+cut, and a DHCP lease moves.
+
+Adding one is a pick, not a form. The options flow lists what is on the LAN,
+hiding serials already configured:
+
+```
+99432604107106 — phase L2 — 192.168.1.117
+```
+
+The topology comes from register **300**, read from the device:
+
+| Value | Meaning |
+| --- | --- |
+| 0 | Single — standalone |
+| 1 | Parallel — one bank, shared battery |
+| 2 / 3 / 4 | Phase P1 / P2 / P3 of a three-phase set |
+
+It is shown because it is the one thing a user can check against reality:
+three inverters wired one per phase should read L1, L2 and L3, and three
+reading "standalone" say the inverters have not been told they are a
+three-phase set.
+
+**Discovery reuses the running hub.** Opening a second listener would collide
+on the port, and its broadcast would yank already-working collectors onto a
+listener about to be torn down. A temporary listener is opened only when no hub
+runs at all — the first EyBond inverter on the installation.
+
+### What the topology means downstream
+
+The hub is unchanged in every case; topology decides how Svitgrid models the
+inverters, not how we talk to them.
+
+| Reported | Modelled as |
+| --- | --- |
+| `Phase P1/P2/P3` | Three inverter documents, one phase each, summed by the household |
+| `Parallel` | Three documents, master and slaves, `sharedBattery` |
+| `Single` ×3 | Three unrelated inverters |
