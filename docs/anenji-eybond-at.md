@@ -4,10 +4,30 @@ Reads an Anenji inverter through the EyBond/SmartESS Wi-Fi collector it ships
 with, over the local network. No cloud account, no dongle swap, no router
 changes.
 
-**Status as of 2026-08-20:** the protocol stack is complete and tested against
-captured frames. **It has never run against the real collector.** Battery, PV,
-and load registers are identified but unexercised, because the bench unit has
-none of that hardware attached.
+**Status as of 2026-08-21:** proven end to end on real hardware. A live Anenji
+was onboarded through Home Assistant running in a Docker container, and a
+reading reached Svitgrid:
+
+```json
+{ "inverterId": "ha-9d17a7fc5fc0", "source": "edge",
+  "gridVoltageL1": 231.8, "gridFrequency": 50.03,
+  "loadVoltageL1": 233.4, "loadPower": -2.0,
+  "inverterTemperature": 26.0,
+  "gridPower": 0.0, "batteryPower": 0.0, "batterySoc": 5.0, "pvPower": 0.0 }
+```
+
+`sync_state = sent`. The path from a register to the cloud works.
+
+**Battery, PV and load remain unexercised.** The bench unit has none of that
+hardware attached, so those registers read zero and their addresses are still
+`IDENTIFIED` rather than `CONFIRMED`. Two values are worth knowing about:
+
+* **`batterySoc` reads 5 with no battery attached** (register 229), and that
+  value reaches the cloud even with `hasBattery: false`. Anything downstream
+  that treats it as a real state of charge would raise a low-battery alert
+  against a battery that does not exist.
+* **`pvVoltage1` reads 27.3 V with no panels** (register 219) -- a floating
+  MPPT input.
 
 ## How it works
 
@@ -229,6 +249,29 @@ panels attached.
 See `docs/inverter-registers-deye-vs-anenji.md` and
 `docs/inverter-research/2026-08-20-anenji-smg-ii-register-families.md` in the
 main svitgrid repo for the measurements behind all of this.
+
+## The first reading lands with onboarding
+
+The harvest loop does **not** sleep the poll cadence while waiting for a
+collector. It blocks on the hub's change signal and reads as soon as one is
+identified.
+
+That is not a refinement. Measured 2026-08-20: the loop's first tick ran
+**0.6 s before** the collector connected, so it correctly skipped -- and then
+slept the full 300 s cadence while the app showed "Waiting for data" and the
+pipe worked perfectly the whole time. Every fresh install hit it, because the
+loop always starts before a collector has had time to dial in.
+
+Re-measured after the fix, against a live Home Assistant:
+
+```
+21:08:40  collector connected
+21:08:40  is inverter 99432604107106
+21:08:40  bound to collector
+21:08:40  reading appended
+```
+
+The 30 s ceiling only bounds the case where no collector ever arrives.
 
 ## Several inverters
 
