@@ -44,6 +44,12 @@ from .const import (
     PAIRING_MAX_POLL_DURATION_S,
     PAIRING_POLL_INTERVAL_S,
 )
+from .eybond_at.setup import (
+    EYBOND_PROTOCOL,
+    build_manual_config,
+    needs_inverter_ip,
+    needs_reachability_check,
+)
 from .keystore import SvitgridKeystore
 from .pairing_client import (
     PairingClaimed,
@@ -205,12 +211,19 @@ class SvitgridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             model_id = (user_input.get("model_id") or "").strip()
             logger_serial = (user_input.get("logger_serial") or "").strip()
 
-            if not ip:
+            # An EyBond/SmartESS collector DIALS US, so there is no address to
+            # dial and no IP to ask for. Requiring one would make the form
+            # unanswerable for a device that works perfectly.
+            if needs_inverter_ip(protocol) and not ip:
                 errors["ip"] = "required"
             if not model_id:
                 errors["model_id"] = "required"
             if protocol == "solarman_v5" and not logger_serial:
                 errors["logger_serial"] = "logger_serial_required"
+
+            if not errors and protocol == EYBOND_PROTOCOL:
+                self._harvest_config = build_manual_config(user_input)
+                return await self.async_step_pair()
 
             if not errors:
                 self._harvest_config = {
@@ -228,9 +241,11 @@ class SvitgridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         schema = vol.Schema(
             {
                 vol.Required("protocol", default="solarman_v5"): SelectSelector(
-                    SelectSelectorConfig(options=["solarman_v5", "modbus_tcp"]),
+                    SelectSelectorConfig(options=["solarman_v5", "modbus_tcp", EYBOND_PROTOCOL]),
                 ),
-                vol.Required("ip"): TextSelector(TextSelectorConfig()),
+                # Optional at the schema level; still enforced per protocol
+                # above, because eybond_at has no address to dial.
+                vol.Optional("ip"): TextSelector(TextSelectorConfig()),
                 vol.Required("port", default=8899): NumberSelector(
                     NumberSelectorConfig(
                         min=1,
@@ -364,14 +379,25 @@ class SvitgridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         # (no harvestConfig) skip the check entirely.
         hc = self._final_payload.get("harvestConfig")
         if hc is not None:
-            self._harvest_config = {
-                "protocol": hc.get("protocol"),
-                "ip": hc.get("ip"),
-                "port": int(hc.get("port")),
-                "slave_id": int(hc.get("slaveId", 1)),
-                "model_id": hc.get("modelId"),
-                "logger_serial": hc.get("loggerSerial"),
-            }
+            if hc.get("protocol") == EYBOND_PROTOCOL:
+                # No ip, and `port` may be absent entirely -- int(None) would
+                # raise here and abort an otherwise valid pairing.
+                self._harvest_config = build_manual_config(
+                    {
+                        "port": hc.get("listenPort") or hc.get("port"),
+                        "slave_id": hc.get("slaveId", 1),
+                        "model_id": hc.get("modelId"),
+                    }
+                )
+            else:
+                self._harvest_config = {
+                    "protocol": hc.get("protocol"),
+                    "ip": hc.get("ip"),
+                    "port": int(hc.get("port")),
+                    "slave_id": int(hc.get("slaveId", 1)),
+                    "model_id": hc.get("modelId"),
+                    "logger_serial": hc.get("loggerSerial"),
+                }
             # Fetch the model's register spec so the reachability check can
             # probe a REAL register (e.g. battery SOC at address 588) instead
             # of the generic fallback register 1 that Deye inverters don't
@@ -381,8 +407,15 @@ class SvitgridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             from .harvest.reachability import check_inverter_reachable
             from .harvest.spec_health import build_spec
 
+            # The EyBond map is dispatched from the device at runtime (protocol
+            # number, register 184), so there is no cloud spec to fetch -- and
+            # nothing to TCP-connect to, because the collector dials US.
+            # Probing would fail every pairing for a working device.
+            probe = needs_reachability_check(self._harvest_config)
             spec = None
             try:
+                if not probe:
+                    raise RuntimeError("no cloud spec for a device-dispatched map")
                 _spec_session = aiohttp_client.async_get_clientsession(self.hass)
                 _spec_api = SvitgridApiClient(_spec_session, api_base=DEFAULT_API_BASE)
                 spec_dict = await _spec_api.get_register_spec(self._harvest_config["model_id"])
@@ -394,7 +427,11 @@ class SvitgridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             except Exception:  # noqa: BLE001 — spec fetch is best-effort
                 spec = None
 
-            reachable = await check_inverter_reachable(self.hass, self._harvest_config, spec=spec)
+            reachable = True
+            if probe:
+                reachable = await check_inverter_reachable(
+                    self.hass, self._harvest_config, spec=spec
+                )
             if not reachable:
                 return self.async_show_form(
                     step_id="pair_finalize",

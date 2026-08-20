@@ -46,6 +46,42 @@ def is_eybond_harvest(harvest_config: dict | None) -> bool:
     return bool(harvest_config) and harvest_config.get("protocol") == EYBOND_PROTOCOL
 
 
+def needs_inverter_ip(protocol: str | None) -> bool:
+    """False for this family: the collector dials US, so there is no IP to dial.
+
+    The manual config-flow step requires an IP for every other protocol. Asking
+    for one here would be unanswerable -- the collector's address is not needed
+    and is not even known until it connects.
+    """
+    return protocol != EYBOND_PROTOCOL
+
+
+def needs_reachability_check(harvest_config: dict | None) -> bool:
+    """False for this family, for the same reason.
+
+    `check_inverter_reachable` TCP-connects to the inverter. Nothing here
+    listens: we are the server. Running the probe would fail every pairing for
+    a collector that is working perfectly.
+    """
+    return not is_eybond_harvest(harvest_config)
+
+
+def build_manual_config(user_input: dict) -> dict:
+    """Build a `harvest_config` for this family from the manual flow's input.
+
+    Deliberately narrow: everything the collector path needs has a working
+    default, so the pairing form stays short. The vendor relay is opt-in and
+    OFF here -- `discover_upstream` can fill it in later from the device, which
+    is safer than asking a user to type a cloud hostname.
+    """
+    return {
+        "protocol": EYBOND_PROTOCOL,
+        "listen_port": int(user_input.get("port") or DEFAULT_LISTEN_PORT),
+        "slave_id": int(user_input.get("slave_id") or 1),
+        "model_id": (user_input.get("model_id") or "").strip(),
+    }
+
+
 def _port(value, name: str, *, allow_ephemeral: bool = False) -> int:
     """Validate a port.
 

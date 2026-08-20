@@ -14,9 +14,12 @@ from custom_components.svitgrid.eybond_at.link import (
 from custom_components.svitgrid.eybond_at.setup import (
     EYBOND_PROTOCOL,
     EybondConfigError,
+    build_manual_config,
     discover_upstream,
     is_eybond_harvest,
     link_config_from,
+    needs_inverter_ip,
+    needs_reachability_check,
     start_eybond_harvest,
 )
 
@@ -237,3 +240,48 @@ class TestStartHarvest:
                 store=FakeStore(),
                 cadence=FakeCadence(),
             )
+
+
+class TestFlowDecisions:
+    """The collector dials US, which breaks two assumptions the flow makes."""
+
+    def test_no_inverter_ip_is_required(self):
+        # Every other protocol dials the inverter. Asking for an IP here would
+        # be unanswerable: it is not needed, and not known until it connects.
+        assert needs_inverter_ip(EYBOND_PROTOCOL) is False
+
+    def test_other_protocols_still_require_an_ip(self):
+        assert needs_inverter_ip("solarman_v5") is True
+        assert needs_inverter_ip("modbus_tcp") is True
+        assert needs_inverter_ip(None) is True
+
+    def test_no_reachability_probe_is_run(self):
+        """check_inverter_reachable TCP-connects to the inverter.
+
+        Nothing listens on this family -- we are the server. Running the probe
+        would fail every pairing for a collector that works perfectly.
+        """
+        assert needs_reachability_check({"protocol": EYBOND_PROTOCOL}) is False
+
+    def test_other_protocols_are_still_probed(self):
+        assert needs_reachability_check({"protocol": "solarman_v5"}) is True
+        assert needs_reachability_check(None) is True
+
+    def test_builds_a_usable_config_from_the_short_form(self):
+        config = build_manual_config({"model_id": "anenji_anj_6200"})
+        assert config["protocol"] == EYBOND_PROTOCOL
+        assert config["listen_port"] == DEFAULT_LISTEN_PORT
+        assert config["slave_id"] == 1
+        assert config["model_id"] == "anenji_anj_6200"
+
+    def test_the_built_config_survives_link_config_translation(self):
+        # The two halves must agree, or pairing succeeds and the listener never
+        # starts.
+        config = link_config_from(build_manual_config({"model_id": "x"}))
+        assert config.listen_port == DEFAULT_LISTEN_PORT
+
+    def test_the_vendor_relay_is_off_in_a_manual_pairing(self):
+        # Safer than asking a user to type a cloud hostname; discover_upstream
+        # can fill it in from the device.
+        config = link_config_from(build_manual_config({"model_id": "x"}))
+        assert config.upstream_host is None
