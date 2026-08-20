@@ -86,6 +86,28 @@ Set `harvest_config` on the inverter:
 | `cloud_proxy_host` | none | Vendor cloud to relay to. See below |
 | `cloud_proxy_port` | none | Required whenever the host is set |
 
+### Home Assistant must be reachable on the local network
+
+The collector opens a connection **to** Home Assistant on TCP 8899. That is
+the one hard requirement, and it is a property of the INSTALL, not of this
+integration — nothing in here can publish a port on a container it is running
+inside.
+
+| Install method | Works out of the box? |
+| --- | --- |
+| Home Assistant Operating System | Yes — runs on the host |
+| Home Assistant Supervised | Yes |
+| Home Assistant Container, `--network=host` | Yes — this is what the official Docker instructions use |
+| Home Assistant Core (venv) | Yes |
+| Home Assistant Container, bridge + `-p 8123:8123` | **No** — 8899 is not exposed |
+
+For the last case the fix is `--network=host`, or `-p 8899:8899` plus the
+addresses the onboarding form asks for. On Docker Desktop for Mac and Windows
+host networking reaches the virtual machine rather than the local network, so
+publishing the port is the only option there.
+
+Onboarding detects this and says so, rather than silently finding nothing.
+
 ### Finding the collector
 
 **You do not need its IP.** The announce is a broadcast to

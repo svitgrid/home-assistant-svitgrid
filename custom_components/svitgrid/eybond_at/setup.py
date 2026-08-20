@@ -390,15 +390,33 @@ def looks_like_container_address(ip: str | None) -> bool:
 
 
 def network_advice(local_ip: str | None) -> str | None:
-    """A sentence explaining why discovery cannot work, or None if it can."""
+    """What to fix, or None when the network is already usable.
+
+    Returns the REMEDY, not just a description. Addresses alone do not make
+    this work: the collector opens a connection TO Home Assistant on TCP
+    {port}, and a container that does not expose that port cannot receive it
+    no matter what addresses are configured. A form that collected addresses
+    and stayed silent about the port would send a user away believing they
+    had finished.
+
+    Home Assistant cannot fix this itself. Publishing a port is a host-level
+    operation on the container, so the integration can only say what is
+    wrong.
+    """
     if not looks_like_container_address(local_ip):
         return None
     return (
-        f"Home Assistant sees its own address as {local_ip}, which is inside a "
-        "container network. The inverter's collector cannot reach that, and a "
-        "broadcast cannot leave the container either. Enter the address of the "
-        "machine running Home Assistant on your home network, and the "
-        "collector's address."
+        f"Home Assistant sees its own address as {local_ip}, which is a "
+        "container network. An inverter collector cannot reach that address, "
+        "and it needs to open a connection TO Home Assistant on TCP port "
+        f"{DEFAULT_LISTEN_PORT}.\n\n"
+        "The reliable fix is to run the container with host networking "
+        "(--network=host), which is what Home Assistant's own Docker "
+        "instructions use. Then this page will not appear again.\n\n"
+        "On Docker Desktop for Mac or Windows, host networking does not reach "
+        f"the local network. There, publish the port instead (-p "
+        f"{DEFAULT_LISTEN_PORT}:{DEFAULT_LISTEN_PORT}) and fill in the "
+        "addresses below."
     )
 
 

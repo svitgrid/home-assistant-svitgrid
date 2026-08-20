@@ -472,6 +472,24 @@ class TestContainerDetection:
         assert advice is not None
         assert "172.17.0.2" in advice
 
+    def test_advice_gives_the_remedy_not_just_the_symptom(self):
+        """Addresses alone do not make this work.
+
+        The collector opens a connection TO Home Assistant on 8899, and a
+        container that does not expose that port cannot receive it whatever
+        addresses are set. A form that collected addresses and said nothing
+        about the port would send a user away believing they had finished.
+        """
+        advice = network_advice("172.17.0.2")
+        assert "--network=host" in advice
+        assert "8899" in advice
+
+    def test_advice_covers_docker_desktop_where_host_networking_does_not_help(self):
+        # On Mac and Windows host networking reaches the VM, not the LAN, so
+        # the remedy there is publishing the port.
+        advice = network_advice("172.17.0.2")
+        assert "-p 8899:8899" in advice
+
     def test_no_advice_when_the_network_is_usable(self):
         # A form that appears when nothing is wrong is worse than no form.
         assert network_advice("192.168.1.34") is None
