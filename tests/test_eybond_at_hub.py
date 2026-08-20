@@ -91,6 +91,19 @@ async def wait_for(predicate, limit_s=5.0):
     return False
 
 
+async def announce_listener():
+    """A UDP socket that records announces, plus its port."""
+    received: list[bytes] = []
+
+    class Receiver(asyncio.DatagramProtocol):
+        def datagram_received(self, data, addr):
+            received.append(data)
+
+    loop = asyncio.get_running_loop()
+    transport, _ = await loop.create_datagram_endpoint(Receiver, local_addr=("127.0.0.1", 0))
+    return received, transport, transport.get_extra_info("sockname")[1]
+
+
 def make_hub(**overrides) -> EybondAtHub:
     defaults = {
         "listen_host": "127.0.0.1",
@@ -245,21 +258,32 @@ class TestThreeCollectors:
                 await unit.close()
             await hub.stop()
 
-    async def test_keeps_announcing_after_the_first_collector_connects(self):
-        """Unlike the single-collector link, which goes quiet once connected.
-
-        With three on the LAN the others still need to hear the announce.
+    async def test_goes_quiet_once_every_expected_collector_is_connected(self):
+        """MEASURED on hardware: a connected collector that receives
+        `set>server=` REDIALS. Announcing every 3 s produced 18 reconnects in
+        45 seconds; announcing only while someone is missing produced one.
         """
-        received: list[bytes] = []
+        received, transport, port = await announce_listener()
+        hub = make_hub(announce_port=port, expected_collectors=1)
+        await hub.start()
+        unit = FakeAnenji(registers_for("11111111111111", 2200))
+        try:
+            assert await wait_for(lambda: len(received) >= 1)  # looking for it
+            await unit.connect(hub.listen_port)
+            assert await wait_for(lambda: hub.collector_count == 1)
+            settled = len(received)
+            await asyncio.sleep(0.3)  # several announce intervals
+            assert len(received) == settled, "announced at a connected collector"
+        finally:
+            await unit.close()
+            await hub.stop()
+            transport.close()
 
-        class Receiver(asyncio.DatagramProtocol):
-            def datagram_received(self, data, addr):
-                received.append(data)
-
-        loop = asyncio.get_running_loop()
-        transport, _ = await loop.create_datagram_endpoint(Receiver, local_addr=("127.0.0.1", 0))
-        port = transport.get_extra_info("sockname")[1]
-        hub = make_hub(announce_port=port)
+    async def test_keeps_looking_while_an_expected_collector_is_missing(self):
+        # Going quiet after the first would leave the other two unable to
+        # find us.
+        received, transport, port = await announce_listener()
+        hub = make_hub(announce_port=port, expected_collectors=3)
         await hub.start()
         unit = FakeAnenji(registers_for("11111111111111", 2200))
         try:
@@ -269,6 +293,32 @@ class TestThreeCollectors:
             assert await wait_for(lambda: len(received) > settled, limit_s=2.0)
         finally:
             await unit.close()
+            await hub.stop()
+            transport.close()
+
+    async def test_recalls_a_missing_collector_by_unicast_not_broadcast(self):
+        """A dead inverter must not make the healthy ones churn.
+
+        Once every address is known, a broadcast would reach the connected
+        collectors too -- and make them redial. Unicast reaches only the one
+        that is missing.
+        """
+        received, transport, port = await announce_listener()
+        # announce_target is a DIFFERENT address, so a broadcast is
+        # distinguishable from a unicast to the known collector.
+        hub = make_hub(announce_port=port, announce_target="127.0.0.2", expected_collectors=1)
+        await hub.start()
+        unit = FakeAnenji(registers_for("11111111111111", 2200))
+        try:
+            await unit.connect(hub.listen_port)
+            assert await wait_for(lambda: hub.collector_count == 1)
+            await unit.close()
+            assert await wait_for(lambda: hub.collector_count == 0)
+            received.clear()
+            # Now it is missing and its address is known: unicast to 127.0.0.1,
+            # which our listener sees. A broadcast would go to 127.0.0.2.
+            assert await wait_for(lambda: len(received) >= 1, limit_s=2.0)
+        finally:
             await hub.stop()
             transport.close()
 

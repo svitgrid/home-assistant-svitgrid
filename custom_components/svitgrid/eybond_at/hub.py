@@ -88,6 +88,10 @@ class HubConfig:
     # How many collectors we expect. A LAN with more than this is a
     # misconfiguration worth reporting rather than silently serving.
     max_sessions: int = 8
+    # How many we are configured to serve. Once that many are connected the
+    # announce goes QUIET -- see `_send_announce` for why that is not optional.
+    # 0 means "unknown", which keeps broadcasting; discovery uses that.
+    expected_collectors: int = 0
 
 
 class EybondAtHub:
@@ -106,6 +110,9 @@ class EybondAtHub:
         self._server: asyncio.AbstractServer | None = None
         self._udp: asyncio.DatagramTransport | None = None
         self._sessions: dict[str, CollectorSession] = {}
+        # Addresses that have dialled in at least once. Lets a missing
+        # collector be recalled by unicast without disturbing the others.
+        self._known_addresses: set[str] = set()
         self._tasks: list[asyncio.Task] = []
         self._actual_port: int | None = None
 
@@ -190,20 +197,47 @@ class EybondAtHub:
             await asyncio.sleep(self._config.announce_interval_s)
 
     def _send_announce(self) -> None:
-        """Announce continuously.
+        """Announce only while a collector we expect is missing.
 
-        Unlike the single-collector case we do NOT stop once one has connected:
-        with three on the LAN, the others still need to hear it. A collector
-        already connected to us re-reads the same address and stays put.
+        ── Why this is not "announce continuously" ───────────────────────
+        MEASURED 2026-08-20 on real hardware: a collector that receives
+        `set>server=` while already connected **redials**. Announcing every
+        3 s produced **18 reconnects in 45 seconds**; announcing only while
+        disconnected produced **one**, held for the whole window.
+
+        An earlier version of this docstring asserted the opposite -- that a
+        connected collector "re-reads the same address and stays put" -- which
+        was an assumption, and wrong.
+
+        ── Why it is not "stop after the first" either ───────────────────
+        With three on the LAN, going quiet after one connects leaves the other
+        two unable to find us. So:
+
+        * fewer connected than expected, and someone has never been seen ->
+          BROADCAST, because an unknown collector has no address to unicast to;
+        * fewer connected than expected, but every address is known ->
+          UNICAST to just the missing ones, so the connected ones are not
+          disturbed by an announce meant for someone else;
+        * all expected connected -> silence.
         """
         if self._udp is None or self._actual_port is None:
             return
+
+        expected = self._config.expected_collectors
+        connected = {s.address for s in self._sessions.values()}
+        if expected and len(self._sessions) >= expected:
+            return  # everyone is here; announcing would only cause redials
+
         our_ip = self._config.advertised_ip or self._ip_provider()
         command = f"set>server={our_ip}:{self._actual_port};".encode()
-        targets = [self._config.announce_target]
-        for session in self._sessions.values():
-            if session.address not in targets:
-                targets.append(session.address)
+
+        missing_known = self._known_addresses - connected
+        # Broadcast only while someone we have never met is still missing.
+        broadcast_needed = not expected or len(self._known_addresses) < expected
+        targets = list(missing_known)
+        if broadcast_needed:
+            targets.append(self._config.announce_target)
+
         for target in targets:
             with contextlib.suppress(OSError):
                 self._udp.sendto(command, (target, self._config.announce_port))
@@ -242,6 +276,7 @@ class EybondAtHub:
             on_diag=self._on_diag,
         )
         self._sessions[key] = session
+        self._known_addresses.add(address)
         self._diag(f"collector connected from {address}")
 
         if self._config.upstream_host and self._config.upstream_port:

@@ -211,6 +211,9 @@ def hub_config_from(harvest_configs: list[dict]) -> HubConfig:
     # Room for every configured inverter, plus headroom for one that redials
     # before we noticed the old socket die.
     base.max_sessions = max(len(configs) + 2, HubConfig.max_sessions)
+    # Drives the announce: once this many are connected it goes quiet, because
+    # announcing at an already-connected collector makes it redial.
+    base.expected_collectors = len(configs)
     return base
 
 
