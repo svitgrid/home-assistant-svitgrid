@@ -79,10 +79,25 @@ class TestParse:
     def test_keeps_commas_in_a_multi_field_value(self):
         assert parse_response(CAP_RESP_UART).value == "9600,8,1,NONE"
 
-    def test_splits_on_the_first_colon_only(self):
-        # The value is a host:port:proto triple in comma form; a naive split on
-        # every colon would lose the tail.
+    def test_keeps_the_full_host_triple(self):
         assert parse_response(CAP_RESP_CLDSRVHOST1).value == "dtu_ess.eybond.com,18899,TCP"
+
+    def test_splits_on_the_first_colon_only(self):
+        """SYNTHETIC frame -- no captured value contains a second colon.
+
+        Kept, and labelled, because the grammar makes the case reachable:
+        `_FORBIDDEN_IN_COMMAND` bars a colon from the command, and nothing bars
+        one from a value. A greedy split would silently truncate such a value
+        from the left.
+
+        This test exists because mutation testing showed the captured
+        `CLDSRVHOST1` fixture cannot tell `partition` from `rpartition` -- it
+        carries only one colon, so the assertion above was vacuous for this
+        property.
+        """
+        r = parse_response(b"AT+CLDSRVHOST1:http://dtu.example.com:18899\r\n")
+        assert r.command == "CLDSRVHOST1"
+        assert r.value == "http://dtu.example.com:18899"
 
     def test_keeps_a_negative_value(self):
         assert parse_response(CAP_RESP_WFSS_NEGATIVE).value == "-49"
