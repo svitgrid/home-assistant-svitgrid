@@ -735,13 +735,13 @@ class SvitgridOptionsFlow(config_entries.OptionsFlow):
             found = []
 
         if not found:
-            # Nothing to pick means nothing to configure. Saying so beats an
-            # empty dropdown the user cannot act on.
-            return self.async_show_form(
-                step_id="add_inverter_collector",
-                data_schema=vol.Schema({}),
-                errors={"base": "no_collectors_found"},
-            )
+            # Nothing found sends the user to the network form rather than a
+            # dead end. Detecting the CAUSE does not generalise -- a NAT'd
+            # virtual machine, a host-only adapter, a VLAN without broadcast,
+            # a port already in use and a switched-off inverter all look the
+            # same from here -- so react to the outcome and say what to check.
+            self._eybond_discovery_failed = True
+            return await self.async_step_add_inverter_network()
 
         schema = vol.Schema(
             {
@@ -786,6 +786,9 @@ class SvitgridOptionsFlow(config_entries.OptionsFlow):
                     "advertised_ip": advertised,
                     "announce_target": collector,
                 }
+                # Cleared so a second empty result comes back here with the
+                # addresses the user just gave, rather than looping silently.
+                self._eybond_discovery_failed = False
                 return await self.async_step_add_inverter_collector()
 
         schema = vol.Schema(

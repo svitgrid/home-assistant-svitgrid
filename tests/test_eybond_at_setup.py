@@ -24,6 +24,7 @@ from custom_components.svitgrid.eybond_at.setup import (
     link_config_from,
     looks_like_container_address,
     network_advice,
+    no_collectors_advice,
     snapshot_collectors,
     start_eybond_hub,
 )
@@ -493,3 +494,42 @@ class TestContainerDetection:
     def test_no_advice_when_the_network_is_usable(self):
         # A form that appears when nothing is wrong is worse than no form.
         assert network_advice("192.168.1.34") is None
+
+
+class TestNoCollectorsAdvice:
+    """Detecting the CAUSE does not generalise; react to the outcome.
+
+    `looks_like_container_address` catches Docker and Podman and misses a
+    VirtualBox NAT adapter, a host-only adapter, a VLAN without broadcast, a
+    port already in use, and an inverter that is switched off. All of those
+    look identical from here.
+    """
+
+    def test_always_returns_something_actionable(self):
+        # "No collectors found" on its own leaves a user nowhere to go.
+        for ip in ("192.168.1.34", "10.0.2.15", "192.168.56.10", "172.17.0.2"):
+            assert no_collectors_advice(ip)
+
+    def test_a_container_still_gets_the_container_remedy(self):
+        advice = no_collectors_advice("172.17.0.2")
+        assert "--network=host" in advice
+
+    def test_a_natted_virtual_machine_is_covered_without_being_detected(self):
+        """10.0.2.15 is VirtualBox NAT and is NOT container-detected.
+
+        That is the whole point: the advice reaches it anyway.
+        """
+        assert looks_like_container_address("10.0.2.15") is False
+        advice = no_collectors_advice("10.0.2.15")
+        assert "bridged adapter" in advice
+
+    def test_names_the_address_and_port_actually_in_use(self):
+        advice = no_collectors_advice("192.168.1.34")
+        assert "192.168.1.34" in advice
+        assert "8899" in advice
+
+    def test_covers_the_causes_that_are_not_networking(self):
+        advice = no_collectors_advice("192.168.1.34")
+        assert "powered on" in advice  # inverter off
+        assert "already using port" in advice  # 8899 taken
+        assert "broadcast" in advice  # VLAN

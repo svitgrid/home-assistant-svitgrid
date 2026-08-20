@@ -108,6 +108,14 @@ publishing the port is the only option there.
 
 Onboarding detects this and says so, rather than silently finding nothing.
 
+**And it does not rely on detecting the cause.** Container ranges are
+recognised so the useless scan is skipped, but a VirtualBox NAT adapter
+(`10.0.2.15`), a host-only adapter (`192.168.56.x`), a VLAN that does not
+carry broadcast, a port 8899 already in use and an inverter that is switched
+off all look identical from inside. Enumerating isolation schemes is a losing
+game, so **any** empty discovery leads to the same form, naming the address
+and port actually in use and listing what to check.
+
 ### Finding the collector
 
 **You do not need its IP.** The announce is a broadcast to

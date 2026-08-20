@@ -433,3 +433,37 @@ def network_advice(local_ip: str | None) -> str | None:
 # From inside a NAT'd container there is no ARP visibility of the LAN at all,
 # which is exactly where a scan would be needed. So the collector's address is
 # asked for instead, with an explanation of why.
+
+
+def no_collectors_advice(local_ip: str | None) -> str:
+    """What to check when discovery found nothing. Always returns advice.
+
+    Detecting the CAUSE does not generalise. `looks_like_container_address`
+    catches Docker and Podman, and misses a VirtualBox NAT adapter
+    (10.0.2.15), a host-only adapter (192.168.56.x), a VLAN that does not
+    carry broadcast, a port 8899 already in use, and an inverter that is
+    simply switched off. Enumerating network isolation schemes is a losing
+    game.
+
+    So this reacts to the OUTCOME instead: nothing was found, here is
+    everything worth checking. A user staring at "no collectors found" has
+    nowhere to go; this at least names the usual causes.
+    """
+    container = network_advice(local_ip)
+    if container:
+        return container
+    return (
+        f"No collector answered. Home Assistant is announcing from {local_ip} "
+        f"and listening on TCP port {DEFAULT_LISTEN_PORT}.\n\n"
+        "Worth checking:\n"
+        "• The inverter is powered on and its collector is on the same "
+        "network as Home Assistant.\n"
+        f"• Home Assistant can be reached at {local_ip} from that network. A "
+        "virtual machine using NAT, or a host-only adapter, is not reachable; "
+        "use a bridged adapter.\n"
+        "• The network carries broadcast between the two. If it does not, "
+        "enter the collector's address below to reach it directly.\n"
+        f"• Nothing else is already using port {DEFAULT_LISTEN_PORT} on this "
+        "machine.\n\n"
+        "You can enter the addresses below to skip discovery."
+    )
