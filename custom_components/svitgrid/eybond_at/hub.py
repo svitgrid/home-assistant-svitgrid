@@ -236,7 +236,15 @@ class EybondAtHub:
         broadcast_needed = not expected or len(self._known_addresses) < expected
         targets = list(missing_known)
         if broadcast_needed:
-            targets.append(self._config.announce_target)
+            # announce_target may name SEVERAL addresses. Where broadcast
+            # cannot reach the LAN, onboarding scans for candidates and we
+            # unicast to all of them rather than making the user identify
+            # which one is the collector.
+            targets.extend(
+                a.strip()
+                for a in self._config.announce_target.split(",")
+                if a.strip() and a.strip() not in targets
+            )
 
         for target in targets:
             with contextlib.suppress(OSError):

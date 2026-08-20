@@ -197,12 +197,21 @@
           "inverter_serial": "Inverter",
           "model_id": "Model id"
         }
+      },
+      "add_inverter_network": {
+        "title": "Network settings",
+        "description": "{advice}",
+        "data": {
+          "advertised_ip": "Home Assistant's address on your home network",
+          "collector_ip": "Collector's address"
+        }
       }
     },
     "error": {
       "no_entities_selected": "Pick at least one sensor — otherwise the dashboard has nothing to show.",
       "no_collectors_found": "No SmartESS collector answered. Check the inverter is powered and on the same network, then try again.",
-      "no_collector_selected": "Choose which inverter this is."
+      "no_collector_selected": "Choose which inverter this is.",
+      "required": "This is required."
     },
     "abort": {
       "cannot_connect": "Could not reach the Svitgrid cloud while adding the inverter. Check your internet and try again.",

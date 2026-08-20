@@ -44,12 +44,14 @@ from .const import (
     PAIRING_MAX_POLL_DURATION_S,
     PAIRING_POLL_INTERVAL_S,
 )
+from .eybond_at.hub import default_local_ip
 from .eybond_at.setup import (
     EYBOND_PROTOCOL,
     build_manual_config,
     discover_collectors,
     needs_inverter_ip,
     needs_reachability_check,
+    network_advice,
 )
 from .keystore import SvitgridKeystore
 from .pairing_client import (
@@ -698,6 +700,14 @@ class SvitgridOptionsFlow(config_entries.OptionsFlow):
             (inv.get("harvest_config") or {}).get("inverter_serial") for inv in self._inverters()
         } - {None}
 
+        # Home Assistant in a container reports a container-internal address.
+        # A collector cannot reach it, and a broadcast cannot leave the
+        # container -- so discovery would find nothing and report only "no
+        # collectors found", which explains nothing. Ask first instead.
+        network = getattr(self, "_eybond_network", None)
+        if network is None and network_advice(default_local_ip()):
+            return await self.async_step_add_inverter_network()
+
         if user_input is not None:
             serial = user_input.get("inverter_serial")
             if not serial:
@@ -707,6 +717,7 @@ class SvitgridOptionsFlow(config_entries.OptionsFlow):
                     {
                         "model_id": user_input.get("model_id", ""),
                         "inverter_serial": serial,
+                        **(network or {}),
                     }
                 )
                 return await self._append_direct_inverter(harvest_config)
@@ -716,6 +727,7 @@ class SvitgridOptionsFlow(config_entries.OptionsFlow):
             found = await discover_collectors(
                 self.hass,
                 running_hub=state.get("eybond_hub"),
+                harvest_config={"protocol": EYBOND_PROTOCOL, **(network or {})},
                 exclude=configured,
             )
         except Exception:  # noqa: BLE001 -- discovery must not abort the flow
@@ -743,6 +755,50 @@ class SvitgridOptionsFlow(config_entries.OptionsFlow):
         )
         return self.async_show_form(
             step_id="add_inverter_collector", data_schema=schema, errors=errors
+        )
+
+    async def async_step_add_inverter_network(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Collect the addresses discovery needs when broadcast cannot work.
+
+        Home Assistant in a container reports something like 172.17.0.2. The
+        announce would carry that address, the collector could not reach it,
+        and NOTHING would report an error -- the datagram is sent
+        successfully. That silent failure is the whole reason for this step.
+
+        There is deliberately no subnet scan. A UDP port-state probe does
+        identify a collector, but only among hosts already known to exist; a
+        blind /24 sweep returned 215 candidates out of 254, and inside a NAT'd
+        container there is no ARP visibility to narrow it down. Asking is
+        honest; guessing is not.
+        """
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            advertised = (user_input.get("advertised_ip") or "").strip()
+            collector = (user_input.get("collector_ip") or "").strip()
+            if not advertised:
+                errors["advertised_ip"] = "required"
+            if not collector:
+                errors["collector_ip"] = "required"
+            if not errors:
+                self._eybond_network = {
+                    "advertised_ip": advertised,
+                    "announce_target": collector,
+                }
+                return await self.async_step_add_inverter_collector()
+
+        schema = vol.Schema(
+            {
+                vol.Required("advertised_ip"): TextSelector(TextSelectorConfig()),
+                vol.Required("collector_ip"): TextSelector(TextSelectorConfig()),
+            }
+        )
+        return self.async_show_form(
+            step_id="add_inverter_network",
+            data_schema=schema,
+            errors=errors,
+            description_placeholders={"advice": network_advice(default_local_ip()) or ""},
         )
 
     async def _append_direct_inverter(self, harvest_config: dict) -> FlowResult:

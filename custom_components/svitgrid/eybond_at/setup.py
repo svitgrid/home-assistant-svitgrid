@@ -35,6 +35,15 @@ from .session import TransactionFailed
 _LOGGER = logging.getLogger(__name__)
 
 EYBOND_PROTOCOL = "eybond_at"
+
+# Docker's default bridge sits in 172.17.0.0/16, and Home Assistant in a
+# published-port container reports an address from it. A collector cannot
+# reach that, and the failure is SILENT: the announce is sent successfully,
+# nothing dials back, and there is no error anywhere to explain it.
+_CONTAINER_RANGES = (
+    ("172.16.0.0", 12),  # Docker bridge networks
+    ("10.88.0.0", 16),  # Podman default
+)
 _MIN_PORT = 1
 _MAX_PORT = 65535
 
@@ -354,3 +363,55 @@ async def discover_collectors(
         return snapshot_collectors(hub, exclude=exclude)
     finally:
         await hub.stop()
+
+
+def _in_network(ip: str, network: str, bits: int) -> bool:
+    def packed(value: str) -> int:
+        parts = [int(p) for p in value.split(".")]
+        return (parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3]
+
+    try:
+        mask = (0xFFFFFFFF << (32 - bits)) & 0xFFFFFFFF
+        return packed(ip) & mask == packed(network) & mask
+    except (ValueError, IndexError):
+        return False
+
+
+def looks_like_container_address(ip: str | None) -> bool:
+    """True when `ip` is a container-internal address a collector cannot reach.
+
+    Detecting this BEFORE scanning is the difference between "no collectors
+    found" -- which tells a user nothing -- and a form that explains the
+    announce went to a Docker-internal address and asks for the real one.
+    """
+    if not ip:
+        return False
+    return any(_in_network(ip, net, bits) for net, bits in _CONTAINER_RANGES)
+
+
+def network_advice(local_ip: str | None) -> str | None:
+    """A sentence explaining why discovery cannot work, or None if it can."""
+    if not looks_like_container_address(local_ip):
+        return None
+    return (
+        f"Home Assistant sees its own address as {local_ip}, which is inside a "
+        "container network. The inverter's collector cannot reach that, and a "
+        "broadcast cannot leave the container either. Enter the address of the "
+        "machine running Home Assistant on your home network, and the "
+        "collector's address."
+    )
+
+
+# ── Why there is no subnet scan here ──────────────────────────────────────
+# A UDP port-state probe DOES identify a collector -- a host with nothing on
+# 58899 replies ICMP port-unreachable, and a collector stays silent -- and it
+# ruled out 24 of 26 hosts on the bench LAN in one pass.
+#
+# It only works on hosts that are KNOWN TO EXIST. That scan probed addresses
+# from the ARP table. An address with no device behind it is silent for the
+# same reason a collector is, so without that precondition the discriminator
+# collapses: scanning a /24 blind returned 215 "candidates" out of 254.
+#
+# From inside a NAT'd container there is no ARP visibility of the LAN at all,
+# which is exactly where a scan would be needed. So the collector's address is
+# asked for instead, with an explanation of why.

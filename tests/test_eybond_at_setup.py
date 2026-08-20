@@ -22,6 +22,8 @@ from custom_components.svitgrid.eybond_at.setup import (
     hub_config_from,
     is_eybond_harvest,
     link_config_from,
+    looks_like_container_address,
+    network_advice,
     snapshot_collectors,
     start_eybond_hub,
 )
@@ -439,3 +441,37 @@ class TestDiscovery:
             settle_s=0.05,
         )
         assert found == []
+
+
+class TestContainerDetection:
+    """Home Assistant in a container is the case that fails SILENTLY.
+
+    The announce carries a container-internal address, the collector cannot
+    reach it, nothing dials back -- and no error is logged anywhere, because
+    the datagram was sent successfully.
+    """
+
+    @pytest.mark.parametrize("ip", ["172.17.0.2", "172.18.0.5", "172.31.255.254", "10.88.0.3"])
+    def test_recognises_container_networks(self, ip):
+        assert looks_like_container_address(ip) is True
+
+    @pytest.mark.parametrize(
+        "ip", ["192.168.1.34", "10.0.0.5", "172.15.0.1", "172.32.0.1", "127.0.0.1"]
+    )
+    def test_leaves_genuine_lan_addresses_alone(self, ip):
+        # 10.0.0.0/8 and 192.168.0.0/16 are ordinary home networks, and
+        # 172.15 / 172.32 sit just outside Docker's 172.16/12.
+        assert looks_like_container_address(ip) is False
+
+    def test_no_address_is_not_a_container(self):
+        assert looks_like_container_address(None) is False
+        assert looks_like_container_address("") is False
+
+    def test_advice_names_the_address_the_user_will_recognise(self):
+        advice = network_advice("172.17.0.2")
+        assert advice is not None
+        assert "172.17.0.2" in advice
+
+    def test_no_advice_when_the_network_is_usable(self):
+        # A form that appears when nothing is wrong is worse than no form.
+        assert network_advice("192.168.1.34") is None
