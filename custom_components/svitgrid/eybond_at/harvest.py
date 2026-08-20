@@ -36,7 +36,8 @@ from ..readings_publisher import (
     gate_payload,
 )
 from .identity import UnknownPlatform
-from .link import TransactionFailed
+from .reader import EybondAtReader
+from .session import TransactionFailed
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -66,13 +67,14 @@ async def poll_once(*, reader, inverter_id: str, store) -> dict | None:
 async def run_eybond_harvest_loop(
     *,
     hass,
-    link,
-    reader,
+    hub,
+    inverter_serial: str | None,
     store,
     cadence,
     inverter_id: str,
     lifecycle=None,
     sleep=asyncio.sleep,
+    reader_factory=None,
 ) -> None:
     """Poll the collector on the shared cadence until shutdown.
 
@@ -84,23 +86,40 @@ async def run_eybond_harvest_loop(
     clamp has a 5 s floor, which is right in production and far too slow for a
     test; overriding the WAIT keeps the clamp itself under test.
     """
-    _LOGGER.info("EyBond harvest loop started for inverter %s", inverter_id)
-    was_connected = False
+    _LOGGER.info(
+        "EyBond harvest loop started for inverter %s (serial %s)",
+        inverter_id,
+        inverter_serial or "unset",
+    )
+    make_reader = reader_factory or EybondAtReader
+    current_session = None
+    reader = None
     unknown_platform_logged = False
 
     while not hass.is_stopping and (lifecycle is None or lifecycle.active):
         next_sleep_s = _clamp_interval(float(cadence.interval_s))
         try:
-            connected = link.collector_connected
-            if connected and not was_connected:
-                # A fresh session may be a different inverter entirely.
-                reader.invalidate()
+            # Routed by the serial the COLLECTOR reports at register 186 --
+            # never connection order, never IP. Order is whatever the
+            # collectors do after a power cut, and a DHCP lease moves.
+            session = hub.session_for(inverter_serial)
+            if session is not current_session:
+                # A different session is a different connection, and possibly
+                # a different device. A fresh reader re-identifies rather than
+                # carrying the previous unit's register map.
+                current_session = session
+                reader = make_reader(session) if session is not None else None
                 unknown_platform_logged = False
-                _LOGGER.info("%s: collector connected, re-identifying", inverter_id)
-            was_connected = connected
+                if session is not None:
+                    _LOGGER.info("%s: bound to collector at %s", inverter_id, session.address)
 
-            if not connected:
-                _LOGGER.debug("%s: no collector connected, skipping tick", inverter_id)
+            if reader is None:
+                # Normal for an inverter that is switched off. Not an error.
+                _LOGGER.debug(
+                    "%s: serial %s not connected, skipping tick",
+                    inverter_id,
+                    inverter_serial or "unset",
+                )
             else:
                 payload = await poll_once(reader=reader, inverter_id=inverter_id, store=store)
                 if payload is not None:

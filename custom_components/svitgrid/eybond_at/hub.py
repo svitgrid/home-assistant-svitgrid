@@ -273,8 +273,13 @@ class EybondAtHub:
                 identity.firmware or "unknown",
             )
             await self._drop_stale_duplicates(session)
-        except (TransactionFailed, asyncio.CancelledError):
+        except asyncio.CancelledError:
             raise
+        except TransactionFailed as err:
+            # A collector that cannot be identified stays connected and simply
+            # routes nowhere. Raising here would surface as an unhandled
+            # background-task exception and tell the user nothing useful.
+            _LOGGER.warning("collector %s did not answer identification: %s", session.address, err)
         except Exception:
             _LOGGER.exception("identify failed for collector %s", session.address)
 

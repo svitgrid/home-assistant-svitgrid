@@ -20,15 +20,14 @@ from __future__ import annotations
 import logging
 
 from .harvest import run_eybond_harvest_loop
-from .link import (
+from .hub import (
     ANNOUNCE_UDP_PORT,
     DEFAULT_ANNOUNCE_TARGET,
     DEFAULT_LISTEN_PORT,
-    EybondAtLink,
-    LinkConfig,
-    TransactionFailed,
+    EybondAtHub,
+    HubConfig,
 )
-from .reader import EybondAtReader
+from .session import TransactionFailed
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -74,12 +73,18 @@ def build_manual_config(user_input: dict) -> dict:
     OFF here -- `discover_upstream` can fill it in later from the device, which
     is safer than asking a user to type a cloud hostname.
     """
-    return {
+    config = {
         "protocol": EYBOND_PROTOCOL,
         "listen_port": int(user_input.get("port") or DEFAULT_LISTEN_PORT),
         "slave_id": int(user_input.get("slave_id") or 1),
         "model_id": (user_input.get("model_id") or "").strip(),
     }
+    # The routing key. The hub matches it against the serial each collector
+    # REPORTS at register 186 -- never connection order, never IP.
+    serial = (user_input.get("inverter_serial") or "").strip()
+    if serial:
+        config["inverter_serial"] = serial
+    return config
 
 
 def _port(value, name: str, *, allow_ephemeral: bool = False) -> int:
@@ -101,8 +106,14 @@ def _port(value, name: str, *, allow_ephemeral: bool = False) -> int:
     return port
 
 
-def link_config_from(harvest_config: dict) -> LinkConfig:
-    """Translate a `harvest_config` into a `LinkConfig`, validating as we go."""
+def link_config_from(harvest_config: dict) -> HubConfig:
+    """Translate ONE `harvest_config` into a `HubConfig`, validating as we go.
+
+    Kept for the single-inverter case and for validation. With several
+    inverters, `hub_config_from` reconciles them -- there is one hub, so
+    conflicting listener settings have to be caught rather than silently
+    resolved by whichever inverter is first in the list.
+    """
     listen_port = _port(
         harvest_config.get("listen_port", DEFAULT_LISTEN_PORT),
         "listen_port",
@@ -125,7 +136,7 @@ def link_config_from(harvest_config: dict) -> LinkConfig:
     if not 0 <= slave_id <= 255:
         raise EybondConfigError(f"slave_id out of range: {slave_id}")
 
-    return LinkConfig(
+    return HubConfig(
         listen_host=harvest_config.get("listen_host", "0.0.0.0"),
         listen_port=listen_port,
         announce_target=harvest_config.get("announce_target", DEFAULT_ANNOUNCE_TARGET),
@@ -164,35 +175,86 @@ async def discover_upstream(link) -> tuple[str, int] | None:
         return None
 
 
-async def start_eybond_harvest(
+def hub_config_from(harvest_configs: list[dict]) -> HubConfig:
+    """Reconcile several inverters' configs into the ONE hub they share.
+
+    There is a single listener, so a disagreement about the listener settings
+    cannot be resolved by taking whichever inverter happens to be first --
+    that would silently ignore the other's configuration. Conflicts raise.
+
+    Per-inverter settings (model, serial) are not the hub's business and are
+    ignored here.
+    """
+    if not harvest_configs:
+        raise EybondConfigError("no EyBond inverters to build a hub for")
+    configs = [link_config_from(hc) for hc in harvest_configs]
+    base = configs[0]
+    for other in configs[1:]:
+        for field_name in (
+            "listen_host",
+            "listen_port",
+            "announce_target",
+            "announce_port",
+            "advertised_ip",
+            "upstream_host",
+            "upstream_port",
+        ):
+            mine, theirs = getattr(base, field_name), getattr(other, field_name)
+            if mine != theirs:
+                raise EybondConfigError(
+                    f"EyBond inverters disagree on {field_name}: "
+                    f"{mine!r} vs {theirs!r}. They share one listener."
+                )
+    # Room for every configured inverter, plus headroom for one that redials
+    # before we noticed the old socket die.
+    base.max_sessions = max(len(configs) + 2, HubConfig.max_sessions)
+    return base
+
+
+async def start_eybond_hub(
     *,
     hass,
-    harvest_config: dict,
-    inverter_id: str,
+    inverters: list[dict],
     store,
     cadence,
     lifecycle=None,
-) -> tuple[EybondAtLink, object]:
-    """Start the listener and the harvest loop. Returns `(link, task)`."""
-    link = EybondAtLink(link_config_from(harvest_config))
-    await link.start()
-    reader = EybondAtReader(link)
-    task = hass.async_create_background_task(
-        run_eybond_harvest_loop(
-            hass=hass,
-            link=link,
-            reader=reader,
-            store=store,
-            cadence=cadence,
-            inverter_id=inverter_id,
-            lifecycle=lifecycle,
-        ),
-        name=f"svitgrid_eybond_{inverter_id}",
-    )
+) -> tuple[EybondAtHub, dict[str, object]]:
+    """Start ONE hub and a harvest loop per inverter. Returns `(hub, tasks)`.
+
+    `inverters` are dicts with `inverter_id` and `harvest_config`.
+    """
+    hub = EybondAtHub(hub_config_from([inv["harvest_config"] for inv in inverters]))
+    await hub.start()
+    tasks: dict[str, object] = {}
+    for inv in inverters:
+        inverter_id = inv["inverter_id"]
+        serial = inv["harvest_config"].get("inverter_serial")
+        if not serial and len(inverters) > 1:
+            # With one inverter the only connection is unambiguous. With
+            # several, an unset serial would match nothing and the inverter
+            # would silently never publish.
+            _LOGGER.error(
+                "inverter %s has no inverter_serial and is one of %d EyBond "
+                "inverters; it cannot be routed and will not publish",
+                inverter_id,
+                len(inverters),
+            )
+        tasks[inverter_id] = hass.async_create_background_task(
+            run_eybond_harvest_loop(
+                hass=hass,
+                hub=hub,
+                inverter_serial=serial,
+                store=store,
+                cadence=cadence,
+                inverter_id=inverter_id,
+                lifecycle=lifecycle,
+            ),
+            name=f"svitgrid_eybond_{inverter_id}",
+        )
     _LOGGER.info(
-        "EyBond listener for inverter %s on port %s (vendor relay: %s)",
-        inverter_id,
-        link.listen_port,
-        link.upstream_target or "off",
+        "EyBond hub on port %s serving %d inverter(s) (vendor relay: %s)",
+        hub.listen_port,
+        len(inverters),
+        hub.upstream_target or "off",
     )
-    return link, task
+    return hub, tasks

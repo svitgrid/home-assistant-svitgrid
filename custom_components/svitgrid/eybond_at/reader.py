@@ -21,8 +21,8 @@ import logging
 from dataclasses import dataclass, field
 
 from .identity import DeviceIdentity, ReadsRegisters, identify, resolve_map
-from .link import TransactionFailed
 from .register_map import Confidence, RegisterMap
+from .session import TransactionFailed
 
 _LOGGER = logging.getLogger(__name__)
 

@@ -20,8 +20,8 @@ import contextlib
 import pytest
 
 from custom_components.svitgrid.eybond_at.demux import Direction, split_frames
+from custom_components.svitgrid.eybond_at.hub import EybondAtHub, HubConfig
 from custom_components.svitgrid.eybond_at.identity import UnknownPlatform
-from custom_components.svitgrid.eybond_at.link import EybondAtLink, LinkConfig
 from custom_components.svitgrid.eybond_at.modbus_rtu import crc16
 from custom_components.svitgrid.eybond_at.reader import EybondAtReader
 from custom_components.svitgrid.eybond_at.register_map import Confidence
@@ -105,9 +105,9 @@ async def wait_for(predicate, limit_s=3.0):
     return False
 
 
-async def connected_link(inverter: FakeAnenji) -> EybondAtLink:
-    link = EybondAtLink(
-        LinkConfig(
+async def connected_link(inverter: FakeAnenji) -> EybondAtHub:
+    link = EybondAtHub(
+        HubConfig(
             listen_host="127.0.0.1",
             listen_port=0,
             announce_target="127.0.0.1",
@@ -118,7 +118,7 @@ async def connected_link(inverter: FakeAnenji) -> EybondAtLink:
     )
     await link.start()
     await inverter.connect(link.listen_port)
-    assert await wait_for(lambda: link.collector_connected)
+    assert await wait_for(lambda: link.collector_count == 1)
     return link
 
 
@@ -127,7 +127,7 @@ class TestEndToEnd:
         inverter = FakeAnenji()
         link = await connected_link(inverter)
         try:
-            reading = await EybondAtReader(link).read()
+            reading = await EybondAtReader(link.sessions[0]).read()
 
             assert reading.identity.protocol_number == 11
             assert reading.identity.device_type == 0x7803
@@ -154,7 +154,7 @@ class TestEndToEnd:
         inverter = FakeAnenji()
         link = await connected_link(inverter)
         try:
-            reading = await EybondAtReader(link).read()
+            reading = await EybondAtReader(link.sessions[0]).read()
             assert reading.values["batterySoc"] == 5
             assert reading.values["pv1Power"] == 0
             assert reading.complete is True
@@ -169,7 +169,7 @@ class TestEndToEnd:
         inverter = FakeAnenji()
         link = await connected_link(inverter)
         try:
-            await EybondAtReader(link).read()
+            await EybondAtReader(link.sessions[0]).read()
             telemetry = [r for r in inverter.requests if 201 <= r[0] <= 229]
             assert telemetry == [(201, 29)]
         finally:
@@ -183,7 +183,7 @@ class TestEndToEnd:
         link = await connected_link(inverter)
         try:
             with pytest.raises(UnknownPlatform):
-                await EybondAtReader(link).read()
+                await EybondAtReader(link.sessions[0]).read()
             # And it cost exactly one identity pass, no telemetry.
             assert not any(201 <= a <= 229 for a, _ in inverter.requests)
         finally:
@@ -191,21 +191,25 @@ class TestEndToEnd:
             await link.stop()
 
     async def test_survives_a_reconnect_and_reidentifies(self):
+        """A reconnect produces a NEW session, and the reader follows it.
+
+        Carrying a reader across sessions would decode the new connection with
+        the old one's cached identity -- and it may be a different inverter.
+        """
         inverter = FakeAnenji()
         link = await connected_link(inverter)
-        reader = EybondAtReader(link)
         try:
-            first = await reader.read()
+            first = await EybondAtReader(link.sessions[0]).read()
             assert first.complete is True
 
             await inverter.close()
-            assert await wait_for(lambda: not link.collector_connected)
-            reader.invalidate()
+            assert await wait_for(lambda: link.collector_count == 0)
 
             second = FakeAnenji()
             await second.connect(link.listen_port)
-            assert await wait_for(lambda: link.collector_connected)
-            again = await reader.read()
+            assert await wait_for(lambda: link.collector_count == 1, limit_s=2.0)
+            assert await wait_for(lambda: link.sessions[0].serial is not None)
+            again = await EybondAtReader(link.sessions[0]).read()
             assert again.identity.serial == "99432604107106"
             assert again.values["gridVoltageL1"] == pytest.approx(228.4)
             await second.close()

@@ -6,21 +6,20 @@ from dataclasses import dataclass, field
 
 import pytest
 
-from custom_components.svitgrid.eybond_at.link import (
+from custom_components.svitgrid.eybond_at.hub import (
     ANNOUNCE_UDP_PORT,
     DEFAULT_LISTEN_PORT,
-    TransactionFailed,
 )
+from custom_components.svitgrid.eybond_at.session import TransactionFailed
 from custom_components.svitgrid.eybond_at.setup import (
     EYBOND_PROTOCOL,
     EybondConfigError,
     build_manual_config,
     discover_upstream,
+    hub_config_from,
     is_eybond_harvest,
     link_config_from,
-    needs_inverter_ip,
-    needs_reachability_check,
-    start_eybond_harvest,
+    start_eybond_hub,
 )
 
 
@@ -174,117 +173,136 @@ class FakeCadence:
     interval_s: float = 5.0
 
 
-class TestStartHarvest:
-    """The factory owns a real listening socket, so its lifecycle is the risk."""
+class TestStartHub:
+    """The hub owns a real listening socket, so its lifecycle is the risk."""
 
-    async def test_starts_a_listener_and_returns_the_link_and_task(self, socket_enabled):
+    async def test_starts_one_listener_for_several_inverters(self, socket_enabled):
         hass = FakeHass()
-        link, task = await start_eybond_harvest(
+        hub, tasks = await start_eybond_hub(
             hass=hass,
-            harvest_config={
-                "protocol": EYBOND_PROTOCOL,
-                "listen_port": 0,  # ephemeral, so the test never fights port 8899
-                "announce_target": "127.0.0.1",
-            },
-            inverter_id="inv1",
+            inverters=[
+                {
+                    "inverter_id": "inv1",
+                    "harvest_config": {
+                        "protocol": EYBOND_PROTOCOL,
+                        "listen_port": 0,
+                        "announce_target": "127.0.0.1",
+                        "inverter_serial": "11111111111111",
+                    },
+                },
+                {
+                    "inverter_id": "inv2",
+                    "harvest_config": {
+                        "protocol": EYBOND_PROTOCOL,
+                        "listen_port": 0,
+                        "announce_target": "127.0.0.1",
+                        "inverter_serial": "22222222222222",
+                    },
+                },
+            ],
             store=FakeStore(),
             cadence=FakeCadence(),
         )
         try:
-            assert link.listen_port and link.listen_port > 0
-            assert link.collector_connected is False
-            assert task in hass.tasks
+            assert hub.listen_port and hub.listen_port > 0
+            assert set(tasks) == {"inv1", "inv2"}
         finally:
             hass.is_stopping = True
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
-            await link.stop()
+            for task in tasks.values():
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+            await hub.stop()
 
-    async def test_stopping_the_link_releases_the_port(self, socket_enabled):
-        """A reload that leaks the socket leaves 8899 bound and the next setup fails.
-
-        Binding the same port a second time is the only way to prove it was
-        actually released.
-        """
+    async def test_stopping_the_hub_releases_the_port(self, socket_enabled):
         hass = FakeHass()
-        link, task = await start_eybond_harvest(
+        hub, tasks = await start_eybond_hub(
             hass=hass,
-            harvest_config={
-                "protocol": EYBOND_PROTOCOL,
-                "listen_port": 0,
-                "announce_target": "127.0.0.1",
-            },
-            inverter_id="inv1",
+            inverters=[
+                {
+                    "inverter_id": "inv1",
+                    "harvest_config": {
+                        "protocol": EYBOND_PROTOCOL,
+                        "listen_port": 0,
+                        "announce_target": "127.0.0.1",
+                    },
+                }
+            ],
             store=FakeStore(),
             cadence=FakeCadence(),
         )
-        port = link.listen_port
+        port = hub.listen_port
         hass.is_stopping = True
-        task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
-        await link.stop()
-
-        # Re-bind the very same port. This raises if the first link leaked it.
+        for task in tasks.values():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        await hub.stop()
+        # Re-bind the same port: raises if the hub leaked it.
         server = await asyncio.start_server(lambda r, w: None, "127.0.0.1", port)
         server.close()
         await server.wait_closed()
 
-    async def test_a_bad_config_raises_before_any_socket_is_opened(self):
-        with pytest.raises(EybondConfigError):
-            await start_eybond_harvest(
-                hass=FakeHass(),
-                harvest_config={"protocol": EYBOND_PROTOCOL, "listen_port": 0xFFFFF},
-                inverter_id="inv1",
-                store=FakeStore(),
-                cadence=FakeCadence(),
+
+class TestHubConfigReconciliation:
+    """One listener, so a disagreement cannot be resolved by taking the first."""
+
+    def test_agreeing_inverters_share_one_hub_config(self):
+        config = hub_config_from(
+            [
+                {"protocol": EYBOND_PROTOCOL, "listen_port": 8899},
+                {"protocol": EYBOND_PROTOCOL, "listen_port": 8899},
+            ]
+        )
+        assert config.listen_port == 8899
+
+    def test_makes_room_for_every_configured_inverter(self):
+        config = hub_config_from([{"protocol": EYBOND_PROTOCOL}] * 12)
+        assert config.max_sessions >= 12
+
+    def test_refuses_inverters_that_disagree_on_the_listen_port(self):
+        # Silently taking the first would ignore the second's configuration.
+        with pytest.raises(EybondConfigError, match="listen_port"):
+            hub_config_from(
+                [
+                    {"protocol": EYBOND_PROTOCOL, "listen_port": 8899},
+                    {"protocol": EYBOND_PROTOCOL, "listen_port": 9899},
+                ]
             )
 
+    def test_refuses_inverters_that_disagree_on_the_vendor_relay(self):
+        with pytest.raises(EybondConfigError, match="upstream_host"):
+            hub_config_from(
+                [
+                    {
+                        "protocol": EYBOND_PROTOCOL,
+                        "cloud_proxy_host": "a.example",
+                        "cloud_proxy_port": 18899,
+                    },
+                    {
+                        "protocol": EYBOND_PROTOCOL,
+                        "cloud_proxy_host": "b.example",
+                        "cloud_proxy_port": 18899,
+                    },
+                ]
+            )
 
-class TestFlowDecisions:
-    """The collector dials US, which breaks two assumptions the flow makes."""
+    def test_refuses_an_empty_fleet(self):
+        with pytest.raises(EybondConfigError):
+            hub_config_from([])
 
-    def test_no_inverter_ip_is_required(self):
-        # Every other protocol dials the inverter. Asking for an IP here would
-        # be unanswerable: it is not needed, and not known until it connects.
-        assert needs_inverter_ip(EYBOND_PROTOCOL) is False
 
-    def test_other_protocols_still_require_an_ip(self):
-        assert needs_inverter_ip("solarman_v5") is True
-        assert needs_inverter_ip("modbus_tcp") is True
-        assert needs_inverter_ip(None) is True
+class TestRoutingKey:
+    def test_the_serial_reaches_the_harvest_config(self):
+        config = build_manual_config({"model_id": "x", "inverter_serial": "99432604107106"})
+        assert config["inverter_serial"] == "99432604107106"
 
-    def test_no_reachability_probe_is_run(self):
-        """check_inverter_reachable TCP-connects to the inverter.
-
-        Nothing listens on this family -- we are the server. Running the probe
-        would fail every pairing for a collector that works perfectly.
-        """
-        assert needs_reachability_check({"protocol": EYBOND_PROTOCOL}) is False
-
-    def test_other_protocols_are_still_probed(self):
-        assert needs_reachability_check({"protocol": "solarman_v5"}) is True
-        assert needs_reachability_check(None) is True
-
-    def test_builds_a_usable_config_from_the_short_form(self):
-        config = build_manual_config({"model_id": "anenji_anj_6200"})
-        assert config["protocol"] == EYBOND_PROTOCOL
-        assert config["listen_port"] == DEFAULT_LISTEN_PORT
-        assert config["slave_id"] == 1
-        assert config["model_id"] == "anenji_anj_6200"
-
-    def test_the_built_config_survives_link_config_translation(self):
-        # The two halves must agree, or pairing succeeds and the listener never
-        # starts.
-        config = link_config_from(build_manual_config({"model_id": "x"}))
-        assert config.listen_port == DEFAULT_LISTEN_PORT
-
-    def test_the_vendor_relay_is_off_in_a_manual_pairing(self):
-        # Safer than asking a user to type a cloud hostname; discover_upstream
-        # can fill it in from the device.
-        config = link_config_from(build_manual_config({"model_id": "x"}))
-        assert config.upstream_host is None
+    def test_an_absent_serial_is_omitted_not_blank(self):
+        # A blank string would match no collector AND look configured.
+        assert "inverter_serial" not in build_manual_config({"model_id": "x"})
+        assert "inverter_serial" not in build_manual_config(
+            {"model_id": "x", "inverter_serial": "   "}
+        )
 
 
 class TestAnnounceOverrides:

@@ -45,7 +45,7 @@ from .const import (
 )
 from .executors import create_executor
 from .executors.yaml_dispatcher import YamlDispatcher
-from .eybond_at.setup import is_eybond_harvest, start_eybond_harvest
+from .eybond_at.setup import is_eybond_harvest, start_eybond_hub
 from .harvest.engine import run_direct_harvest_loop
 from .harvest.event_scheduler_loop import run_event_scheduler_loop
 from .harvest.spec_cache import load_spec
@@ -689,7 +689,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         except Exception:  # never block setup — fail-open
             _LOGGER.exception("entity_map preset refresh failed")
 
-    eybond_links: dict[str, object] = {}
+    eybond_hub = None
+    eybond_inverters: list[dict] = []
     command_task = None
     mqtt_wake_task = None
     scheduler_task = None
@@ -700,27 +701,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             inverter_id = inv["inverter_id"]
             harvest_config = inv.get("harvest_config")
             if is_eybond_harvest(harvest_config):
-                # EyBond/SmartESS collector path. The collector dials US, and
-                # the register map is chosen from the protocol number the
-                # DEVICE reports rather than from a cloud spec keyed by model
-                # id -- see eybond_at/harvest.py for why that distinction
-                # matters. Fail-open: a listener that cannot start leaves the
-                # other inverters running.
-                try:
-                    link, task = await start_eybond_harvest(
-                        hass=hass,
-                        harvest_config=harvest_config,
-                        inverter_id=inverter_id,
-                        store=store,
-                        cadence=cadence,
-                        lifecycle=lifecycle,
-                    )
-                    eybond_links[inverter_id] = link
-                    readings_tasks[inverter_id] = task
-                except Exception:  # never block setup -- fail-open
-                    _LOGGER.exception(
-                        "EyBond listener failed to start for inverter %s", inverter_id
-                    )
+                # EyBond/SmartESS collectors share ONE listener: they dial us,
+                # and a listener per inverter would collide on port 8899. They
+                # are collected here and started together after the loop.
+                eybond_inverters.append(
+                    {"inverter_id": inverter_id, "harvest_config": harvest_config}
+                )
             elif harvest_config:
                 # Direct-Modbus harvest path (SP-B): poll the inverter itself
                 # via the register spec instead of reading HA entities. Load the
@@ -903,11 +889,29 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # v0.15.3: arm the wake loop's updateCheck nudge.
     _update_nudge["coordinator"] = update_coordinator
 
+    if eybond_inverters:
+        # One hub, N sessions, routed by the serial each collector reports.
+        # Fail-open: a hub that cannot start leaves every other inverter
+        # running rather than aborting setup.
+        try:
+            eybond_hub, eybond_tasks = await start_eybond_hub(
+                hass=hass,
+                inverters=eybond_inverters,
+                store=store,
+                cadence=cadence,
+                lifecycle=lifecycle,
+            )
+            readings_tasks.update(eybond_tasks)
+        except Exception:  # never block setup -- fail-open
+            _LOGGER.exception(
+                "EyBond hub failed to start for %d inverter(s)", len(eybond_inverters)
+            )
+
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = {
         "api_client": api_client,
         "readings_tasks": readings_tasks,
-        "eybond_links": eybond_links,
+        "eybond_hub": eybond_hub,
         "command_task": command_task,
         "mqtt_wake_task": mqtt_wake_task,
         "scheduler_task": scheduler_task,
@@ -947,11 +951,12 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     for task in (state.get("readings_tasks") or {}).values():
         if task and not task.done():
             task.cancel()
-    # Close EyBond listeners so the TCP port and UDP announcer are released.
+    # Close the EyBond hub so the TCP port and UDP announcer are released.
     # Without this a reload leaves port 8899 bound and the next setup fails.
-    for link in (state.get("eybond_links") or {}).values():
+    hub = state.get("eybond_hub")
+    if hub is not None:
         with contextlib.suppress(Exception):
-            await link.stop()
+            await hub.stop()
     for key in (
         "command_task",
         "mqtt_wake_task",

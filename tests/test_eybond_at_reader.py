@@ -9,9 +9,9 @@ from custom_components.svitgrid.eybond_at.identity import (
     REG_SERIAL,
     UnknownPlatform,
 )
-from custom_components.svitgrid.eybond_at.link import TransactionFailed
 from custom_components.svitgrid.eybond_at.reader import EybondAtReader
 from custom_components.svitgrid.eybond_at.register_map import Confidence
+from custom_components.svitgrid.eybond_at.session import TransactionFailed
 
 # Registers 201..229, verbatim from the 2026-08-20 capture where they overlap,
 # zero-filled where the bench unit has no hardware attached.

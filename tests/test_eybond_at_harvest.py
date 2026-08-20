@@ -18,18 +18,20 @@ from custom_components.svitgrid.eybond_at.identity import (
     DeviceIdentity,
     UnknownPlatform,
 )
-from custom_components.svitgrid.eybond_at.link import TransactionFailed
 from custom_components.svitgrid.eybond_at.reader import Reading
 from custom_components.svitgrid.eybond_at.register_map import (
     SMG_II_PROTOCOL_11,
     Confidence,
 )
+from custom_components.svitgrid.eybond_at.session import TransactionFailed
 
 
 async def fast_sleep(_seconds: float) -> None:
     """Drive the loop fast. See the module docstring for why this is injected."""
     await asyncio.sleep(0.001)
 
+
+SERIAL = "99432604107106"
 
 IDENTITY = DeviceIdentity(
     protocol_number=11,
@@ -91,8 +93,18 @@ class FakeReader:
 
 
 @dataclass
-class FakeLink:
-    collector_connected: bool = True
+class FakeSession:
+    address: str = "192.168.1.116"
+
+
+@dataclass
+class FakeHub:
+    """Routes by serial, like the real hub."""
+
+    connected: dict = field(default_factory=dict)
+
+    def session_for(self, serial):
+        return self.connected.get(serial)
 
 
 @dataclass
@@ -149,8 +161,9 @@ class TestLoop:
         await asyncio.gather(
             run_eybond_harvest_loop(
                 hass=hass,
-                link=FakeLink(),
-                reader=reader,
+                hub=FakeHub({SERIAL: FakeSession()}),
+                inverter_serial=SERIAL,
+                reader_factory=lambda _session: reader,
                 store=store,
                 cadence=FakeCadence(),
                 inverter_id="inv1",
@@ -170,8 +183,9 @@ class TestLoop:
         await asyncio.gather(
             run_eybond_harvest_loop(
                 hass=hass,
-                link=FakeLink(collector_connected=False),
-                reader=reader,
+                hub=FakeHub({}),
+                inverter_serial=SERIAL,
+                reader_factory=lambda _session: reader,
                 store=store,
                 cadence=FakeCadence(),
                 inverter_id="inv1",
@@ -182,38 +196,45 @@ class TestLoop:
         assert reader.calls == 0
         assert store.appended == []
 
-    async def test_reidentifies_when_the_collector_reconnects(self):
+    async def test_rebinds_when_the_collector_reconnects(self):
         """A new session may be a different inverter.
 
-        Reusing a cached identity across a reconnect would decode the new
-        device with the previous one's register map.
+        Reusing the reader across a reconnect would decode the new device with
+        the previous one's register map, so a changed session gets a fresh
+        reader.
         """
-        hass, store, reader = FakeHass(), FakeStore(), FakeReader()
-        link = FakeLink(collector_connected=False)
+        hass, store = FakeHass(), FakeStore()
+        hub = FakeHub({})
+        made = []
+
+        def factory(session):
+            made.append(session)
+            return FakeReader()
 
         async def flap():
             await asyncio.sleep(0.02)
-            link.collector_connected = True
+            hub.connected[SERIAL] = FakeSession()
             await asyncio.sleep(0.03)
-            link.collector_connected = False
+            hub.connected.clear()
             await asyncio.sleep(0.02)
-            link.collector_connected = True
+            hub.connected[SERIAL] = FakeSession()  # a DIFFERENT session object
             await asyncio.sleep(0.03)
             hass.is_stopping = True
 
         await asyncio.gather(
             run_eybond_harvest_loop(
                 hass=hass,
-                link=link,
-                reader=reader,
+                hub=hub,
+                inverter_serial=SERIAL,
                 store=store,
                 cadence=FakeCadence(),
                 inverter_id="inv1",
                 sleep=fast_sleep,
+                reader_factory=factory,
             ),
             flap(),
         )
-        assert reader.invalidated >= 2
+        assert len(made) >= 2  # a fresh reader per session
 
     async def test_an_unknown_platform_does_not_stop_the_loop(self):
         hass, store = FakeHass(), FakeStore()
@@ -226,8 +247,9 @@ class TestLoop:
         await asyncio.gather(
             run_eybond_harvest_loop(
                 hass=hass,
-                link=FakeLink(),
-                reader=reader,
+                hub=FakeHub({SERIAL: FakeSession()}),
+                inverter_serial=SERIAL,
+                reader_factory=lambda _session: reader,
                 store=store,
                 cadence=FakeCadence(),
                 inverter_id="inv1",
@@ -252,8 +274,9 @@ class TestLoop:
             await asyncio.gather(
                 run_eybond_harvest_loop(
                     hass=hass,
-                    link=FakeLink(),
-                    reader=reader,
+                    hub=FakeHub({SERIAL: FakeSession()}),
+                    inverter_serial=SERIAL,
+                    reader_factory=lambda _session: reader,
                     store=store,
                     cadence=FakeCadence(),
                     inverter_id="inv1",
@@ -276,8 +299,9 @@ class TestLoop:
         await asyncio.gather(
             run_eybond_harvest_loop(
                 hass=hass,
-                link=FakeLink(),
-                reader=reader,
+                hub=FakeHub({SERIAL: FakeSession()}),
+                inverter_serial=SERIAL,
+                reader_factory=lambda _session: reader,
                 store=store,
                 cadence=FakeCadence(),
                 inverter_id="inv1",
@@ -299,8 +323,9 @@ class TestLoop:
             asyncio.gather(
                 run_eybond_harvest_loop(
                     hass=hass,
-                    link=FakeLink(),
-                    reader=reader,
+                    hub=FakeHub({SERIAL: FakeSession()}),
+                    inverter_serial=SERIAL,
+                    reader_factory=lambda _session: reader,
                     store=store,
                     cadence=FakeCadence(),
                     inverter_id="inv1",
@@ -322,3 +347,34 @@ async def test_every_core_field_is_produced_by_the_map(field_name):
     the only symptom is an inverter that never appears.
     """
     assert field_name in {spec.field for spec in SMG_II_PROTOCOL_11.fields}
+
+
+class TestRouting:
+    async def test_an_inverter_whose_serial_is_absent_publishes_nothing(self):
+        """Normal for a switched-off inverter, and it must not be an error.
+
+        Publishing whatever session happens to be connected would attribute
+        one inverter's readings to another.
+        """
+        hass, store, reader = FakeHass(), FakeStore(), FakeReader()
+
+        async def stop_after_a_moment():
+            await asyncio.sleep(0.05)
+            hass.is_stopping = True
+
+        await asyncio.gather(
+            run_eybond_harvest_loop(
+                hass=hass,
+                # Another inverter IS connected -- just not this one.
+                hub=FakeHub({"88888888888888": FakeSession()}),
+                inverter_serial=SERIAL,
+                store=store,
+                cadence=FakeCadence(),
+                inverter_id="inv1",
+                sleep=fast_sleep,
+                reader_factory=lambda _s: reader,
+            ),
+            stop_after_a_moment(),
+        )
+        assert reader.calls == 0
+        assert store.appended == []
