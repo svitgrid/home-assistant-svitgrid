@@ -127,6 +127,13 @@ class EybondAtLink:
     def upstream_connected(self) -> bool:
         return self._upstream_writer is not None
 
+    @property
+    def upstream_target(self) -> tuple[str, int] | None:
+        """The vendor cloud this link relays to, or None in local-only mode."""
+        if self._config.upstream_host and self._config.upstream_port:
+            return self._config.upstream_host, self._config.upstream_port
+        return None
+
     # ── lifecycle ─────────────────────────────────────────────────────────
     async def start(self) -> None:
         self._server = await asyncio.start_server(

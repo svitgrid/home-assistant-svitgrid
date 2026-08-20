@@ -515,3 +515,10 @@ class TestFraming:
         finally:
             await collector.close()
             await link.stop()
+
+    async def test_exposes_the_vendor_target_without_reaching_into_config(self):
+        link = make_link(upstream_host="cloud.example", upstream_port=18899)
+        assert link.upstream_target == ("cloud.example", 18899)
+
+    async def test_local_only_reports_no_vendor_target(self):
+        assert make_link().upstream_target is None
