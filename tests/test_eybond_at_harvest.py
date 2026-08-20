@@ -102,9 +102,22 @@ class FakeHub:
     """Routes by serial, like the real hub."""
 
     connected: dict = field(default_factory=dict)
+    waits: list = field(default_factory=list)
+    changed: object = None
 
     def session_for(self, serial):
         return self.connected.get(serial)
+
+    async def wait_for_change(self, limit_s):
+        self.waits.append(limit_s)
+        if self.changed is not None:
+            try:
+                await asyncio.wait_for(self.changed.wait(), limit_s)
+                return True
+            except TimeoutError:
+                return False
+        await asyncio.sleep(0.001)
+        return False
 
 
 @dataclass
@@ -378,3 +391,70 @@ class TestRouting:
         )
         assert reader.calls == 0
         assert store.appended == []
+
+
+class TestColdStart:
+    """A fresh install must not wait a full poll cadence for its first reading.
+
+    Measured on real hardware 2026-08-20: the loop's first tick ran 0.6 s
+    BEFORE the collector connected, so it correctly skipped -- and then slept
+    the whole 300 s cadence while the app showed "Waiting for data". The pipe
+    was working the entire time.
+    """
+
+    async def test_waits_for_the_collector_instead_of_sleeping_the_cadence(self):
+        hass, store, reader = FakeHass(), FakeStore(), FakeReader()
+        hub = FakeHub()
+
+        async def stop_after_a_moment():
+            await asyncio.sleep(0.05)
+            hass.is_stopping = True
+
+        await asyncio.gather(
+            run_eybond_harvest_loop(
+                hass=hass,
+                hub=hub,
+                inverter_serial=SERIAL,
+                store=store,
+                cadence=FakeCadence(interval_s=300),
+                inverter_id="inv1",
+                sleep=fast_sleep,
+                reader_factory=lambda _s: reader,
+            ),
+            stop_after_a_moment(),
+        )
+        assert hub.waits, "did not wait on the hub at all"
+        # 30 s ceiling, never the 300 s cadence.
+        assert max(hub.waits) <= 30
+
+    async def test_reads_as_soon_as_the_collector_arrives(self):
+        """The whole point: the first reading lands with onboarding.
+
+        Waking on the event rather than the cadence is the difference between
+        a reading in seconds and one five minutes later.
+        """
+        hass, store, reader = FakeHass(), FakeStore(), FakeReader()
+        hub = FakeHub(changed=asyncio.Event())
+
+        async def collector_arrives():
+            await asyncio.sleep(0.03)
+            hub.connected[SERIAL] = FakeSession()
+            hub.changed.set()
+            await asyncio.sleep(0.05)
+            hass.is_stopping = True
+
+        await asyncio.gather(
+            run_eybond_harvest_loop(
+                hass=hass,
+                hub=hub,
+                inverter_serial=SERIAL,
+                store=store,
+                cadence=FakeCadence(interval_s=300),
+                inverter_id="inv1",
+                sleep=fast_sleep,
+                reader_factory=lambda _s: reader,
+            ),
+            collector_arrives(),
+        )
+        # Published despite a 300 s cadence, because it woke on the event.
+        assert store.appended, "did not read after the collector arrived"

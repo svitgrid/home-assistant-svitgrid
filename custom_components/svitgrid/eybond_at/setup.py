@@ -292,6 +292,23 @@ class DiscoveredCollector:
     protocol_number: int
     output_mode: OutputMode
     firmware: str
+    # The /24 Home Assistant believes it is on, when known. Used only to tell
+    # a real collector address from a NAT gateway.
+    lan_prefix: str | None = None
+
+    @property
+    def shows_a_real_address(self) -> bool:
+        """False when the address is a NAT gateway rather than the collector.
+
+        Behind Docker Desktop every collector appears to come from the same
+        gateway (192.168.65.1), so the address identifies nothing -- with
+        three collectors all three rows would read the same. Routing uses the
+        SERIAL, so nothing breaks; the address is just noise, and showing it
+        invites a user to act on a number that is not their inverter's.
+        """
+        if not self.lan_prefix:
+            return True  # no LAN reference to compare against
+        return self.address.rsplit(".", 1)[0] == self.lan_prefix
 
     @property
     def label(self) -> str:
@@ -310,10 +327,14 @@ class DiscoveredCollector:
             OutputMode.PHASE_P3: "phase L3",
             OutputMode.UNKNOWN: "topology unknown",
         }[self.output_mode]
-        return f"{self.serial} — {topology} — {self.address}"
+        if self.shows_a_real_address:
+            return f"{self.serial} — {topology} — {self.address}"
+        return f"{self.serial} — {topology}"
 
 
-def snapshot_collectors(hub, *, exclude: set[str] | None = None) -> list[DiscoveredCollector]:
+def snapshot_collectors(
+    hub, *, exclude: set[str] | None = None, lan_ip: str | None = None
+) -> list[DiscoveredCollector]:
     """Identified collectors on `hub`, minus serials already configured.
 
     Excluding the configured ones is what makes adding the second and third
@@ -332,6 +353,7 @@ def snapshot_collectors(hub, *, exclude: set[str] | None = None) -> list[Discove
                 protocol_number=identity.protocol_number,
                 output_mode=identity.output_mode,
                 firmware=identity.firmware,
+                lan_prefix=lan_ip.rsplit(".", 1)[0] if lan_ip else None,
             )
         )
     return sorted(found, key=lambda c: c.serial)
@@ -345,6 +367,7 @@ async def discover_collectors(
     settle_s: float = 12.0,
     exclude: set[str] | None = None,
     sleep=None,
+    lan_ip: str | None = None,
 ) -> list[DiscoveredCollector]:
     """Find collectors on the LAN for a pairing form.
 
@@ -357,18 +380,21 @@ async def discover_collectors(
     installation -- does this open a temporary one.
     """
     waiter = sleep or asyncio.sleep
+    # The address the user told us Home Assistant is on. Used only to tell a
+    # real collector address from a NAT gateway in the picker label.
+    lan_ip = lan_ip or (harvest_config or {}).get("advertised_ip")
     if running_hub is not None:
         # Already serving. Collectors are connected or will be within one
         # announce interval, so give it a moment rather than answering "none".
-        if not snapshot_collectors(running_hub, exclude=exclude):
+        if not snapshot_collectors(running_hub, exclude=exclude, lan_ip=lan_ip):
             await waiter(settle_s)
-        return snapshot_collectors(running_hub, exclude=exclude)
+        return snapshot_collectors(running_hub, exclude=exclude, lan_ip=lan_ip)
 
     hub = EybondAtHub(link_config_from(harvest_config or {"protocol": EYBOND_PROTOCOL}))
     await hub.start()
     try:
         await waiter(settle_s)
-        return snapshot_collectors(hub, exclude=exclude)
+        return snapshot_collectors(hub, exclude=exclude, lan_ip=lan_ip)
     finally:
         await hub.stop()
 

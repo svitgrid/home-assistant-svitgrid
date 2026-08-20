@@ -672,3 +672,65 @@ class TestFinalizeDoesNotClobberThePicker:
         assert SvitgridConfigFlow._eybond_known_model_id is not base
         # The options flow has no earlier step, so it still asks.
         assert SvitgridOptionsFlow._eybond_known_model_id is base
+
+
+class TestAddressLabel:
+    """Behind Docker Desktop every collector appears to come from the same NAT
+    gateway, so the address identifies nothing -- three collectors would show
+    three identical addresses. Routing uses the SERIAL, so nothing breaks; the
+    address is just noise that invites a user to act on the wrong number."""
+
+    def test_shows_an_address_on_the_same_lan(self):
+        hub = StubHub([StubSession("192.168.1.116", identity("111"))])
+        found = snapshot_collectors(hub, lan_ip="192.168.1.34")[0]
+        assert found.shows_a_real_address is True
+        assert "192.168.1.116" in found.label
+
+    def test_hides_a_nat_gateway_address(self):
+        # 192.168.65.1 is Docker Desktop's gateway, seen on the bench.
+        hub = StubHub([StubSession("192.168.65.1", identity("111"))])
+        found = snapshot_collectors(hub, lan_ip="192.168.1.34")[0]
+        assert found.shows_a_real_address is False
+        assert "192.168.65.1" not in found.label
+        assert "111" in found.label  # the serial still identifies it
+
+    def test_shows_the_address_when_there_is_no_lan_reference(self):
+        # Without an advertised_ip there is nothing to compare against, so
+        # showing it is better than hiding information we cannot judge.
+        hub = StubHub([StubSession("192.168.65.1", identity("111"))])
+        assert snapshot_collectors(hub)[0].shows_a_real_address is True
+
+    def test_the_topology_survives_either_way(self):
+        hub = StubHub([StubSession("192.168.65.1", identity("111", OutputMode.PHASE_P2))])
+        assert "phase L2" in snapshot_collectors(hub, lan_ip="192.168.1.34")[0].label
+
+    async def test_the_advertised_ip_reaches_the_label_decision(self):
+        """The production path, not just the parameter.
+
+        Twice today a value was collected correctly and never arrived at its
+        destination -- build_manual_config dropped the network settings, and
+        pair_finalize overwrote them. This asserts the LAN reference actually
+        travels from harvest_config into the label decision.
+        """
+        hub = StubHub([StubSession("192.168.65.1", identity("111"))])
+        found = await discover_collectors(
+            None,
+            running_hub=hub,
+            harvest_config={
+                "protocol": EYBOND_PROTOCOL,
+                "advertised_ip": "192.168.1.34",
+            },
+            settle_s=0,
+        )
+        assert found[0].shows_a_real_address is False
+        assert "192.168.65.1" not in found[0].label
+
+    async def test_without_an_advertised_ip_the_address_is_shown(self):
+        hub = StubHub([StubSession("192.168.65.1", identity("111"))])
+        found = await discover_collectors(
+            None,
+            running_hub=hub,
+            harvest_config={"protocol": EYBOND_PROTOCOL},
+            settle_s=0,
+        )
+        assert found[0].shows_a_real_address is True

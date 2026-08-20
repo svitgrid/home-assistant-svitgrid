@@ -41,6 +41,17 @@ from .session import TransactionFailed
 
 _LOGGER = logging.getLogger(__name__)
 
+# Ceiling on how long to block waiting for a collector. The wait ends as soon
+# as one is identified, so this only bounds the case where none ever arrives.
+#
+# Why this exists: while no collector is connected there is nothing to read,
+# so the poll cadence does not apply -- we are waiting for an EVENT, not
+# pacing a device. Sleeping the cadence here made a fresh install wait five
+# minutes for its first reading. Measured 2026-08-20: the loop's first tick
+# ran 0.6 s before the collector connected, and the reading then waited out a
+# full 300 s cadence while the user watched "Waiting for data".
+_WAITING_FOR_COLLECTOR_S = 30.0
+
 
 async def poll_once(*, reader, inverter_id: str, store) -> dict | None:
     """One reading: poll, assemble, gate, append.
@@ -115,11 +126,18 @@ async def run_eybond_harvest_loop(
 
             if reader is None:
                 # Normal for an inverter that is switched off. Not an error.
+                # Wait for one to ARRIVE rather than sleeping the cadence, so
+                # the first reading lands with onboarding instead of minutes
+                # after it.
                 _LOGGER.debug(
-                    "%s: serial %s not connected, skipping tick",
+                    "%s: serial %s not connected, waiting",
                     inverter_id,
                     inverter_serial or "unset",
                 )
+                if hasattr(hub, "wait_for_change"):
+                    await hub.wait_for_change(min(next_sleep_s, _WAITING_FOR_COLLECTOR_S))
+                    continue
+                next_sleep_s = min(next_sleep_s, _WAITING_FOR_COLLECTOR_S)
             else:
                 payload = await poll_once(reader=reader, inverter_id=inverter_id, store=store)
                 if payload is not None:

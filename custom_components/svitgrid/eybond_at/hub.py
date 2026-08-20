@@ -113,6 +113,11 @@ class EybondAtHub:
         # Addresses that have dialled in at least once. Lets a missing
         # collector be recalled by unicast without disturbing the others.
         self._known_addresses: set[str] = set()
+        # Fired whenever a session is identified or lost. A harvest loop with
+        # nothing to read waits on this instead of polling, so the FIRST
+        # reading lands as soon as the collector is identified rather than a
+        # poll cadence later.
+        self._changed = asyncio.Event()
         self._tasks: list[asyncio.Task] = []
         self._actual_port: int | None = None
 
@@ -143,6 +148,24 @@ class EybondAtHub:
             if session.serial == serial:
                 return session
         return None
+
+    async def wait_for_change(self, limit_s: float) -> bool:
+        """Block until a session is identified or lost, or `timeout` elapses.
+
+        Returns True when something changed. Lets a caller react to a
+        collector arriving instead of discovering it on the next poll tick --
+        the difference between a first reading in seconds and one a full
+        cadence later.
+        """
+        self._changed.clear()
+        try:
+            await asyncio.wait_for(self._changed.wait(), limit_s)
+            return True
+        except TimeoutError:
+            return False
+
+    def _signal_change(self) -> None:
+        self._changed.set()
 
     def unclaimed(self) -> list[CollectorSession]:
         """Identified sessions that no configured inverter has claimed.
@@ -298,6 +321,7 @@ class EybondAtHub:
                 await identify_task
             await session.close("collector disconnected")
             self._sessions.pop(key, None)
+            self._signal_change()
 
     async def _identify(self, session: CollectorSession) -> None:
         """Read the identity block so the hub can route this connection.
@@ -316,6 +340,7 @@ class EybondAtHub:
                 identity.firmware or "unknown",
             )
             await self._drop_stale_duplicates(session)
+            self._signal_change()
         except asyncio.CancelledError:
             raise
         except TransactionFailed as err:

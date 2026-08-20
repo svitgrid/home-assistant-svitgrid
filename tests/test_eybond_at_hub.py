@@ -356,3 +356,43 @@ class TestUpstreamIsolation:
             for unit in units:
                 await unit.close()
             await hub.stop()
+
+
+class TestChangeSignal:
+    """A harvest loop with nothing to read waits on this instead of polling."""
+
+    async def test_fires_when_a_collector_is_identified(self):
+        hub = make_hub()
+        await hub.start()
+        unit = FakeAnenji(registers_for("11111111111111", 2200))
+        try:
+            waiter = asyncio.create_task(hub.wait_for_change(5.0))
+            await asyncio.sleep(0.02)
+            await unit.connect(hub.listen_port)
+            assert await waiter is True
+        finally:
+            await unit.close()
+            await hub.stop()
+
+    async def test_fires_when_a_collector_is_lost(self):
+        hub = make_hub()
+        await hub.start()
+        unit = FakeAnenji(registers_for("11111111111111", 2200))
+        try:
+            await unit.connect(hub.listen_port)
+            assert await wait_for(lambda: hub.collector_count == 1)
+            waiter = asyncio.create_task(hub.wait_for_change(5.0))
+            await asyncio.sleep(0.02)
+            await unit.close()
+            assert await waiter is True
+        finally:
+            await hub.stop()
+
+    async def test_returns_false_when_nothing_happens(self):
+        # Bounds the case where no collector ever arrives.
+        hub = make_hub()
+        await hub.start()
+        try:
+            assert await hub.wait_for_change(0.05) is False
+        finally:
+            await hub.stop()
