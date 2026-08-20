@@ -94,14 +94,15 @@
         }
       },
       "add_inverter": {
-        "title": "Add inverter — details",
-        "description": "Enter the brand, model, and hardware details for the new inverter.",
+        "title": "Add inverter",
+        "description": "How is this inverter connected?",
         "data": {
+          "connection": "Connection",
           "brand": "Brand",
           "model": "Model",
-          "phases": "Phase count (1 / 2 / 3)",
-          "has_battery": "Has a battery",
-          "pv_strings": "Number of PV strings (1–8)"
+          "phases": "Phases",
+          "has_battery": "Has battery",
+          "pv_strings": "PV strings"
         }
       },
       "add_inverter_entities": {
@@ -188,10 +189,20 @@
         "data": {
           "auto_update": "Automatically install updates"
         }
+      },
+      "add_inverter_collector": {
+        "title": "Choose the inverter",
+        "description": "These SmartESS collectors are on your network. Each one reports its own serial number and how it is wired, so pick the inverter you are adding. Ones you have already configured are not listed.",
+        "data": {
+          "inverter_serial": "Inverter",
+          "model_id": "Model id"
+        }
       }
     },
     "error": {
-      "no_entities_selected": "Pick at least one sensor — otherwise the dashboard has nothing to show."
+      "no_entities_selected": "Pick at least one sensor — otherwise the dashboard has nothing to show.",
+      "no_collectors_found": "No SmartESS collector answered. Check the inverter is powered and on the same network, then try again.",
+      "no_collector_selected": "Choose which inverter this is."
     },
     "abort": {
       "cannot_connect": "Could not reach the Svitgrid cloud while adding the inverter. Check your internet and try again.",

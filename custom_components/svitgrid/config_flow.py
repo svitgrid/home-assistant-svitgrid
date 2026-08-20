@@ -47,6 +47,7 @@ from .const import (
 from .eybond_at.setup import (
     EYBOND_PROTOCOL,
     build_manual_config,
+    discover_collectors,
     needs_inverter_ip,
     needs_reachability_check,
 )
@@ -140,6 +141,9 @@ class SvitgridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         schema = vol.Schema(
             {
+                vol.Required("connection", default="ha_entities"): SelectSelector(
+                    SelectSelectorConfig(options=["ha_entities", EYBOND_PROTOCOL]),
+                ),
                 vol.Required("brand"): TextSelector(TextSelectorConfig()),
                 vol.Required("model"): TextSelector(TextSelectorConfig()),
                 vol.Required("phases", default=3): SelectSelector(
@@ -590,6 +594,12 @@ class SvitgridOptionsFlow(config_entries.OptionsFlow):
                 "hasBattery": bool(user_input["has_battery"]),
                 "pvStrings": int(user_input["pv_strings"]),
             }
+            # Until this fork existed, the ONLY way to add a second inverter
+            # was by mapping Home Assistant entities -- so a household could
+            # never have two direct-harvest inverters of any protocol, not
+            # just EyBond.
+            if user_input.get("connection") == EYBOND_PROTOCOL:
+                return await self.async_step_add_inverter_collector()
             return await self.async_step_add_inverter_entities()
         schema = vol.Schema(
             {
@@ -671,6 +681,104 @@ class SvitgridOptionsFlow(config_entries.OptionsFlow):
         return self.async_show_form(
             step_id="add_inverter_entities", data_schema=vol.Schema(schema_dict), errors=errors
         )
+
+    # ── add: EyBond/SmartESS collector (the collector dials US) ──────────
+    async def async_step_add_inverter_collector(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Pick which physical inverter this is, from what is on the LAN.
+
+        The collector reports its own serial (register 186) and how it is
+        wired (register 300), so the user picks from a list instead of typing
+        an address. Serials already configured are hidden, which is what makes
+        adding the second and third inverter unambiguous.
+        """
+        errors: dict[str, str] = {}
+        configured = {
+            (inv.get("harvest_config") or {}).get("inverter_serial") for inv in self._inverters()
+        } - {None}
+
+        if user_input is not None:
+            serial = user_input.get("inverter_serial")
+            if not serial:
+                errors["base"] = "no_collector_selected"
+            else:
+                harvest_config = build_manual_config(
+                    {
+                        "model_id": user_input.get("model_id", ""),
+                        "inverter_serial": serial,
+                    }
+                )
+                return await self._append_direct_inverter(harvest_config)
+
+        state = self.hass.data.get(DOMAIN, {}).get(self._entry.entry_id) or {}
+        try:
+            found = await discover_collectors(
+                self.hass,
+                running_hub=state.get("eybond_hub"),
+                exclude=configured,
+            )
+        except Exception:  # noqa: BLE001 -- discovery must not abort the flow
+            _LOGGER.exception("EyBond discovery failed")
+            found = []
+
+        if not found:
+            # Nothing to pick means nothing to configure. Saying so beats an
+            # empty dropdown the user cannot act on.
+            return self.async_show_form(
+                step_id="add_inverter_collector",
+                data_schema=vol.Schema({}),
+                errors={"base": "no_collectors_found"},
+            )
+
+        schema = vol.Schema(
+            {
+                vol.Required("inverter_serial"): SelectSelector(
+                    SelectSelectorConfig(
+                        options=[{"value": c.serial, "label": c.label} for c in found],
+                    ),
+                ),
+                vol.Required("model_id"): TextSelector(TextSelectorConfig()),
+            }
+        )
+        return self.async_show_form(
+            step_id="add_inverter_collector", data_schema=schema, errors=errors
+        )
+
+    async def _append_direct_inverter(self, harvest_config: dict) -> FlowResult:
+        """Create the inverter server-side, then append it with its config.
+
+        Shares `add_inverter` with the entity path -- only what is attached to
+        the stored inverter differs, `harvest_config` instead of `entity_map`.
+        """
+        if self._add_meta is None:
+            return self.async_abort(reason="inverter_not_found")
+        session = aiohttp_client.async_get_clientsession(self.hass)
+        client = SvitgridApiClient(session, api_base=self._entry.data["api_base"])
+        try:
+            resp = await client.add_inverter(
+                api_key=self._entry.data["api_key"],
+                inverter={**self._add_meta, "entityMap": {}, "commands": []},
+            )
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception("add_inverter API call failed")
+            return self.async_abort(reason="cannot_connect")
+        inverters = self._inverters()
+        inverters.append(
+            {
+                "inverter_id": resp["inverterId"],
+                "harvest_config": harvest_config,
+                "command_recipes": resp.get("commands") or [],
+                "brand": resp.get("brand"),
+                "model": resp.get("model"),
+                "phases": resp.get("phases"),
+                "has_battery": resp.get("hasBattery"),
+                "pv_strings": resp.get("pvStrings"),
+                "preset_id": resp.get("presetId"),
+            }
+        )
+        self._persist_inverters(inverters)
+        return self.async_create_entry(title="", data=dict(self._entry.options))
 
     # ── edit: pick inverter, then re-map (scoped to the selection) ───────
     async def async_step_edit_inverter(

@@ -17,7 +17,9 @@ endpoint from the device for callers that want to enable it automatically.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from dataclasses import dataclass
 
 from .harvest import run_eybond_harvest_loop
 from .hub import (
@@ -27,6 +29,7 @@ from .hub import (
     EybondAtHub,
     HubConfig,
 )
+from .register_map import OutputMode
 from .session import TransactionFailed
 
 _LOGGER = logging.getLogger(__name__)
@@ -258,3 +261,93 @@ async def start_eybond_hub(
         hub.upstream_target or "off",
     )
     return hub, tasks
+
+
+@dataclass(frozen=True)
+class DiscoveredCollector:
+    """One collector seen on the LAN, as a pairing form would show it."""
+
+    serial: str
+    address: str
+    protocol_number: int
+    output_mode: OutputMode
+    firmware: str
+
+    @property
+    def label(self) -> str:
+        """What the user reads in the picker.
+
+        The topology is included because it is the thing a user can check
+        against reality: if they wired one inverter per phase, three entries
+        reading "Phase P1/P2/P3" confirm it, and three reading "Single" say
+        the inverters have not been told they are a three-phase set.
+        """
+        topology = {
+            OutputMode.SINGLE: "standalone",
+            OutputMode.PARALLEL: "parallel bank",
+            OutputMode.PHASE_P1: "phase L1",
+            OutputMode.PHASE_P2: "phase L2",
+            OutputMode.PHASE_P3: "phase L3",
+            OutputMode.UNKNOWN: "topology unknown",
+        }[self.output_mode]
+        return f"{self.serial} — {topology} — {self.address}"
+
+
+def snapshot_collectors(hub, *, exclude: set[str] | None = None) -> list[DiscoveredCollector]:
+    """Identified collectors on `hub`, minus serials already configured.
+
+    Excluding the configured ones is what makes adding the second and third
+    inverter unambiguous: the list shows only what is still unclaimed.
+    """
+    exclude = exclude or set()
+    found = []
+    for session in hub.sessions:
+        identity = session.identity
+        if identity is None or identity.serial in exclude:
+            continue
+        found.append(
+            DiscoveredCollector(
+                serial=identity.serial,
+                address=session.address,
+                protocol_number=identity.protocol_number,
+                output_mode=identity.output_mode,
+                firmware=identity.firmware,
+            )
+        )
+    return sorted(found, key=lambda c: c.serial)
+
+
+async def discover_collectors(
+    hass,
+    *,
+    running_hub=None,
+    harvest_config: dict | None = None,
+    settle_s: float = 12.0,
+    exclude: set[str] | None = None,
+    sleep=None,
+) -> list[DiscoveredCollector]:
+    """Find collectors on the LAN for a pairing form.
+
+    **Reuses the running hub when there is one.** Starting a second listener
+    would collide on the port AND its broadcast would yank already-working
+    collectors onto a listener that is about to be torn down. That is the same
+    `address already in use` that makes one-listener-per-inverter impossible.
+
+    Only when no hub is running -- the first EyBond inverter on this
+    installation -- does this open a temporary one.
+    """
+    waiter = sleep or asyncio.sleep
+    if running_hub is not None:
+        # Already serving. Collectors are connected or will be within one
+        # announce interval, so give it a moment rather than answering "none".
+        if not snapshot_collectors(running_hub, exclude=exclude):
+            await waiter(settle_s)
+        return snapshot_collectors(running_hub, exclude=exclude)
+
+    hub = EybondAtHub(link_config_from(harvest_config or {"protocol": EYBOND_PROTOCOL}))
+    await hub.start()
+    try:
+        await waiter(settle_s)
+        return snapshot_collectors(hub, exclude=exclude)
+    finally:
+        await hub.stop()

@@ -10,15 +10,19 @@ from custom_components.svitgrid.eybond_at.hub import (
     ANNOUNCE_UDP_PORT,
     DEFAULT_LISTEN_PORT,
 )
+from custom_components.svitgrid.eybond_at.identity import DeviceIdentity
+from custom_components.svitgrid.eybond_at.register_map import OutputMode
 from custom_components.svitgrid.eybond_at.session import TransactionFailed
 from custom_components.svitgrid.eybond_at.setup import (
     EYBOND_PROTOCOL,
     EybondConfigError,
     build_manual_config,
+    discover_collectors,
     discover_upstream,
     hub_config_from,
     is_eybond_harvest,
     link_config_from,
+    snapshot_collectors,
     start_eybond_hub,
 )
 
@@ -327,3 +331,111 @@ class TestAnnounceOverrides:
         # For a LAN where broadcast does not cross a VLAN boundary.
         config = link_config_from({"protocol": EYBOND_PROTOCOL, "announce_target": "192.168.1.116"})
         assert config.announce_target == "192.168.1.116"
+
+
+@dataclass
+class StubSession:
+    address: str
+    identity: object | None
+
+
+@dataclass
+class StubHub:
+    sessions: list
+
+
+def identity(serial, mode=OutputMode.SINGLE, protocol=11):
+    return DeviceIdentity(
+        protocol_number=protocol,
+        device_type=0x7803,
+        serial=serial,
+        firmware="7803_A6260126v1",
+        output_mode=mode,
+    )
+
+
+class TestSnapshot:
+    def test_lists_identified_collectors(self):
+        hub = StubHub(
+            [
+                StubSession("192.168.1.116", identity("11111111111111")),
+                StubSession("192.168.1.117", identity("22222222222222")),
+            ]
+        )
+        assert [c.serial for c in snapshot_collectors(hub)] == [
+            "11111111111111",
+            "22222222222222",
+        ]
+
+    def test_skips_a_session_that_has_not_identified_yet(self):
+        # Offering it would let a user pick a device we cannot route to.
+        hub = StubHub([StubSession("192.168.1.116", None)])
+        assert snapshot_collectors(hub) == []
+
+    def test_hides_serials_already_configured(self):
+        """This is what makes adding the 2nd and 3rd inverter unambiguous."""
+        hub = StubHub(
+            [
+                StubSession("192.168.1.116", identity("11111111111111")),
+                StubSession("192.168.1.117", identity("22222222222222")),
+            ]
+        )
+        remaining = snapshot_collectors(hub, exclude={"11111111111111"})
+        assert [c.serial for c in remaining] == ["22222222222222"]
+
+    def test_the_label_shows_the_topology(self):
+        # The one thing a user can check against reality: three inverters
+        # wired one per phase should read L1/L2/L3, not three "standalone".
+        hub = StubHub([StubSession("192.168.1.116", identity("111", OutputMode.PHASE_P2))])
+        assert snapshot_collectors(hub)[0].label == "111 — phase L2 — 192.168.1.116"
+
+    def test_an_unknown_topology_says_so_rather_than_guessing(self):
+        hub = StubHub([StubSession("192.168.1.116", identity("111", OutputMode.UNKNOWN))])
+        assert "topology unknown" in snapshot_collectors(hub)[0].label
+
+
+class TestDiscovery:
+    async def test_reuses_a_running_hub_rather_than_opening_a_listener(self):
+        """Opening a second listener would collide on the port AND its
+        broadcast would yank working collectors onto a listener about to be
+        torn down."""
+        hub = StubHub([StubSession("192.168.1.116", identity("11111111111111"))])
+        found = await discover_collectors(None, running_hub=hub, settle_s=0)
+        assert [c.serial for c in found] == ["11111111111111"]
+
+    async def test_waits_for_a_running_hub_with_nothing_connected_yet(self):
+        waited = []
+
+        async def fake_sleep(seconds):
+            waited.append(seconds)
+
+        hub = StubHub([])
+        await discover_collectors(None, running_hub=hub, settle_s=9, sleep=fake_sleep)
+        # Answering "none" instantly would be wrong: a collector connects
+        # within one announce interval.
+        assert waited == [9]
+
+    async def test_does_not_wait_when_the_hub_already_has_collectors(self):
+        waited = []
+
+        async def fake_sleep(seconds):
+            waited.append(seconds)
+
+        hub = StubHub([StubSession("1.2.3.4", identity("111"))])
+        await discover_collectors(None, running_hub=hub, settle_s=9, sleep=fake_sleep)
+        assert waited == []
+
+    async def test_opens_a_temporary_listener_when_no_hub_runs(self, socket_enabled):
+        # The first EyBond inverter on this installation: nothing is serving
+        # yet, so there is nothing to collide with.
+        found = await discover_collectors(
+            None,
+            running_hub=None,
+            harvest_config={
+                "protocol": EYBOND_PROTOCOL,
+                "listen_port": 0,
+                "announce_target": "127.0.0.1",
+            },
+            settle_s=0.05,
+        )
+        assert found == []
