@@ -1,5 +1,9 @@
 """Turning a harvest_config into a running link, and reading the vendor endpoint."""
 
+import asyncio
+import contextlib
+from dataclasses import dataclass, field
+
 import pytest
 
 from custom_components.svitgrid.eybond_at.link import (
@@ -13,6 +17,7 @@ from custom_components.svitgrid.eybond_at.setup import (
     discover_upstream,
     is_eybond_harvest,
     link_config_from,
+    start_eybond_harvest,
 )
 
 
@@ -72,9 +77,26 @@ class TestLinkConfig:
             )
 
     def test_rejects_a_port_outside_the_valid_range(self):
-        for port in (0, -1, 65536):
+        for port in (-1, 65536):
             with pytest.raises(EybondConfigError):
                 link_config_from({"protocol": EYBOND_PROTOCOL, "listen_port": port})
+
+    def test_allows_an_ephemeral_listen_port(self):
+        # 0 means "let the OS choose". The announce advertises the port that
+        # was actually bound, so this works end to end.
+        assert link_config_from({"protocol": EYBOND_PROTOCOL, "listen_port": 0}).listen_port == 0
+
+    def test_still_rejects_an_ephemeral_port_for_a_port_we_dial(self):
+        # 0 is meaningful for a port we BIND and meaningless for one we CONNECT
+        # to. Accepting it there would produce a relay that silently never works.
+        with pytest.raises(EybondConfigError):
+            link_config_from(
+                {
+                    "protocol": EYBOND_PROTOCOL,
+                    "cloud_proxy_host": "dtu_ess.eybond.com",
+                    "cloud_proxy_port": 0,
+                }
+            )
 
     def test_rejects_a_slave_id_outside_modbus_range(self):
         with pytest.raises(EybondConfigError):
@@ -123,3 +145,95 @@ class TestDiscoverUpstream:
     async def test_ignores_a_non_tcp_transport(self):
         # Only TCP is implemented; a UDP endpoint would be relayed wrongly.
         assert await discover_upstream(FakeLink(reply="host.example,18899,UDP")) is None
+
+
+@dataclass
+class FakeHass:
+    is_stopping: bool = False
+    tasks: list = field(default_factory=list)
+
+    def async_create_background_task(self, coro, name=None):
+        task = asyncio.create_task(coro, name=name)
+        self.tasks.append(task)
+        return task
+
+
+class FakeStore:
+    def __init__(self):
+        self.appended = []
+
+    async def append(self, payload):
+        self.appended.append(payload)
+
+
+@dataclass
+class FakeCadence:
+    interval_s: float = 5.0
+
+
+class TestStartHarvest:
+    """The factory owns a real listening socket, so its lifecycle is the risk."""
+
+    async def test_starts_a_listener_and_returns_the_link_and_task(self, socket_enabled):
+        hass = FakeHass()
+        link, task = await start_eybond_harvest(
+            hass=hass,
+            harvest_config={
+                "protocol": EYBOND_PROTOCOL,
+                "listen_port": 0,  # ephemeral, so the test never fights port 8899
+                "announce_target": "127.0.0.1",
+            },
+            inverter_id="inv1",
+            store=FakeStore(),
+            cadence=FakeCadence(),
+        )
+        try:
+            assert link.listen_port and link.listen_port > 0
+            assert link.collector_connected is False
+            assert task in hass.tasks
+        finally:
+            hass.is_stopping = True
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+            await link.stop()
+
+    async def test_stopping_the_link_releases_the_port(self, socket_enabled):
+        """A reload that leaks the socket leaves 8899 bound and the next setup fails.
+
+        Binding the same port a second time is the only way to prove it was
+        actually released.
+        """
+        hass = FakeHass()
+        link, task = await start_eybond_harvest(
+            hass=hass,
+            harvest_config={
+                "protocol": EYBOND_PROTOCOL,
+                "listen_port": 0,
+                "announce_target": "127.0.0.1",
+            },
+            inverter_id="inv1",
+            store=FakeStore(),
+            cadence=FakeCadence(),
+        )
+        port = link.listen_port
+        hass.is_stopping = True
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        await link.stop()
+
+        # Re-bind the very same port. This raises if the first link leaked it.
+        server = await asyncio.start_server(lambda r, w: None, "127.0.0.1", port)
+        server.close()
+        await server.wait_closed()
+
+    async def test_a_bad_config_raises_before_any_socket_is_opened(self):
+        with pytest.raises(EybondConfigError):
+            await start_eybond_harvest(
+                hass=FakeHass(),
+                harvest_config={"protocol": EYBOND_PROTOCOL, "listen_port": 0xFFFFF},
+                inverter_id="inv1",
+                store=FakeStore(),
+                cadence=FakeCadence(),
+            )

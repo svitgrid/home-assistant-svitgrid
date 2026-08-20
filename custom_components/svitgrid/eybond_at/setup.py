@@ -46,11 +46,20 @@ def is_eybond_harvest(harvest_config: dict | None) -> bool:
     return bool(harvest_config) and harvest_config.get("protocol") == EYBOND_PROTOCOL
 
 
-def _port(value, name: str) -> int:
+def _port(value, name: str, *, allow_ephemeral: bool = False) -> int:
+    """Validate a port.
+
+    `allow_ephemeral` permits 0, which means "let the OS choose". That is
+    meaningful for OUR listener -- the announce advertises `link.listen_port`,
+    the port actually bound -- and meaningless for a port we dial, where 0 is
+    simply wrong.
+    """
     try:
         port = int(value)
     except (TypeError, ValueError) as err:
         raise EybondConfigError(f"{name} is not a number: {value!r}") from err
+    if allow_ephemeral and port == 0:
+        return 0
     if not _MIN_PORT <= port <= _MAX_PORT:
         raise EybondConfigError(f"{name} out of range: {port}")
     return port
@@ -58,7 +67,11 @@ def _port(value, name: str) -> int:
 
 def link_config_from(harvest_config: dict) -> LinkConfig:
     """Translate a `harvest_config` into a `LinkConfig`, validating as we go."""
-    listen_port = _port(harvest_config.get("listen_port", DEFAULT_LISTEN_PORT), "listen_port")
+    listen_port = _port(
+        harvest_config.get("listen_port", DEFAULT_LISTEN_PORT),
+        "listen_port",
+        allow_ephemeral=True,
+    )
     announce_port = _port(harvest_config.get("announce_port", ANNOUNCE_UDP_PORT), "announce_port")
 
     upstream_host = harvest_config.get("cloud_proxy_host") or None
