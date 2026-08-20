@@ -655,3 +655,20 @@ class TestFinalizeDoesNotClobberThePicker:
         config = link_config_from(picker)
         assert config.advertised_ip == "192.168.1.34"
         assert config.announce_target == "192.168.1.116"
+
+    def test_the_config_flow_carries_its_model_id_into_the_picker(self):
+        """Asked on the connection form, so the picker must not re-ask.
+
+        Asking twice and discarding the first answer is the kind of small
+        wrongness that makes a user distrust the rest of the form.
+        """
+        from custom_components.svitgrid.config_flow import (
+            EybondCollectorSteps,
+            SvitgridConfigFlow,
+            SvitgridOptionsFlow,
+        )
+
+        base = EybondCollectorSteps._eybond_known_model_id
+        assert SvitgridConfigFlow._eybond_known_model_id is not base
+        # The options flow has no earlier step, so it still asks.
+        assert SvitgridOptionsFlow._eybond_known_model_id is base

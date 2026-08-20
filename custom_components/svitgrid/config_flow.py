@@ -99,6 +99,16 @@ class EybondCollectorSteps:
     def _eybond_exclude_serials(self) -> set[str]:
         return set()
 
+    def _eybond_known_model_id(self) -> str | None:
+        """A model id already collected earlier in this flow, if any.
+
+        The config flow asks for it on the connection form; the options flow
+        has no earlier step, so it asks in the picker. Asking twice and then
+        discarding the first answer is the kind of small wrongness that makes
+        a user distrust the rest of the form.
+        """
+        return None
+
     def _eybond_running_hub(self):
         return None
 
@@ -168,6 +178,7 @@ class EybondCollectorSteps:
         if network is None and network_advice(default_local_ip()):
             return await self.async_step_eybond_network()
 
+        known_model = self._eybond_known_model_id()
         if user_input is not None:
             serial = user_input.get("inverter_serial")
             if not serial:
@@ -176,7 +187,7 @@ class EybondCollectorSteps:
                 return await self._eybond_finish(
                     build_manual_config(
                         {
-                            "model_id": user_input.get("model_id", ""),
+                            "model_id": known_model or user_input.get("model_id", ""),
                             "inverter_serial": serial,
                             **(network or {}),
                         }
@@ -260,6 +271,11 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
         self._island_key: str | None = None
 
     # ── EyBond hooks (see EybondCollectorSteps) ──────────────────────────
+    _eybond_model_id: str | None = None
+
+    def _eybond_known_model_id(self) -> str | None:
+        return self._eybond_model_id
+
     def _eybond_running_hub(self):
         """A hub from an already-loaded entry, if this is not the first one.
 
@@ -392,6 +408,8 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
             if not errors and protocol == EYBOND_PROTOCOL:
                 # The collector dials US, so there is nothing to type: pick it
                 # from the network instead. Same steps the options flow uses.
+                # model_id was collected above, so the picker does not re-ask.
+                self._eybond_model_id = model_id
                 return await self.async_step_eybond_collector()
 
             if not errors:
