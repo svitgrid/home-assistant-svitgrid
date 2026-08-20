@@ -29,6 +29,8 @@ from custom_components.svitgrid.eybond_at.identity import (
 from custom_components.svitgrid.eybond_at.register_map import (
     SMG_II_PROTOCOL_11,
     Confidence,
+    FieldSpec,
+    RegisterMap,
 )
 
 # Captured 2026-08-20 from collector I20000282044487591.
@@ -183,3 +185,27 @@ class TestReadPlan:
     def test_no_block_exceeds_the_collector_read_limit(self):
         for _address, count in SMG_II_PROTOCOL_11.read_plan():
             assert 1 <= count <= 32  # the collector caps a read at 32 registers
+
+    def test_splits_a_span_wider_than_the_register_cap(self):
+        """SYNTHETIC map -- the real one spans 29 registers and never hits 32.
+
+        Mutation testing showed the cap could be disabled entirely with every
+        test still green, because SMG_II_PROTOCOL_11 fits under it. A future
+        map with a wider span would silently build an over-long read that the
+        collector refuses.
+        """
+        wide = RegisterMap(
+            name="synthetic",
+            protocol_numbers=(999,),
+            # 100..180 in steps of 4: within max_gap, far wider than max_count.
+            fields=tuple(FieldSpec(f"f{i}", 100 + i * 4) for i in range(21)),
+        )
+        plan = wide.read_plan(max_count=32, max_gap=8)
+        assert len(plan) > 1, "a 81-register span must not be one read"
+        for _address, count in plan:
+            assert count <= 32
+        covered = set()
+        for address, count in plan:
+            covered.update(range(address, address + count))
+        for spec in wide.fields:
+            assert spec.address in covered
