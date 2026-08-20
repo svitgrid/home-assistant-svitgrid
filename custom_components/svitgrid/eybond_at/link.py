@@ -320,7 +320,9 @@ class EybondAtLink:
         for action in self._scheduler.reset():
             if action.kind is ActionKind.FAIL_OURS:
                 self._fail(action.reason or reason)
-        self._fail(reason)
+        # No trailing unconditional _fail: the scheduler already reports a
+        # pending own request, and _pending is only ever set alongside one.
+        # Mutation testing showed an extra call here changed nothing.
         upstream = self._upstream_writer
         self._upstream_writer = None
         if upstream is not None:

@@ -85,6 +85,31 @@ class FakeCollector:
                 await self.writer.wait_closed()
 
 
+class FakeCloud:
+    """Accepts a connection then hangs up, like the throttled vendor cloud did."""
+
+    def __init__(self):
+        self.server = None
+        self.port = None
+        self.connections = 0
+
+    async def start(self):
+        self.server = await asyncio.start_server(self._on_conn, "127.0.0.1", 0)
+        self.port = self.server.sockets[0].getsockname()[1]
+
+    async def _on_conn(self, reader, writer):
+        self.connections += 1
+        writer.close()
+        with contextlib.suppress(Exception):
+            await writer.wait_closed()
+
+    async def stop(self):
+        if self.server:
+            self.server.close()
+            with contextlib.suppress(Exception):
+                await self.server.wait_closed()
+
+
 async def free_port() -> int:
     """Reserve and release a port, so connecting to it is refused."""
     server = await asyncio.start_server(lambda r, w: None, "127.0.0.1", 0)
@@ -299,6 +324,41 @@ class TestUpstreamIsolation:
             await collector.close()
             await link.stop()
 
+    async def test_an_upstream_that_connects_then_hangs_up_leaves_the_collector_alone(
+        self,
+    ):
+        """The exact shape of the 2026-08-20 incident.
+
+        `test_a_dead_upstream_never_tears_down_the_collector_session` covers an
+        upstream that never accepts. The real cloud DID accept, ran a
+        handshake, and then closed -- and that is what the broken proxy
+        coupled to. Mutation testing showed the connect-failure test alone did
+        not catch a teardown on upstream CLOSE.
+        """
+        cloud = FakeCloud()
+        await cloud.start()
+        link = make_link(
+            upstream_host="127.0.0.1",
+            upstream_port=cloud.port,
+            upstream_backoff_initial_s=0.05,
+            upstream_backoff_max_s=0.1,
+        )
+        await link.start()
+        collector = FakeCollector()
+        collector.auto_reply = RESP_TYPE
+        try:
+            await collector.connect(link.listen_port)
+            assert await wait_for(lambda: link.collector_connected)
+            # Several accept-then-close cycles, exactly as the cloud behaved.
+            assert await wait_for(lambda: cloud.connections >= 3, limit_s=3.0)
+            assert link.collector_connected is True
+            words = await link.read_registers(address=0x00AB, count=1, timeout_s=2.0)
+            assert words == [0x7803]
+        finally:
+            await collector.close()
+            await link.stop()
+            await cloud.stop()
+
     async def test_no_upstream_configured_is_a_clean_local_only_mode(self):
         link = make_link()  # upstream_host is None
         await link.start()
@@ -344,6 +404,28 @@ class TestDesync:
             await collector.send(bytes(bad))
             with pytest.raises(TransactionFailed):
                 await task
+            assert await wait_for(lambda: not link.collector_connected, limit_s=2.0)
+        finally:
+            await collector.close()
+            await link.stop()
+
+    async def test_a_corrupt_frame_drops_even_with_nothing_outstanding(self):
+        """Isolates the FRAMING path from the transaction-timeout path.
+
+        With no request in flight the scheduler has no deadline, so the tick
+        loop cannot rescue this. Only the framing error can drop the
+        connection -- mutation testing showed the other corrupt-frame test
+        passed via the 3 s timeout instead.
+        """
+        link = make_link(txn_timeout_ms=60_000)
+        await link.start()
+        collector = FakeCollector()
+        try:
+            await collector.connect(link.listen_port)
+            assert await wait_for(lambda: link.collector_connected)
+            bad = bytearray(RESP_TYPE)
+            bad[3] ^= 0xFF  # breaks the CRC
+            await collector.send(bytes(bad))
             assert await wait_for(lambda: not link.collector_connected, limit_s=2.0)
         finally:
             await collector.close()
@@ -411,6 +493,25 @@ class TestFraming:
             await collector.send(exception_frame)
             with pytest.raises(TransactionFailed):
                 await task
+        finally:
+            await collector.close()
+            await link.stop()
+
+    async def test_an_at_reply_for_a_different_command_is_rejected(self):
+        """No transaction id means a mismatched reply is a desync signal.
+
+        Accepting it would return another command's value as though it were
+        the answer we asked for.
+        """
+        link = make_link()
+        await link.start()
+        collector = FakeCollector()
+        collector.auto_reply = b"AT+ATVER:1.14\r\n"
+        try:
+            await collector.connect(link.listen_port)
+            assert await wait_for(lambda: link.collector_connected)
+            with pytest.raises(TransactionFailed):
+                await link.at_query("DTUPN", timeout_s=2.0)
         finally:
             await collector.close()
             await link.stop()
