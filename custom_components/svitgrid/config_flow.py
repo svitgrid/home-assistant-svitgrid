@@ -52,6 +52,7 @@ from .eybond_at.setup import (
     build_manual_config,
     discover_collectors,
     lan_ip_from_host_header,
+    localhost_advice,
     needs_inverter_ip,
     needs_reachability_check,
     network_advice,
@@ -140,6 +141,7 @@ class EybondCollectorSteps:
         host = request.headers.get("Host")
         lan_ip = lan_ip_from_host_header(host)
         if not lan_ip:
+            self._eybond_refused_host = host
             # Says WHICH input was refused. Without the value, "we asked you
             # again" and "we could not read it" look identical from a log, and
             # they need opposite fixes.
@@ -195,11 +197,21 @@ class EybondCollectorSteps:
                 return await self.async_step_eybond_collector()
 
         local_ip = default_local_ip()
-        advice = (
-            no_collectors_advice(local_ip)
-            if self._eybond_discovery_failed
-            else (network_advice(local_ip) or "")
-        )
+        network = self._eybond_network or {}
+        if self._eybond_discovery_failed:
+            # Nothing answered. If the addresses were worked out and used, the
+            # network is fine and the device is the remaining suspect -- say
+            # that instead of re-explaining container networking.
+            announced = network.get("advertised_ip")
+            advice = no_collectors_advice(
+                local_ip,
+                announced_from=announced,
+                swept_subnet=f"{announced.rsplit('.', 1)[0]}.0/24" if announced else None,
+            )
+        else:
+            # Could not work the addresses out. When the cause is the URL the
+            # user opened, that is the one thing they can act on.
+            advice = localhost_advice(self._eybond_refused_host) or (network_advice(local_ip) or "")
         return self.async_show_form(
             step_id="eybond_network",
             data_schema=vol.Schema(
@@ -336,6 +348,9 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
 
     # ── EyBond hooks (see EybondCollectorSteps) ──────────────────────────
     _eybond_model_id: str | None = None
+    # The Host header the derivation refused, kept so the form can explain
+    # WHICH dead end this is rather than showing one message for all of them.
+    _eybond_refused_host: str | None = None
 
     def _eybond_known_model_id(self) -> str | None:
         return self._eybond_model_id

@@ -556,8 +556,47 @@ def network_advice(local_ip: str | None) -> str | None:
 # asked for instead, with an explanation of why.
 
 
-def no_collectors_advice(local_ip: str | None) -> str:
+def localhost_advice(host: str | None) -> str:
+    """Why the addresses could not be worked out, when the cause is the URL.
+
+    Home Assistant derives its own LAN address from the browser's Host header.
+    Open it at `localhost` and that header says `localhost`, which is
+    meaningless to an inverter -- so the derivation refuses and the form
+    appears. The old text explained Docker networking and never mentioned the
+    one thing the user could actually change.
+
+    Empty when the header was usable; there is nothing to explain then.
+    """
+    if not host:
+        return ""
+    name = host.split(":", 1)[0].strip().lower()
+    if name not in ("localhost", "127.0.0.1", "::1", "ip6-localhost"):
+        return ""
+    return (
+        f"You opened Home Assistant at {host}, so it cannot tell what address "
+        "this machine has on your network -- and that address is exactly what "
+        "the inverter's collector needs in order to connect back.\n\n"
+        "Open Home Assistant at its network address instead (for example "
+        "http://192.168.1.34:8123, using this machine's own address) and this "
+        "page will fill itself in.\n\n"
+        "Or enter the addresses below to continue here."
+    )
+
+
+def no_collectors_advice(
+    local_ip: str | None,
+    *,
+    announced_from: str | None = None,
+    swept_subnet: str | None = None,
+) -> str:
     """What to check when discovery found nothing. Always returns advice.
+
+    `announced_from` and `swept_subnet` are set once the addresses have been
+    worked out and used. That case is NOT a networking problem and must not be
+    answered with networking advice: the announce went out from a real address
+    across a real subnet, so what is left is the device. Conflating the two is
+    what made "the collector dropped off WiFi" render as "go and fix your
+    Docker networking".
 
     Detecting the CAUSE does not generalise. `looks_like_container_address`
     catches Docker and Podman, and misses a VirtualBox NAT adapter
@@ -570,6 +609,25 @@ def no_collectors_advice(local_ip: str | None) -> str:
     everything worth checking. A user staring at "no collectors found" has
     nowhere to go; this at least names the usual causes.
     """
+    if announced_from:
+        where = f" across {swept_subnet}" if swept_subnet else ""
+        return (
+            f"No collector answered. Home Assistant announced itself as "
+            f"{announced_from}{where} and listened on TCP port "
+            f"{DEFAULT_LISTEN_PORT}. The addresses are already known and "
+            "working, so there is nothing to correct below.\n\n"
+            "That leaves the inverter:\n"
+            "• It is powered on, and its WiFi collector has joined the "
+            "network.\n"
+            "• The collector answers a ping from another machine on the same "
+            "network.\n"
+            f"• It is on the same subnet{where and ' as' + where or ''} — a "
+            "collector on a different subnet or a guest WiFi network cannot "
+            "be reached.\n\n"
+            "If the collector's address is known and it is outside that "
+            "range, enter it below."
+        )
+
     container = network_advice(local_ip)
     if container:
         return container
