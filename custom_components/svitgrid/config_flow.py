@@ -46,6 +46,7 @@ from .const import (
 )
 from .eybond_at.hub import default_local_ip
 from .eybond_at.setup import (
+    EYBOND_PRESET_PROTOCOL,
     EYBOND_PROTOCOL,
     build_manual_config,
     discover_collectors,
@@ -272,6 +273,7 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
 
     # ── EyBond hooks (see EybondCollectorSteps) ──────────────────────────
     _eybond_model_id: str | None = None
+    _eybond_collector_asked: bool = False
 
     def _eybond_known_model_id(self) -> str | None:
         return self._eybond_model_id
@@ -290,7 +292,38 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
 
     async def _eybond_finish(self, harvest_config: dict) -> FlowResult:
         self._harvest_config = harvest_config
+        if self._final_payload is not None:
+            # Recommended path: pairing already finished, and the collector
+            # questions came after it. Re-entering finalize skips the finalize
+            # call (it is guarded on _final_payload) and creates the entry with
+            # the config just collected.
+            return await self.async_step_pair_finalize()
         return await self.async_step_pair()
+
+    async def _preset_wants_a_collector(self, preset_id: str) -> bool:
+        """Does this preset describe an inverter read via its own collector?
+
+        The mobile app chose the preset, and the preset is the only thing that
+        knows: /finalize does not report the protocol, and the cloud cannot
+        derive it either -- an EyBond harvest config never leaves this machine.
+
+        Fail-open on any lookup failure. Pairing has already succeeded
+        server-side by this point, so refusing to finish here would strand the
+        household with an edge device and an inverter it has no integration
+        for -- recoverable only by deleting records the user cannot see. A
+        missed collector step is recoverable from the options flow.
+        """
+        try:
+            session = aiohttp_client.async_get_clientsession(self.hass)
+            preset = await SvitgridApiClient(session, api_base=DEFAULT_API_BASE).get_preset(
+                preset_id
+            )
+        except Exception:  # noqa: BLE001 -- see fail-open note above
+            _LOGGER.exception(
+                "preset lookup failed for %s; finishing without a collector", preset_id
+            )
+            return False
+        return bool(preset) and preset.get("protocolId") == EYBOND_PRESET_PROTOCOL
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """First step — present Pair vs Manual vs direct-harvest."""
@@ -639,6 +672,25 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
                         "ip": f"{self._harvest_config['ip']}:{self._harvest_config['port']}"
                     },
                 )
+
+        # The recommended path pairs FIRST and asks about hardware after: the
+        # app already said which inverter this is, and the preset says how it
+        # is read. A collector-harvest preset needs the collector questions
+        # here -- otherwise the entry is created with no listener, no announce
+        # and no routing serial, and reads nothing at all while looking paired.
+        #
+        # Guarded so re-entry from _eybond_finish falls straight through.
+        if self._harvest_config is None and not self._eybond_collector_asked:
+            preset_id = self._final_payload.get("presetId")
+            # A manual pairing carries no preset; asking for None would 404.
+            if preset_id:
+                self._eybond_collector_asked = True
+                if await self._preset_wants_a_collector(preset_id):
+                    # Label only -- nothing on this path ever reads it back,
+                    # because the register map is dispatched from the device
+                    # (register 184), not from a cloud spec.
+                    self._eybond_model_id = preset_id.replace("-", "_")
+                    return await self.async_step_eybond_collector()
 
         # Phase 2: persist preset metadata returned by /finalize so
         # async_setup_entry can boot the readings publisher with a working

@@ -36,6 +36,12 @@ _LOGGER = logging.getLogger(__name__)
 
 EYBOND_PROTOCOL = "eybond_at"
 
+# The value a PRESET carries in `protocolId`, which is a different thing from
+# the harvest-config `protocol` above: one says how the cloud describes the
+# inverter, the other how this add-on reads it. Both keep the
+# `home_assistant` prefix the mobile app matches on with startswith.
+EYBOND_PRESET_PROTOCOL = "home_assistant_eybond"
+
 # Docker's default bridge sits in 172.17.0.0/16, and Home Assistant in a
 # published-port container reports an address from it. A collector cannot
 # reach that, and the failure is SILENT: the announce is sent successfully,
