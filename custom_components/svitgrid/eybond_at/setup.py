@@ -468,10 +468,12 @@ def lan_ip_from_host_header(host: str | None) -> str | None:
         # when Home Assistant is behind a proxy or a tunnel, and a collector
         # on the LAN cannot dial that.
         return None
-    if parsed.version != 4 or parsed.is_loopback:
+    if parsed.version != 4:
         return None
     # RFC1918 explicitly, NOT `is_private`, which is true for the
-    # documentation ranges as well. And deliberately not the CGNAT range
+    # documentation ranges as well. This also covers loopback, which is in no
+    # RFC1918 range -- a separate loopback check here could never fire, and
+    # mutation testing confirmed removing it broke nothing. And deliberately not the CGNAT range
     # 100.64/10: a Tailscale address is reachable by the browser and NOT by an
     # inverter on the LAN, which is precisely the address we must not accept.
     if not any(parsed in net for net in _RFC1918):
