@@ -269,4 +269,20 @@ class TestErrorsAreDiagnosable:
         message = str(err.value)
         assert "..." in message
         assert "502 buffered" in message
-        assert len(message) < 200
+        assert len(message) < 320
+
+    def test_a_whole_foreign_frame_survives_the_bound(self):
+        """The bound existed to cap the log; it also truncated the evidence.
+
+        A collector that opens a connection and sends something we do not
+        recognise gives us exactly one look at it. The first capture in the
+        field was a 36-byte frame cut off at 24, which left the trailer -- the
+        part that identifies the framing -- unread.
+        """
+        foreign = bytes.fromhex("a5170010450000010000000200") + bytes(22) + bytes([0x15])
+        assert len(foreign) == 36
+        with pytest.raises(ModbusError) as err:
+            take_frame(foreign, Direction.RESPONSE)
+        message = str(err.value)
+        assert foreign.hex() in message, "the whole frame must reach the log"
+        assert "..." not in message

@@ -73,13 +73,18 @@ class Frame:
     raw: bytes
 
 
-def _context(buf: bytes, limit: int = 24) -> str:
+def _context(buf: bytes, limit: int = 96) -> str:
     """Bytes to put in an error, so a field failure is diagnosable.
 
     A framing error that names only the offending code is a dead end: the
     same message covers a genuinely unsupported function AND a stream that
     has desynchronised, and those need opposite fixes. The bytes tell them
     apart.
+
+    The limit is generous on purpose. These errors are rare -- one in two
+    hours on the bench unit -- and each one is a single chance to see what
+    the collector actually sent. A 24-byte bound cut the first field capture
+    in half and cost a day of waiting for the next.
     """
     head = buf[:limit]
     return f"{head.hex()}{'...' if len(buf) > limit else ''} ({len(buf)} buffered)"
