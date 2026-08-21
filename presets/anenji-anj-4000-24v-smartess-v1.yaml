@@ -1,4 +1,4 @@
-# Svitgrid HA Preset — Anenji ANJ-4000W-24V, via its own SmartESS/EyBond WiFi collector.
+# Svitgrid HA Preset — Anenji ANJ-4.2KW-24V-W-Pro, via its own SmartESS/EyBond WiFi collector.
 #
 # One of the EASUN/ISolar SMG II family. The add-on takes the collector over
 # and decodes registers itself, so `entityMap` is empty: no Home Assistant
@@ -10,18 +10,23 @@
 # model here sets the label the owner sees, sensible defaults below, and the
 # reading-core key that bounds validation.
 #
-# UNMEASURED. No unit of this model has been read. It is offered because the
-# runtime dispatch refuses rather than guessing: an unrecognised protocol
-# number publishes nothing and says so.
+# MEASURED. This is the bench unit: serial 99432604107106, nameplate read
+# 2026-08-21. Rated 4200 VA / 4200 W, 24 VDC input, 230 V 18.3 A output,
+# single MPPT with a 6200 W maximum array.
+#
+# The document id still says `anj-4000-24v` because inverter documents already
+# reference it and a preset id is effectively append-only. The MODEL NAME is
+# what users read, and that now matches the label: the "ANJ-4000W-24V" in the
+# third-party catalogue this preset was first written from does not exist.
 
 id: anenji-anj-4000-24v-smartess-v1
-version: "1"
+version: "2"
 brand: Anenji
-model: ANJ-4000W-24V
-modelId: anenji_anj_4000
+model: ANJ-4.2KW-24V-W-Pro
+modelId: anenji_anj_4200
 phases: 1
 hasBattery: true
-pvStrings: 2
+pvStrings: 1
 protocolId: home_assistant_eybond
 
 entityMap: {}
