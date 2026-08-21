@@ -186,3 +186,71 @@ async def test_no_preset_at_all_is_not_a_lookup(hass: HomeAssistant) -> None:
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
     client.get_preset.assert_not_awaited()
+
+
+class TestTheModelIsNotAskedTwice:
+    """The app already asked which model this is. Asking again is a bug.
+
+    `_eybond_known_model_id` existed and was used to FILL the value, but the
+    picker's schema still listed model_id as Required -- so the field appeared
+    anyway and the answer was mandatory. Filling a field the user must still
+    type is not the same as not asking.
+    """
+
+    async def test_the_picker_omits_model_id_when_the_preset_named_one(
+        self, hass
+    ):
+        flow = _make_flow(hass, preset_id="anenji-anj-6200-smartess-v1")
+        preset = {**EYBOND_PRESET, "id": "anenji-anj-6200-smartess-v1",
+                  "modelId": "anenji_anj_6200"}
+        preset_patch, _ = _mock_preset(preset)
+        found = [DiscoveredCollector(
+            serial=SERIAL, address="192.168.1.116", protocol_number=11,
+            firmware="fw", output_mode=OutputMode.SINGLE,
+        )]
+
+        with preset_patch, _on_lan(), _mock_discovery(found):
+            result = await flow.async_step_pair_finalize()
+
+        assert result["step_id"] == "eybond_collector"
+        assert "model_id" not in result["data_schema"].schema
+        assert "inverter_serial" in {str(k) for k in result["data_schema"].schema}
+
+    async def test_the_model_id_comes_from_the_preset_not_its_document_id(
+        self, hass
+    ):
+        """`anenji_anj_6200` is a reading-core catalogue key. The preset id
+        `anenji-anj-6200-smartess-v1` is not, and slugging it produces a
+        string that matches nothing."""
+        flow = _make_flow(hass, preset_id="anenji-anj-6200-smartess-v1")
+        preset = {**EYBOND_PRESET, "id": "anenji-anj-6200-smartess-v1",
+                  "modelId": "anenji_anj_6200"}
+        preset_patch, _ = _mock_preset(preset)
+        found = [DiscoveredCollector(
+            serial=SERIAL, address="192.168.1.116", protocol_number=11,
+            firmware="fw", output_mode=OutputMode.SINGLE,
+        )]
+
+        with preset_patch, _on_lan(), _mock_discovery(found):
+            await flow.async_step_pair_finalize()
+            result = await flow.async_step_eybond_collector(
+                {"inverter_serial": SERIAL}
+            )
+
+        cfg = result["data"]["inverters"][0]["harvest_config"]
+        assert cfg["model_id"] == "anenji_anj_6200"
+
+    async def test_a_preset_with_no_model_id_still_asks(self, hass):
+        # The "model not listed" fallback names none, so there is nothing to
+        # fill and the question is honest.
+        flow = _make_flow(hass, preset_id="anenji-smartess-v1")
+        preset_patch, _ = _mock_preset(EYBOND_PRESET)   # no modelId key
+        found = [DiscoveredCollector(
+            serial=SERIAL, address="192.168.1.116", protocol_number=11,
+            firmware="fw", output_mode=OutputMode.SINGLE,
+        )]
+
+        with preset_patch, _on_lan(), _mock_discovery(found):
+            result = await flow.async_step_pair_finalize()
+
+        assert "model_id" in {str(k) for k in result["data_schema"].schema}

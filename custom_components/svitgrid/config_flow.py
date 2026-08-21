@@ -132,12 +132,31 @@ class EybondCollectorSteps:
         if request is None:
             # No HTTP request in context -- a flow resumed from a background
             # task. Nothing to read.
+            _LOGGER.debug(
+                "eybond: cannot derive the network settings -- no HTTP request "
+                "in context (flow resumed outside a browser request)"
+            )
             return None
-        lan_ip = lan_ip_from_host_header(request.headers.get("Host"))
+        host = request.headers.get("Host")
+        lan_ip = lan_ip_from_host_header(host)
         if not lan_ip:
+            # Says WHICH input was refused. Without the value, "we asked you
+            # again" and "we could not read it" look identical from a log, and
+            # they need opposite fixes.
+            _LOGGER.debug(
+                "eybond: cannot derive the network settings -- Host header %r "
+                "is not a usable LAN address (hostname, loopback, container, "
+                "CGNAT or non-RFC1918)",
+                host,
+            )
             return None
         targets = subnet_announce_targets(lan_ip)
         if not targets:
+            _LOGGER.debug(
+                "eybond: derived %s from the Host header but could not build "
+                "a /24 target list from it",
+                lan_ip,
+            )
             return None
         _LOGGER.debug(
             "eybond: derived Home Assistant address %s from the request; announcing across its /24",
@@ -254,18 +273,22 @@ class EybondCollectorSteps:
             self._eybond_discovery_failed = True
             return await self.async_step_eybond_network()
 
+        schema: dict = {
+            vol.Required("inverter_serial"): SelectSelector(
+                SelectSelectorConfig(
+                    options=[{"value": c.serial, "label": c.label} for c in found],
+                ),
+            ),
+        }
+        # Only when nothing earlier in the flow already answered it. Filling
+        # the value while still SHOWING a required field is not "not asking":
+        # the user picked their model in the app and is then made to type it
+        # again, which reads as the form having ignored them.
+        if not known_model:
+            schema[vol.Required("model_id")] = TextSelector(TextSelectorConfig())
         return self.async_show_form(
             step_id="eybond_collector",
-            data_schema=vol.Schema(
-                {
-                    vol.Required("inverter_serial"): SelectSelector(
-                        SelectSelectorConfig(
-                            options=[{"value": c.serial, "label": c.label} for c in found],
-                        ),
-                    ),
-                    vol.Required("model_id"): TextSelector(TextSelectorConfig()),
-                }
-            ),
+            data_schema=vol.Schema(schema),
             errors=errors,
         )
 
@@ -339,8 +362,12 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
             return await self.async_step_pair_finalize()
         return await self.async_step_pair()
 
-    async def _preset_wants_a_collector(self, preset_id: str) -> bool:
-        """Does this preset describe an inverter read via its own collector?
+    async def _collector_preset(self, preset_id: str) -> dict | None:
+        """The preset, when it describes an inverter read via its own collector.
+
+        Returns the whole document rather than a yes/no: the caller also
+        needs its `modelId`, and fetching it twice for two answers invites
+        the two from drifting apart.
 
         The mobile app chose the preset, and the preset is the only thing that
         knows: /finalize does not report the protocol, and the cloud cannot
@@ -361,8 +388,10 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
             _LOGGER.exception(
                 "preset lookup failed for %s; finishing without a collector", preset_id
             )
-            return False
-        return bool(preset) and preset.get("protocolId") == EYBOND_PRESET_PROTOCOL
+            return None
+        if not preset or preset.get("protocolId") != EYBOND_PRESET_PROTOCOL:
+            return None
+        return preset
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """First step — present Pair vs Manual vs direct-harvest."""
@@ -724,11 +753,14 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
             preset_id = self._final_payload.get("presetId")
             # A manual pairing carries no preset, and asking the API for None
             # would 404 -- so the short-circuit here is load-bearing.
-            if preset_id and await self._preset_wants_a_collector(preset_id):
-                # Label only -- nothing on this path ever reads it back,
-                # because the register map is dispatched from the device
-                # (register 184), not from a cloud spec.
-                self._eybond_model_id = preset_id.replace("-", "_")
+            collector_preset = await self._collector_preset(preset_id) if preset_id else None
+            if collector_preset is not None:
+                # The preset's OWN modelId -- a reading-core catalogue key.
+                # Slugging the preset document id instead produced
+                # `anenji_anj_6200_smartess_v1`, which matches nothing. None
+                # when the preset names no model (the "model not listed"
+                # fallback), and then the picker asks, which is honest.
+                self._eybond_model_id = collector_preset.get("modelId")
                 return await self.async_step_eybond_collector()
 
         # Phase 2: persist preset metadata returned by /finalize so
