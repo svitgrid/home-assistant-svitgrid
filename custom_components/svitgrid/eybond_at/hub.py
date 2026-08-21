@@ -66,6 +66,25 @@ def default_local_ip() -> str:
         sock.close()
 
 
+def is_dialable_peer(address: str, *, advertised_ip: str | None) -> bool:
+    """Can we send a unicast announce back to the address a collector came from?
+
+    On a NAT'd container the answer is no, and silently so. Docker Desktop
+    rewrites the source of every inbound connection to its gateway, so all 11
+    of the bench unit's connections on 2026-08-21 appeared to come from
+    192.168.65.1. Storing that as the collector's "known address" meant a
+    re-announce for a missing collector was unicast into the NAT -- and worse,
+    having "seen" a collector switched the subnet sweep off, so nothing else
+    would look for it either.
+
+    With no `advertised_ip` there is no NAT to reason about (host networking),
+    and the peer address is real.
+    """
+    if not advertised_ip:
+        return True
+    return address.rsplit(".", 1)[0] == advertised_ip.rsplit(".", 1)[0]
+
+
 @dataclass
 class HubConfig:
     listen_host: str = "0.0.0.0"
@@ -254,9 +273,20 @@ class EybondAtHub:
         our_ip = self._config.advertised_ip or self._ip_provider()
         command = f"set>server={our_ip}:{self._actual_port};".encode()
 
-        missing_known = self._known_addresses - connected
-        # Broadcast only while someone we have never met is still missing.
-        broadcast_needed = not expected or len(self._known_addresses) < expected
+        # Only addresses we can actually dial. On a NAT'd container every
+        # peer looks like the Docker gateway, and unicasting there reaches
+        # nothing -- see is_dialable_peer.
+        dialable = {
+            a
+            for a in self._known_addresses
+            if is_dialable_peer(a, advertised_ip=self._config.advertised_ip)
+        }
+        missing_known = dialable - connected
+        # Broadcast (or sweep the configured list) while someone we have never
+        # met is still missing. Counting UNDIALABLE addresses here is what
+        # switched the sweep off after one NAT'd connection, leaving a
+        # collector that forgot us with nothing to find.
+        broadcast_needed = not expected or len(dialable) < expected
         targets = list(missing_known)
         if broadcast_needed:
             # announce_target may name SEVERAL addresses. Where broadcast

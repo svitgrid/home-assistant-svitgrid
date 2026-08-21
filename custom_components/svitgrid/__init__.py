@@ -173,6 +173,10 @@ async def _start_local_store(
                 lifecycle=lifecycle,
                 discharge_positive_ids=discharge_positive_ids,
                 control=control,
+                # So the diagnostics sensors reflect store-backed uploads too.
+                # Without this every direct-Modbus and EyBond inverter reports
+                # "Ingests (24h): 0 / Last ingest: Unknown" while data flows.
+                activity=activity,
             ),
             name="svitgrid_reading_sender",
         )

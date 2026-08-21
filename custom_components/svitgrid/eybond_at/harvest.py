@@ -75,6 +75,22 @@ async def poll_once(*, reader, inverter_id: str, store) -> dict | None:
     return payload
 
 
+def first_poll_retry_s(*, attempt: int, cadence_s: float) -> float:
+    """How long to wait before retrying a poll that has never yet succeeded.
+
+    The steady-state cadence is 300 s, which is right once data is flowing and
+    badly wrong before it. A single transient timeout on the FIRST poll used to
+    cost five minutes on the "waiting for data" screen a new user is watching --
+    measured 2026-08-21: bound 17:08:36, poll failed 17:08:45, next attempt
+    17:13:45.
+
+    So: seconds at first, doubling, and never slower than the normal cadence --
+    converging on it rather than overshooting, and never making a short cadence
+    longer than it already is.
+    """
+    return min(5.0 * (2 ** max(0, attempt - 1)), cadence_s)
+
+
 async def run_eybond_harvest_loop(
     *,
     hass,
@@ -107,6 +123,9 @@ async def run_eybond_harvest_loop(
     current_session = None
     reader = None
     unknown_platform_logged = False
+    # Until a reading lands, failures are retried fast; see first_poll_retry_s.
+    first_reading_done = False
+    failed_first_polls = 0
 
     while not hass.is_stopping and (lifecycle is None or lifecycle.active):
         next_sleep_s = _clamp_interval(float(cadence.interval_s))
@@ -143,6 +162,8 @@ async def run_eybond_harvest_loop(
                 payload = await poll_once(reader=reader, inverter_id=inverter_id, store=store)
                 if payload is not None:
                     _LOGGER.debug("%s: reading appended", inverter_id)
+                    first_reading_done = True
+                    failed_first_polls = 0
         except UnknownPlatform as err:
             # Loud once, then quiet. It cannot resolve itself without either a
             # capture of this platform or a different device, so repeating it
@@ -161,6 +182,20 @@ async def run_eybond_harvest_loop(
                 activity.spec_problem = str(err)
         except TransactionFailed as err:
             _LOGGER.debug("%s: poll failed: %s", inverter_id, err)
+            # Before the FIRST reading, retry in seconds rather than sleeping
+            # the steady-state cadence. One transient timeout otherwise puts
+            # five minutes on the onboarding screen -- measured 2026-08-21.
+            if not first_reading_done:
+                failed_first_polls += 1
+                next_sleep_s = first_poll_retry_s(
+                    attempt=failed_first_polls, cadence_s=next_sleep_s
+                )
+                _LOGGER.debug(
+                    "%s: no reading yet; retrying in %.0fs (attempt %d)",
+                    inverter_id,
+                    next_sleep_s,
+                    failed_first_polls,
+                )
         except Exception:
             _LOGGER.exception("%s: unexpected harvest error", inverter_id)
             next_sleep_s = _DEFAULT_INTERVAL_S
