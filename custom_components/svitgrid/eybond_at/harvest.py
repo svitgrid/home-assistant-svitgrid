@@ -84,6 +84,7 @@ async def run_eybond_harvest_loop(
     cadence,
     inverter_id: str,
     lifecycle=None,
+    activity=None,
     sleep=asyncio.sleep,
     reader_factory=None,
 ) -> None:
@@ -149,6 +150,15 @@ async def run_eybond_harvest_loop(
             if not unknown_platform_logged:
                 _LOGGER.error("%s: refusing to publish. %s", inverter_id, err)
                 unknown_platform_logged = True
+            # An ERROR in the log is not something a user finds. This inverter
+            # publishes NOTHING and cannot recover on its own, which is the
+            # case `spec_problem` is ranked top of the diagnostics line for --
+            # otherwise the owner sees a device that paired and then sat at
+            # "idle" forever. Set every tick, not just the first: the sensor
+            # is created after the loop starts, so a first-tick-only write
+            # would be lost.
+            if activity is not None:
+                activity.spec_problem = str(err)
         except TransactionFailed as err:
             _LOGGER.debug("%s: poll failed: %s", inverter_id, err)
         except Exception:

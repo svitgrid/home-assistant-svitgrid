@@ -247,6 +247,7 @@ async def start_eybond_hub(
     store,
     cadence,
     lifecycle=None,
+    activity=None,
 ) -> tuple[EybondAtHub, dict[str, object]]:
     """Start ONE hub and a harvest loop per inverter. Returns `(hub, tasks)`.
 
@@ -277,6 +278,7 @@ async def start_eybond_hub(
                 cadence=cadence,
                 inverter_id=inverter_id,
                 lifecycle=lifecycle,
+                activity=activity,
             ),
             name=f"svitgrid_eybond_{inverter_id}",
         )

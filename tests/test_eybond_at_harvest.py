@@ -163,6 +163,12 @@ class TestPollOnce:
         assert store.appended == []
 
 
+class FakeActivity:
+    """Only the field the loop touches."""
+
+    spec_problem: str | None = None
+
+
 class TestLoop:
     async def test_polls_and_appends_then_stops(self):
         hass, store, reader = FakeHass(), FakeStore(), FakeReader()
@@ -272,6 +278,68 @@ class TestLoop:
         )
         assert reader.calls > 1  # kept polling
         assert store.appended == []  # and published nothing
+
+    async def test_an_unknown_platform_reaches_the_diagnostics_sensor(self):
+        """An ERROR in the log is not something a user finds.
+
+        This inverter publishes NOTHING and cannot recover on its own, which
+        is exactly the case `spec_problem` is ranked top of the diagnostics
+        line for. Without this the owner sees a device that paired fine and
+        then sat at "idle" forever, with the reason buried in a log they have
+        no reason to open. That matters more now that the model picker offers
+        models nobody has measured.
+        """
+        hass, store = FakeHass(), FakeStore()
+        activity = FakeActivity()
+        reader = FakeReader(error=UnknownPlatform("unrecognised protocol number 4"))
+
+        async def stop_after_a_moment():
+            await asyncio.sleep(0.05)
+            hass.is_stopping = True
+
+        await asyncio.gather(
+            run_eybond_harvest_loop(
+                hass=hass,
+                hub=FakeHub({SERIAL: FakeSession()}),
+                inverter_serial=SERIAL,
+                reader_factory=lambda _session: reader,
+                store=store,
+                cadence=FakeCadence(),
+                inverter_id="inv1",
+                activity=activity,
+                sleep=fast_sleep,
+            ),
+            stop_after_a_moment(),
+        )
+        assert activity.spec_problem is not None
+        # The protocol number is the whole diagnostic value: it is what turns
+        # "unsupported" into a capture someone can act on.
+        assert "4" in activity.spec_problem
+
+    async def test_no_activity_is_not_an_error(self):
+        # Callers that do not pass one must keep working -- refusing to poll
+        # because there is nowhere to report would be a worse failure.
+        hass, store = FakeHass(), FakeStore()
+        reader = FakeReader(error=UnknownPlatform("unrecognised protocol number 4"))
+
+        async def stop_after_a_moment():
+            await asyncio.sleep(0.05)
+            hass.is_stopping = True
+
+        await asyncio.gather(
+            run_eybond_harvest_loop(
+                hass=hass,
+                hub=FakeHub({SERIAL: FakeSession()}),
+                inverter_serial=SERIAL,
+                reader_factory=lambda _session: reader,
+                store=store,
+                cadence=FakeCadence(),
+                inverter_id="inv1",
+                sleep=fast_sleep,
+            ),
+            stop_after_a_moment(),
+        )
+        assert reader.calls > 1
 
     async def test_an_unknown_platform_is_logged_once_not_every_tick(self, caplog):
         # It cannot resolve without a capture or a different device, so

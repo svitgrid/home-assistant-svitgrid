@@ -10,10 +10,15 @@
 # all — nothing polls HA, nothing is relayed. The preset exists to name the
 # hardware in the mobile picker and to carry the defaults below.
 #
-# One preset covers every Anenji model in this family. The register map is
-# chosen at runtime from register 184 (the protocol number) rather than from
-# the brand or model string, so a different Anenji reads correctly without a
-# preset of its own. An unrecognised protocol number publishes nothing.
+# THE FALLBACK. Named models have their own presets alongside this one; this
+# entry is for an Anenji that is not among them. It stays useful because the
+# register map is chosen at runtime from register 184 (the protocol number),
+# never from the brand or model string -- so an unlisted model reads correctly
+# anyway, and an unrecognised protocol number publishes nothing rather than
+# guessing.
+#
+# It names no modelId, so reading-core validates it against the generous
+# default. That is the honest bound for a model we cannot identify.
 #
 # phases/hasBattery/pvStrings are defaults only — the mobile onboarding asks
 # the user and their answers overwrite these on the inverter document.
@@ -23,9 +28,9 @@
 # 99432604107106, protocol 11 (EASUN/ISolar SMG II).
 
 id: anenji-smartess-v1
-version: "1"
+version: "2"
 brand: Anenji
-model: Hybrid (SmartESS collector)
+model: Hybrid (SmartESS collector, model not listed)
 phases: 1
 hasBattery: true
 pvStrings: 2

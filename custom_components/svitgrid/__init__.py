@@ -900,6 +900,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 store=store,
                 cadence=cadence,
                 lifecycle=lifecycle,
+                # So a platform this add-on cannot decode says so on the
+                # diagnostics sensor, instead of looking like a healthy
+                # inverter that never reports.
+                activity=activity,
             )
             readings_tasks.update(eybond_tasks)
         except Exception:  # never block setup -- fail-open
