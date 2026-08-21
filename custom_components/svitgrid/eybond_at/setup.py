@@ -18,6 +18,7 @@ endpoint from the device for callers that want to enable it automatically.
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import logging
 from dataclasses import dataclass
 
@@ -429,6 +430,82 @@ def looks_like_container_address(ip: str | None) -> bool:
     if not ip:
         return False
     return any(_in_network(ip, net, bits) for net, bits in _CONTAINER_RANGES)
+
+
+_RFC1918 = (
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+)
+
+
+def lan_ip_from_host_header(host: str | None) -> str | None:
+    """The address the user reached Home Assistant on, when it is usable.
+
+    Asking someone sitting IN Home Assistant for Home Assistant's own address
+    is a question the software should answer itself -- and it can. The config
+    flow is driven by an HTTP request from a browser, and its Host header is
+    the address that browser dialled. In a bridge container that is the HOST's
+    LAN address: exactly the value the announce needs, and exactly the value
+    `default_local_ip` cannot see.
+
+    Returns None rather than a guess whenever the header cannot be trusted,
+    because a wrong address here fails SILENTLY -- the announce is sent, no
+    collector dials back, and nothing anywhere says why.
+    """
+    if not host:
+        return None
+    candidate = host.strip()
+    if candidate.startswith("["):
+        # IPv6 literal. We announce an IPv4 address; nothing to take here.
+        return None
+    # Strip the port. A bare IPv4 has three dots and no colon.
+    candidate = candidate.split(":", 1)[0].strip()
+    try:
+        parsed = ipaddress.ip_address(candidate)
+    except ValueError:
+        # A hostname. Resolving it would cheerfully return a PUBLIC address
+        # when Home Assistant is behind a proxy or a tunnel, and a collector
+        # on the LAN cannot dial that.
+        return None
+    if parsed.version != 4 or parsed.is_loopback:
+        return None
+    # RFC1918 explicitly, NOT `is_private`, which is true for the
+    # documentation ranges as well. And deliberately not the CGNAT range
+    # 100.64/10: a Tailscale address is reachable by the browser and NOT by an
+    # inverter on the LAN, which is precisely the address we must not accept.
+    if not any(parsed in net for net in _RFC1918):
+        return None
+    if looks_like_container_address(candidate):
+        # The exact failure the Network settings form exists to prevent.
+        return None
+    return candidate
+
+
+def subnet_announce_targets(lan_ip: str | None) -> str:
+    """Every host address in `lan_ip`'s /24, as the hub's target list.
+
+    This is broadcast, emulated for a container that cannot broadcast. On host
+    networking the announce goes to 255.255.255.255 and every collector on the
+    LAN hears it; behind Docker's NAT that packet never leaves, so we send the
+    same thing to each address instead. The blast radius is identical to the
+    broadcast it replaces -- which matters, because that is the thing being
+    argued for, not a new behaviour.
+
+    A /24 is assumed. The netmask is not knowable from inside the container,
+    and /24 covers essentially every home LAN; a collector outside it simply
+    is not found, which is the same outcome as today.
+    """
+    if not lan_ip:
+        return ""
+    try:
+        parsed = ipaddress.ip_address(lan_ip)
+    except ValueError:
+        return ""
+    if parsed.version != 4:
+        return ""
+    network = ipaddress.ip_network(f"{lan_ip}/24", strict=False)
+    return ",".join(str(host) for host in network.hosts() if str(host) != lan_ip)
 
 
 def network_advice(local_ip: str | None) -> str | None:

@@ -19,6 +19,7 @@ from typing import Any
 
 import voluptuous as vol
 from homeassistant import config_entries
+from homeassistant.components.http import current_request
 from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers import aiohttp_client
@@ -50,10 +51,12 @@ from .eybond_at.setup import (
     EYBOND_PROTOCOL,
     build_manual_config,
     discover_collectors,
+    lan_ip_from_host_header,
     needs_inverter_ip,
     needs_reachability_check,
     network_advice,
     no_collectors_advice,
+    subnet_announce_targets,
 )
 from .keystore import SvitgridKeystore
 from .pairing_client import (
@@ -116,6 +119,34 @@ class EybondCollectorSteps:
     async def _eybond_finish(self, harvest_config: dict) -> FlowResult:
         raise NotImplementedError
 
+    def _derive_network(self) -> dict | None:
+        """Answer the Network settings form from the browser's own request.
+
+        Returns None when it cannot be answered honestly -- browsing on the
+        Home Assistant host itself (`Host: localhost`), through a proxy, or
+        over a VPN. A wrong address here fails SILENTLY: the announce goes
+        out, no collector dials back, and there is no error anywhere. So the
+        form stays as the fallback rather than being replaced by a guess.
+        """
+        request = current_request.get()
+        if request is None:
+            # No HTTP request in context -- a flow resumed from a background
+            # task. Nothing to read.
+            return None
+        lan_ip = lan_ip_from_host_header(request.headers.get("Host"))
+        if not lan_ip:
+            return None
+        targets = subnet_announce_targets(lan_ip)
+        if not targets:
+            return None
+        _LOGGER.debug(
+            "eybond: derived Home Assistant address %s from the request; announcing across its /24",
+            lan_ip,
+        )
+        # announce_target takes a comma-separated list, so this is the
+        # broadcast the container cannot send, done one address at a time.
+        return {"advertised_ip": lan_ip, "announce_target": targets}
+
     async def async_step_eybond_network(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
@@ -172,12 +203,21 @@ class EybondCollectorSteps:
         an address they do not have.
         """
         errors: dict[str, str] = {}
-        network = self._eybond_network
 
-        # Skip a scan that cannot work: a container-internal address means the
-        # announce cannot reach any collector.
-        if network is None and network_advice(default_local_ip()):
-            return await self.async_step_eybond_network()
+        # A container-internal address means the announce cannot reach any
+        # collector, so the scan below cannot work. Before asking the user to
+        # fix it by hand, try to answer both questions ourselves -- they are
+        # sitting IN Home Assistant, in a browser, having already typed the
+        # address the form is about to ask for.
+        if self._eybond_network is None and network_advice(default_local_ip()):
+            self._eybond_network = self._derive_network()
+            if self._eybond_network is None:
+                return await self.async_step_eybond_network()
+        # Still None on host networking, and that is correct: broadcast
+        # reaches the LAN there, so there is nothing to derive and nothing to
+        # ask. Routing here unconditionally would put every healthy install
+        # through a form it does not need.
+        network = self._eybond_network
 
         known_model = self._eybond_known_model_id()
         if user_input is not None:
