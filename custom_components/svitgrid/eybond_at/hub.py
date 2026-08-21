@@ -437,6 +437,8 @@ class EybondAtHub:
             await asyncio.sleep(self._config.tick_interval_s)
             for session in list(self._sessions.values()):
                 await session.tick()
+                # Keeps an idle session alive; see HEARTBEAT_IDLE_MS.
+                await session.heartbeat_if_idle()
 
 
 __all__ = [

@@ -112,6 +112,13 @@ class ModbusCollector(FakeCollector):
                 self._buf += data
                 frames, self._buf = split_frames(self._buf, Direction.REQUEST)
                 for frame in frames:
+                    if frame.raw.startswith(b"AT+"):
+                        # Answer AT queries too: a heartbeat that never gets a
+                        # reply times out and desyncs the session, which would
+                        # make these tests measure the wrong thing.
+                        cmd = frame.raw[3:-2].split(b"?")[0].split(b"=")[0]
+                        await self.send(b"AT+" + cmd + b":\r\n")
+                        continue
                     address = int.from_bytes(frame.raw[2:4], "big")
                     count = int.from_bytes(frame.raw[4:6], "big")
                     words = [self.registers.get(address + i, 0) for i in range(count)]
@@ -335,6 +342,80 @@ class TestUpstreamIsolation:
             session = await one_session(hub, collector)
             assert session.upstream_connected is False
             assert await session.read_registers(0x00AB, 1, timeout_s=2.0) == [0x7803]
+        finally:
+            await collector.close()
+            await hub.stop()
+
+
+class TestIdleHeartbeat:
+    """Our poll cadence is 300 s; the collector drops an idle line at ~90 s.
+
+    Without a heartbeat the session churns constantly. It still works -- a
+    reconnect re-identifies and reads -- but every reading costs a fresh
+    handshake, and the log fills with disconnects that look like a fault.
+    """
+
+    async def test_sends_a_heartbeat_once_the_line_goes_quiet(self):
+        hub = make_hub()
+        await hub.start()
+        collector = ModbusCollector()
+        try:
+            session = await quiet_session(hub, collector)
+            collector.answer = True
+            collector.received.clear()
+            # Pretend the line has been silent longer than the threshold.
+            session._last_activity_ms -= 60_000
+            await session.heartbeat_if_idle(idle_ms=20_000)
+            sent = b"".join(collector.received)
+            assert b"AT+HTBT?" in sent
+        finally:
+            await collector.close()
+            await hub.stop()
+
+    async def test_stays_quiet_while_the_line_is_busy(self):
+        # A heartbeat on a line that is already talking is pure noise, and on
+        # a protocol with no transaction id it is an extra chance to desync.
+        hub = make_hub()
+        await hub.start()
+        collector = ModbusCollector()
+        try:
+            session = await quiet_session(hub, collector)
+            collector.answer = True
+            collector.received.clear()
+            await session.heartbeat_if_idle(idle_ms=20_000)
+            assert b"AT+HTBT?" not in b"".join(collector.received)
+        finally:
+            await collector.close()
+            await hub.stop()
+
+    async def test_a_read_counts_as_activity(self):
+        """Otherwise a polled session would still be heartbeated needlessly."""
+        hub = make_hub()
+        await hub.start()
+        collector = ModbusCollector()
+        try:
+            session = await quiet_session(hub, collector)
+            collector.answer = True
+            session._last_activity_ms -= 60_000
+            await session.read_registers(0x00AB, 1, timeout_s=2.0)
+            collector.received.clear()
+            await session.heartbeat_if_idle(idle_ms=20_000)
+            assert b"AT+HTBT?" not in b"".join(collector.received)
+        finally:
+            await collector.close()
+            await hub.stop()
+
+    async def test_a_failed_heartbeat_does_not_raise(self):
+        # Best effort: a heartbeat that times out must not kill the loop that
+        # sent it.
+        hub = make_hub(txn_timeout_ms=200)
+        await hub.start()
+        collector = ModbusCollector()
+        try:
+            session = await quiet_session(hub, collector)
+            collector.answer = False  # never replies
+            session._last_activity_ms -= 60_000
+            await session.heartbeat_if_idle(idle_ms=20_000)
         finally:
             await collector.close()
             await hub.stop()

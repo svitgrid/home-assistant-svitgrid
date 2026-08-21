@@ -24,6 +24,19 @@ from .scheduler import ActionKind, SchedulerBusy, TxnScheduler
 
 _LOGGER = logging.getLogger(__name__)
 
+# How long a line may sit silent before we send AT+HTBT?.
+#
+# The vendor cloud sends one roughly every 20 s, and a session that goes quiet
+# gets dropped: measured 2026-08-21, Home Assistant's sessions closed at 91,
+# 92, 93, 115, 119 and 120 seconds while polling only every 300 s. A direct
+# comparison against the collector gave a silent session a 90 s maximum and a
+# heartbeated one 156 s.
+#
+# That evidence is suggestive rather than conclusive -- the sample is small --
+# but it costs one AT query per 20 s on an otherwise idle line, and it matches
+# what the vendor's own server does.
+HEARTBEAT_IDLE_MS = 20_000
+
 
 class TransactionFailed(Exception):
     """A request could not be completed: no collector, timeout, or desync."""
@@ -56,6 +69,7 @@ class CollectorSession:
         self._pending: asyncio.Future | None = None
         self._lock = asyncio.Lock()
         self._closed = False
+        self._last_activity_ms = int(clock() * 1000)
 
         self._upstream_writer: asyncio.StreamWriter | None = None
         self._upstream_buf = b""
@@ -85,6 +99,7 @@ class CollectorSession:
     # ── inbound ───────────────────────────────────────────────────────────
     async def feed(self, data: bytes) -> bool:
         """Feed bytes from the collector. Returns False when the session died."""
+        self._last_activity_ms = self._now_ms()
         self._buf += data
         try:
             frames, self._buf = split_frames(self._buf, Direction.RESPONSE)
@@ -118,6 +133,23 @@ class CollectorSession:
         if actions:
             await self._apply(actions)
 
+    async def heartbeat_if_idle(self, idle_ms: int = HEARTBEAT_IDLE_MS) -> None:
+        """Send AT+HTBT? when the line has been silent too long.
+
+        Our poll cadence is 300 s and the collector drops a session after
+        roughly 90. Without this the connection churns constantly: it works,
+        because a reconnect re-identifies and reads, but every reading costs a
+        fresh handshake and the log fills with disconnects.
+        """
+        if self._closed or self._lock.locked():
+            return
+        if self._now_ms() - self._last_activity_ms < idle_ms:
+            return
+        try:
+            await self.at_query("HTBT", timeout_s=3.0)
+        except TransactionFailed as err:
+            self._diag(f"heartbeat failed: {err}")
+
     # ── outbound ──────────────────────────────────────────────────────────
     async def _apply(self, actions) -> bool:
         """Returns True when the session was closed."""
@@ -141,6 +173,7 @@ class CollectorSession:
         try:
             self._writer.write(data)
             await self._writer.drain()
+            self._last_activity_ms = self._now_ms()
         except (OSError, ConnectionError) as err:
             await self.close(f"write failed: {err}")
 
