@@ -1,0 +1,36 @@
+# Svitgrid HA Preset — Anenji LV hybrid via its own SmartESS/EyBond WiFi collector.
+#
+# This is the stock hardware: the WiFi stick the inverter ships with, talking
+# the vendor's own protocol. The add-on takes the collector over (UDP
+# `set>server=`), then speaks AT commands plus bare Modbus RTU to it and
+# decodes registers itself. See docs/anenji-eybond-at.md.
+#
+# `entityMap` is EMPTY on purpose, and that is what distinguishes this preset
+# from anenji-generic-v1. There are no Home Assistant entities in the path at
+# all — nothing polls HA, nothing is relayed. The preset exists to name the
+# hardware in the mobile picker and to carry the defaults below.
+#
+# One preset covers every Anenji model in this family. The register map is
+# chosen at runtime from register 184 (the protocol number) rather than from
+# the brand or model string, so a different Anenji reads correctly without a
+# preset of its own. An unrecognised protocol number publishes nothing.
+#
+# phases/hasBattery/pvStrings are defaults only — the mobile onboarding asks
+# the user and their answers overwrite these on the inverter document.
+#
+# Control deferred: commands[] stays empty until write registers are measured
+# on real hardware. Measured 2026-08-20 on a 24 V bench unit, serial
+# 99432604107106, protocol 11 (EASUN/ISolar SMG II).
+
+id: anenji-smartess-v1
+version: "1"
+brand: Anenji
+model: Hybrid (SmartESS collector)
+phases: 1
+hasBattery: true
+pvStrings: 2
+protocolId: home_assistant_eybond
+
+entityMap: {}
+
+commands: []
