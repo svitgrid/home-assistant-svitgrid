@@ -273,7 +273,6 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
 
     # ── EyBond hooks (see EybondCollectorSteps) ──────────────────────────
     _eybond_model_id: str | None = None
-    _eybond_collector_asked: bool = False
 
     def _eybond_known_model_id(self) -> str | None:
         return self._eybond_model_id
@@ -679,18 +678,18 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
         # here -- otherwise the entry is created with no listener, no announce
         # and no routing serial, and reads nothing at all while looking paired.
         #
-        # Guarded so re-entry from _eybond_finish falls straight through.
-        if self._harvest_config is None and not self._eybond_collector_asked:
+        # Re-entry from _eybond_finish falls straight through, because that
+        # is where the config gets set -- so this cannot ask twice.
+        if self._harvest_config is None:
             preset_id = self._final_payload.get("presetId")
-            # A manual pairing carries no preset; asking for None would 404.
-            if preset_id:
-                self._eybond_collector_asked = True
-                if await self._preset_wants_a_collector(preset_id):
-                    # Label only -- nothing on this path ever reads it back,
-                    # because the register map is dispatched from the device
-                    # (register 184), not from a cloud spec.
-                    self._eybond_model_id = preset_id.replace("-", "_")
-                    return await self.async_step_eybond_collector()
+            # A manual pairing carries no preset, and asking the API for None
+            # would 404 -- so the short-circuit here is load-bearing.
+            if preset_id and await self._preset_wants_a_collector(preset_id):
+                # Label only -- nothing on this path ever reads it back,
+                # because the register map is dispatched from the device
+                # (register 184), not from a cloud spec.
+                self._eybond_model_id = preset_id.replace("-", "_")
+                return await self.async_step_eybond_collector()
 
         # Phase 2: persist preset metadata returned by /finalize so
         # async_setup_entry can boot the readings publisher with a working

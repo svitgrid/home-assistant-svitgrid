@@ -120,7 +120,7 @@ async def test_the_picked_collector_reaches_the_created_entry(hass: HomeAssistan
     publishes, with nothing in the log to say why.
     """
     flow = _make_flow(hass, preset_id="anenji-smartess-v1")
-    preset_patch, _ = _mock_preset(EYBOND_PRESET)
+    preset_patch, client = _mock_preset(EYBOND_PRESET)
     found = [
         DiscoveredCollector(
             serial=SERIAL,
@@ -136,6 +136,10 @@ async def test_the_picked_collector_reaches_the_created_entry(hass: HomeAssistan
         result = await flow.async_step_eybond_collector({"inverter_serial": SERIAL})
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
+    # Finishing re-enters pair_finalize. Nothing may ask a second time: the
+    # collected config is what stops it, so a regression here shows up as a
+    # repeated question or, worse, unbounded recursion.
+    assert client.get_preset.await_count == 1
     inverter = result["data"]["inverters"][0]
     assert inverter["harvest_config"]["protocol"] == "eybond_at"
     assert inverter["harvest_config"]["inverter_serial"] == SERIAL
