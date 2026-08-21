@@ -175,6 +175,23 @@ async def run_eybond_harvest_loop(
                             period_sec=int(next_sleep_s),
                             summary=_summary_of(payload),
                         )
+                elif not first_reading_done:
+                    # A gated reading raises NOTHING: reader.read() catches a
+                    # per-block timeout and returns an incomplete reading, so
+                    # poll_once simply returns None. Protocol 11 reads a SINGLE
+                    # block, so one timeout empties the whole reading -- making
+                    # this the COMMON first-poll failure, and the one the
+                    # `except TransactionFailed` retry never covered.
+                    failed_first_polls += 1
+                    next_sleep_s = first_poll_retry_s(
+                        attempt=failed_first_polls, cadence_s=next_sleep_s
+                    )
+                    _LOGGER.debug(
+                        "%s: no reading yet (incomplete); retrying in %.0fs (attempt %d)",
+                        inverter_id,
+                        next_sleep_s,
+                        failed_first_polls,
+                    )
         except UnknownPlatform as err:
             # Loud once, then quiet. It cannot resolve itself without either a
             # capture of this platform or a different device, so repeating it

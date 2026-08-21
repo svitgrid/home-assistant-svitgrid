@@ -238,6 +238,10 @@ def hub_config_from(harvest_configs: list[dict]) -> HubConfig:
     # Drives the announce: once this many are connected it goes quiet, because
     # announcing at an already-connected collector makes it redial.
     base.expected_collectors = len(configs)
+    # So the gate can tell OUR collectors from a stranger's on the same LAN.
+    base.expected_serials = tuple(
+        s for s in (hc.get("inverter_serial") for hc in harvest_configs) if s
+    )
     return base
 
 

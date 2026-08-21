@@ -111,6 +111,13 @@ class HubConfig:
     # announce goes QUIET -- see `_send_announce` for why that is not optional.
     # 0 means "unknown", which keeps broadcasting; discovery uses that.
     expected_collectors: int = 0
+    # The serials we are configured to serve. The announce gate counts these,
+    # not raw sessions: a second, UNPAIRED collector on the LAN dialling in
+    # first would otherwise silence the announce for the paired one for ever,
+    # because the heartbeat keeps the unpaired session alive and the slot never
+    # frees. Empty means "unknown" -- discovery, and older entries that carry
+    # no serial -- and then the raw count applies as before.
+    expected_serials: tuple[str, ...] = ()
 
 
 class EybondAtHub:
@@ -267,7 +274,14 @@ class EybondAtHub:
 
         expected = self._config.expected_collectors
         connected = {s.address for s in self._sessions.values()}
-        if expected and len(self._sessions) >= expected:
+        wanted = self._config.expected_serials
+        if wanted:
+            # A session counts only once it has identified itself AS one of
+            # ours. Mid-identification it may yet turn out to be someone else's.
+            here = sum(1 for s in self._sessions.values() if s.serial in wanted)
+        else:
+            here = len(self._sessions)
+        if expected and here >= expected:
             return  # everyone is here; announcing would only cause redials
 
         our_ip = self._config.advertised_ip or self._ip_provider()
