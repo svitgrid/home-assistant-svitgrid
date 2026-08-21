@@ -32,6 +32,7 @@ from typing import Any
 from ..readings_publisher import (
     _DEFAULT_INTERVAL_S,
     _clamp_interval,
+    _summary_of,
     assemble_payload,
     gate_payload,
 )
@@ -164,6 +165,16 @@ async def run_eybond_harvest_loop(
                     _LOGGER.debug("%s: reading appended", inverter_id)
                     first_reading_done = True
                     failed_first_polls = 0
+                    # Where harvest/engine.py records it, for the same reason:
+                    # this is the point that knows the sample count and the
+                    # period. Recording from the shared sender instead
+                    # double-counted and overwrote the richer record.
+                    if activity is not None:
+                        activity.record_ingest_success(
+                            sample_count=1,
+                            period_sec=int(next_sleep_s),
+                            summary=_summary_of(payload),
+                        )
         except UnknownPlatform as err:
             # Loud once, then quiet. It cannot resolve itself without either a
             # capture of this platform or a different device, so repeating it

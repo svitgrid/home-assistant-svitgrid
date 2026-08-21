@@ -4,6 +4,9 @@
    "Ingests (24h): 0 / Last ingest: Unknown / Status: idle" for ever while
    readings reached the cloud perfectly well. Only `readings_publisher` (the
    entity-relay path) called `record_ingest_success`.
+   (Now covered in test_ingest_activity_signature.py, against the REAL
+   ActivityTracker — the first attempt recorded from the shared sender with
+   the wrong keyword arguments, and fakes accepting **kw hid it.)
 
 2. A first poll that failed slept the FULL 300 s cadence before retrying, so
    one transient timeout put five minutes on the "waiting for data" screen a
@@ -74,71 +77,8 @@ class TestReAnnounceReachesTheCollector:
         assert is_dialable_peer("192.168.1.116", advertised_ip=None) is True
 
 
-class TestIngestActivityOnTheCollectorPath:
-    async def test_a_successful_drain_records_an_ingest(self):
-        from custom_components.svitgrid.reading_sender import record_drain_activity
-
-        class Activity:
-            def __init__(self):
-                self.ok = 0
-                self.fail = []
-
-            def record_ingest_success(self, **kw):
-                self.ok += 1
-
-            def record_ingest_failure(self, *, reason):
-                self.fail.append(reason)
-
-        a = Activity()
-        record_drain_activity(a, sent_count=3, error=None)
-        assert a.ok == 1, "HA must stop reporting 0 ingests while data flows"
-        assert a.fail == []
-
-    async def test_a_failed_drain_records_the_reason(self):
-        from custom_components.svitgrid.reading_sender import record_drain_activity
-
-        class Activity:
-            def __init__(self):
-                self.ok = 0
-                self.fail = []
-
-            def record_ingest_success(self, **kw):
-                self.ok += 1
-
-            def record_ingest_failure(self, *, reason):
-                self.fail.append(reason)
-
-        a = Activity()
-        record_drain_activity(a, sent_count=0, error=RuntimeError("boom"))
-        assert a.ok == 0
-        assert a.fail and "boom" in a.fail[0]
-
-    async def test_an_empty_drain_records_nothing(self):
-        # Nothing to send is not an ingest, and not a failure either.
-        from custom_components.svitgrid.reading_sender import record_drain_activity
-
-        class Activity:
-            def __init__(self):
-                self.ok = 0
-                self.fail = []
-
-            def record_ingest_success(self, **kw):
-                self.ok += 1
-
-            def record_ingest_failure(self, *, reason):
-                self.fail.append(reason)
-
-        a = Activity()
-        record_drain_activity(a, sent_count=0, error=None)
-        assert a.ok == 0 and a.fail == []
-
-    async def test_no_activity_tracker_is_not_an_error(self):
-        from custom_components.svitgrid.reading_sender import record_drain_activity
-
-        record_drain_activity(None, sent_count=5, error=None)
-
-
 # ── wiring: a helper nothing calls is worth nothing ───────────────────────
+
 
 class TestTheLoopActuallyRetriesFast:
     async def test_a_failed_first_poll_is_retried_within_seconds(self):
@@ -164,6 +104,7 @@ class TestTheLoopActuallyRetriesFast:
 
         class Store:
             appended: list = []
+
             def append(self, *a, **k):
                 pass
 
@@ -209,9 +150,11 @@ class TestTheHubKeepsLookingWhenThePeerIsUndialable:
         # Pretend a collector dialled in from the Docker gateway.
         hub._known_addresses.add("192.168.65.1")
         sent: list = []
+
         class UDP:
             def sendto(self, data, addr):
                 sent.append(addr[0])
+
         hub._udp = UDP()
         hub._actual_port = 8899
         hub._send_announce()
@@ -220,4 +163,3 @@ class TestTheHubKeepsLookingWhenThePeerIsUndialable:
             "address is a NAT gateway and cannot be dialled"
         )
         assert "192.168.65.1" not in sent, "announcing into the NAT reaches nothing"
-

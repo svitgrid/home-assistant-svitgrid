@@ -338,26 +338,6 @@ async def drain_once(
     return sent_count
 
 
-def record_drain_activity(activity, *, sent_count: int, error: BaseException | None) -> None:
-    """Report a drain to the activity tracker the diagnostics sensors read.
-
-    Only `readings_publisher` -- the entity-relay path -- ever recorded an
-    ingest. Everything that uploads through the local store (direct Modbus, and
-    every EyBond/SmartESS collector) left Home Assistant reporting
-    "Ingests (24h): 0 / Last ingest: Unknown / Status: idle" for ever, while
-    readings reached the cloud perfectly well. Observed on a live onboarding.
-
-    An empty drain is neither: there was nothing to send, which is not an
-    ingest and not a failure.
-    """
-    if activity is None:
-        return
-    if error is not None:
-        activity.record_ingest_failure(reason=str(error) or type(error).__name__)
-    elif sent_count > 0:
-        activity.record_ingest_success(count=sent_count)
-
-
 async def run_sender_loop(
     *,
     hass: HomeAssistant,
@@ -369,7 +349,6 @@ async def run_sender_loop(
     lifecycle=None,
     discharge_positive_ids: set[str] | None = None,
     control: MqttControlState | None = None,
-    activity=None,
 ) -> None:
     # Additive MQTT readings publisher, owned by this loop so its paho network
     # thread is torn down when the loop exits (task cancel on unload). Construction
@@ -384,7 +363,7 @@ async def run_sender_loop(
     try:
         while not hass.is_stopping and (lifecycle is None or lifecycle.active):
             try:
-                sent_count = await drain_once(
+                await drain_once(
                     store=store,
                     api_client=api_client,
                     api_key=api_key,
@@ -396,12 +375,8 @@ async def run_sender_loop(
                     control=control,
                     health=health,
                 )
-                record_drain_activity(activity, sent_count=sent_count, error=None)
-            except Exception as err:  # never let the sender loop die
+            except Exception:  # never let the sender loop die
                 _LOGGER.exception("sender drain failed")
-                # Report it too. Silence here is how every store-backed
-                # inverter came to show "Ingests (24h): 0" for ever.
-                record_drain_activity(activity, sent_count=0, error=err)
             # Use the store's data-available event when present so a fresh reading
             # wakes the sender immediately instead of waiting up to tick_s.
             # Fall back to a plain sleep for test doubles or stores that lack the method.
