@@ -235,3 +235,38 @@ class TestDemux:
         frame, rest = take_frame(b"", Direction.RESPONSE)
         assert frame is None
         assert rest == b""
+
+
+class TestErrorsAreDiagnosable:
+    """A framing error naming only the code is a dead end in the field.
+
+    The same message covers a genuinely unsupported function AND a stream
+    that has desynchronised, and those need opposite fixes. Seen live on
+    2026-08-21: "unknown response function code: 0x17", sixteen times
+    overnight, with no way to tell which it was.
+    """
+
+    def test_an_unknown_function_code_reports_the_bytes(self):
+        frame = bytes.fromhex("011700112233445566")
+        with pytest.raises(ModbusError) as err:
+            take_frame(frame, Direction.RESPONSE)
+        assert "0x17" in str(err.value)
+        assert "011700112233" in str(err.value)
+
+    def test_a_crc_mismatch_reports_the_bytes(self):
+        corrupted = bytearray(RESP_TYPE)
+        corrupted[3] ^= 0xFF
+        with pytest.raises(ModbusError) as err:
+            take_frame(bytes(corrupted), Direction.RESPONSE)
+        assert "CRC mismatch" in str(err.value)
+        assert corrupted.hex()[:8] in str(err.value)
+
+    def test_the_context_is_bounded(self):
+        # A long buffer must not dump a screenful into the log.
+        frame = bytes([0x01, 0x17]) + bytes(500)
+        with pytest.raises(ModbusError) as err:
+            take_frame(frame, Direction.RESPONSE)
+        message = str(err.value)
+        assert "..." in message
+        assert "502 buffered" in message
+        assert len(message) < 200

@@ -270,8 +270,18 @@ class EybondAtHub:
             )
 
         for target in targets:
-            with contextlib.suppress(OSError):
+            try:
                 self._udp.sendto(command, (target, self._config.announce_port))
+            except OSError as err:
+                # Never suppressed. A collector that cannot hear us looks
+                # exactly like a collector that is switched off, and the
+                # difference is only visible here.
+                _LOGGER.warning(
+                    "announce to %s:%s failed: %s",
+                    target,
+                    self._config.announce_port,
+                    err,
+                )
 
     # ── connections ───────────────────────────────────────────────────────
     async def _on_connection(

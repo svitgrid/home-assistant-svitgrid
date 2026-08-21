@@ -396,3 +396,31 @@ class TestChangeSignal:
             assert await hub.wait_for_change(0.05) is False
         finally:
             await hub.stop()
+
+
+class TestAnnounceFailuresAreVisible:
+    async def test_a_failing_announce_is_logged_not_swallowed(self, caplog):
+        """A collector that cannot HEAR us looks exactly like one that is
+        switched off. The difference is only visible at the send.
+
+        asyncio queues datagrams rather than raising for a bad address, so the
+        failure is forced at the transport.
+        """
+
+        class BrokenTransport:
+            def sendto(self, data, addr):
+                raise OSError("network is unreachable")
+
+            def close(self):
+                pass
+
+        hub = make_hub(expected_collectors=1)
+        await hub.start()
+        try:
+            hub._udp = BrokenTransport()
+            with caplog.at_level("WARNING"):
+                hub._send_announce()
+            assert any("announce to" in r.message for r in caplog.records)
+        finally:
+            hub._udp = None
+            await hub.stop()

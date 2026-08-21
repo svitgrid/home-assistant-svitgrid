@@ -73,6 +73,18 @@ class Frame:
     raw: bytes
 
 
+def _context(buf: bytes, limit: int = 24) -> str:
+    """Bytes to put in an error, so a field failure is diagnosable.
+
+    A framing error that names only the offending code is a dead end: the
+    same message covers a genuinely unsupported function AND a stream that
+    has desynchronised, and those need opposite fixes. The bytes tell them
+    apart.
+    """
+    head = buf[:limit]
+    return f"{head.hex()}{'...' if len(buf) > limit else ''} ({len(buf)} buffered)"
+
+
 def _modbus_frame_length(buf: bytes, direction: Direction) -> int | None:
     """Total frame length, or None when more bytes are needed to know it."""
     if len(buf) < 2:
@@ -89,7 +101,7 @@ def _modbus_frame_length(buf: bytes, direction: Direction) -> int | None:
             if len(buf) < 7:
                 return None
             return 7 + buf[6] + 2
-        raise ModbusError(f"unknown request function code: {function:#04x}")
+        raise ModbusError(f"unknown request function code: {function:#04x} | {_context(buf)}")
 
     if function in _READ_FUNCTIONS:
         if len(buf) < 3:
@@ -97,7 +109,7 @@ def _modbus_frame_length(buf: bytes, direction: Direction) -> int | None:
         return 3 + buf[2] + 2
     if function in _WRITE_FUNCTIONS:
         return _ECHO_RESPONSE_LEN
-    raise ModbusError(f"unknown response function code: {function:#04x}")
+    raise ModbusError(f"unknown response function code: {function:#04x} | {_context(buf)}")
 
 
 def take_frame(buf: bytes, direction: Direction) -> tuple[Frame | None, bytes]:
@@ -130,7 +142,7 @@ def take_frame(buf: bytes, direction: Direction) -> tuple[Frame | None, bytes]:
     if actual != expected:
         raise ModbusError(
             f"CRC mismatch on a {length}-byte frame: "
-            f"frame says {expected:#06x}, computed {actual:#06x}"
+            f"frame says {expected:#06x}, computed {actual:#06x} | {_context(buf)}"
         )
     return Frame(kind=FrameKind.MODBUS, raw=frame), buf[length:]
 
