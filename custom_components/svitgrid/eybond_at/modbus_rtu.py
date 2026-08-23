@@ -111,3 +111,57 @@ def words_to_ascii(words: list[int]) -> str:
     """
     raw = b"".join(word.to_bytes(2, "big") for word in words)
     return raw.split(b"\x00", 1)[0].decode("ascii", errors="replace")
+
+
+def build_write_single(slave: int, address: int, value: int) -> bytes:
+    """Build a write-single-holding-register request (function code 6).
+
+    Every bound is CHECKED rather than masked. A truncated address writes a
+    different register and a truncated value a different setpoint, both
+    silently -- and on this device a setpoint is a battery charge voltage.
+
+    No write has ever been confirmed against this hardware. This builds the
+    frame; it does not establish that the device honours one.
+    """
+    if not 0 <= slave <= 0xFF:
+        raise ModbusError(f"slave id out of range: {slave}")
+    if not 0 <= address <= 0xFFFF:
+        raise ModbusError(f"address out of range: {address}")
+    if not 0 <= value <= 0xFFFF:
+        raise ModbusError(f"value out of range: {value}")
+    return _append_crc(
+        bytes(
+            [
+                slave,
+                FC_WRITE_SINGLE,
+                (address >> 8) & 0xFF,
+                address & 0xFF,
+                (value >> 8) & 0xFF,
+                value & 0xFF,
+            ]
+        )
+    )
+
+
+def parse_write_response(frame: bytes) -> tuple[int, int]:
+    """Return the (address, value) a write echo carried back.
+
+    A conforming device echoes the request verbatim -- whether or not it
+    honoured the write. That is why a caller that cares must read the register
+    back rather than treat this as confirmation.
+
+    An exception response is raised as `ModbusExceptionError` so a caller can
+    tell "this register is read-only" (illegal data address) from "this frame
+    is broken".
+    """
+    if len(frame) < 5:
+        raise ModbusError(f"frame too short: {frame.hex()}")
+    _check_crc(frame)
+    function = frame[1]
+    if function & 0x80:
+        raise ModbusExceptionError(frame[2])
+    if function != FC_WRITE_SINGLE:
+        raise ModbusError(f"not a write-single response: function {function}")
+    if len(frame) != 8:
+        raise ModbusError(f"write echo must be 8 bytes, got {len(frame)}: {frame.hex()}")
+    return ((frame[2] << 8) | frame[3], (frame[4] << 8) | frame[5])

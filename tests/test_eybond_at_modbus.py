@@ -25,8 +25,10 @@ from custom_components.svitgrid.eybond_at.modbus_rtu import (
     ModbusError,
     ModbusExceptionError,
     build_read,
+    build_write_single,
     crc16,
     parse_read_response,
+    parse_write_response,
     to_signed,
     words_to_ascii,
 )
@@ -286,3 +288,74 @@ class TestErrorsAreDiagnosable:
         message = str(err.value)
         assert foreign.hex() in message, "the whole frame must reach the log"
         assert "..." not in message
+
+
+# ── write-single codec ────────────────────────────────────────────────────
+#
+# Function code 6. The collector tunnels bare RTU with no transaction id, so a
+# write correlates by ORDER like every other frame, and its echo is the only
+# acknowledgement the wire carries.
+#
+# No write has ever been confirmed against this hardware. These tests prove the
+# CODEC, not the capability.
+
+
+def test_build_write_single_frames_what_the_device_expects():
+    # Register 303 (buzzer mode) = 3.
+    frame = build_write_single(slave=1, address=303, value=3)
+    assert frame[:6] == bytes([0x01, 0x06, 0x01, 0x2F, 0x00, 0x03])
+    assert len(frame) == 8
+    crc = crc16(frame[:6])
+    assert frame[6] == crc & 0xFF
+    assert frame[7] == (crc >> 8) & 0xFF
+
+
+def test_build_write_single_accepts_the_full_uint16_range():
+    assert len(build_write_single(slave=1, address=320, value=0)) == 8
+    assert len(build_write_single(slave=1, address=320, value=65535)) == 8
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"slave": 1, "address": 320, "value": 65536},
+        {"slave": 1, "address": 320, "value": -1},
+        {"slave": 1, "address": 0x10000, "value": 1},
+        {"slave": 256, "address": 1, "value": 1},
+    ],
+)
+def test_build_write_single_refuses_out_of_range_rather_than_truncating(kwargs):
+    # A truncated address writes a DIFFERENT register and a truncated value a
+    # different setpoint, both silently. On this device a setpoint is a battery
+    # charge voltage.
+    with pytest.raises(ModbusError):
+        build_write_single(**kwargs)
+
+
+def test_parse_write_response_returns_the_echo():
+    echo = build_write_single(slave=1, address=303, value=3)
+    address, value = parse_write_response(echo)
+    assert (address, value) == (303, 3)
+
+
+def test_parse_write_response_rejects_a_bad_crc():
+    echo = bytearray(build_write_single(slave=1, address=303, value=3))
+    echo[7] ^= 0xFF
+    with pytest.raises(ModbusError):
+        parse_write_response(bytes(echo))
+
+
+def test_parse_write_response_surfaces_a_modbus_exception():
+    # 0x86 = FC 6 with the exception bit, 0x02 = illegal data address. Exactly
+    # what a read-only register answers, so it must be distinguishable from a
+    # broken frame.
+    body = bytes([0x01, 0x86, 0x02])
+    crc = crc16(body)
+    frame = body + bytes([crc & 0xFF, (crc >> 8) & 0xFF])
+    with pytest.raises(ModbusExceptionError):
+        parse_write_response(frame)
+
+
+def test_parse_write_response_rejects_a_read_response():
+    with pytest.raises(ModbusError):
+        parse_write_response(build_read(slave=1, address=303, count=1))
