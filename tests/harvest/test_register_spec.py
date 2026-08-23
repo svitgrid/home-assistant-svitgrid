@@ -101,6 +101,7 @@ def test_builtin_catalog_matches_dart_kbuiltincatalog():
                 "phase_load_ct_or_inverter",
                 "grid_relay_bit",
                 "daily_grid_unavailable",
+                "load_energy_balance",
             }
         )
         == BUILTIN_CATALOG

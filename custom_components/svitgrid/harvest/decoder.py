@@ -180,6 +180,22 @@ def _apply_builtin(d: Derivation, out: dict[str, float | None], spec: RegisterSp
             return
         raw_val = out.get(d.inputs[0])
         out[d.field] = None if raw_val is None else (1.0 if (int(raw_val) & mask) != 0 else 0.0)
+    elif b == "load_energy_balance":
+        # inputs = [totalPvPowerField, batteryPowerField, gridPowerField], all
+        # POST-normalise. Mirrors reference_decoder.dart's branch and
+        # ModelRegisterDecoder's exactly.
+        #
+        # Any input missing yields None rather than a partial sum: a load built
+        # from two of three terms is a confident wrong number, and this field
+        # is in CORE_PAYLOAD_FIELDS, so it gates publication.
+        pv = out.get(d.inputs[0])
+        bat = out.get(d.inputs[1])
+        grid = out.get(d.inputs[2])
+        if pv is None or bat is None or grid is None:
+            out[d.field] = None
+            return
+        derived = pv - bat + grid
+        out[d.field] = derived if derived > 0 else 0.0
     elif b == "daily_grid_unavailable":
         for f in d.inputs:
             out[f] = None

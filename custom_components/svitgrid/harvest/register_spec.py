@@ -31,6 +31,15 @@ BUILTIN_CATALOG = frozenset(
         "phase_load_ct_or_inverter",
         "grid_relay_bit",
         "daily_grid_unavailable",
+        # House load reconstructed from the energy-flow identity
+        # `load = pv - battery + grid` for families that publish NO house-load
+        # register (SolaX X3-Hybrid G4 is the first). Inputs are the
+        # POST-normalise values: battery positive = charging (subtracted, it is
+        # a consumer) and grid positive = importing (added). Clamped at zero.
+        #
+        # Must stay identical to Dart's kBuiltinCatalog
+        # (packages/inverter_protocol/lib/src/spec/builtin_catalog.dart).
+        "load_energy_balance",
     }
 )
 
