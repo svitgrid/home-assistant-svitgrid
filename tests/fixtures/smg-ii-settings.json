@@ -1,0 +1,320 @@
+{
+  "protocolNumber": 11,
+  "note": "EASUN/ISolar SMG II configuration block. Bounds at 24 V are MEASURED on serial 99432604107106; 48 V bounds are DERIVED by doubling and carry boundsDerived=true.",
+  "packVoltages": {
+    "24": [
+      {
+        "key": "maxChargeVoltage",
+        "address": 324,
+        "scale": 0.1,
+        "unit": "V",
+        "decimals": 1,
+        "rawMin": 240,
+        "rawMax": 320,
+        "risk": "protective",
+        "boundsDerived": false
+      },
+      {
+        "key": "floatChargeVoltage",
+        "address": 325,
+        "scale": 0.1,
+        "unit": "V",
+        "decimals": 1,
+        "rawMin": 240,
+        "rawMax": 300,
+        "risk": "protective",
+        "boundsDerived": false
+      },
+      {
+        "key": "batteryOverVoltage",
+        "address": 323,
+        "scale": 0.1,
+        "unit": "V",
+        "decimals": 1,
+        "rawMin": 260,
+        "rawMax": 340,
+        "risk": "protective",
+        "boundsDerived": false
+      },
+      {
+        "key": "lowVoltageCutoffOnMains",
+        "address": 327,
+        "scale": 0.1,
+        "unit": "V",
+        "decimals": 1,
+        "rawMin": 190,
+        "rawMax": 260,
+        "risk": "protective",
+        "boundsDerived": false
+      },
+      {
+        "key": "lowVoltageCutoffOffGrid",
+        "address": 329,
+        "scale": 0.1,
+        "unit": "V",
+        "decimals": 1,
+        "rawMin": 180,
+        "rawMax": 250,
+        "risk": "protective",
+        "boundsDerived": false
+      },
+      {
+        "key": "equalizationVoltage",
+        "address": 334,
+        "scale": 0.1,
+        "unit": "V",
+        "decimals": 1,
+        "rawMin": 240,
+        "rawMax": 320,
+        "risk": "protective",
+        "boundsDerived": false
+      }
+    ],
+    "48": [
+      {
+        "key": "maxChargeVoltage",
+        "address": 324,
+        "scale": 0.1,
+        "unit": "V",
+        "decimals": 1,
+        "rawMin": 480,
+        "rawMax": 640,
+        "risk": "protective",
+        "boundsDerived": true
+      },
+      {
+        "key": "floatChargeVoltage",
+        "address": 325,
+        "scale": 0.1,
+        "unit": "V",
+        "decimals": 1,
+        "rawMin": 480,
+        "rawMax": 600,
+        "risk": "protective",
+        "boundsDerived": true
+      },
+      {
+        "key": "batteryOverVoltage",
+        "address": 323,
+        "scale": 0.1,
+        "unit": "V",
+        "decimals": 1,
+        "rawMin": 520,
+        "rawMax": 680,
+        "risk": "protective",
+        "boundsDerived": true
+      },
+      {
+        "key": "lowVoltageCutoffOnMains",
+        "address": 327,
+        "scale": 0.1,
+        "unit": "V",
+        "decimals": 1,
+        "rawMin": 380,
+        "rawMax": 520,
+        "risk": "protective",
+        "boundsDerived": true
+      },
+      {
+        "key": "lowVoltageCutoffOffGrid",
+        "address": 329,
+        "scale": 0.1,
+        "unit": "V",
+        "decimals": 1,
+        "rawMin": 360,
+        "rawMax": 500,
+        "risk": "protective",
+        "boundsDerived": true
+      },
+      {
+        "key": "equalizationVoltage",
+        "address": 334,
+        "scale": 0.1,
+        "unit": "V",
+        "decimals": 1,
+        "rawMin": 480,
+        "rawMax": 640,
+        "risk": "protective",
+        "boundsDerived": true
+      }
+    ]
+  },
+  "packIndependent": [
+    {
+      "key": "maxChargeCurrent",
+      "address": 332,
+      "scale": 0.1,
+      "unit": "A",
+      "decimals": 1,
+      "rawMin": 0,
+      "rawMax": 1200,
+      "risk": "routine",
+      "boundsDerived": false
+    },
+    {
+      "key": "maxMainsChargeCurrent",
+      "address": 333,
+      "scale": 0.1,
+      "unit": "A",
+      "decimals": 1,
+      "rawMin": 0,
+      "rawMax": 1200,
+      "risk": "routine",
+      "boundsDerived": false
+    },
+    {
+      "key": "socBackToUtility",
+      "address": 341,
+      "scale": 1.0,
+      "unit": "%",
+      "decimals": 0,
+      "rawMin": 0,
+      "rawMax": 100,
+      "risk": "protective",
+      "boundsDerived": false
+    },
+    {
+      "key": "socBackToBattery",
+      "address": 342,
+      "scale": 1.0,
+      "unit": "%",
+      "decimals": 0,
+      "rawMin": 0,
+      "rawMax": 100,
+      "risk": "protective",
+      "boundsDerived": false
+    },
+    {
+      "key": "socLowDcCutoff",
+      "address": 343,
+      "scale": 1.0,
+      "unit": "%",
+      "decimals": 0,
+      "rawMin": 0,
+      "rawMax": 100,
+      "risk": "protective",
+      "boundsDerived": false
+    },
+    {
+      "key": "equalizationEnabled",
+      "address": 313,
+      "scale": 1.0,
+      "unit": "",
+      "decimals": 0,
+      "rawMin": 0,
+      "rawMax": 1,
+      "risk": "routine",
+      "boundsDerived": false
+    },
+    {
+      "key": "equalizationMinutes",
+      "address": 335,
+      "scale": 1.0,
+      "unit": "min",
+      "decimals": 0,
+      "rawMin": 5,
+      "rawMax": 900,
+      "risk": "routine",
+      "boundsDerived": false
+    },
+    {
+      "key": "equalizationTimeoutMinutes",
+      "address": 336,
+      "scale": 1.0,
+      "unit": "min",
+      "decimals": 0,
+      "rawMin": 5,
+      "rawMax": 900,
+      "risk": "routine",
+      "boundsDerived": false
+    },
+    {
+      "key": "equalizationIntervalDays",
+      "address": 337,
+      "scale": 1.0,
+      "unit": "d",
+      "decimals": 0,
+      "rawMin": 0,
+      "rawMax": 90,
+      "risk": "routine",
+      "boundsDerived": false
+    },
+    {
+      "key": "outputVoltage",
+      "address": 320,
+      "scale": 0.1,
+      "unit": "V",
+      "decimals": 1,
+      "rawMin": 2000,
+      "rawMax": 2400,
+      "risk": "routine",
+      "boundsDerived": false
+    },
+    {
+      "key": "outputFrequency",
+      "address": 321,
+      "scale": 0.01,
+      "unit": "Hz",
+      "decimals": 2,
+      "rawMin": 5000,
+      "rawMax": 6000,
+      "risk": "routine",
+      "boundsDerived": false
+    },
+    {
+      "key": "buzzerMode",
+      "address": 303,
+      "scale": 1.0,
+      "unit": "",
+      "decimals": 0,
+      "rawMin": 0,
+      "rawMax": 3,
+      "risk": "routine",
+      "boundsDerived": false
+    }
+  ],
+  "constraints": [
+    {
+      "key": "floatBelowBulk",
+      "low": 325,
+      "high": 324,
+      "rule": "strictlyBelow"
+    },
+    {
+      "key": "bulkBelowOverVoltage",
+      "low": 324,
+      "high": 323,
+      "rule": "strictlyBelow"
+    },
+    {
+      "key": "bulkBelowEqualization",
+      "low": 324,
+      "high": 334,
+      "rule": "strictlyBelow"
+    },
+    {
+      "key": "equalizationBelowOverVoltage",
+      "low": 334,
+      "high": 323,
+      "rule": "strictlyBelow"
+    },
+    {
+      "key": "offGridCutoffBelowMainsCutoff",
+      "low": 329,
+      "high": 327,
+      "rule": "strictlyBelow"
+    },
+    {
+      "key": "lowDcCutoffBelowBackToUtility",
+      "low": 343,
+      "high": 341,
+      "rule": "strictlyBelow"
+    },
+    {
+      "key": "backToUtilityBelowBackToBattery",
+      "low": 341,
+      "high": 342,
+      "rule": "strictlyBelow"
+    }
+  ]
+}

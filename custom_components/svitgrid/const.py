@@ -264,6 +264,12 @@ DISPATCHABLE_COMMANDS = frozenset(
         "set_gen_force",
         "set_gen_port_mode",
         "set_sell_power_cap",
+        # SMG II settings screen (Anenji/EASUN over an EyBond collector). A
+        # name missing here is rejected before any executor is consulted,
+        # and that failure looks identical to a broken executor -- see
+        # tests/test_smg_settings_executor_wiring.py.
+        "read_inverter_settings",
+        "set_inverter_setting",
     }
 )
 

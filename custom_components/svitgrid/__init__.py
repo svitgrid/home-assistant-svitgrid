@@ -44,6 +44,7 @@ from .const import (
     ROLLUP_INTERVAL_S,
 )
 from .executors import create_executor
+from .executors.smg_settings_executor import EybondSmgSettingsExecutor
 from .executors.yaml_dispatcher import YamlDispatcher
 from .eybond_at.setup import is_eybond_harvest, start_eybond_hub
 from .harvest.engine import run_direct_harvest_loop
@@ -906,6 +907,40 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 activity=activity,
             )
             readings_tasks.update(eybond_tasks)
+            # SMG II settings screen (Anenji/EASUN over an EyBond collector,
+            # Task 5). One executor per inverter, added to the SAME dict
+            # already handed to run_command_loop by reference above -- the
+            # running loop sees these entries on its next dispatch without a
+            # reload. Each executor resolves its OWN live session from the
+            # hub per command rather than holding one, because a session can
+            # reconnect (or reconnect to a swapped unit) between commands;
+            # see EybondSmgSettingsExecutor's docstring. An inverter that is
+            # NOT on this transport never reaches this loop, so its
+            # read_inverter_settings / set_inverter_setting commands still
+            # hit the "no executor configured" rejection in command_poller,
+            # not an executor that cannot serve them.
+            #
+            # nominal_pack_voltage: no config surface collects this for an
+            # EyBond inverter today (unlike the legacy YAML `executor:
+            # battery_nominal_voltage` block). Falls back to 24 V -- the only
+            # MEASURED pack in smg_settings.py -- via an opt-in
+            # `battery_nominal_voltage` harvest_config key so a future
+            # config-flow step can set it without another code change. A
+            # 48 V customer left on the default sees pack-independent
+            # settings fine; the six DC setpoints read against the wrong
+            # bounds table (still safe -- see the executor's own
+            # unconfirmed-group guard for HOW a wrong bound is caught on
+            # writes, but a raw MEASURED 24 V table on a 48 V unit is simply
+            # wrong, not merely unconfirmed, so writes to those six would be
+            # refused as out-of-range rather than flagged unconfirmed).
+            for inv in eybond_inverters:
+                executors_by_inverter[inv["inverter_id"]] = EybondSmgSettingsExecutor(
+                    hub=eybond_hub,
+                    inverter_serial=inv["harvest_config"].get("inverter_serial"),
+                    nominal_pack_voltage=int(
+                        inv["harvest_config"].get("battery_nominal_voltage", 24)
+                    ),
+                )
         except Exception:  # never block setup -- fail-open
             _LOGGER.exception(
                 "EyBond hub failed to start for %d inverter(s)", len(eybond_inverters)
