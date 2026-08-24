@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.21.4 — 2026-08-24
+
+### Added
+- **SolaX X3-Hybrid G4 support.** This platform publishes no house-load
+  register — not on any revision of the vendor's protocol specification — so
+  the add-on now understands a new decoding rule the cloud sends for it,
+  `load_energy_balance`, which computes consumption from the energy-flow
+  identity `solar − battery + grid` and clamps it at zero.
+
+  Two things worth knowing about the number it produces. Its error term is the
+  inverter's own conversion loss, so it reads slightly **high** — on the
+  reference unit, 550 W against the inverter's own reported 411 W. And it is
+  only as good as its three inputs: if the grid meter reading is missing, no
+  load is reported at all, rather than a load that silently omits the grid.
+
+  A SolaX is read through a third-party RS-485 gateway (an Elfin EW11 set to
+  `Protocol = Modbus`, on the gateway's own port 8899), not through the
+  manufacturer's cloud dongle. The factory setting of `Protocol = None` looks
+  connected and decodes nothing.
+
 ## 0.21.3 — 2026-08-18
 
 ### Fixed
