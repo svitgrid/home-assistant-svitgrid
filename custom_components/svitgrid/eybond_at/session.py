@@ -19,7 +19,13 @@ import logging
 
 from .at_codec import AtProtocolError, build_query, parse_response
 from .demux import Direction, split_frames
-from .modbus_rtu import ModbusError, build_read, parse_read_response
+from .modbus_rtu import (
+    ModbusError,
+    build_read,
+    build_write_single,
+    parse_read_response,
+    parse_write_response,
+)
 from .scheduler import ActionKind, SchedulerBusy, TxnScheduler
 
 _LOGGER = logging.getLogger(__name__)
@@ -226,6 +232,20 @@ class CollectorSession:
             return parse_read_response(raw)
         except ModbusError as err:
             raise TransactionFailed(str(err)) from err
+
+    async def write_register(self, address: int, value: int, timeout_s: float = 5.0) -> int:
+        raw = await self._transact(build_write_single(self.slave_id, address, value), timeout_s)
+        try:
+            echoed_address, echoed_value = parse_write_response(raw)
+        except ModbusError as err:
+            raise TransactionFailed(str(err)) from err
+        if echoed_address != address:
+            # No transaction id, so a reply that echoes a different address is
+            # a desync, not a value to trust -- see the module docstring.
+            raise TransactionFailed(
+                f"write echo is for register {echoed_address}, expected {address}"
+            )
+        return echoed_value
 
     async def at_query(self, command: str, timeout_s: float = 3.0) -> str:
         raw = await self._transact(build_query(command), timeout_s)
