@@ -30,7 +30,23 @@ class FakeLink:
         self.read_only: set[int] = set()
 
     async def read_registers(self, address: int, count: int, timeout_s: float = 5.0) -> list[int]:
-        return [self.registers.get(address + i, 0) for i in range(count)]
+        """Answers only for addresses this device actually has.
+
+        An address MISSING from `registers` is one the device did not answer
+        for, and the block stops there -- a short read, exactly what a
+        truncated frame or a dropped connection produces. It is emphatically
+        NOT `.get(address + i, 0)`: defaulting an absent register to 0 hands
+        the executor a fully-populated snapshot no matter what arrived, which
+        is how a truncated read at 24 V was able to let an unvalidated
+        protective write through with every test in this file green.
+        """
+        words: list[int] = []
+        for i in range(count):
+            value = self.registers.get(address + i)
+            if value is None:
+                break
+            words.append(value)
+        return words
 
     async def write_register(self, address: int, value: int, timeout_s: float = 5.0) -> int:
         self.writes.append((address, value))
@@ -39,15 +55,25 @@ class FakeLink:
         return value
 
 
+# The device answers for its whole configuration block, not only the addresses
+# the catalogue names -- `_read_raw` reads contiguous blocks and gets words back
+# for the gaps too. The fixtures cover the span so that an address DELETED from
+# one means "this word did not arrive", which is the only thing `FakeLink`'s
+# short-read semantics should ever be expressing.
+_CONFIG_BLOCK_SPAN = range(303, 344)
+
+
 def bench_registers() -> dict[int, int]:
     """The bench unit's factory profile."""
-    return {
+    space = dict.fromkeys(_CONFIG_BLOCK_SPAN, 0)
+    space.update({
         324: 282, 325: 270, 332: 600, 333: 300,
         323: 320, 327: 230, 329: 210,
         341: 20, 342: 30, 343: 15,
         313: 0, 334: 292, 335: 60, 336: 120, 337: 30,
         320: 2300, 321: 5000, 303: 3,
-    }
+    })
+    return space
 
 
 def bench_48v() -> dict[int, int]:
@@ -250,15 +276,66 @@ async def test_refuses_an_unknown_setting_key():
 
 
 async def test_validates_against_what_the_device_holds_not_a_cached_copy():
-    # Someone changed the bulk voltage at the inverter's own panel. A cached
-    # value would let a float through that is now above it.
+    # Someone changed the bulk voltage at the inverter's own panel -- AFTER we
+    # had already read the block once. The order matters: mutating the register
+    # before the executor's only dispatch proves `apply` reads at all, which a
+    # snapshot memoised on the instance also satisfies. Reading first and
+    # mutating afterwards is what proves it RE-reads, and a stale snapshot is
+    # how a pack-damaging combination gets approved by validation that ran
+    # against numbers the device no longer holds.
     ex = make_executor(registers=bench_registers(), protocol_number=11, pack_voltage=24)
-    ex.link.registers[324] = 272  # 27.2 V
+    first = await ex.dispatch("read_inverter_settings", {})
+    assert first["settings"]["maxChargeVoltage"] == pytest.approx(28.2, abs=0.001)
+
+    ex.link.registers[324] = 272  # 27.2 V from now on
+
     result = await ex.dispatch(
         "set_inverter_setting", {"setting": "floatChargeVoltage", "value": 27.5}
     )
     assert result["ok"] is False, "float 27.5 now exceeds bulk 27.2"
     assert ex.link.writes == []
+
+
+async def test_a_setting_already_at_its_target_is_not_written_again():
+    """Pre-read, skip if already there. Not an optimisation: no write on this
+    family has ever been confirmed on real hardware, so the cheapest way to be
+    safe is to send nothing when nothing needs to change."""
+    ex = make_executor(registers=bench_registers(), protocol_number=11, pack_voltage=24)
+    result = await ex.dispatch("set_inverter_setting", {"setting": "buzzerMode", "value": 3})
+    assert result["ok"] is True
+    assert result["readBack"] == 3
+    assert ex.link.writes == [], "register 303 already holds 3; nothing should be sent"
+
+
+async def test_a_truncated_read_refuses_a_protective_write_at_24v():
+    """The 24 V table is the MEASURED one, so nothing in it is bounds_derived
+    and the unconfirmed group lock has nothing to lock: `unconfirmed` comes
+    back empty however little of the block arrived.
+
+    `validate_smg_settings` then SKIPS every constraint whose partner register
+    is absent -- correct when validating a partial snapshot, and catastrophic
+    when authorising a write, because the skipped comparison is the one
+    protecting the pack. Here the bulk voltage never arrives and a float of
+    30.0 V, above the bench unit's 28.2 V bulk, sails through `floatBelowBulk`
+    without it ever being evaluated.
+
+    Reachable in production: `CollectorSession.read_registers` returns whatever
+    word count a well-formed frame carries and never checks it against the
+    count requested.
+    """
+    ex = make_executor(
+        link=truncating(bench_registers(), to=3), protocol_number=11, pack_voltage=24
+    )
+    snapshot = await ex.dispatch("read_inverter_settings", {})
+    assert "maxChargeVoltage" not in snapshot["settings"], "the bulk voltage did not arrive"
+    assert snapshot["unconfirmed"] == [], "24 V derives no bounds, so nothing locks the group"
+
+    result = await ex.dispatch(
+        "set_inverter_setting", {"setting": "floatChargeVoltage", "value": 30.0}
+    )
+    assert result["ok"] is False, "floatBelowBulk could not be evaluated -- refuse, do not skip"
+    assert ex.link.writes == []
+    assert "324" in result["message"], "name the register that did not arrive"
 
 
 async def test_measured_24v_bounds_are_never_treated_as_unconfirmed():

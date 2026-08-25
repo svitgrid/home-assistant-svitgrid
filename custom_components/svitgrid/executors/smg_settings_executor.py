@@ -31,6 +31,7 @@ from ..eybond_at.session import TransactionFailed
 from ..eybond_at.smg_settings import (
     SmgSetting,
     smg_settings_for,
+    unevaluatable_constraints_for,
     validate_smg_settings,
 )
 from .base import BaseExecutor
@@ -342,6 +343,31 @@ class SmgSettingsExecutor(BaseExecutor):
             if s.key in unconfirmed:
                 for_validation.pop(s.address, None)
         for_validation[setting.address] = raw
+
+        # Refuse a write whose cross-field constraints cannot all be
+        # EVALUATED, not just the ones it would break. validate_smg_settings
+        # skips a constraint whose partner register is absent, so a short read
+        # -- fewer words than requested, which CollectorSession.read_registers
+        # passes through without ever comparing against the count asked for --
+        # makes the protective comparison vanish instead of failing. At 24 V
+        # nothing is bounds_derived, so the unconfirmed group lock above
+        # returns an empty set no matter how little of the block arrived, and
+        # this is the only thing standing between a truncated read and an
+        # unvalidated write to a battery charge setpoint.
+        unevaluatable = unevaluatable_constraints_for(setting.address, for_validation)
+        if unevaluatable:
+            detail = ", ".join(
+                f"{constraint_key} needs register {partner}"
+                for constraint_key, partner in unevaluatable
+            )
+            return VerifiedWrite(
+                ok=False, skipped=False, written=raw, read_back=None,
+                message=(
+                    f"{key} cannot be checked against what the device holds: "
+                    f"{detail}. Refusing to write."
+                ),
+            )
+
         violations = validate_smg_settings(for_validation)
         if violations:
             return VerifiedWrite(

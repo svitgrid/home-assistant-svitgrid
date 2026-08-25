@@ -302,6 +302,35 @@ def validate_smg_settings(values: dict[int, int]) -> list[SmgConstraintViolation
     return violations
 
 
+def unevaluatable_constraints_for(
+    address: int, values: dict[int, int]
+) -> list[tuple[str, int]]:
+    """`(constraint key, missing register)` for every constraint involving
+    `address` that `values` cannot evaluate.
+
+    `validate_smg_settings` SKIPS a constraint whose two fields are not both
+    present. That is right for describing a partial snapshot and wrong for
+    authorising a write: the skipped comparison is precisely the one protecting
+    the pack, and a short read makes it disappear silently. A caller about to
+    write `address` uses this to refuse instead of proceeding on constraints
+    that were never checked.
+
+    Reports every missing partner rather than the first, for the same reason
+    `validate_smg_settings` reports every violation: the write path is slow.
+    """
+    missing: list[tuple[str, int]] = []
+    for c in _CONSTRAINTS:
+        if c.low == address:
+            partner = c.high
+        elif c.high == address:
+            partner = c.low
+        else:
+            continue
+        if partner not in values:
+            missing.append((c.key, partner))
+    return missing
+
+
 def constraint_address_pairs_for_testing() -> list[tuple[int, int]]:
     """The `(low, high)` register-address pair behind every constraint.
 
