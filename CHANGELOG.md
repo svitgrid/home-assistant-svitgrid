@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.21.5 — 2026-08-25
+
+### Added
+- **Read and write an Anenji/EASUN SMG II inverter's settings.** The add-on can
+  now answer `read_inverter_settings` and `set_inverter_setting` for inverters
+  reached through an EyBond/SmartESS collector, so the mobile app's Anenji
+  settings screen works when the inverter is harvested by Home Assistant rather
+  than by the phone.
+
+  Which settings appear depends on the pack voltage. The catalogue was measured
+  on a 24 V unit; the 48 V bounds are derived from it by doubling. A pack
+  voltage with no bounds table publishes only the twelve settings that do not
+  depend on one — deliberately, because a doubled charge-voltage bound is a
+  cooked or flattened battery rather than a display bug.
+
+  Every write is verified rather than assumed: the add-on re-reads the register
+  and compares, because a device that echoed the request would otherwise look
+  identical to one that applied it. Nothing about this write path has been
+  confirmed on real hardware yet.
+
+### Fixed
+- **A truncated register read could let an unvalidated write reach a protective
+  setpoint.** The check that decides whether the device's answers can be trusted
+  only ever examined settings whose bounds are *derived*. On a 24 V pack nothing
+  is derived, so the check reported "everything confirmed" however much of the
+  read had gone missing — and the cross-field rules that protect the battery
+  (float below bulk, bulk below over-voltage) were then skipped for any register
+  that had not arrived. A write is now refused, naming the constraint and the
+  missing register, when a short read leaves it unevaluatable.
+
 ## 0.21.4 — 2026-08-24
 
 ### Added
