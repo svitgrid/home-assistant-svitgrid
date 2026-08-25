@@ -17,7 +17,11 @@ from __future__ import annotations
 import pytest
 
 from custom_components.svitgrid.eybond_at.smg_settings import smg_ii_protocol_number
-from custom_components.svitgrid.executors.smg_settings_executor import SmgSettingsExecutor
+from custom_components.svitgrid.executors.smg_settings_executor import (
+    EybondSmgSettingsExecutor,
+    NoCollectorConnected,
+    SmgSettingsExecutor,
+)
 
 
 class FakeLink:
@@ -354,3 +358,120 @@ async def test_unrecognised_protocol_publishes_nothing():
     )
     assert write["ok"] is False
     assert ex.link.writes == []
+
+
+# ── EybondSmgSettingsExecutor: the class __init__.py actually wires up ────────
+#
+# The transport-agnostic SmgSettingsExecutor above takes a fixed link and a
+# fixed protocol number at construction. The one in production takes neither:
+# it is built once at config-entry setup and outlives every collector
+# connection, so it re-resolves the session AND re-reads register 184 on every
+# dispatch. Gutting its entire dispatch body -- dropping the
+# NoCollectorConnected raise and hardcoding the protocol to 11 -- left the full
+# suite green, because the only coverage it had asserted isinstance and two
+# private attributes.
+
+
+class FakeHub:
+    """Routes by serial, like the real hub (cf. FakeHub in test_eybond_at_harvest.py)."""
+
+    def __init__(self, sessions: dict[str | None, FakeLink]):
+        self.sessions = dict(sessions)
+        self.asked: list[str | None] = []
+
+    def session_for(self, serial):
+        self.asked.append(serial)
+        return self.sessions.get(serial)
+
+
+def _collector_registers(**overrides: int) -> dict[int, int]:
+    """A bench unit reachable over a collector: the config block plus the
+    protocol number at register 184."""
+    return {**bench_registers(), 184: smg_ii_protocol_number, **overrides}
+
+
+async def test_reads_and_writes_over_the_session_the_hub_holds_for_its_own_serial():
+    mine = FakeLink(_collector_registers())
+    someone_else = FakeLink(_collector_registers())
+    hub = FakeHub({"99432604107106": mine, "00000000000000": someone_else})
+    ex = EybondSmgSettingsExecutor(hub=hub, inverter_serial="99432604107106")
+
+    result = await ex.dispatch("read_inverter_settings", {})
+    assert hub.asked == ["99432604107106"]
+    assert result["protocolNumber"] == smg_ii_protocol_number
+    assert result["settings"]["buzzerMode"] == 3
+
+    write = await ex.dispatch("set_inverter_setting", {"setting": "buzzerMode", "value": 0})
+    assert write["ok"] is True
+    assert mine.writes == [(303, 0)]
+    assert someone_else.writes == [], "a write must never land on another inverter's session"
+
+
+async def test_refuses_every_command_when_no_collector_is_connected():
+    """The collector comes and goes. With no live session there is nothing to
+    read and nothing to write to, and saying so is the whole point: an executor
+    that quietly returned ok would report a setpoint applied to a device it
+    never reached."""
+    session = FakeLink(_collector_registers())
+    hub = FakeHub({"someone-else": session})
+    ex = EybondSmgSettingsExecutor(hub=hub, inverter_serial="99432604107106")
+
+    with pytest.raises(NoCollectorConnected):
+        await ex.dispatch("read_inverter_settings", {})
+    with pytest.raises(NoCollectorConnected):
+        await ex.dispatch(
+            "set_inverter_setting", {"setting": "maxChargeVoltage", "value": 29.0}
+        )
+    assert session.writes == []
+
+
+async def test_refuses_when_the_inverter_has_no_serial_to_resolve():
+    ex = EybondSmgSettingsExecutor(hub=FakeHub({}), inverter_serial=None)
+    with pytest.raises(NoCollectorConnected):
+        await ex.dispatch("read_inverter_settings", {})
+
+
+async def test_rereads_the_protocol_number_on_every_dispatch():
+    """Register 184 selects the register map, and the collector can reconnect
+    to a DIFFERENT unit between commands. Trusting the number from the last
+    command is how the SMG II map gets applied to registers that mean something
+    else -- on a write path whose six DC setpoints are protective."""
+    link = FakeLink(_collector_registers())
+    hub = FakeHub({"99432604107106": link})
+    ex = EybondSmgSettingsExecutor(hub=hub, inverter_serial="99432604107106")
+
+    first = await ex.dispatch("read_inverter_settings", {})
+    assert first["protocolNumber"] == smg_ii_protocol_number
+    assert first["settings"], "the SMG II catalogue publishes for protocol 11"
+
+    # The collector is now talking to a unit on a different map.
+    link.registers[184] = 3
+
+    second = await ex.dispatch("read_inverter_settings", {})
+    assert second["protocolNumber"] == 3
+    assert second["settings"] == {}, "an unrecognised protocol publishes nothing"
+
+    write = await ex.dispatch(
+        "set_inverter_setting", {"setting": "floatChargeVoltage", "value": 27.0}
+    )
+    assert write["ok"] is False
+    assert link.writes == []
+
+
+async def test_publishes_nothing_when_the_protocol_register_does_not_answer():
+    """A short read of register 184 yields no words. Unknown protocol, not
+    protocol 11: fail closed."""
+    registers = _collector_registers()
+    del registers[184]
+    link = FakeLink(registers)
+    ex = EybondSmgSettingsExecutor(
+        hub=FakeHub({"99432604107106": link}), inverter_serial="99432604107106"
+    )
+
+    result = await ex.dispatch("read_inverter_settings", {})
+    assert result["protocolNumber"] == 0
+    assert result["settings"] == {}
+
+    write = await ex.dispatch("set_inverter_setting", {"setting": "buzzerMode", "value": 0})
+    assert write["ok"] is False
+    assert link.writes == []
