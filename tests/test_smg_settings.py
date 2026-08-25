@@ -107,6 +107,40 @@ class TestCatalogue:
             display_max = s.to_display(s.raw_max)
             assert s.to_raw(display_max) == s.raw_max, f"{s.key} max round trip"
 
+    def test_every_raw_value_in_range_round_trips_not_just_the_endpoints(self):
+        """The endpoints above are truncation-safe by accident, so they prove
+        nothing about `to_raw`'s rounding.
+
+        `to_display(324) / 0.1` is 323.99999999999994 -- a setpoint the user
+        reads as 32.4 V comes back as 32.3 V if `to_raw` truncates. 18 values
+        across the 24 V and 48 V voltage ranges do this, every one of them a
+        protective DC setpoint, and every one 0.1 V LOW rather than loudly
+        wrong. Walking the whole range is what catches it.
+        """
+        for pack_voltage in (24, 48):
+            settings = smg_settings_for(
+                protocol_number=smg_ii_protocol_number, nominal_pack_voltage=pack_voltage
+            )
+            for s in settings:
+                for raw in range(s.raw_min, s.raw_max + 1):
+                    assert s.to_raw(s.to_display(raw)) == raw, (
+                        f"{pack_voltage} V {s.key}: {raw} -> "
+                        f"{s.to_display(raw)}{s.unit} -> {s.to_raw(s.to_display(raw))}"
+                    )
+
+    def test_to_raw_rounds_a_value_the_user_typed_rather_than_truncating(self):
+        """The user's own numbers, not just round-trips of ours: 32.4 V typed
+        into the app must reach register 323 as 324, not 323."""
+        settings = smg_settings_for(
+            protocol_number=smg_ii_protocol_number, nominal_pack_voltage=24
+        )
+
+        def by_address(a):
+            return next(s for s in settings if s.address == a)
+
+        assert by_address(323).to_raw(32.4) == 324
+        assert by_address(329).to_raw(18.2) == 182
+
     def test_bench_values_sit_inside_their_published_range(self):
         bench = {
             324: 282, 325: 270, 332: 600, 333: 300,
@@ -211,6 +245,16 @@ class TestValidateSmgSettings:
         errors = validate_smg_settings(v)
         assert errors
         assert set(errors[0].addresses) >= {324, 325}
+
+    def test_rejects_a_float_exactly_equal_to_the_bulk_charge_voltage(self):
+        """`floatBelowBulk` says STRICTLY below. Equal is the boundary the
+        constraint's own comment describes -- a pack held at the bulk voltage
+        never leaves absorption, which is the damage, not a near miss."""
+        v = self.valid()
+        v[325] = v[324]
+        errors = validate_smg_settings(v)
+        assert errors, "float equal to bulk must be refused, not tolerated"
+        assert errors[0].key == "floatBelowBulk"
 
     def test_rejects_a_bulk_above_the_overvoltage_protection(self):
         v = self.valid()

@@ -69,9 +69,15 @@ class SmgSetting:
         return raw * self.scale
 
     def to_raw(self, display: float) -> int:
-        """Rounds rather than truncates: 28.2 V arrives as 28.199999999999996
-        in a float, and truncating would write 281 for a setpoint the user
-        typed as 28.2."""
+        """Rounds rather than truncates.
+
+        `32.4 / 0.1` is 323.99999999999994 in binary floating point, so
+        truncating writes 323 -- 32.3 V -- for a setpoint the user typed as
+        32.4 V. 18 values across the 24 V and 48 V voltage ranges do this, all
+        of them protective DC setpoints, and all of them land 0.1 V LOW rather
+        than raising anything. (28.2 V, the bench unit's bulk voltage, happens
+        to divide exactly and is NOT an example.)
+        """
         return round(display / self.scale)
 
     def contains(self, raw: int) -> bool:
