@@ -21,16 +21,17 @@ was already correct.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
-from custom_components.svitgrid.eybond_at.session import TransactionFailed, WriteRefused
-from custom_components.svitgrid.eybond_at.smg_settings import smg_ii_protocol_number
 from custom_components.svitgrid.executors.smg_settings_executor import (
     SmgSettingsExecutor,
     write_register_verified,
 )
-
-from .test_smg_settings_executor import FakeLink, bench_registers
+from custom_components.svitgrid.eybond_at.session import TransactionFailed, WriteRefused
+from custom_components.svitgrid.eybond_at.smg_settings import smg_ii_protocol_number
+from tests.test_smg_settings_executor import FakeLink, bench_registers
 
 
 class RefusingLink(FakeLink):
@@ -156,16 +157,14 @@ async def test_a_write_that_would_change_nothing_is_skipped():
     assert link.writes == []
 
 
-async def test_the_harvest_loop_holds_no_write_call():
+def test_the_harvest_loop_holds_no_write_call():
     """The poll path must not be able to reach a write at all.
 
     Asserted against the source rather than by driving the loop: what matters
     is that no future edit quietly adds one, and a behavioural test only covers
     the branches it happens to walk.
     """
-    from pathlib import Path
-
-    import custom_components.svitgrid.eybond_at.harvest as harvest
+    from custom_components.svitgrid.eybond_at import harvest
 
     source = Path(harvest.__file__).read_text()
     assert "write_register" not in source

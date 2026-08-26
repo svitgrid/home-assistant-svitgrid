@@ -6,14 +6,7 @@ would be worse than having no tool, because it would license shipping the
 whole settings feature on a false premise.
 """
 
-import pytest
-
-from custom_components.svitgrid.eybond_at.modbus_rtu import (
-    FC_WRITE_MULTIPLE,
-    build_write_multiple,
-    crc16,
-    parse_write_multiple_response,
-)
+from custom_components.svitgrid.eybond_at.modbus_rtu import FC_WRITE_MULTIPLE, crc16
 from tools.bench_probe import BUZZER_REG, write_probe
 
 
