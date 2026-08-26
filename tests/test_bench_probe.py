@@ -9,10 +9,10 @@ whole settings feature on a false premise.
 import pytest
 
 from custom_components.svitgrid.eybond_at.modbus_rtu import (
-    ModbusExceptionError,
-    build_write_single,
+    FC_WRITE_MULTIPLE,
+    build_write_multiple,
     crc16,
-    parse_write_response,
+    parse_write_multiple_response,
 )
 from tools.bench_probe import BUZZER_REG, write_probe
 
@@ -22,25 +22,41 @@ class StubSession:
 
     slave_id = 1
 
-    def __init__(self, registers, *, read_only=(), refuse=False):
+    def __init__(self, registers, *, read_only=(), refuse=False, refuse_code=0x01):
         self.registers = dict(registers)
         self.read_only = set(read_only)
         self.refuse = refuse
+        # Which of the documented refusals to answer with. 0x01 (read-only) is
+        # the default because it is the one that genuinely rules the register
+        # out; 0x07 does not, and the tool must not say so.
+        self.refuse_code = refuse_code
         self.writes: list[tuple[int, int]] = []
 
     async def read_registers(self, address, count, timeout_s=5.0):
         return [self.registers.get(address + i, 0) for i in range(count)]
 
     async def _transact(self, payload, timeout_s):
-        address, value = parse_write_response(payload)  # request and echo share a shape
+        # Decode the FC16 REQUEST the tool built. Unlike FC06, a request and
+        # its acknowledgement do NOT share a shape here -- the request carries
+        # a byte count and data, the ack carries neither -- so this stub has
+        # to read the request as a request.
+        assert payload[1] == FC_WRITE_MULTIPLE, (
+            f"the bench tool must speak FC16; it sent function {payload[1]:#04x}"
+        )
+        address = int.from_bytes(payload[2:4], "big")
+        quantity = int.from_bytes(payload[4:6], "big")
+        value = int.from_bytes(payload[7:9], "big")
         self.writes.append((address, value))
         if self.refuse:
-            body = bytes([self.slave_id, 0x86, 0x02])
+            body = bytes([self.slave_id, FC_WRITE_MULTIPLE | 0x80, self.refuse_code])
             crc = crc16(body)
             return body + bytes([crc & 0xFF, (crc >> 8) & 0xFF])
         if address not in self.read_only:
             self.registers[address] = value
-        return build_write_single(self.slave_id, address, value)
+        # The device answers with address and QUANTITY, never the value.
+        body = bytes([self.slave_id, FC_WRITE_MULTIPLE]) + payload[2:6]
+        assert quantity == 1
+        return body + crc16(body).to_bytes(2, "little")
 
 
 async def test_reports_confirmed_when_the_value_sticks(capsys):
@@ -70,10 +86,11 @@ async def test_detects_a_device_that_echoes_but_does_not_store(capsys):
 
 
 async def test_reports_a_modbus_refusal_distinctly(capsys):
-    session = StubSession({BUZZER_REG: 3}, refuse=True)
+    session = StubSession({BUZZER_REG: 3}, refuse=True)  # 0x01, read-only
     code = await write_probe(session)
     out = capsys.readouterr().out
-    assert "REFUSED at the Modbus layer" in out
+    assert "REFUSED by the device" in out
+    assert "read-only" in out
     assert "Option C is not available" in out
     assert code == 2
 
@@ -92,3 +109,45 @@ async def test_touches_only_the_buzzer_register():
     await write_probe(session)
     assert {addr for addr, _ in session.writes} == {BUZZER_REG}
     assert session.registers[324] == 282
+
+
+async def test_the_probe_writes_with_function_code_16(capsys):
+    """The bug this tool must not reproduce.
+
+    `bench_probe` is what we use to prove things on the bench, so a tool
+    speaking a function code the hardware ignores would produce a confident
+    "refused" verdict about a device that simply never heard the question.
+    The StubSession asserts the function code on every write.
+    """
+    session = StubSession({BUZZER_REG: 3})
+    code = await write_probe(session)
+    assert code == 0
+
+
+async def test_the_probe_does_not_check_the_ack_against_the_value_written(capsys):
+    """An FC16 ack carries the quantity, not the value.
+
+    The probe writes 0 to the buzzer register when it finds a non-zero value.
+    A tool comparing the ack's trailing word against 0 would call a perfectly
+    good acknowledgement a mismatch.
+    """
+    session = StubSession({BUZZER_REG: 3})
+    await write_probe(session)
+    out = capsys.readouterr().out
+    assert "WRITE CONFIRMED" in out
+    assert session.writes[0] == (BUZZER_REG, 0)
+
+
+async def test_the_probe_names_the_refusal_reason(capsys):
+    """A bench refusal must say WHICH refusal.
+
+    0x07 means the MODE is the obstacle, so the register may well be writable
+    -- the opposite conclusion from 0x01. A tool that printed "not writable"
+    for both would retire a perfectly good register on the strength of a
+    temporary condition.
+    """
+    session = StubSession({BUZZER_REG: 3}, refuse=True, refuse_code=0x07)
+    await write_probe(session)
+    out = capsys.readouterr().out.lower()
+    assert "mode" in out
+    assert "not writable" not in out

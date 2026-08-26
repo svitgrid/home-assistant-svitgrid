@@ -21,10 +21,12 @@ from .at_codec import AtProtocolError, build_query, parse_response
 from .demux import Direction, split_frames
 from .modbus_rtu import (
     ModbusError,
+    ModbusExceptionError,
     build_read,
-    build_write_single,
+    build_write_multiple,
+    describe_write_exception,
     parse_read_response,
-    parse_write_response,
+    parse_write_multiple_response,
 )
 from .scheduler import ActionKind, SchedulerBusy, TxnScheduler
 
@@ -46,6 +48,26 @@ HEARTBEAT_IDLE_MS = 20_000
 
 class TransactionFailed(Exception):
     """A request could not be completed: no collector, timeout, or desync."""
+
+
+class WriteRefused(TransactionFailed):
+    """The device answered a write with a Modbus exception.
+
+    Distinct from every other `TransactionFailed` because it is a real ANSWER,
+    not an absence of one: the device parsed the frame and declined it, and
+    the code says why. "The inverter will not change this in its current
+    working mode" and "the line dropped" need opposite things from the user,
+    so they must not arrive as the same failure.
+
+    Subclasses `TransactionFailed` so the callers that already catch that --
+    the harvest loop, setup, the hub -- keep working unchanged.
+    """
+
+    def __init__(self, *, code: int, reason: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        # Stable and machine-readable; see `describe_write_exception`.
+        self.reason = reason
 
 
 class CollectorSession:
@@ -233,19 +255,46 @@ class CollectorSession:
         except ModbusError as err:
             raise TransactionFailed(str(err)) from err
 
-    async def write_register(self, address: int, value: int, timeout_s: float = 5.0) -> int:
-        raw = await self._transact(build_write_single(self.slave_id, address, value), timeout_s)
+    async def write_register(self, address: int, value: int, timeout_s: float = 5.0) -> None:
+        """Write one register with FC16, the only write this protocol defines.
+
+        Returns nothing, deliberately. An FC16 acknowledgement carries the
+        QUANTITY of registers written, never the value, so there is no value
+        here that could be mistaken for confirmation -- and confirmation is
+        not what an acknowledgement is. It proves the device parsed the
+        request. Only a read-back proves the setting took effect; see
+        `write_register_verified`.
+
+        Raises `WriteRefused` when the device declines, so the caller can say
+        which of the three documented refusals it was.
+        """
+        raw = await self._transact(
+            build_write_multiple(self.slave_id, address, [value]), timeout_s
+        )
         try:
-            echoed_address, echoed_value = parse_write_response(raw)
+            acked_address, acked_quantity = parse_write_multiple_response(raw)
+        except ModbusExceptionError as err:
+            described = describe_write_exception(err.code)
+            raise WriteRefused(
+                code=err.code,
+                reason=described.reason,
+                message=f"write to register {address} refused: {described.message}",
+            ) from err
         except ModbusError as err:
             raise TransactionFailed(str(err)) from err
-        if echoed_address != address:
-            # No transaction id, so a reply that echoes a different address is
-            # a desync, not a value to trust -- see the module docstring.
+
+        # No transaction id, so a reply describing a different request is a
+        # desync, not something to trust -- see the module docstring. Both
+        # fields are checked: an ack for the right register but the wrong
+        # count still describes a frame we did not send.
+        if acked_address != address:
             raise TransactionFailed(
-                f"write echo is for register {echoed_address}, expected {address}"
+                f"write ack is for register {acked_address}, expected {address}"
             )
-        return echoed_value
+        if acked_quantity != 1:
+            raise TransactionFailed(
+                f"write ack covers {acked_quantity} registers, expected 1"
+            )
 
     async def at_query(self, command: str, timeout_s: float = 3.0) -> str:
         raw = await self._transact(build_query(command), timeout_s)

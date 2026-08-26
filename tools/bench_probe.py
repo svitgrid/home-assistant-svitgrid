@@ -9,10 +9,10 @@ listeners on one LAN will fight over it.
     python3 tools/bench_probe.py --sweep 700-710      # probe an undeclared range
     python3 tools/bench_probe.py --write-probe        # the buzzer write probe
 
-Why this is a tool and not a feature: no write has ever been confirmed against
-this hardware. Adding a write path to the shipped integration before one has
-would be shipping an unproven capability. This proves it first; the feature
-comes after.
+The write probe speaks **FC16**, the only write frame this protocol defines.
+It used to send FC06, which the device does not answer at all -- so the tool
+returned a confident verdict about a question the hardware never heard. A
+bench tool that cannot be trusted on that point is worse than no tool.
 """
 
 from __future__ import annotations
@@ -29,8 +29,10 @@ from custom_components.svitgrid.eybond_at.hub import EybondAtHub, HubConfig  # n
 from custom_components.svitgrid.eybond_at.identity import identify, resolve_map  # noqa: E402
 from custom_components.svitgrid.eybond_at.modbus_rtu import (  # noqa: E402
     ModbusError,
-    build_write_single,
-    parse_write_response,
+    ModbusExceptionError,
+    build_write_multiple,
+    describe_write_exception,
+    parse_write_multiple_response,
     to_signed,
 )
 
@@ -194,10 +196,24 @@ async def write_probe(session) -> int:
 
     try:
         raw = await session._transact(  # noqa: SLF001 - bench tool, see module docstring
-            build_write_single(session.slave_id, BUZZER_REG, target), 5.0
+            build_write_multiple(session.slave_id, BUZZER_REG, [target]), 5.0
         )
-        address, echoed = parse_write_response(raw)
-        print(f"  echo: register {address} = {echoed}")
+        # FC16 acknowledges the address and the QUANTITY of registers written
+        # -- NOT the value. Printing this as if it were the value written, or
+        # comparing it against `target`, would call a correct acknowledgement
+        # a mismatch for every value except 1.
+        address, quantity = parse_write_multiple_response(raw)
+        print(f"  ack: register {address}, {quantity} register(s) written")
+    except ModbusExceptionError as err:
+        described = describe_write_exception(err.code)
+        print(f"  REFUSED by the device (0x{err.code:02X}, {described.reason}):")
+        print(f"    {described.message}")
+        if described.reason == "wrong_mode":
+            print("  -> the register may well be writable; the MODE is the obstacle.")
+            print("     Retrying the same value changes nothing until that does.")
+        else:
+            print("  -> this register is not writable. Option C is not available.")
+        return 2
     except ModbusError as err:
         print(f"  REFUSED at the Modbus layer: {err}")
         print("  -> this register is not writable. Option C is not available.")
@@ -222,7 +238,7 @@ async def write_probe(session) -> int:
     print(f"  restoring {original} ...")
     with contextlib.suppress(Exception):
         await session._transact(  # noqa: SLF001
-            build_write_single(session.slave_id, BUZZER_REG, original), 5.0
+            build_write_multiple(session.slave_id, BUZZER_REG, [original]), 5.0
         )
     final = await read_block(session, BUZZER_REG, 1)
     if final:

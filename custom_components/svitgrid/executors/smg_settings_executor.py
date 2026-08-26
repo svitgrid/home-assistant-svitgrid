@@ -27,7 +27,7 @@ from typing import Any, Protocol
 
 from ..eybond_at.identity import REG_PROTOCOL
 from ..eybond_at.register_map import MAX_BLOCK_GAP, MAX_BLOCK_REGISTERS
-from ..eybond_at.session import TransactionFailed
+from ..eybond_at.session import TransactionFailed, WriteRefused
 from ..eybond_at.smg_settings import (
     SmgSetting,
     smg_settings_for,
@@ -44,7 +44,7 @@ class RegisterLink(Protocol):
         self, address: int, count: int, timeout_s: float = 5.0
     ) -> list[int]: ...
 
-    async def write_register(self, address: int, value: int, timeout_s: float = 5.0) -> int: ...
+    async def write_register(self, address: int, value: int, timeout_s: float = 5.0) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -61,10 +61,18 @@ class VerifiedWrite:
     written: int
 
     # What the register held afterwards, in raw register units. None when
-    # the read-back failed.
+    # the read-back failed, and None when the device refused outright -- a
+    # refusal means nothing was written, so there is nothing to read back.
     read_back: int | None
 
     message: str
+
+    # Which documented refusal the DEVICE returned, if any: "read_only",
+    # "out_of_range", "wrong_mode", or "device_error". None covers both a
+    # success and a value our own validation rejected before sending -- our
+    # decision is not the device's, and labelling it with a device reason
+    # would misattribute it.
+    refusal: str | None = None
 
 
 async def write_register_verified(
@@ -72,16 +80,20 @@ async def write_register_verified(
 ) -> VerifiedWrite:
     """Writes `value` to `address` and proves it stuck.
 
-    No write to this device has ever been confirmed on real hardware, so the
-    echo is not treated as evidence. A conforming device echoes the request
-    verbatim whether or not it honoured it, and a register that is read-only
-    in practice can answer without raising a Modbus exception. Only a
+    The acknowledgement is not treated as evidence. An FC16 ack proves the
+    device PARSED the request -- it carries the quantity of registers
+    written, not even the value -- and a register that is read-only in
+    practice can acknowledge without raising a Modbus exception. Only a
     read-back distinguishes those cases -- and on this hardware the values in
     question are battery charge setpoints, where "it said OK and did nothing"
     is the failure that costs a pack.
 
-    A write that is refused outright raises `TransactionFailed`, because that
-    is a transport answer the caller can act on. A write that lands but
+    A write the DEVICE refuses returns `ok=False` with `refusal` naming which
+    of the three documented refusals it was, so the caller can tell the user
+    something true rather than "it failed". A write that could not be
+    attempted at all -- a timeout, a dropped line -- still raises
+    `TransactionFailed`: nothing is known about it, and inventing a reason
+    would be worse than propagating the failure. A write that lands but
     cannot be verified returns `ok=False` rather than raising: the change may
     well have taken effect, and reporting success for something unconfirmed
     is worse than reporting uncertainty.
@@ -104,7 +116,22 @@ async def write_register_verified(
         # read-back below is what decides the outcome.
         pass
 
-    await link.write_register(address, value, timeout_s=timeout_s)
+    try:
+        await link.write_register(address, value, timeout_s=timeout_s)
+    except WriteRefused as err:
+        # The device answered and declined. That is a fact worth reporting
+        # precisely: "not in this working mode" and "read-only" send the user
+        # in opposite directions, and neither is "the write may have worked".
+        # Returned rather than raised so the reason survives into the command
+        # response the user actually sees.
+        return VerifiedWrite(
+            ok=False,
+            skipped=False,
+            written=value,
+            read_back=None,
+            message=str(err),
+            refusal=err.reason,
+        )
 
     try:
         words = await link.read_registers(address, 1, timeout_s=timeout_s)
@@ -416,6 +443,7 @@ class SmgSettingsExecutor(BaseExecutor):
                 "ok": vw.ok,
                 "readBack": read_back_display,
                 "message": vw.message or None,
+                "refusal": vw.refusal,
             }
         raise NotImplementedError(f"SmgSettingsExecutor does not support command {command_name!r}")
 
