@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.21.6 — 2026-08-27
+
+### Fixed
+- **Writing an Anenji/EASUN SMG II setting never worked.** Every write this
+  add-on sent used Modbus function code 06 (write single register), which does
+  not exist in the SMG II protocol — it defines only 03 to read and 16 to
+  write. An unsupported function code draws no reply at all, not even an
+  error, so the symptom was silence followed by the collector dropping the
+  connection. It looked like a dead bus or a read-only logger; it was neither.
+
+  Writes now use function code 16, confirmed against real hardware: a register
+  was set, acknowledged, read back changed, and restored.
+
+  Note that a function-code-16 acknowledgement echoes the address and the
+  number of registers written, never the value. The add-on therefore still
+  re-reads the register separately rather than treating the acknowledgement as
+  proof the setting took effect.
+
+- **A refused write now says why.** The inverter answers a refusal with a
+  reason — the register is read-only, the value is out of range, or the
+  registers cannot be modified in the current working mode. Those reasons now
+  reach the caller instead of collapsing into a generic failure. The third is
+  worth knowing: with a preset battery profile selected, the inverter owns the
+  charge voltages and refuses every custom value until the battery type is set
+  to User.
+
 ## 0.21.5 — 2026-08-25
 
 ### Added
