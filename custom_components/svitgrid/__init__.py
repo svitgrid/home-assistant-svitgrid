@@ -79,6 +79,7 @@ async def _start_local_store(
     cloud_ingest_enabled: bool = True,
     discharge_positive_ids=None,
     control: MqttControlState | None = None,
+    device_id: str | None = None,
 ):
     """Create the per-entry local store, seed the shared lifecycle holder from
     persisted state, register the read views once, and (only when the device is
@@ -104,7 +105,15 @@ async def _start_local_store(
 
     When the persisted lifecycle is not active (paused/deprovisioned), the
     sender loop and rollup timer are NOT started; their slots are returned as
-    None. Views/panel registration is always performed by the caller path."""
+    None. Views/panel registration is always performed by the caller path.
+
+    device_id: the entry's edge device id, which SCOPES the persisted lifecycle.
+    readings.db is one file per HA install and `deprovisioned` is terminal, so
+    without this a single 410 (household deleted → key revoked) muted the whole
+    install forever — re-pairing mints a new device and a new key, the pairing
+    finalizes, and the sender still never starts. Rows left by a version that
+    did not record a device are discarded here, because nothing shows whom they
+    describe; the server re-decides on the next request."""
     from datetime import UTC, datetime, timedelta
 
     from homeassistant.helpers.event import async_track_time_interval
@@ -144,6 +153,8 @@ async def _start_local_store(
 
     # Seed the shared lifecycle holder from persisted state. The activity
     # tracker (if any) is mirrored into the status sensor on lifecycle changes.
+    # Stamp the device FIRST: it is what get_lifecycle/set_lifecycle scope on.
+    store.device_id = device_id
     persisted = await store.get_lifecycle()
     lifecycle = LifecycleState(
         state=persisted["state"],
@@ -453,7 +464,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     # YAML path has no ActivityTracker; pass None as the activity mirror.
     # active_ids contains the single inverter_id used by the YAML config.
     store, cadence, sender_task, cancel_rollup, lifecycle = await _start_local_store(
-        hass, api_client, state.api_key, None, active_ids={inverter_id}
+        hass, api_client, state.api_key, None, active_ids={inverter_id}, device_id=device_id
     )
     await register_panel(hass)
 
@@ -646,6 +657,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             cloud_ingest_enabled=cloud_ingest_enabled,
             discharge_positive_ids=discharge_positive_ids,
             control=control,
+            device_id=entry.data.get("edge_device_id"),
         )
         cadence.interval_s = _initial_cadence_seconds(dict(entry.data))
         hass.data.setdefault(DOMAIN, {})

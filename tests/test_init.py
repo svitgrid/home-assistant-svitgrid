@@ -848,6 +848,72 @@ async def test_async_unload_entry_calls_remove_panel(hass, enable_custom_integra
 
 
 @pytest.mark.asyncio
+async def test_setup_scopes_the_lifecycle_to_this_entrys_edge_device(
+    hass, enable_custom_integrations
+):
+    """readings.db is one file per HA install, and `deprovisioned` is terminal.
+    Unless the store is told WHICH edge device the latch is about, a household
+    deletion mutes the install permanently: re-pairing mints a new device and a
+    new key, the pairing finalizes, and the sender still never starts. Setup
+    must stamp the entry's edge device id and drop the unowned legacy rows."""
+    from unittest.mock import AsyncMock, patch
+
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    from custom_components.svitgrid import async_setup_entry
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        version=2,
+        title="Svitgrid (h-abc)",
+        data={
+            "api_base": "https://api.example.com",
+            "api_key": "test-key",
+            "edge_device_id": "ed-1",
+            "household_id": "h-abc",
+            "signing_key_id": "ha-home-01",
+            "private_key_pem": ("-----BEGIN PRIVATE KEY-----\nFAKE\n-----END PRIVATE KEY-----\n"),
+            "public_key_hex": "04" + "a" * 128,
+            "trusted_keys": [],
+            "inverters": [
+                {
+                    "inverter_id": "ha-xyz",
+                    "entity_map": {"batterySoc": "sensor.soc"},
+                    "command_recipes": [],
+                    "command_config": {},
+                    "brand": "Deye",
+                    "model": "SG04LP3",
+                    "phases": 3,
+                    "has_battery": True,
+                    "pv_strings": 2,
+                    "preset_id": None,
+                }
+            ],
+        },
+        entry_id="test-entry-id-lifecycle-scope",
+    )
+    entry.add_to_hass(hass)
+
+    with (
+        patch("custom_components.svitgrid.run_readings_loop", new_callable=AsyncMock),
+        patch("custom_components.svitgrid.run_command_loop", new_callable=AsyncMock),
+        patch("custom_components.svitgrid.run_mqtt_wake_loop", new_callable=AsyncMock),
+        patch("custom_components.svitgrid.run_sender_loop", new_callable=AsyncMock),
+        patch.object(
+            hass.config_entries,
+            "async_forward_entry_setups",
+            AsyncMock(return_value=True),
+        ),
+    ):
+        ok = await async_setup_entry(hass, entry)
+        await hass.async_block_till_done()
+
+    assert ok is True
+    store = hass.data[DOMAIN][entry.entry_id]["store"]
+    assert store.device_id == "ed-1"
+
+
+@pytest.mark.asyncio
 async def test_deprovisioned_at_startup_skips_loops(hass, enable_custom_integrations):
     """When the persisted lifecycle is 'deprovisioned', no background loops are
     started, but the panel/views/sensors are still set up."""

@@ -121,6 +121,17 @@ class ReadingStore:
         # warning — in island mode the cloud sender never runs, so readings
         # legitimately sit in sync_state='pending' forever.
         self.cloud_ingest_enabled: bool = True
+        # Edge device id this store's lifecycle rows belong to, stamped by
+        # _start_local_store from the config entry. readings.db is ONE file per
+        # Home Assistant install (not per config entry), and `deprovisioned` is
+        # terminal in LifecycleState — so an unscoped latch outlived the device
+        # it was written about and muted the install forever, through restarts,
+        # re-installs and re-pairing alike. None on the YAML path, which keeps
+        # the pre-0.21.7 unscoped rows.
+        self.device_id: str | None = None
+        # One-shot guard: the legacy-row purge runs on the first scoped read,
+        # not on every /lifecycle panel poll.
+        self._legacy_lifecycle_purged: bool = False
         # Lazily created asyncio.Event — do NOT create at __init__ time because
         # that would bind to whatever loop happens to be current at construction,
         # which may differ from the running loop used by the sender.
@@ -931,15 +942,24 @@ class ReadingStore:
         finally:
             conn.close()
 
+    _LIFECYCLE_KEYS = ("lifecycle_state", "lifecycle_reason", "lifecycle_since")
+
+    def _lifecycle_key(self, key: str) -> str:
+        """Meta key for this store's device. Scoping by device id is what makes
+        the terminal `deprovisioned` state recoverable: re-pairing always mints
+        a NEW edge device id server-side, so a fresh pairing cannot read the
+        previous device's latch."""
+        return f"{key}:{self.device_id}" if self.device_id else key
+
     def _set_lifecycle_sync(self, state: str, reason: str | None, since: str | None) -> None:
         conn = _connect(self._db_path)
         try:
             conn.executemany(
                 "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
                 [
-                    ("lifecycle_state", state),
-                    ("lifecycle_reason", reason or ""),
-                    ("lifecycle_since", since or ""),
+                    (self._lifecycle_key("lifecycle_state"), state),
+                    (self._lifecycle_key("lifecycle_reason"), reason or ""),
+                    (self._lifecycle_key("lifecycle_since"), since or ""),
                 ],
             )
             conn.commit()
@@ -947,10 +967,36 @@ class ReadingStore:
             conn.close()
 
     def _get_lifecycle_sync(self) -> dict:
-        st = self._get_meta_sync("lifecycle_state") or "active"
-        rs = self._get_meta_sync("lifecycle_reason") or None
-        sn = self._get_meta_sync("lifecycle_since") or None
+        if self.device_id and not self._legacy_lifecycle_purged:
+            self._purge_unowned_lifecycle_sync()
+            self._legacy_lifecycle_purged = True
+        # Deliberately does NOT fall back to the unscoped rows: those were
+        # written before lifecycle rows named a device, so nothing shows they
+        # describe the device that is paired now. Only the server can settle
+        # that — it answers 410 or it does not — and one request is a cheap
+        # price for an install that would otherwise never upload again.
+        st = self._get_meta_sync(self._lifecycle_key("lifecycle_state")) or "active"
+        rs = self._get_meta_sync(self._lifecycle_key("lifecycle_reason")) or None
+        sn = self._get_meta_sync(self._lifecycle_key("lifecycle_since")) or None
         return {"state": st, "reason": rs or None, "since": sn or None}
+
+    def _purge_unowned_lifecycle_sync(self) -> None:
+        """Drop the pre-0.21.7 unscoped lifecycle rows once this store knows its
+        device. They can never be authoritative again, and a stale
+        `lifecycle_state=deprovisioned` sitting in readings.db is exactly what
+        misleads whoever debugs the next silent install. No-op without a device
+        id — on the YAML path the unscoped rows ARE the live ones."""
+        if not self.device_id:
+            return
+        conn = _connect(self._db_path)
+        try:
+            conn.executemany(
+                "DELETE FROM meta WHERE key = ?",
+                [(k,) for k in self._LIFECYCLE_KEYS],
+            )
+            conn.commit()
+        finally:
+            conn.close()
 
     def _prune_inverters_not_in_sync(self, keep_ids: set) -> int:
         """Delete readings_raw rows for inverters not in keep_ids.

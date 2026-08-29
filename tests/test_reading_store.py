@@ -248,6 +248,83 @@ def test_lifecycle_defaults_active_when_unset(tmp_path):
     assert store._get_lifecycle_sync() == {"state": "active", "reason": None, "since": None}
 
 
+def test_lifecycle_is_scoped_to_the_paired_device(tmp_path):
+    """A latch belongs to ONE paired device. Re-pairing always mints a NEW edge
+    device id server-side, so scoping the meta rows by that id is what makes
+    'deprovisioned' — a terminal state in LifecycleState — recoverable at all."""
+    db = str(tmp_path / "readings.db")
+    old = ReadingStore(None, db)
+    old.device_id = "ed-old"
+    old._set_lifecycle_sync("deprovisioned", "revoked", "2026-08-24T08:00:00Z")
+    assert old._get_lifecycle_sync()["state"] == "deprovisioned"
+
+    fresh = ReadingStore(None, db)
+    fresh.device_id = "ed-new"
+    assert fresh._get_lifecycle_sync() == {"state": "active", "reason": None, "since": None}
+
+
+def test_lifecycle_ignores_a_legacy_unowned_latch(tmp_path):
+    """Rows written before lifecycle carried a device id name no owner, so they
+    cannot be shown to belong to the device that is paired now. Only the server
+    can settle that — it answers 410 or it does not — so the row is discarded
+    and the next request re-decides. Without this, every install that was ever
+    410'd stays mute forever, whatever the user re-pairs."""
+    db = str(tmp_path / "readings.db")
+    legacy = ReadingStore(None, db)  # no device_id → writes the unscoped rows
+    legacy._set_lifecycle_sync("deprovisioned", "revoked", "2026-08-24T08:00:00Z")
+
+    store = ReadingStore(None, db)
+    store.device_id = "ed-new"
+    assert store._get_lifecycle_sync() == {"state": "active", "reason": None, "since": None}
+
+
+def test_reading_the_lifecycle_deletes_the_legacy_rows(tmp_path):
+    """The purge rides on the first scoped read so no caller has to remember it."""
+    db = str(tmp_path / "readings.db")
+    legacy = ReadingStore(None, db)
+    legacy._set_lifecycle_sync("deprovisioned", "revoked", "2026-08-24T08:00:00Z")
+
+    store = ReadingStore(None, db)
+    store.device_id = "ed-new"
+    store._get_lifecycle_sync()
+
+    assert legacy._get_lifecycle_sync() == {"state": "active", "reason": None, "since": None}
+
+
+def test_purge_unowned_lifecycle_deletes_the_legacy_rows(tmp_path):
+    """The unscoped rows can never be authoritative again; leaving them behind
+    only misleads whoever opens readings.db next."""
+    db = str(tmp_path / "readings.db")
+    legacy = ReadingStore(None, db)
+    legacy._set_lifecycle_sync("deprovisioned", "revoked", "2026-08-24T08:00:00Z")
+
+    store = ReadingStore(None, db)
+    store.device_id = "ed-new"
+    store._purge_unowned_lifecycle_sync()
+
+    assert legacy._get_lifecycle_sync() == {"state": "active", "reason": None, "since": None}
+
+
+def test_purge_unowned_lifecycle_is_a_noop_without_a_device_id(tmp_path):
+    """The YAML path may run with no device id; its own rows ARE the unscoped
+    ones, so purging them would delete a live latch."""
+    store = _store(tmp_path)
+    store._set_lifecycle_sync("deprovisioned", "revoked", "2026-08-24T08:00:00Z")
+    store._purge_unowned_lifecycle_sync()
+    assert store._get_lifecycle_sync()["state"] == "deprovisioned"
+
+
+def test_scoped_lifecycle_roundtrips(tmp_path):
+    store = _store(tmp_path)
+    store.device_id = "ed-1"
+    store._set_lifecycle_sync("paused", "disabled", "2026-08-24T08:00:00Z")
+    assert store._get_lifecycle_sync() == {
+        "state": "paused",
+        "reason": "disabled",
+        "since": "2026-08-24T08:00:00Z",
+    }
+
+
 def test_prune_inverters_not_in_keeps_listed_and_deletes_rest(tmp_path):
     """Rows for inverters NOT in keep_ids are deleted; rows for listed ids remain."""
     store = _store(tmp_path)
