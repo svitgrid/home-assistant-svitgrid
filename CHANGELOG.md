@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.21.7 — 2026-08-29
+
+### Fixed
+- **An install that was ever unpaired could never upload again — and
+  re-pairing did not help.** When the cloud revokes a device's key (the usual
+  cause: its household was deleted), it answers 410 and the add-on stops
+  uploading. That state was written to disk and treated as permanent: it
+  survived a restart, removing and re-adding the integration, and pairing into
+  a brand-new household.
+
+  Nothing about that was visible. Pairing still completed, the add-on still
+  received a working key, and the Svitgrid device still appeared in Home
+  Assistant — it simply never sent a reading, so the app waited on "waiting for
+  the first data from Home Assistant" indefinitely. The add-on's own advice,
+  "re-pair to resume", was wrong.
+
+  The stop is now recorded against the device it was about. Pairing always
+  creates a new device, so a new pairing starts clean. Installs already stuck
+  in this state recover on upgrade, with no re-pairing and no manual cleanup:
+  the add-on retries once, and the cloud decides.
+
 ## 0.21.6 — 2026-08-27
 
 ### Fixed
