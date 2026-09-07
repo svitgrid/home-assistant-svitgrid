@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.21.8 — 2026-09-07
+
+### Fixed
+- **Battery amps read about half on a three-phase Deye or Sunsynk.** On the LV
+  three-phase hybrids — `deye_sg04lp3`, `deye_sg05lp3`, `sunsynk_3phase`,
+  `sunsynk_3phase_15k` — some units run two current branches on one shared DC
+  bus. Register 591 carries one of them; register 594 carries the other. The
+  add-on read 591 alone, so a two-branch install reported roughly half the
+  current the pack was really doing, while voltage, power and state of charge
+  were all correct.
+
+  It is not fleet-wide even on one model, so the second branch is not simply
+  added. It is taken only when doing so moves V x I closer to the power the
+  inverter itself reports: a one-branch unit reads 594 = 0 and is left
+  untouched, and a 594 holding something unrelated is pushed away from that
+  power and refused.
+
+  This release only teaches the decoder the new `battery_bus_current_2_sum`
+  behaviour. Nothing changes until the matching register specs are published
+  cloud-side — and they are deliberately held back until this release is out,
+  because an install that meets a behaviour it does not implement refuses the
+  whole spec and reports nothing at all.
+
+  Matches the edge firmware (svitgrid#553) and the mobile harvester
+  (svitgrid#558). Closes svitgrid#562.
+
 ## 0.21.7 — 2026-08-29
 
 ### Fixed

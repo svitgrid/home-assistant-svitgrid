@@ -102,6 +102,7 @@ def test_builtin_catalog_matches_dart_kbuiltincatalog():
                 "grid_relay_bit",
                 "daily_grid_unavailable",
                 "load_energy_balance",
+                "battery_bus_current_2_sum",
             }
         )
         == BUILTIN_CATALOG

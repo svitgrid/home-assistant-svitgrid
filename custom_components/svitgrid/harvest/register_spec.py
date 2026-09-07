@@ -40,6 +40,18 @@ BUILTIN_CATALOG = frozenset(
         # Must stay identical to Dart's kBuiltinCatalog
         # (packages/inverter_protocol/lib/src/spec/builtin_catalog.dart).
         "load_energy_balance",
+        # Second battery-BUS current branch folded into `batteryCurrent` on the
+        # LV 3-phase hybrids (reg 594 — svitgrid#553/#558). inputs =
+        # [batteryVoltage, batteryCurrent, batteryBusCurrent2, batteryPower].
+        #
+        # Not expressible with the existing primitives: the sum is taken only
+        # when it moves V x I CLOSER to the power the inverter reports, which is
+        # a comparison rather than an arithmetic op. A blanket sum would be
+        # wrong for the one-branch units on the same model.
+        #
+        # Must stay identical to Dart's kBuiltinCatalog
+        # (packages/inverter_protocol/lib/src/spec/builtin_catalog.dart).
+        "battery_bus_current_2_sum",
     }
 )
 

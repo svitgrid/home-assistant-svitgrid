@@ -196,6 +196,41 @@ def _apply_builtin(d: Derivation, out: dict[str, float | None], spec: RegisterSp
             return
         derived = pv - bat + grid
         out[d.field] = derived if derived > 0 else 0.0
+    elif b == "battery_bus_current_2_sum":
+        # inputs = [batteryVoltage, batteryCurrent, batteryBusCurrent2,
+        # batteryPower]. Mirrors reference_decoder.dart's branch,
+        # ModelRegisterDecoder's block and firmware battery_bus_current_2_present
+        # (battery2_gate.h) exactly.
+        #
+        # Reg 590 is already the BUS total on this platform, so only the CURRENT
+        # is short: the second branch is folded into batteryCurrent and
+        # batteryPower is left alone. Not published as a second pack — there is
+        # no second voltage or SOC beside it.
+        #
+        # MIXED CONVENTIONS, and getting them wrong inverts the gate rather than
+        # breaking it: the two currents arrive RAW while batteryPower has already
+        # been through battery_sign_normalize. So both currents are normalised
+        # here for the COMPARISON and the sum is written back RAW, matching the
+        # read it overwrites.
+        v = out.get(d.inputs[0])
+        i1_raw = out.get(d.inputs[1])
+        i2_raw = out.get(d.inputs[2])
+        p = out.get(d.inputs[3])
+        if v is None or i1_raw is None or i2_raw is None or p is None:
+            return
+        flip = spec.flags.battery_positive_is_discharge
+        i1 = -i1_raw if flip else i1_raw
+        i2 = -i2_raw if flip else i2_raw
+        # Below the power floor every term is measurement noise and the
+        # comparison decides nothing, so the reading is left as read.
+        if v <= 0 or i2 == 0 or abs(p) < 100.0:
+            return
+        err_one = abs(v * i1 - p)
+        err_sum = abs(v * (i1 + i2) - p)
+        if err_sum < err_one:
+            summed = i1_raw + i2_raw
+            if abs(summed) <= 500:
+                out[d.field] = summed
     elif b == "daily_grid_unavailable":
         for f in d.inputs:
             out[f] = None
