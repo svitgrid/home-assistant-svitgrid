@@ -22,6 +22,7 @@ from .api_client import CommandAckFailed, DeviceEvicted, DeviceStopped, Svitgrid
 from .cloud_endpoint_handler import is_allowed_api_base, probe_endpoint_auth
 from .command_auth import verify_signed_command
 from .const import (
+    ADD_INVERTER_COMMAND,
     ADD_TRUSTED_KEY_COMMAND,
     COMMAND_POLL_CEILING_S,
     COMMAND_POLL_INTERVAL_S,
@@ -29,6 +30,7 @@ from .const import (
     DISPATCHABLE_COMMANDS,
     ENABLE_ISLAND_COMMAND,
     LEGACY_ISLAND_DEVICE_ID,
+    MAX_INVERTERS,
     POLL_NOW_COMMAND,
     REVOKE_TRUSTED_KEY_COMMAND,
     SET_CLOUD_ENDPOINT_COMMAND,
@@ -38,10 +40,12 @@ from .const import (
     TRUSTED_KEY_RESYNC_MIN_INTERVAL_S,
 )
 from .harvest_config_apply import (
+    apply_add_inverter,
     apply_harvest_config_change,
     apply_read_source_change,
     probe_modbus_reachable,
 )
+from .inverter_entry import inverter_entry_from_api
 from .keystore import SvitgridKeystore
 from .signing import sign_payload
 
@@ -389,6 +393,112 @@ async def process_command(
                 cmd_id,
                 payload,
             )
+        return
+
+    # Arm: add_inverter — the app created an inverter in the cloud for a
+    # station that is ALREADY paired, and this is the only thing that tells us.
+    # The entry's inverter list is written once, at pairing, and no code path
+    # re-reads it from the cloud; without this the new inverter renders on the
+    # dashboard and is polled by nothing, with no error anywhere.
+    #
+    # Payload is the cloud's own inverter description, the same shape
+    # /finalize returns in its `inverters` array, so one translation serves
+    # both.
+    if cmd_type == ADD_INVERTER_COMMAND:
+        payload = command.get("payload") or {}
+        inverter_id = payload.get("inverterId")
+
+        if hass is None or entry is None:
+            _LOGGER.warning(
+                "add_inverter rejected — no ConfigEntry (YAML install?). cmd_id=%s", cmd_id
+            )
+            await _send_signed_ack(
+                api_client=api_client,
+                api_key=api_key,
+                command_id=cmd_id,
+                success=False,
+                rejected=True,
+                reason="yaml_config_no_entry",
+                our_private_key=our_private_key,
+                our_signing_key_id=our_signing_key_id,
+                executor_version=executor_version,
+            )
+            return
+
+        if not inverter_id:
+            _LOGGER.error("add_inverter rejected — payload names no inverterId. cmd_id=%s", cmd_id)
+            await _send_signed_ack(
+                api_client=api_client,
+                api_key=api_key,
+                command_id=cmd_id,
+                success=False,
+                rejected=True,
+                reason="missing_inverter_id",
+                our_private_key=our_private_key,
+                our_signing_key_id=our_signing_key_id,
+                executor_version=executor_version,
+            )
+            return
+
+        existing = list(entry.data.get("inverters") or [])
+
+        # Already here. The cloud retries any command whose ACK it did not see,
+        # so this is the ordinary case on a flaky link — and appending twice
+        # would poll the inverter twice and publish every reading twice.
+        # SUCCESS rather than rejection: the requested state is the state we
+        # are in, and an error here would show the owner a failure for
+        # something that worked.
+        if any(inv.get("inverter_id") == inverter_id for inv in existing):
+            _LOGGER.info(
+                "add_inverter: %s already configured — nothing to do. cmd_id=%s",
+                inverter_id,
+                cmd_id,
+            )
+            await _send_signed_ack(
+                api_client=api_client,
+                api_key=api_key,
+                command_id=cmd_id,
+                success=True,
+                our_private_key=our_private_key,
+                our_signing_key_id=our_signing_key_id,
+                executor_version=executor_version,
+            )
+            return
+
+        # The same cap /api/svitgrid/hello promises the app and the API
+        # enforces at claim. Accepting past it is how an inverter ends up
+        # stored and never polled.
+        if len(existing) >= MAX_INVERTERS:
+            _LOGGER.error(
+                "add_inverter rejected — already carrying %d inverters. cmd_id=%s",
+                len(existing),
+                cmd_id,
+            )
+            await _send_signed_ack(
+                api_client=api_client,
+                api_key=api_key,
+                command_id=cmd_id,
+                success=False,
+                rejected=True,
+                reason="too_many_inverters",
+                our_private_key=our_private_key,
+                our_signing_key_id=our_signing_key_id,
+                executor_version=executor_version,
+            )
+            return
+
+        # ACK before apply/reload: the reload tears down the api_client
+        # mid-flight, the same race the arms above avoid the same way.
+        await _send_signed_ack(
+            api_client=api_client,
+            api_key=api_key,
+            command_id=cmd_id,
+            success=True,
+            our_private_key=our_private_key,
+            our_signing_key_id=our_signing_key_id,
+            executor_version=executor_version,
+        )
+        await apply_add_inverter(hass, entry, inverter_entry_from_api(payload))
         return
 
     # === Arm 1c-ter: set_read_source (relay <-> native harvest) ===

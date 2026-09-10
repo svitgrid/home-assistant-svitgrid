@@ -52,7 +52,7 @@ from .harvest.event_scheduler_loop import run_event_scheduler_loop
 from .harvest.spec_cache import load_spec
 from .harvest.spec_health import build_spec
 from .harvest.write_executor import WriteExecutor
-from .http_views import register_views
+from .http_views import SvitgridHelloView, register_views
 from .island_event_store import IslandEventStore
 from .keystore import SvitgridKeystore
 from .lifecycle import DEPROVISIONED, LifecycleState
@@ -416,6 +416,22 @@ CONFIG_SCHEMA = vol.Schema(
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up the Svitgrid integration from YAML config."""
+    # Registered BEFORE the YAML short-circuit below, and outside
+    # async_setup_entry, because the caller this view exists for has not paired
+    # yet: the Svitgrid app sweeps the LAN during onboarding and needs to know
+    # the add-on is here, what version it is, and — while the owner is looking
+    # at the pairing screen — the code, so they do not have to retype it.
+    # register_views() runs per entry and would answer nobody until after the
+    # pairing it is meant to help.
+    try:
+        hass.http.register_view(SvitgridHelloView())
+    except (AttributeError, RuntimeError) as err:
+        # AttributeError: no http component (a bare test/YAML harness).
+        # RuntimeError: the route is already registered — view routes are
+        # global to hass.http and outlive a reload, the same swallow
+        # register_views() makes for its own views.
+        _LOGGER.debug("hello view not registered: %s", err)
+
     conf = config.get(DOMAIN)
     if not conf:
         return True  # no svitgrid: block — nothing to do

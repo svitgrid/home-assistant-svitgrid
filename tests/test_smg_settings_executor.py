@@ -16,12 +16,12 @@ from __future__ import annotations
 
 import pytest
 
-from custom_components.svitgrid.eybond_at.smg_settings import smg_ii_protocol_number
 from custom_components.svitgrid.executors.smg_settings_executor import (
     EybondSmgSettingsExecutor,
     NoCollectorConnected,
     SmgSettingsExecutor,
 )
+from custom_components.svitgrid.eybond_at.smg_settings import smg_ii_protocol_number
 
 
 class FakeLink:
@@ -88,7 +88,7 @@ def bench_48v() -> dict[int, int]:
     return r
 
 
-def truncating(registers: dict[int, int], *, to: int) -> "TruncatingLink":
+def truncating(registers: dict[int, int], *, to: int) -> TruncatingLink:
     return TruncatingLink(registers, keep=to)
 
 

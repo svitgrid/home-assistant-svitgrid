@@ -17,8 +17,6 @@
 # importing (a source, added). Clamped at zero.
 import math
 
-import pytest
-
 from custom_components.svitgrid.harvest.decoder import decode
 from custom_components.svitgrid.harvest.register_spec import (
     BUILTIN_CATALOG,

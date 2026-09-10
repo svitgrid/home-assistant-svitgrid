@@ -219,6 +219,12 @@ INTEGRATION_COMMANDS = frozenset({SET_CLOUD_INGEST_COMMAND})
 # trust posture as set_cloud_endpoint/enable_island. Command-poller probes
 # the new endpoint's TCP reachability before applying (fail-closed).
 SET_HARVEST_CONFIG_COMMAND = "set_harvest_config"
+
+# Teaches an already-paired add-on about an inverter the app just created in
+# the cloud. The entry's inverter list is written once, at pairing, and nothing
+# re-reads it from the cloud — so without this command a second inverter exists
+# in Firestore, renders on the dashboard, and is polled by nothing at all.
+ADD_INVERTER_COMMAND = "add_inverter"
 # Switch an inverter between relay (edge-forwarded) and native (direct
 # Modbus harvest) read sources. Internal (no admin signature required) —
 # RBAC-gated at the API level (household owner/admin), same trust posture
@@ -244,6 +250,7 @@ INTERNAL_COMMANDS = frozenset(
         DISABLE_ISLAND_COMMAND,
         SET_CLOUD_INGEST_COMMAND,
         SET_HARVEST_CONFIG_COMMAND,
+        ADD_INVERTER_COMMAND,
         SET_READ_SOURCE_COMMAND,
         POLL_NOW_COMMAND,
     }
@@ -344,3 +351,11 @@ GITHUB_USER_AGENT = "svitgrid-ha-integration"
 UPDATE_CHECK_INTERVAL_S = 12 * 3600  # how often to poll GitHub for a new release
 RESTART_GUARD_WINDOW_S = 60  # defer auto-restart if a command ran this recently
 CONF_AUTO_UPDATE = "auto_update"  # entry-options key; default True
+
+# The most inverters this add-on will carry, reported verbatim by
+# /api/svitgrid/hello so the app reads a NUMBER rather than inferring a
+# capability from a version string. Mirrors MAX_HA_INVERTERS in the API
+# (services/api/src/models/schemas.ts) — the server refuses more than this at
+# claim, and an add-on promising more than the server accepts would strand the
+# extra inverters at pairing with nothing said.
+MAX_INVERTERS = 16

@@ -59,6 +59,7 @@ from .eybond_at.setup import (
     no_collectors_advice,
     subnet_announce_targets,
 )
+from .inverter_entry import inverters_from_finalize
 from .keystore import SvitgridKeystore
 from .pairing_client import (
     PairingClaimed,
@@ -602,6 +603,12 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
 
             self._secret = start_result["secret"]
             self._code = start_result["code"]
+            # Publish the code — and ONLY the code — for /api/svitgrid/hello,
+            # so the Svitgrid app can prefill it rather than asking the owner
+            # to copy six characters between two screens. The secret sitting
+            # beside it here is what finalizes a pairing; publishing that would
+            # let anyone on the LAN complete this pairing themselves.
+            self.hass.data.setdefault(DOMAIN, {})["pending_pairing"] = {"code": self._code}
             self._pair_task = self.hass.async_create_task(self._poll_for_claim(client))
 
         if not self._pair_task.done():
@@ -622,6 +629,11 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
             return self.async_abort(reason="pairing_failed")
         finally:
             self._pair_task = None
+            # The window closes here on every ending the poll has — claimed,
+            # expired and failed all pass through this block. A code still on
+            # offer afterwards sends the app into a pairing that cannot finish,
+            # which reads as the app being broken.
+            self.hass.data.setdefault(DOMAIN, {})["pending_pairing"] = None
 
         return self.async_show_progress_done(next_step_id="pair_finalize")
 
@@ -790,24 +802,20 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
         # starts ("no inverters configured; nothing to publish"). The flat
         # fields below are kept for back-compat; the inverters list is
         # authoritative.
-        inverter = {
-            "inverter_id": self._final_payload["hardwareId"],
-            "entity_map": self._final_payload.get("entityMap") or {},
-            "command_recipes": self._final_payload.get("commands") or [],
-            "command_config": {"hub_name": "solarman", "slave_id": 1, "battery_voltage": 52.8},
-            "brand": self._final_payload.get("brand"),
-            "model": self._final_payload.get("model"),
-            "phases": self._final_payload.get("phases"),
-            "has_battery": self._final_payload.get("hasBattery"),
-            "pv_strings": self._final_payload.get("pvStrings"),
-            "preset_id": self._final_payload.get("presetId"),
-        }
-        # SP-B: thread the direct-Modbus harvest spec into the inverter dict
-        # when one was collected (async_step_harvest_config). Absent on the
-        # preset / HA-only paths, so only add the key when set to keep those
-        # entries unchanged.
-        if self._harvest_config is not None:
-            inverter["harvest_config"] = self._harvest_config
+        # Every inverter the response describes — the `inverters` array when
+        # the API itemised the station, else the flat fields, which is what an
+        # API deployed before the array returns.
+        inverters = inverters_from_finalize(
+            self._final_payload, fallback_id=self._final_payload["hardwareId"]
+        )
+        # SP-B: thread the direct-Modbus harvest spec collected in this flow
+        # (async_step_harvest_config) onto the FIRST inverter. It describes one
+        # address, asked once, so it can only ever be the first one's — a
+        # second inverter's address arrives in the response's own array.
+        # Absent on the preset / HA-only paths, so only set when collected,
+        # and never over an address the cloud already named.
+        if self._harvest_config is not None and "harvest_config" not in inverters[0]:
+            inverters[0]["harvest_config"] = self._harvest_config
         return self.async_create_entry(
             title=self._entry_title(),
             data={
@@ -829,7 +837,7 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
                 "trusted_key_status": self._final_payload.get("trustedKeyStatus") or "approved",
                 "preset_id": self._final_payload.get("presetId"),
                 # Canonical v2 shape read by _inverters_from_entry.
-                "inverters": [inverter],
+                "inverters": inverters,
                 # Phase 2 flat fields (None when /finalize had no preset) — kept
                 # for back-compat; the inverters list above is authoritative.
                 "entity_map": self._final_payload.get("entityMap") or {},

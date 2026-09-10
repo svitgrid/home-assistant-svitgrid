@@ -94,3 +94,23 @@ async def apply_read_source_change(
         await hass.config_entries.async_reload(entry.entry_id)
 
     hass.async_create_task(_do_reload())
+
+
+async def apply_add_inverter(hass, entry, inverter: dict) -> None:
+    """Append `inverter` to the entry's inverter list and reload.
+
+    Deep-copies entry.data for the same reason the two functions above do: a
+    shallow copy shares the inner dicts, so `new_data == entry.data` by the
+    time `async_update_entry` runs and Home Assistant drops an unchanged
+    `data=` as a no-op — the append survives until the next restart and then
+    silently vanishes.
+
+    The caller has already fenced the duplicate and the cap; this only writes.
+    """
+    # entry.data is a read-only MappingProxyType at runtime; copy.deepcopy can't
+    # pickle a mappingproxy (Python 3.14 TypeError), so dict()-convert first.
+    new_data = copy.deepcopy(dict(entry.data))
+    new_data.setdefault("inverters", []).append(copy.deepcopy(inverter))
+    _suppress_listener_reload(hass)
+    hass.config_entries.async_update_entry(entry, data=new_data)
+    hass.async_create_task(hass.config_entries.async_reload(entry.entry_id))

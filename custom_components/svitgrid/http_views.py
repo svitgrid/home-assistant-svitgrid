@@ -29,8 +29,15 @@ from aiohttp import web
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.core import HomeAssistant
 
+from .api_client import _integration_version
 from .command_auth import verify_signed_command
-from .const import DOMAIN, INTEGRATION_COMMANDS, LEGACY_ISLAND_DEVICE_ID, SET_CLOUD_INGEST_COMMAND
+from .const import (
+    DOMAIN,
+    INTEGRATION_COMMANDS,
+    LEGACY_ISLAND_DEVICE_ID,
+    MAX_INVERTERS,
+    SET_CLOUD_INGEST_COMMAND,
+)
 from .hourly_energy import per_hour_deltas, to_local_hour_rows
 from .island_auth import island_key_present_and_valid, island_request_authorized
 from .local_time import local_day_of, local_hour_index
@@ -216,6 +223,57 @@ class SvitgridHealthView(_BaseView):
         if not await self._authorize(request):
             return web.Response(status=401)
         return self.json(await self._store.get_lifecycle())
+
+
+class SvitgridHelloView(HomeAssistantView):
+    """GET /api/svitgrid/hello — the one view an UNPAIRED caller may read.
+
+    The Svitgrid app sweeps the LAN for port 8123 during onboarding. That
+    finds a Home Assistant and tells it nothing else: every other view here
+    refuses a caller with no HA session and no island key, which is exactly
+    the caller doing the onboarding. So the owner retypes a code the add-on
+    already has, and the app cannot tell an add-on that carries several
+    inverters from one that would accept them and poll only the first.
+
+    Deliberately unauthenticated, and deliberately thin. Nothing here is a
+    secret from someone already on this network and already talking to this
+    port: version and instance name sit on the login page HA serves them, and
+    the pairing code is on the screen of the machine they are standing at.
+
+    The code is the one field that is not merely descriptive, so it is fenced
+    twice: it is returned ONLY while a pairing is pending, and the flow clears
+    that the instant the pairing is claimed, cancelled or expires. It is
+    single-use and minutes-lived either way.
+    """
+
+    url = "/api/svitgrid/hello"
+    name = "api:svitgrid:hello"
+    requires_auth = False
+
+    async def get(self, request):
+        hass = request.app["hass"]
+        data = hass.data.get(DOMAIN) or {}
+        pending = data.get("pending_pairing") or {}
+        # ONLY the code. `pending` is the flow's own working state and carries
+        # the pairing secret, the API key and the private key beside it —
+        # returning the dict would publish all of them to the LAN.
+        code = pending.get("code") if isinstance(pending, dict) else None
+
+        return self.json(
+            {
+                "service": "svitgrid",
+                "version": _integration_version(),
+                "instanceName": hass.config.location_name,
+                # Asked of Home Assistant rather than tracked in a counter of
+                # our own: a paired add-on is the household's existing station,
+                # not a fresh one to onboard, and a counter that drifts would
+                # offer a working station for re-onboarding.
+                "paired": bool(hass.config_entries.async_entries(DOMAIN)),
+                "maxInverters": MAX_INVERTERS,
+                "pairingPending": bool(code),
+                **({"code": code} if code else {}),
+            }
+        )
 
 
 class SvitgridCommandsView(HomeAssistantView):

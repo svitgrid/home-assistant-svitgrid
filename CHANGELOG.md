@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.22.0 — 2026-09-10
+
+### Added
+- **A station can now carry more than one inverter from the start.** Pairing
+  used to describe a single inverter, so a house with two had to pair one and
+  add the other by hand afterwards. The pairing response now carries every
+  inverter the Svitgrid app found, each with its own entity mapping and, on the
+  direct-Modbus path, its own address.
+- **An inverter added to an already-paired station arrives on its own.** The
+  add-on's inverter list is written once, at pairing, and nothing re-read it
+  from the cloud — so an inverter added later existed in the app and was polled
+  by nothing, with no error shown anywhere. The new `add_inverter` command
+  appends it and reloads.
+- **`GET /api/svitgrid/hello`.** The one endpoint that answers without
+  authentication, so the Svitgrid app can find this add-on on the network
+  during onboarding: it reports the version, the instance name, whether the
+  add-on is already paired, and how many inverters it can carry. While a
+  pairing is pending it also returns the six-character code, so the app fills
+  it in instead of asking you to copy it from one screen to another. The code
+  is offered only during that window, and the pairing secret is never
+  published.
+
 ## 0.21.7 — 2026-08-29
 
 ### Fixed
