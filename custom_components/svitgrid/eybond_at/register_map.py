@@ -148,9 +148,25 @@ class RegisterMap:
         return plan
 
 
+# Protocols 1 and 11 share this layout, each measured on its own hardware.
+#
+# 11 is the bench ANJ-4.2KW-24V (serial 99432604107106, 2026-08-20/21). 1 is a
+# customer's ANJ-5KW (device type 0x3501, serial 99432507102679, 2026-08-29),
+# captured by the mobile app's unknown-protocol register sweep: every field
+# below decoded to a plausible value and none conflicted -- 200.5 V mains,
+# 50.02 Hz, 199.7 V output, 28.8 V battery, 100 % SOC, 28 C.
+#
+# Corroborated by the SMG II RS232 map (syssi/esphome-smg-ii), which agrees on
+# all 24 registers it assigns. The published 8/11 kW map for protocols 3-6 was
+# tested against the same frame and REFUTED -- it puts frequency at 227 (would
+# read 0.28 Hz) and temperature at 231 (340 C) -- which is why 3-6 stay absent.
+#
+# One value is unexplained and deliberately not acted on: register 215 read
+# 28.8 V on a unit catalogued as 48 V. It is published as measured; nothing
+# here rescales it.
 SMG_II_PROTOCOL_11 = RegisterMap(
-    name="EASUN/ISolar SMG II, protocol 11",
-    protocol_numbers=(11,),
+    name="EASUN/ISolar SMG II, protocols 1 and 11",
+    protocol_numbers=(1, 11),
     topology_register=300,
     fields=(
         FieldSpec("runningState", 201),
