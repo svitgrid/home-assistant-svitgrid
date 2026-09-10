@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.22.1 — 2026-09-10
+
+### Fixed
+- **The Svitgrid app could not find this add-on until you had already paired
+  it.** `/api/svitgrid/hello` was registered when the integration is set up,
+  and Home Assistant does not set up an integration that has no configuration
+  yet — so on a fresh install the endpoint answered 404, which is exactly the
+  install it exists for. It is now also registered the moment you open
+  Svitgrid in Home Assistant, which is when the pairing code appears, so the
+  app can fill the code in for you instead of asking you to type it.
+
 ## 0.22.0 — 2026-09-10
 
 ### Added

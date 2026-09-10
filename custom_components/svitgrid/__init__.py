@@ -52,7 +52,7 @@ from .harvest.event_scheduler_loop import run_event_scheduler_loop
 from .harvest.spec_cache import load_spec
 from .harvest.spec_health import build_spec
 from .harvest.write_executor import WriteExecutor
-from .http_views import SvitgridHelloView, register_views
+from .http_views import ensure_hello_view, register_views
 from .island_event_store import IslandEventStore
 from .keystore import SvitgridKeystore
 from .lifecycle import DEPROVISIONED, LifecycleState
@@ -423,14 +423,10 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     # at the pairing screen — the code, so they do not have to retype it.
     # register_views() runs per entry and would answer nobody until after the
     # pairing it is meant to help.
-    try:
-        hass.http.register_view(SvitgridHelloView())
-    except (AttributeError, RuntimeError) as err:
-        # AttributeError: no http component (a bare test/YAML harness).
-        # RuntimeError: the route is already registered — view routes are
-        # global to hass.http and outlive a reload, the same swallow
-        # register_views() makes for its own views.
-        _LOGGER.debug("hello view not registered: %s", err)
+    # NOT sufficient on its own — see ensure_hello_view. A domain with no
+    # config entry is never set up, so this never runs on the install the view
+    # is for; the config flow registers it as well.
+    ensure_hello_view(hass)
 
     conf = config.get(DOMAIN)
     if not conf:

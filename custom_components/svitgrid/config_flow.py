@@ -59,6 +59,7 @@ from .eybond_at.setup import (
     no_collectors_advice,
     subnet_announce_targets,
 )
+from .http_views import ensure_hello_view
 from .inverter_entry import inverters_from_finalize
 from .keystore import SvitgridKeystore
 from .pairing_client import (
@@ -411,6 +412,12 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """First step — present Pair vs Manual vs direct-harvest."""
+        # Opening this flow is the first moment Home Assistant loads us on an
+        # install that has never paired — and the moment the Svitgrid app is
+        # scanning the network for exactly this box. Registering the hello
+        # view here is what lets it find us, and what lets it prefill the
+        # pairing code the next step puts on screen.
+        ensure_hello_view(self.hass)
         return self.async_show_menu(
             step_id="user",
             menu_options=["pair", "manual", "harvest_config"],

@@ -1042,3 +1042,34 @@ def register_views(hass: HomeAssistant, store) -> None:
                 type(view).__name__,
                 err,
             )
+
+
+def ensure_hello_view(hass) -> None:
+    """Register :class:`SvitgridHelloView`, idempotently.
+
+    Called from BOTH `async_setup` and the config flow's first step, because
+    neither alone covers the install this view exists for. Home Assistant
+    calls `async_setup` when the domain is set up, and a domain with no config
+    entry and no YAML block is never set up — the integration is discovered
+    and nothing more. So on a never-paired install, the one the Svitgrid app
+    is scanning for, the route did not exist and `/api/svitgrid/hello`
+    answered 404.
+
+    Opening the Svitgrid config flow loads the integration, and is also the
+    moment the pairing code appears on screen — so the flow registers it too,
+    and the code the app prefills is the code the owner is looking at.
+
+    Never raises. The view is a convenience for onboarding; a harness with no
+    http component, or a route already registered by an earlier call, must not
+    be a reason setup or a config flow fails.
+    """
+    http = getattr(hass, "http", None)
+    if http is None:
+        return
+    try:
+        http.register_view(SvitgridHelloView())
+    except RuntimeError as err:
+        # View routes are GLOBAL to hass.http and outlive a config-entry
+        # reload, so a second registration raises "Added route will never be
+        # executed". The existing route already serves.
+        _LOGGER.debug("hello view already registered: %s", err)
