@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- **Pairing ended with "Unknown error occurred" when the cloud refused the
+  claim.** The Svitgrid cloud now answers 422 `no_buildable_inverter` when the
+  app's claim named inverters none of which resolve to a preset or a manual
+  spec (an app build that lost the inverter profile at claim time,
+  2026-09-11). The finalize call did not catch it, so Home Assistant showed
+  its generic error and the log held a traceback, with nothing telling the
+  owner what happened or what to do. The refusal is now typed
+  (`PairingRefused`, carrying the cloud's `code`) and the flow ends with a
+  message that names the cause and the way out: nothing was created, that
+  code cannot be claimed again, update the app and start the pairing again
+  for a new code. Any other finalize error ends the flow as "Pairing failed"
+  instead of escaping.
+
 ## 0.22.2 — 2026-09-10
 
 Merges the 0.21.8 harvest fixes, which were written on a branch while 0.22.0

@@ -629,3 +629,120 @@ async def test_pair_finalize_defaults_trusted_key_status_to_approved(
     mean approved, or every healthy household shows a false approval warning."""
     data = await _run_pair_flow_with_finalize(hass, dict(_BASE_FINALIZE))
     assert data["trusted_key_status"] == "approved"
+
+
+@pytest.mark.asyncio
+async def test_pair_finalize_refused_claim_aborts_with_its_own_reason(
+    hass: HomeAssistant, enable_custom_integrations
+) -> None:
+    """A 422 `no_buildable_inverter` at finalize ends the flow with a message
+    that names the cause and the way out (pair again for a new code) — and
+    creates no entry. Before this it went uncaught: Home Assistant showed
+    "Unknown error occurred" and the log held a traceback."""
+    from cryptography.hazmat.primitives.asymmetric import ec
+
+    from custom_components.svitgrid.pairing_client import PairingClaimed, PairingRefused
+
+    fake_priv = ec.generate_private_key(ec.SECP256R1())
+
+    async def _instant_sleep(_: float) -> None:
+        """No-op sleep so the poll loop runs immediately."""
+
+    results: list[dict] = []
+    manager = hass.config_entries.flow
+    original_configure = manager.async_configure
+
+    async def _recording_configure(*args, **kwargs):
+        # The flow manager advances a finished progress step by calling
+        # itself; recording that call is the only way to read the abort.
+        result = await original_configure(*args, **kwargs)
+        results.append(result)
+        return result
+
+    with (
+        patch("custom_components.svitgrid.config_flow.PairingClient") as mock_client_cls,
+        patch(
+            "custom_components.svitgrid.config_flow.generate_keypair",
+            return_value=(fake_priv, "04" + "a" * 128),
+        ),
+        patch("custom_components.svitgrid.config_flow.asyncio.sleep", side_effect=_instant_sleep),
+        patch.object(manager, "async_configure", _recording_configure),
+    ):
+        mock_client = mock_client_cls.return_value
+        mock_client.start = AsyncMock(
+            return_value={"secret": "secret-1", "code": "7K9PA2", "expiresIn": 300}
+        )
+        mock_client.get_status = AsyncMock(
+            return_value=PairingClaimed(household_id="h-abc", preset_id=None)
+        )
+        mock_client.finalize = AsyncMock(
+            side_effect=PairingRefused(
+                422,
+                "no_buildable_inverter",
+                "None of the claimed inverters can be created: each needs a preset or a manual spec.",
+            )
+        )
+
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": config_entries.SOURCE_USER}
+        )
+        await manager.async_configure(result["flow_id"], user_input={"next_step_id": "pair"})
+        await hass.async_block_till_done()
+
+    aborts = [r for r in results if r["type"] == FlowResultType.ABORT]
+    assert aborts, f"the flow never aborted: {[r['type'] for r in results]}"
+    assert aborts[-1]["reason"] == "claim_not_buildable"
+    assert hass.config_entries.async_entries(DOMAIN) == []
+
+
+@pytest.mark.asyncio
+async def test_pair_finalize_plain_failure_aborts_as_pairing_failed(
+    hass: HomeAssistant, enable_custom_integrations
+) -> None:
+    """Any other finalize error still ends the flow, as `pairing_failed`, not
+    as an uncaught exception."""
+    from cryptography.hazmat.primitives.asymmetric import ec
+
+    from custom_components.svitgrid.pairing_client import PairingClaimed, PairingError
+
+    fake_priv = ec.generate_private_key(ec.SECP256R1())
+
+    async def _instant_sleep(_: float) -> None:
+        """No-op sleep."""
+
+    results: list[dict] = []
+    manager = hass.config_entries.flow
+    original_configure = manager.async_configure
+
+    async def _recording_configure(*args, **kwargs):
+        result = await original_configure(*args, **kwargs)
+        results.append(result)
+        return result
+
+    with (
+        patch("custom_components.svitgrid.config_flow.PairingClient") as mock_client_cls,
+        patch(
+            "custom_components.svitgrid.config_flow.generate_keypair",
+            return_value=(fake_priv, "04" + "a" * 128),
+        ),
+        patch("custom_components.svitgrid.config_flow.asyncio.sleep", side_effect=_instant_sleep),
+        patch.object(manager, "async_configure", _recording_configure),
+    ):
+        mock_client = mock_client_cls.return_value
+        mock_client.start = AsyncMock(
+            return_value={"secret": "secret-1", "code": "7K9PA2", "expiresIn": 300}
+        )
+        mock_client.get_status = AsyncMock(
+            return_value=PairingClaimed(household_id="h-abc", preset_id=None)
+        )
+        mock_client.finalize = AsyncMock(side_effect=PairingError("finalize failed: HTTP 503"))
+
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": config_entries.SOURCE_USER}
+        )
+        await manager.async_configure(result["flow_id"], user_input={"next_step_id": "pair"})
+        await hass.async_block_till_done()
+
+    aborts = [r for r in results if r["type"] == FlowResultType.ABORT]
+    assert aborts and aborts[-1]["reason"] == "pairing_failed"
+    assert hass.config_entries.async_entries(DOMAIN) == []

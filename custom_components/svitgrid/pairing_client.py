@@ -24,6 +24,24 @@ class PairingConflict(PairingError):
     """409 — pairing in wrong state (already claimed / not yet claimed)."""
 
 
+class PairingRefused(PairingError):
+    """A 4xx whose JSON body names a reason (`code`) the flow can act on.
+
+    The cloud answers 422 `no_buildable_inverter` when the app's claim named
+    inverters none of which resolve to a preset or a manual spec (an app build
+    that lost the profile at claim time, 2026-09-11). Nothing was created, the
+    pairing stays `claimed`, and this code cannot be re-claimed: the only way
+    on is a fresh pairing. Typed so the flow can say that, instead of
+    re-raising a bare error that Home Assistant renders as "Unknown error".
+    """
+
+    def __init__(self, status: int, code: str, message: str) -> None:
+        super().__init__(f"finalize refused (HTTP {status}, {code}): {message}")
+        self.status = status
+        self.code = code
+        self.message = message
+
+
 @dataclass
 class PairingPending:
     """Pairing exists, waiting for mobile to claim."""
@@ -118,5 +136,27 @@ class PairingClient:
             if resp.status == 409:
                 raise PairingConflict("pairing not claimed yet")
             if resp.status != 200:
+                refusal = await _refusal_body(resp)
+                if refusal is not None:
+                    raise PairingRefused(resp.status, *refusal)
                 raise PairingError(f"finalize failed: HTTP {resp.status}")
             return await resp.json()
+
+
+async def _refusal_body(resp: aiohttp.ClientResponse) -> tuple[str, str] | None:
+    """`(code, message)` when a non-200 body is JSON carrying a `code`, else None.
+
+    A body that is not JSON, or carries no `code`, is a plain failure with
+    nothing for the flow to name.
+    """
+    try:
+        body = await resp.json()
+    except Exception:  # noqa: BLE001 — anything but JSON is "no reason given"
+        return None
+    if not isinstance(body, dict):
+        return None
+    code = body.get("code")
+    if not isinstance(code, str) or not code:
+        return None
+    message = body.get("error")
+    return code, message if isinstance(message, str) else ""

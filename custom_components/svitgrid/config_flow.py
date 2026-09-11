@@ -68,6 +68,7 @@ from .pairing_client import (
     PairingError,
     PairingExpired,
     PairingPending,
+    PairingRefused,
 )
 from .signing import generate_keypair, serialize_private_key
 
@@ -681,15 +682,32 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
                     # via entry.data["island_key"] → keystore.save(island_key=…).
                     await SvitgridKeystore(self.hass).async_set_island_key(island_key)
 
-            self._final_payload = await self._pairing_client.finalize(
-                secret=self._secret,
-                public_key_hex=self._public_key_hex,
-                signing_key_id=self._signing_key_id,
-                # Manual-mode: hand the user-collected inverter spec to the API
-                # so it creates inverters/{hwid} with the right brand / entityMap.
-                # Preset-mode: None — API looks up the preset server-side.
-                inverter=self._manual_inverter,
-            )
+            try:
+                self._final_payload = await self._pairing_client.finalize(
+                    secret=self._secret,
+                    public_key_hex=self._public_key_hex,
+                    signing_key_id=self._signing_key_id,
+                    # Manual-mode: hand the user-collected inverter spec to the API
+                    # so it creates inverters/{hwid} with the right brand / entityMap.
+                    # Preset-mode: None — API looks up the preset server-side.
+                    inverter=self._manual_inverter,
+                )
+            except PairingRefused as err:
+                # The cloud refused to build the station from what the app
+                # claimed — nothing was created, and this code cannot be
+                # claimed again, so the owner must start over with a new one.
+                # Said in the owner's terms; before this the exception went
+                # uncaught and Home Assistant showed "Unknown error occurred".
+                _LOGGER.error("Pairing finalize refused by the cloud: %s", err)
+                if err.code == "no_buildable_inverter":
+                    return self.async_abort(reason="claim_not_buildable")
+                return self.async_abort(
+                    reason="pairing_refused",
+                    description_placeholders={"reason": err.message or err.code},
+                )
+            except PairingError:
+                _LOGGER.exception("Pairing finalize failed")
+                return self.async_abort(reason="pairing_failed")
 
         # SP-D: the cloud /finalize response may carry a direct-Modbus
         # `harvestConfig` (camelCase) when the mobile app handed off a
