@@ -1,5 +1,5 @@
 {
-  "sourceCommit": "c4dd939e69467cbcc9746f98f444a0822f79bb8e",
+  "sourceCommit": "9d5acee8c60549ed3c4189199659cbbc4a6788de",
   "vectors": [
     {
       "modelId": "deye_sg04lp3",
@@ -222,6 +222,24 @@
             "address": 213
           },
           {
+            "field": "batteryCorrectedAh",
+            "address": 592
+          },
+          {
+            "field": "lifetimeBatteryChargeEnergy",
+            "address": 516,
+            "words": 2,
+            "lowWordFirst": true,
+            "scale": 0.1
+          },
+          {
+            "field": "lifetimeBatteryDischargeEnergy",
+            "address": 518,
+            "words": 2,
+            "lowWordFirst": true,
+            "scale": 0.1
+          },
+          {
             "field": "generatorPower",
             "address": 667,
             "signed": true
@@ -406,7 +424,7 @@
           {
             "project": "svitgrid-field-verification",
             "url": "https://github.com/ivanursul/svitgrid",
-            "retrievedAt": "2026-02-01"
+            "retrievedAt": "2026-09-08"
           }
         ],
         "confidence": "verified"
@@ -697,6 +715,24 @@
             "address": 213
           },
           {
+            "field": "batteryCorrectedAh",
+            "address": 592
+          },
+          {
+            "field": "lifetimeBatteryChargeEnergy",
+            "address": 516,
+            "words": 2,
+            "lowWordFirst": true,
+            "scale": 0.1
+          },
+          {
+            "field": "lifetimeBatteryDischargeEnergy",
+            "address": 518,
+            "words": 2,
+            "lowWordFirst": true,
+            "scale": 0.1
+          },
+          {
             "field": "generatorPower",
             "address": 667,
             "signed": true
@@ -950,7 +986,7 @@
         "modelId": "deye_sg05lp3",
         "version": 1,
         "source": "generated",
-        "verified": false,
+        "verified": true,
         "protocol": "solarman_v5",
         "port": 8899,
         "defaultSlaveId": 1,
@@ -1165,6 +1201,24 @@
             "address": 213
           },
           {
+            "field": "batteryCorrectedAh",
+            "address": 592
+          },
+          {
+            "field": "lifetimeBatteryChargeEnergy",
+            "address": 516,
+            "words": 2,
+            "lowWordFirst": true,
+            "scale": 0.1
+          },
+          {
+            "field": "lifetimeBatteryDischargeEnergy",
+            "address": 518,
+            "words": 2,
+            "lowWordFirst": true,
+            "scale": 0.1
+          },
+          {
             "field": "generatorPower",
             "address": 667,
             "signed": true
@@ -1345,7 +1399,14 @@
           }
         ],
         "transport": "solarman_v5",
-        "confidence": "extrapolated"
+        "sourceRefs": [
+          {
+            "project": "svitgrid-field-verification",
+            "url": "https://github.com/ivanursul/svitgrid",
+            "retrievedAt": "2026-09-08"
+          }
+        ],
+        "confidence": "verified"
       },
       "rawRegisters": {
         "1": {
@@ -1418,7 +1479,7 @@
         "modelId": "deye_sg03lp1",
         "version": 1,
         "source": "generated",
-        "verified": false,
+        "verified": true,
         "protocol": "solarman_v5",
         "port": 8899,
         "defaultSlaveId": 1,
@@ -1515,12 +1576,40 @@
             "scale": 0.1
           },
           {
+            "field": "dailyBatteryChargeEnergy",
+            "address": 70,
+            "scale": 0.1
+          },
+          {
+            "field": "dailyBatteryDischargeEnergy",
+            "address": 71,
+            "scale": 0.1
+          },
+          {
             "field": "bmsChargeCurrentLimit",
-            "address": 210
+            "address": 314
           },
           {
             "field": "bmsDischargeCurrentLimit",
-            "address": 211
+            "address": 315
+          },
+          {
+            "field": "batteryCorrectedAh",
+            "address": 107
+          },
+          {
+            "field": "lifetimeBatteryChargeEnergy",
+            "address": 72,
+            "words": 2,
+            "lowWordFirst": true,
+            "scale": 0.1
+          },
+          {
+            "field": "lifetimeBatteryDischargeEnergy",
+            "address": 74,
+            "words": 2,
+            "lowWordFirst": true,
+            "scale": 0.1
           },
           {
             "field": "generatorPower",
@@ -1710,7 +1799,14 @@
           }
         ],
         "transport": "solarman_v5",
-        "confidence": "extrapolated"
+        "sourceRefs": [
+          {
+            "project": "svitgrid-field-verification",
+            "url": "https://github.com/ivanursul/svitgrid",
+            "retrievedAt": "2026-09-08"
+          }
+        ],
+        "confidence": "verified"
       },
       "rawRegisters": {
         "1": {
@@ -1756,7 +1852,7 @@
         "modelId": "deye_sg01lp1",
         "version": 1,
         "source": "generated",
-        "verified": false,
+        "verified": true,
         "protocol": "solarman_v5",
         "port": 8899,
         "defaultSlaveId": 1,
@@ -1853,12 +1949,40 @@
             "scale": 0.1
           },
           {
+            "field": "dailyBatteryChargeEnergy",
+            "address": 70,
+            "scale": 0.1
+          },
+          {
+            "field": "dailyBatteryDischargeEnergy",
+            "address": 71,
+            "scale": 0.1
+          },
+          {
             "field": "bmsChargeCurrentLimit",
-            "address": 210
+            "address": 314
           },
           {
             "field": "bmsDischargeCurrentLimit",
-            "address": 211
+            "address": 315
+          },
+          {
+            "field": "batteryCorrectedAh",
+            "address": 107
+          },
+          {
+            "field": "lifetimeBatteryChargeEnergy",
+            "address": 72,
+            "words": 2,
+            "lowWordFirst": true,
+            "scale": 0.1
+          },
+          {
+            "field": "lifetimeBatteryDischargeEnergy",
+            "address": 74,
+            "words": 2,
+            "lowWordFirst": true,
+            "scale": 0.1
           },
           {
             "field": "generatorPower",
@@ -2048,7 +2172,14 @@
           }
         ],
         "transport": "solarman_v5",
-        "confidence": "extrapolated"
+        "sourceRefs": [
+          {
+            "project": "svitgrid-field-verification",
+            "url": "https://github.com/ivanursul/svitgrid",
+            "retrievedAt": "2026-09-08"
+          }
+        ],
+        "confidence": "verified"
       },
       "rawRegisters": {
         "1": {
@@ -2094,7 +2225,7 @@
         "modelId": "deye_sg02lp1",
         "version": 1,
         "source": "generated",
-        "verified": false,
+        "verified": true,
         "protocol": "solarman_v5",
         "port": 8899,
         "defaultSlaveId": 1,
@@ -2206,12 +2337,40 @@
             "scale": 0.1
           },
           {
+            "field": "dailyBatteryChargeEnergy",
+            "address": 70,
+            "scale": 0.1
+          },
+          {
+            "field": "dailyBatteryDischargeEnergy",
+            "address": 71,
+            "scale": 0.1
+          },
+          {
             "field": "bmsChargeCurrentLimit",
-            "address": 210
+            "address": 314
           },
           {
             "field": "bmsDischargeCurrentLimit",
-            "address": 211
+            "address": 315
+          },
+          {
+            "field": "batteryCorrectedAh",
+            "address": 107
+          },
+          {
+            "field": "lifetimeBatteryChargeEnergy",
+            "address": 72,
+            "words": 2,
+            "lowWordFirst": true,
+            "scale": 0.1
+          },
+          {
+            "field": "lifetimeBatteryDischargeEnergy",
+            "address": 74,
+            "words": 2,
+            "lowWordFirst": true,
+            "scale": 0.1
           },
           {
             "field": "generatorPower",
@@ -2402,7 +2561,14 @@
           }
         ],
         "transport": "solarman_v5",
-        "confidence": "extrapolated"
+        "sourceRefs": [
+          {
+            "project": "svitgrid-field-verification",
+            "url": "https://github.com/ivanursul/svitgrid",
+            "retrievedAt": "2026-09-08"
+          }
+        ],
+        "confidence": "verified"
       },
       "rawRegisters": {
         "1": {
@@ -2448,7 +2614,7 @@
         "modelId": "deye_sun_g3",
         "version": 1,
         "source": "generated",
-        "verified": false,
+        "verified": true,
         "protocol": "solarman_v5",
         "port": 8899,
         "defaultSlaveId": 1,
@@ -2545,12 +2711,40 @@
             "scale": 0.1
           },
           {
+            "field": "dailyBatteryChargeEnergy",
+            "address": 70,
+            "scale": 0.1
+          },
+          {
+            "field": "dailyBatteryDischargeEnergy",
+            "address": 71,
+            "scale": 0.1
+          },
+          {
             "field": "bmsChargeCurrentLimit",
-            "address": 210
+            "address": 314
           },
           {
             "field": "bmsDischargeCurrentLimit",
-            "address": 211
+            "address": 315
+          },
+          {
+            "field": "batteryCorrectedAh",
+            "address": 107
+          },
+          {
+            "field": "lifetimeBatteryChargeEnergy",
+            "address": 72,
+            "words": 2,
+            "lowWordFirst": true,
+            "scale": 0.1
+          },
+          {
+            "field": "lifetimeBatteryDischargeEnergy",
+            "address": 74,
+            "words": 2,
+            "lowWordFirst": true,
+            "scale": 0.1
           },
           {
             "field": "generatorPower",
@@ -2740,7 +2934,14 @@
           }
         ],
         "transport": "solarman_v5",
-        "confidence": "extrapolated"
+        "sourceRefs": [
+          {
+            "project": "svitgrid-field-verification",
+            "url": "https://github.com/ivanursul/svitgrid",
+            "retrievedAt": "2026-09-08"
+          }
+        ],
+        "confidence": "verified"
       },
       "rawRegisters": {
         "1": {
@@ -2883,12 +3084,40 @@
             "scale": 0.1
           },
           {
+            "field": "dailyBatteryChargeEnergy",
+            "address": 70,
+            "scale": 0.1
+          },
+          {
+            "field": "dailyBatteryDischargeEnergy",
+            "address": 71,
+            "scale": 0.1
+          },
+          {
             "field": "bmsChargeCurrentLimit",
-            "address": 210
+            "address": 314
           },
           {
             "field": "bmsDischargeCurrentLimit",
-            "address": 211
+            "address": 315
+          },
+          {
+            "field": "batteryCorrectedAh",
+            "address": 107
+          },
+          {
+            "field": "lifetimeBatteryChargeEnergy",
+            "address": 72,
+            "words": 2,
+            "lowWordFirst": true,
+            "scale": 0.1
+          },
+          {
+            "field": "lifetimeBatteryDischargeEnergy",
+            "address": 74,
+            "words": 2,
+            "lowWordFirst": true,
+            "scale": 0.1
           },
           {
             "field": "generatorPower",
@@ -3124,7 +3353,7 @@
         "modelId": "deye_sg01lp1_us",
         "version": 1,
         "source": "generated",
-        "verified": false,
+        "verified": true,
         "protocol": "solarman_v5",
         "port": 8899,
         "defaultSlaveId": 1,
@@ -3221,12 +3450,40 @@
             "scale": 0.1
           },
           {
+            "field": "dailyBatteryChargeEnergy",
+            "address": 70,
+            "scale": 0.1
+          },
+          {
+            "field": "dailyBatteryDischargeEnergy",
+            "address": 71,
+            "scale": 0.1
+          },
+          {
             "field": "bmsChargeCurrentLimit",
-            "address": 210
+            "address": 314
           },
           {
             "field": "bmsDischargeCurrentLimit",
-            "address": 211
+            "address": 315
+          },
+          {
+            "field": "batteryCorrectedAh",
+            "address": 107
+          },
+          {
+            "field": "lifetimeBatteryChargeEnergy",
+            "address": 72,
+            "words": 2,
+            "lowWordFirst": true,
+            "scale": 0.1
+          },
+          {
+            "field": "lifetimeBatteryDischargeEnergy",
+            "address": 74,
+            "words": 2,
+            "lowWordFirst": true,
+            "scale": 0.1
           },
           {
             "field": "generatorPower",
@@ -3416,7 +3673,14 @@
           }
         ],
         "transport": "solarman_v5",
-        "confidence": "extrapolated"
+        "sourceRefs": [
+          {
+            "project": "svitgrid-field-verification",
+            "url": "https://github.com/ivanursul/svitgrid",
+            "retrievedAt": "2026-09-08"
+          }
+        ],
+        "confidence": "verified"
       },
       "rawRegisters": {
         "1": {
@@ -3559,12 +3823,40 @@
             "scale": 0.1
           },
           {
+            "field": "dailyBatteryChargeEnergy",
+            "address": 70,
+            "scale": 0.1
+          },
+          {
+            "field": "dailyBatteryDischargeEnergy",
+            "address": 71,
+            "scale": 0.1
+          },
+          {
             "field": "bmsChargeCurrentLimit",
-            "address": 210
+            "address": 314
           },
           {
             "field": "bmsDischargeCurrentLimit",
-            "address": 211
+            "address": 315
+          },
+          {
+            "field": "batteryCorrectedAh",
+            "address": 107
+          },
+          {
+            "field": "lifetimeBatteryChargeEnergy",
+            "address": 72,
+            "words": 2,
+            "lowWordFirst": true,
+            "scale": 0.1
+          },
+          {
+            "field": "lifetimeBatteryDischargeEnergy",
+            "address": 74,
+            "words": 2,
+            "lowWordFirst": true,
+            "scale": 0.1
           },
           {
             "field": "generatorPower",
@@ -3897,12 +4189,40 @@
             "scale": 0.1
           },
           {
+            "field": "dailyBatteryChargeEnergy",
+            "address": 70,
+            "scale": 0.1
+          },
+          {
+            "field": "dailyBatteryDischargeEnergy",
+            "address": 71,
+            "scale": 0.1
+          },
+          {
             "field": "bmsChargeCurrentLimit",
-            "address": 210
+            "address": 314
           },
           {
             "field": "bmsDischargeCurrentLimit",
-            "address": 211
+            "address": 315
+          },
+          {
+            "field": "batteryCorrectedAh",
+            "address": 107
+          },
+          {
+            "field": "lifetimeBatteryChargeEnergy",
+            "address": 72,
+            "words": 2,
+            "lowWordFirst": true,
+            "scale": 0.1
+          },
+          {
+            "field": "lifetimeBatteryDischargeEnergy",
+            "address": 74,
+            "words": 2,
+            "lowWordFirst": true,
+            "scale": 0.1
           },
           {
             "field": "generatorPower",
@@ -4235,12 +4555,40 @@
             "scale": 0.1
           },
           {
+            "field": "dailyBatteryChargeEnergy",
+            "address": 70,
+            "scale": 0.1
+          },
+          {
+            "field": "dailyBatteryDischargeEnergy",
+            "address": 71,
+            "scale": 0.1
+          },
+          {
             "field": "bmsChargeCurrentLimit",
-            "address": 210
+            "address": 314
           },
           {
             "field": "bmsDischargeCurrentLimit",
-            "address": 211
+            "address": 315
+          },
+          {
+            "field": "batteryCorrectedAh",
+            "address": 107
+          },
+          {
+            "field": "lifetimeBatteryChargeEnergy",
+            "address": 72,
+            "words": 2,
+            "lowWordFirst": true,
+            "scale": 0.1
+          },
+          {
+            "field": "lifetimeBatteryDischargeEnergy",
+            "address": 74,
+            "words": 2,
+            "lowWordFirst": true,
+            "scale": 0.1
           },
           {
             "field": "generatorPower",
@@ -4476,7 +4824,7 @@
         "modelId": "deye_sg01hp3",
         "version": 1,
         "source": "generated",
-        "verified": false,
+        "verified": true,
         "protocol": "solarman_v5",
         "port": 8899,
         "defaultSlaveId": 1,
@@ -4554,19 +4902,23 @@
           },
           {
             "field": "loadPower",
-            "address": 653
+            "address": 653,
+            "signed": true
           },
           {
             "field": "loadPowerL1",
-            "address": 650
+            "address": 650,
+            "signed": true
           },
           {
             "field": "loadPowerL2",
-            "address": 651
+            "address": 651,
+            "signed": true
           },
           {
             "field": "loadPowerL3",
-            "address": 652
+            "address": 652,
+            "signed": true
           },
           {
             "field": "loadVoltageL1",
@@ -4675,6 +5027,24 @@
           {
             "field": "bmsDischargeCurrentLimit",
             "address": 213
+          },
+          {
+            "field": "batteryCorrectedAh",
+            "address": 592
+          },
+          {
+            "field": "lifetimeBatteryChargeEnergy",
+            "address": 516,
+            "words": 2,
+            "lowWordFirst": true,
+            "scale": 0.1
+          },
+          {
+            "field": "lifetimeBatteryDischargeEnergy",
+            "address": 518,
+            "words": 2,
+            "lowWordFirst": true,
+            "scale": 0.1
           },
           {
             "field": "generatorPower",
@@ -4884,7 +5254,14 @@
           }
         ],
         "transport": "solarman_v5",
-        "confidence": "extrapolated"
+        "sourceRefs": [
+          {
+            "project": "svitgrid-field-verification",
+            "url": "https://github.com/ivanursul/svitgrid",
+            "retrievedAt": "2026-09-08"
+          }
+        ],
+        "confidence": "verified"
       },
       "rawRegisters": {
         "1": {
@@ -4953,7 +5330,7 @@
         "modelId": "deye_sg01hp3_50k",
         "version": 1,
         "source": "generated",
-        "verified": false,
+        "verified": true,
         "protocol": "solarman_v5",
         "port": 8899,
         "defaultSlaveId": 1,
@@ -5031,19 +5408,23 @@
           },
           {
             "field": "loadPower",
-            "address": 653
+            "address": 653,
+            "signed": true
           },
           {
             "field": "loadPowerL1",
-            "address": 650
+            "address": 650,
+            "signed": true
           },
           {
             "field": "loadPowerL2",
-            "address": 651
+            "address": 651,
+            "signed": true
           },
           {
             "field": "loadPowerL3",
-            "address": 652
+            "address": 652,
+            "signed": true
           },
           {
             "field": "loadVoltageL1",
@@ -5152,6 +5533,24 @@
           {
             "field": "bmsDischargeCurrentLimit",
             "address": 213
+          },
+          {
+            "field": "batteryCorrectedAh",
+            "address": 592
+          },
+          {
+            "field": "lifetimeBatteryChargeEnergy",
+            "address": 516,
+            "words": 2,
+            "lowWordFirst": true,
+            "scale": 0.1
+          },
+          {
+            "field": "lifetimeBatteryDischargeEnergy",
+            "address": 518,
+            "words": 2,
+            "lowWordFirst": true,
+            "scale": 0.1
           },
           {
             "field": "generatorPower",
@@ -5361,7 +5760,14 @@
           }
         ],
         "transport": "solarman_v5",
-        "confidence": "extrapolated"
+        "sourceRefs": [
+          {
+            "project": "svitgrid-field-verification",
+            "url": "https://github.com/ivanursul/svitgrid",
+            "retrievedAt": "2026-09-08"
+          }
+        ],
+        "confidence": "verified"
       },
       "rawRegisters": {
         "1": {
@@ -5430,7 +5836,7 @@
         "modelId": "deye_sg01hp3_30k",
         "version": 1,
         "source": "generated",
-        "verified": false,
+        "verified": true,
         "protocol": "solarman_v5",
         "port": 8899,
         "defaultSlaveId": 1,
@@ -5508,19 +5914,23 @@
           },
           {
             "field": "loadPower",
-            "address": 653
+            "address": 653,
+            "signed": true
           },
           {
             "field": "loadPowerL1",
-            "address": 650
+            "address": 650,
+            "signed": true
           },
           {
             "field": "loadPowerL2",
-            "address": 651
+            "address": 651,
+            "signed": true
           },
           {
             "field": "loadPowerL3",
-            "address": 652
+            "address": 652,
+            "signed": true
           },
           {
             "field": "loadVoltageL1",
@@ -5629,6 +6039,24 @@
           {
             "field": "bmsDischargeCurrentLimit",
             "address": 213
+          },
+          {
+            "field": "batteryCorrectedAh",
+            "address": 592
+          },
+          {
+            "field": "lifetimeBatteryChargeEnergy",
+            "address": 516,
+            "words": 2,
+            "lowWordFirst": true,
+            "scale": 0.1
+          },
+          {
+            "field": "lifetimeBatteryDischargeEnergy",
+            "address": 518,
+            "words": 2,
+            "lowWordFirst": true,
+            "scale": 0.1
           },
           {
             "field": "generatorPower",
@@ -5838,7 +6266,14 @@
           }
         ],
         "transport": "solarman_v5",
-        "confidence": "extrapolated"
+        "sourceRefs": [
+          {
+            "project": "svitgrid-field-verification",
+            "url": "https://github.com/ivanursul/svitgrid",
+            "retrievedAt": "2026-09-08"
+          }
+        ],
+        "confidence": "verified"
       },
       "rawRegisters": {
         "1": {
@@ -5907,7 +6342,7 @@
         "modelId": "deye_gb_s20k",
         "version": 1,
         "source": "generated",
-        "verified": false,
+        "verified": true,
         "protocol": "solarman_v5",
         "port": 8899,
         "defaultSlaveId": 1,
@@ -5985,19 +6420,23 @@
           },
           {
             "field": "loadPower",
-            "address": 653
+            "address": 653,
+            "signed": true
           },
           {
             "field": "loadPowerL1",
-            "address": 650
+            "address": 650,
+            "signed": true
           },
           {
             "field": "loadPowerL2",
-            "address": 651
+            "address": 651,
+            "signed": true
           },
           {
             "field": "loadPowerL3",
-            "address": 652
+            "address": 652,
+            "signed": true
           },
           {
             "field": "loadVoltageL1",
@@ -6106,6 +6545,24 @@
           {
             "field": "bmsDischargeCurrentLimit",
             "address": 213
+          },
+          {
+            "field": "batteryCorrectedAh",
+            "address": 592
+          },
+          {
+            "field": "lifetimeBatteryChargeEnergy",
+            "address": 516,
+            "words": 2,
+            "lowWordFirst": true,
+            "scale": 0.1
+          },
+          {
+            "field": "lifetimeBatteryDischargeEnergy",
+            "address": 518,
+            "words": 2,
+            "lowWordFirst": true,
+            "scale": 0.1
           },
           {
             "field": "generatorPower",
@@ -6315,7 +6772,14 @@
           }
         ],
         "transport": "solarman_v5",
-        "confidence": "extrapolated"
+        "sourceRefs": [
+          {
+            "project": "svitgrid-field-verification",
+            "url": "https://github.com/ivanursul/svitgrid",
+            "retrievedAt": "2026-09-08"
+          }
+        ],
+        "confidence": "verified"
       },
       "rawRegisters": {
         "1": {
@@ -6384,7 +6848,7 @@
         "modelId": "deye_sg02hp3_80k",
         "version": 1,
         "source": "generated",
-        "verified": false,
+        "verified": true,
         "protocol": "solarman_v5",
         "port": 8899,
         "defaultSlaveId": 1,
@@ -6462,19 +6926,23 @@
           },
           {
             "field": "loadPower",
-            "address": 653
+            "address": 653,
+            "signed": true
           },
           {
             "field": "loadPowerL1",
-            "address": 650
+            "address": 650,
+            "signed": true
           },
           {
             "field": "loadPowerL2",
-            "address": 651
+            "address": 651,
+            "signed": true
           },
           {
             "field": "loadPowerL3",
-            "address": 652
+            "address": 652,
+            "signed": true
           },
           {
             "field": "loadVoltageL1",
@@ -6603,6 +7071,24 @@
           {
             "field": "bmsDischargeCurrentLimit",
             "address": 213
+          },
+          {
+            "field": "batteryCorrectedAh",
+            "address": 592
+          },
+          {
+            "field": "lifetimeBatteryChargeEnergy",
+            "address": 516,
+            "words": 2,
+            "lowWordFirst": true,
+            "scale": 0.1
+          },
+          {
+            "field": "lifetimeBatteryDischargeEnergy",
+            "address": 518,
+            "words": 2,
+            "lowWordFirst": true,
+            "scale": 0.1
           },
           {
             "field": "generatorPower",
@@ -6832,7 +7318,14 @@
           }
         ],
         "transport": "solarman_v5",
-        "confidence": "extrapolated"
+        "sourceRefs": [
+          {
+            "project": "svitgrid-field-verification",
+            "url": "https://github.com/ivanursul/svitgrid",
+            "retrievedAt": "2026-09-08"
+          }
+        ],
+        "confidence": "verified"
       },
       "rawRegisters": {
         "1": {
@@ -7017,6 +7510,14 @@
         ],
         "derivations": [
           {
+            "field": "batteryPower",
+            "op": "builtin",
+            "inputs": [
+              "batteryPower"
+            ],
+            "builtin": "battery_sign_normalize"
+          },
+          {
             "field": "batteryTemperature",
             "op": "builtin",
             "inputs": [
@@ -7091,9 +7592,16 @@
         "defaultSlaveId": 1,
         "flags": {
           "batteryPositiveIsDischarge": true,
+          "gridPositiveIsExport": true,
           "dailyGridUnavailable": true
         },
         "reads": [
+          {
+            "field": "gridPower",
+            "address": 37113,
+            "words": 2,
+            "signed": true
+          },
           {
             "field": "gridVoltageL1",
             "address": 32069,
@@ -7108,6 +7616,24 @@
             "field": "gridVoltageL3",
             "address": 32071,
             "scale": 0.1
+          },
+          {
+            "field": "gridPowerL1",
+            "address": 37132,
+            "words": 2,
+            "signed": true
+          },
+          {
+            "field": "gridPowerL2",
+            "address": 37134,
+            "words": 2,
+            "signed": true
+          },
+          {
+            "field": "gridPowerL3",
+            "address": 37136,
+            "words": 2,
+            "signed": true
           },
           {
             "field": "gridFrequency",
@@ -7180,6 +7706,14 @@
           }
         ],
         "derivations": [
+          {
+            "field": "gridPower",
+            "op": "builtin",
+            "inputs": [
+              "gridPower"
+            ],
+            "builtin": "grid_sign_normalize"
+          },
           {
             "field": "dailyGridImportEnergy",
             "op": "builtin",
@@ -7242,9 +7776,16 @@
         "defaultSlaveId": 1,
         "flags": {
           "batteryPositiveIsDischarge": true,
+          "gridPositiveIsExport": true,
           "dailyGridUnavailable": true
         },
         "reads": [
+          {
+            "field": "gridPower",
+            "address": 37113,
+            "words": 2,
+            "signed": true
+          },
           {
             "field": "gridVoltageL1",
             "address": 32069,
@@ -7259,6 +7800,24 @@
             "field": "gridVoltageL3",
             "address": 32071,
             "scale": 0.1
+          },
+          {
+            "field": "gridPowerL1",
+            "address": 37132,
+            "words": 2,
+            "signed": true
+          },
+          {
+            "field": "gridPowerL2",
+            "address": 37134,
+            "words": 2,
+            "signed": true
+          },
+          {
+            "field": "gridPowerL3",
+            "address": 37136,
+            "words": 2,
+            "signed": true
           },
           {
             "field": "gridFrequency",
@@ -7331,6 +7890,14 @@
           }
         ],
         "derivations": [
+          {
+            "field": "gridPower",
+            "op": "builtin",
+            "inputs": [
+              "gridPower"
+            ],
+            "builtin": "grid_sign_normalize"
+          },
           {
             "field": "dailyGridImportEnergy",
             "op": "builtin",
@@ -7393,9 +7960,16 @@
         "defaultSlaveId": 1,
         "flags": {
           "batteryPositiveIsDischarge": true,
+          "gridPositiveIsExport": true,
           "dailyGridUnavailable": true
         },
         "reads": [
+          {
+            "field": "gridPower",
+            "address": 37113,
+            "words": 2,
+            "signed": true
+          },
           {
             "field": "gridVoltageL1",
             "address": 32069,
@@ -7410,6 +7984,24 @@
             "field": "gridVoltageL3",
             "address": 32071,
             "scale": 0.1
+          },
+          {
+            "field": "gridPowerL1",
+            "address": 37132,
+            "words": 2,
+            "signed": true
+          },
+          {
+            "field": "gridPowerL2",
+            "address": 37134,
+            "words": 2,
+            "signed": true
+          },
+          {
+            "field": "gridPowerL3",
+            "address": 37136,
+            "words": 2,
+            "signed": true
           },
           {
             "field": "gridFrequency",
@@ -7483,6 +8075,14 @@
         ],
         "derivations": [
           {
+            "field": "gridPower",
+            "op": "builtin",
+            "inputs": [
+              "gridPower"
+            ],
+            "builtin": "grid_sign_normalize"
+          },
+          {
             "field": "dailyGridImportEnergy",
             "op": "builtin",
             "inputs": [],
@@ -7538,7 +8138,7 @@
         "modelId": "deye_sg04lp1",
         "version": 1,
         "source": "generated",
-        "verified": false,
+        "verified": true,
         "protocol": "solarman_v5",
         "port": 8899,
         "defaultSlaveId": 1,
@@ -7635,12 +8235,40 @@
             "scale": 0.1
           },
           {
+            "field": "dailyBatteryChargeEnergy",
+            "address": 70,
+            "scale": 0.1
+          },
+          {
+            "field": "dailyBatteryDischargeEnergy",
+            "address": 71,
+            "scale": 0.1
+          },
+          {
             "field": "bmsChargeCurrentLimit",
-            "address": 210
+            "address": 314
           },
           {
             "field": "bmsDischargeCurrentLimit",
-            "address": 211
+            "address": 315
+          },
+          {
+            "field": "batteryCorrectedAh",
+            "address": 107
+          },
+          {
+            "field": "lifetimeBatteryChargeEnergy",
+            "address": 72,
+            "words": 2,
+            "lowWordFirst": true,
+            "scale": 0.1
+          },
+          {
+            "field": "lifetimeBatteryDischargeEnergy",
+            "address": 74,
+            "words": 2,
+            "lowWordFirst": true,
+            "scale": 0.1
           },
           {
             "field": "generatorPower",
@@ -7830,7 +8458,14 @@
           }
         ],
         "transport": "solarman_v5",
-        "confidence": "extrapolated"
+        "sourceRefs": [
+          {
+            "project": "svitgrid-field-verification",
+            "url": "https://github.com/ivanursul/svitgrid",
+            "retrievedAt": "2026-09-08"
+          }
+        ],
+        "confidence": "verified"
       },
       "rawRegisters": {
         "1": {
@@ -7876,7 +8511,7 @@
         "modelId": "deye_sg05lp1",
         "version": 1,
         "source": "generated",
-        "verified": false,
+        "verified": true,
         "protocol": "solarman_v5",
         "port": 8899,
         "defaultSlaveId": 1,
@@ -7973,12 +8608,40 @@
             "scale": 0.1
           },
           {
+            "field": "dailyBatteryChargeEnergy",
+            "address": 70,
+            "scale": 0.1
+          },
+          {
+            "field": "dailyBatteryDischargeEnergy",
+            "address": 71,
+            "scale": 0.1
+          },
+          {
             "field": "bmsChargeCurrentLimit",
-            "address": 210
+            "address": 314
           },
           {
             "field": "bmsDischargeCurrentLimit",
-            "address": 211
+            "address": 315
+          },
+          {
+            "field": "batteryCorrectedAh",
+            "address": 107
+          },
+          {
+            "field": "lifetimeBatteryChargeEnergy",
+            "address": 72,
+            "words": 2,
+            "lowWordFirst": true,
+            "scale": 0.1
+          },
+          {
+            "field": "lifetimeBatteryDischargeEnergy",
+            "address": 74,
+            "words": 2,
+            "lowWordFirst": true,
+            "scale": 0.1
           },
           {
             "field": "generatorPower",
@@ -8168,7 +8831,14 @@
           }
         ],
         "transport": "solarman_v5",
-        "confidence": "extrapolated"
+        "sourceRefs": [
+          {
+            "project": "svitgrid-field-verification",
+            "url": "https://github.com/ivanursul/svitgrid",
+            "retrievedAt": "2026-09-08"
+          }
+        ],
+        "confidence": "verified"
       },
       "rawRegisters": {
         "1": {
@@ -8214,7 +8884,7 @@
         "modelId": "deye_sg01lp1_16k",
         "version": 1,
         "source": "generated",
-        "verified": false,
+        "verified": true,
         "protocol": "solarman_v5",
         "port": 8899,
         "defaultSlaveId": 1,
@@ -8311,12 +8981,40 @@
             "scale": 0.1
           },
           {
+            "field": "dailyBatteryChargeEnergy",
+            "address": 70,
+            "scale": 0.1
+          },
+          {
+            "field": "dailyBatteryDischargeEnergy",
+            "address": 71,
+            "scale": 0.1
+          },
+          {
             "field": "bmsChargeCurrentLimit",
-            "address": 210
+            "address": 314
           },
           {
             "field": "bmsDischargeCurrentLimit",
-            "address": 211
+            "address": 315
+          },
+          {
+            "field": "batteryCorrectedAh",
+            "address": 107
+          },
+          {
+            "field": "lifetimeBatteryChargeEnergy",
+            "address": 72,
+            "words": 2,
+            "lowWordFirst": true,
+            "scale": 0.1
+          },
+          {
+            "field": "lifetimeBatteryDischargeEnergy",
+            "address": 74,
+            "words": 2,
+            "lowWordFirst": true,
+            "scale": 0.1
           },
           {
             "field": "generatorPower",
@@ -8506,7 +9204,14 @@
           }
         ],
         "transport": "solarman_v5",
-        "confidence": "extrapolated"
+        "sourceRefs": [
+          {
+            "project": "svitgrid-field-verification",
+            "url": "https://github.com/ivanursul/svitgrid",
+            "retrievedAt": "2026-09-08"
+          }
+        ],
+        "confidence": "verified"
       },
       "rawRegisters": {
         "1": {
@@ -8649,12 +9354,40 @@
             "scale": 0.1
           },
           {
+            "field": "dailyBatteryChargeEnergy",
+            "address": 70,
+            "scale": 0.1
+          },
+          {
+            "field": "dailyBatteryDischargeEnergy",
+            "address": 71,
+            "scale": 0.1
+          },
+          {
             "field": "bmsChargeCurrentLimit",
-            "address": 210
+            "address": 314
           },
           {
             "field": "bmsDischargeCurrentLimit",
-            "address": 211
+            "address": 315
+          },
+          {
+            "field": "batteryCorrectedAh",
+            "address": 107
+          },
+          {
+            "field": "lifetimeBatteryChargeEnergy",
+            "address": 72,
+            "words": 2,
+            "lowWordFirst": true,
+            "scale": 0.1
+          },
+          {
+            "field": "lifetimeBatteryDischargeEnergy",
+            "address": 74,
+            "words": 2,
+            "lowWordFirst": true,
+            "scale": 0.1
           },
           {
             "field": "generatorPower",
@@ -8987,12 +9720,40 @@
             "scale": 0.1
           },
           {
+            "field": "dailyBatteryChargeEnergy",
+            "address": 70,
+            "scale": 0.1
+          },
+          {
+            "field": "dailyBatteryDischargeEnergy",
+            "address": 71,
+            "scale": 0.1
+          },
+          {
             "field": "bmsChargeCurrentLimit",
-            "address": 210
+            "address": 314
           },
           {
             "field": "bmsDischargeCurrentLimit",
-            "address": 211
+            "address": 315
+          },
+          {
+            "field": "batteryCorrectedAh",
+            "address": 107
+          },
+          {
+            "field": "lifetimeBatteryChargeEnergy",
+            "address": 72,
+            "words": 2,
+            "lowWordFirst": true,
+            "scale": 0.1
+          },
+          {
+            "field": "lifetimeBatteryDischargeEnergy",
+            "address": 74,
+            "words": 2,
+            "lowWordFirst": true,
+            "scale": 0.1
           },
           {
             "field": "generatorPower",
@@ -9443,6 +10204,24 @@
             "address": 213
           },
           {
+            "field": "batteryCorrectedAh",
+            "address": 592
+          },
+          {
+            "field": "lifetimeBatteryChargeEnergy",
+            "address": 516,
+            "words": 2,
+            "lowWordFirst": true,
+            "scale": 0.1
+          },
+          {
+            "field": "lifetimeBatteryDischargeEnergy",
+            "address": 518,
+            "words": 2,
+            "lowWordFirst": true,
+            "scale": 0.1
+          },
+          {
             "field": "generatorPower",
             "address": 667,
             "signed": true
@@ -9793,12 +10572,40 @@
             "scale": 0.1
           },
           {
+            "field": "dailyBatteryChargeEnergy",
+            "address": 70,
+            "scale": 0.1
+          },
+          {
+            "field": "dailyBatteryDischargeEnergy",
+            "address": 71,
+            "scale": 0.1
+          },
+          {
             "field": "bmsChargeCurrentLimit",
-            "address": 210
+            "address": 314
           },
           {
             "field": "bmsDischargeCurrentLimit",
-            "address": 211
+            "address": 315
+          },
+          {
+            "field": "batteryCorrectedAh",
+            "address": 107
+          },
+          {
+            "field": "lifetimeBatteryChargeEnergy",
+            "address": 72,
+            "words": 2,
+            "lowWordFirst": true,
+            "scale": 0.1
+          },
+          {
+            "field": "lifetimeBatteryDischargeEnergy",
+            "address": 74,
+            "words": 2,
+            "lowWordFirst": true,
+            "scale": 0.1
           },
           {
             "field": "generatorPower",
@@ -10034,7 +10841,7 @@
         "modelId": "deye_string",
         "version": 1,
         "source": "generated",
-        "verified": false,
+        "verified": true,
         "protocol": "solarman_v5",
         "port": 8899,
         "defaultSlaveId": 1,
@@ -10044,12 +10851,6 @@
           "dailyGridUnavailable": true
         },
         "reads": [
-          {
-            "field": "gridPower",
-            "address": 86,
-            "words": 2,
-            "signed": true
-          },
           {
             "field": "gridVoltageL1",
             "address": 73,
@@ -10178,7 +10979,14 @@
         ],
         "writes": [],
         "transport": "solarman_v5",
-        "confidence": "extrapolated"
+        "sourceRefs": [
+          {
+            "project": "svitgrid-field-verification",
+            "url": "https://github.com/ivanursul/svitgrid",
+            "retrievedAt": "2026-09-08"
+          }
+        ],
+        "confidence": "verified"
       },
       "rawRegisters": {
         "1": {
@@ -10203,7 +11011,7 @@
         "batterySoc": 0.0,
         "batteryPower": -0.0,
         "batteryVoltage": 0.0,
-        "gridPower": 8980.0,
+        "gridPower": 0.0,
         "loadPower": 0.0,
         "totalPvPower": 9259.0,
         "dailyPvEnergy": 35.0
@@ -10215,7 +11023,7 @@
         "modelId": "deye_micro",
         "version": 1,
         "source": "generated",
-        "verified": false,
+        "verified": true,
         "protocol": "solarman_v5",
         "port": 8899,
         "defaultSlaveId": 1,
@@ -10225,13 +11033,6 @@
           "dailyGridUnavailable": true
         },
         "reads": [
-          {
-            "field": "gridPower",
-            "address": 86,
-            "words": 2,
-            "signed": true,
-            "scale": 0.1
-          },
           {
             "field": "gridVoltageL1",
             "address": 73,
@@ -10350,7 +11151,14 @@
         ],
         "writes": [],
         "transport": "solarman_v5",
-        "confidence": "extrapolated"
+        "sourceRefs": [
+          {
+            "project": "svitgrid-field-verification",
+            "url": "https://github.com/ivanursul/svitgrid",
+            "retrievedAt": "2026-09-08"
+          }
+        ],
+        "confidence": "verified"
       },
       "rawRegisters": {
         "1": {
@@ -10375,7 +11183,7 @@
         "batterySoc": 0.0,
         "batteryPower": -0.0,
         "batteryVoltage": 0.0,
-        "gridPower": 898.0,
+        "gridPower": 0.0,
         "loadPower": 0.0,
         "totalPvPower": 9259.0,
         "dailyPvEnergy": 35.0
@@ -10498,6 +11306,14 @@
           }
         ],
         "derivations": [
+          {
+            "field": "batteryPower",
+            "op": "builtin",
+            "inputs": [
+              "batteryPower"
+            ],
+            "builtin": "battery_sign_normalize"
+          },
           {
             "field": "batteryTemperature",
             "op": "builtin",
@@ -10679,6 +11495,14 @@
         ],
         "derivations": [
           {
+            "field": "batteryPower",
+            "op": "builtin",
+            "inputs": [
+              "batteryPower"
+            ],
+            "builtin": "battery_sign_normalize"
+          },
+          {
             "field": "batteryTemperature",
             "op": "builtin",
             "inputs": [
@@ -10858,6 +11682,14 @@
           }
         ],
         "derivations": [
+          {
+            "field": "batteryPower",
+            "op": "builtin",
+            "inputs": [
+              "batteryPower"
+            ],
+            "builtin": "battery_sign_normalize"
+          },
           {
             "field": "batteryTemperature",
             "op": "builtin",
@@ -11039,6 +11871,14 @@
         ],
         "derivations": [
           {
+            "field": "batteryPower",
+            "op": "builtin",
+            "inputs": [
+              "batteryPower"
+            ],
+            "builtin": "battery_sign_normalize"
+          },
+          {
             "field": "batteryTemperature",
             "op": "builtin",
             "inputs": [
@@ -11218,6 +12058,14 @@
           }
         ],
         "derivations": [
+          {
+            "field": "batteryPower",
+            "op": "builtin",
+            "inputs": [
+              "batteryPower"
+            ],
+            "builtin": "battery_sign_normalize"
+          },
           {
             "field": "batteryTemperature",
             "op": "builtin",
@@ -11399,6 +12247,14 @@
         ],
         "derivations": [
           {
+            "field": "batteryPower",
+            "op": "builtin",
+            "inputs": [
+              "batteryPower"
+            ],
+            "builtin": "battery_sign_normalize"
+          },
+          {
             "field": "batteryTemperature",
             "op": "builtin",
             "inputs": [
@@ -11578,6 +12434,14 @@
           }
         ],
         "derivations": [
+          {
+            "field": "batteryPower",
+            "op": "builtin",
+            "inputs": [
+              "batteryPower"
+            ],
+            "builtin": "battery_sign_normalize"
+          },
           {
             "field": "batteryTemperature",
             "op": "builtin",
@@ -17573,6 +18437,2664 @@
         "loadPower": 0.0,
         "totalPvPower": 9912.0,
         "dailyPvEnergy": 61.300000000000004
+      }
+    },
+    {
+      "modelId": "tsun_tsol_ms400",
+      "spec": {
+        "modelId": "tsun_tsol_ms400",
+        "version": 1,
+        "source": "generated",
+        "verified": false,
+        "protocol": "solarman_v5",
+        "port": 8899,
+        "defaultSlaveId": 1,
+        "flags": {
+          "batteryPositiveIsDischarge": true,
+          "dailyGridUnavailable": true
+        },
+        "reads": [
+          {
+            "field": "gridVoltageL1",
+            "address": 12297,
+            "scale": 0.1
+          },
+          {
+            "field": "gridFrequency",
+            "address": 12299,
+            "scale": 0.01
+          },
+          {
+            "field": "pv1Voltage",
+            "address": 12304,
+            "scale": 0.1
+          },
+          {
+            "field": "pv1Current",
+            "address": 12305,
+            "scale": 0.01
+          },
+          {
+            "field": "pv1Power",
+            "address": 12306,
+            "scale": 0.1
+          },
+          {
+            "field": "dailyPvEnergy",
+            "address": 12316,
+            "scale": 0.01
+          }
+        ],
+        "derivations": [
+          {
+            "field": "totalPvPower",
+            "op": "sum",
+            "inputs": [
+              "pv1Power"
+            ]
+          },
+          {
+            "field": "dailyGridImportEnergy",
+            "op": "builtin",
+            "inputs": [],
+            "builtin": "daily_grid_unavailable"
+          },
+          {
+            "field": "dailyGridExportEnergy",
+            "op": "builtin",
+            "inputs": [],
+            "builtin": "daily_grid_unavailable"
+          }
+        ],
+        "writes": [],
+        "transport": "solarman_v5",
+        "sourceRefs": [
+          {
+            "project": "davidrapan/ha-solarman",
+            "url": "https://github.com/davidrapan/ha-solarman/blob/main/custom_components/solarman/inverter_definitions/tsun_tsol-ms.yaml",
+            "retrievedAt": "2026-08-17"
+          },
+          {
+            "project": "s-allius/tsun-gen3-proxy",
+            "url": "https://github.com/s-allius/tsun-gen3-proxy/blob/main/app/src/modbus.py",
+            "retrievedAt": "2026-08-17"
+          }
+        ],
+        "confidence": "dual_source"
+      },
+      "rawRegisters": {
+        "1": {
+          "12297": 2314,
+          "12299": 5001,
+          "12303": 5400,
+          "12304": 345,
+          "12305": 820,
+          "12306": 2829,
+          "12307": 338,
+          "12308": 790,
+          "12309": 2670,
+          "12316": 387,
+          "12317": 0,
+          "12318": 41230
+        }
+      },
+      "expectedFields": {
+        "batterySoc": 0.0,
+        "batteryPower": -0.0,
+        "batteryVoltage": 0.0,
+        "gridPower": 0.0,
+        "loadPower": 0.0,
+        "totalPvPower": 282.90000000000003,
+        "dailyPvEnergy": 3.87
+      }
+    },
+    {
+      "modelId": "tsun_tsol_ms800",
+      "spec": {
+        "modelId": "tsun_tsol_ms800",
+        "version": 1,
+        "source": "generated",
+        "verified": false,
+        "protocol": "solarman_v5",
+        "port": 8899,
+        "defaultSlaveId": 1,
+        "flags": {
+          "batteryPositiveIsDischarge": true,
+          "dailyGridUnavailable": true
+        },
+        "reads": [
+          {
+            "field": "gridVoltageL1",
+            "address": 12297,
+            "scale": 0.1
+          },
+          {
+            "field": "gridFrequency",
+            "address": 12299,
+            "scale": 0.01
+          },
+          {
+            "field": "pv1Voltage",
+            "address": 12304,
+            "scale": 0.1
+          },
+          {
+            "field": "pv1Current",
+            "address": 12305,
+            "scale": 0.01
+          },
+          {
+            "field": "pv2Voltage",
+            "address": 12307,
+            "scale": 0.1
+          },
+          {
+            "field": "pv2Current",
+            "address": 12308,
+            "scale": 0.01
+          },
+          {
+            "field": "pv1Power",
+            "address": 12306,
+            "scale": 0.1
+          },
+          {
+            "field": "pv2Power",
+            "address": 12309,
+            "scale": 0.1
+          },
+          {
+            "field": "dailyPvEnergy",
+            "address": 12316,
+            "scale": 0.01
+          }
+        ],
+        "derivations": [
+          {
+            "field": "totalPvPower",
+            "op": "sum",
+            "inputs": [
+              "pv1Power",
+              "pv2Power"
+            ]
+          },
+          {
+            "field": "dailyGridImportEnergy",
+            "op": "builtin",
+            "inputs": [],
+            "builtin": "daily_grid_unavailable"
+          },
+          {
+            "field": "dailyGridExportEnergy",
+            "op": "builtin",
+            "inputs": [],
+            "builtin": "daily_grid_unavailable"
+          }
+        ],
+        "writes": [],
+        "transport": "solarman_v5",
+        "sourceRefs": [
+          {
+            "project": "davidrapan/ha-solarman",
+            "url": "https://github.com/davidrapan/ha-solarman/blob/main/custom_components/solarman/inverter_definitions/tsun_tsol-ms.yaml",
+            "retrievedAt": "2026-08-17"
+          },
+          {
+            "project": "s-allius/tsun-gen3-proxy",
+            "url": "https://github.com/s-allius/tsun-gen3-proxy/blob/main/app/src/modbus.py",
+            "retrievedAt": "2026-08-17"
+          }
+        ],
+        "confidence": "dual_source"
+      },
+      "rawRegisters": {
+        "1": {
+          "12297": 2314,
+          "12299": 5001,
+          "12303": 5400,
+          "12304": 345,
+          "12305": 820,
+          "12306": 2829,
+          "12307": 338,
+          "12308": 790,
+          "12309": 2670,
+          "12316": 387,
+          "12317": 0,
+          "12318": 41230
+        }
+      },
+      "expectedFields": {
+        "batterySoc": 0.0,
+        "batteryPower": -0.0,
+        "batteryVoltage": 0.0,
+        "gridPower": 0.0,
+        "loadPower": 0.0,
+        "totalPvPower": 549.9000000000001,
+        "dailyPvEnergy": 3.87
+      }
+    },
+    {
+      "modelId": "swatten_sih_th_10k",
+      "spec": {
+        "modelId": "swatten_sih_th_10k",
+        "version": 1,
+        "source": "generated",
+        "verified": false,
+        "protocol": "solarman_v5",
+        "port": 8899,
+        "defaultSlaveId": 1,
+        "flags": {
+          "batteryPositiveIsDischarge": true,
+          "usesInputRegisters": true
+        },
+        "reads": [
+          {
+            "field": "batterySoc",
+            "address": 10023,
+            "signed": true,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "batteryVoltage",
+            "address": 10020,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "batteryPower",
+            "address": 10022,
+            "signed": true,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "batteryCurrent",
+            "address": 10021,
+            "signed": true,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "batteryTemperature",
+            "address": 10025,
+            "signed": true,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "gridPower",
+            "address": 5401,
+            "signed": true,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "gridVoltageL1",
+            "address": 4069,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "gridVoltageL2",
+            "address": 4070,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "gridVoltageL3",
+            "address": 4071,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "gridFrequency",
+            "address": 4198,
+            "signed": true,
+            "scale": 0.01,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "loadPower",
+            "address": 10008,
+            "signed": true,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv1Voltage",
+            "address": 4061,
+            "signed": true,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv1Current",
+            "address": 4062,
+            "signed": true,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv2Voltage",
+            "address": 4063,
+            "signed": true,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv2Current",
+            "address": 4064,
+            "signed": true,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "totalPvPower",
+            "address": 4067,
+            "words": 2,
+            "lowWordFirst": true,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyPvEnergy",
+            "address": 10002,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyGridImportEnergy",
+            "address": 10036,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyGridExportEnergy",
+            "address": 10045,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyBatteryChargeEnergy",
+            "address": 10040,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyBatteryDischargeEnergy",
+            "address": 10026,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          }
+        ],
+        "derivations": [
+          {
+            "field": "batteryPower",
+            "op": "builtin",
+            "inputs": [
+              "batteryPower"
+            ],
+            "builtin": "battery_sign_normalize"
+          },
+          {
+            "field": "batteryTemperature",
+            "op": "builtin",
+            "inputs": [
+              "batteryTemperature"
+            ],
+            "builtin": "battery_temp_clamp"
+          }
+        ],
+        "writes": [],
+        "transport": "solarman_v5",
+        "sourceRefs": [
+          {
+            "project": "davidrapan/ha-solarman",
+            "url": "https://github.com/davidrapan/ha-solarman/blob/main/custom_components/solarman/inverter_definitions/swatten_sih-th.yaml",
+            "retrievedAt": "2026-08-17",
+            "independentOf": "swatten_vendor_xlsx"
+          },
+          {
+            "project": "wills106/homeassistant-solax-modbus",
+            "url": "https://github.com/wills106/homeassistant-solax-modbus/blob/main/custom_components/solax_modbus/plugin_swatten.py",
+            "retrievedAt": "2026-08-17",
+            "independentOf": "swatten_vendor_xlsx"
+          }
+        ],
+        "confidence": "single_source"
+      },
+      "rawRegisters": {
+        "1": {
+          "4061": 6200,
+          "4062": 81,
+          "4063": 5980,
+          "4064": 74,
+          "4067": 9447,
+          "4068": 0,
+          "4069": 2312,
+          "4070": 2298,
+          "4071": 2321,
+          "4198": 5001,
+          "5401": 62036,
+          "10002": 425,
+          "10008": 2200,
+          "10020": 3840,
+          "10021": 65440,
+          "10022": 61836,
+          "10023": 62,
+          "10025": 236,
+          "10026": 74,
+          "10036": 31,
+          "10040": 96,
+          "10045": 187
+        }
+      },
+      "expectedFields": {
+        "batterySoc": 62.0,
+        "batteryPower": 3700.0,
+        "batteryVoltage": 384.0,
+        "gridPower": -3500.0,
+        "loadPower": 2200.0,
+        "totalPvPower": 9447.0,
+        "dailyPvEnergy": 42.5
+      }
+    },
+    {
+      "modelId": "chint_cps_sce_6k",
+      "spec": {
+        "modelId": "chint_cps_sce_6k",
+        "version": 1,
+        "source": "generated",
+        "verified": false,
+        "protocol": "solarman_v5",
+        "port": 8899,
+        "defaultSlaveId": 1,
+        "flags": {
+          "batteryPowerFromVoltageCurrent": true,
+          "batteryPositiveIsDischarge": true
+        },
+        "reads": [
+          {
+            "field": "batterySoc",
+            "address": 8192
+          },
+          {
+            "field": "batteryVoltage",
+            "address": 8198,
+            "scale": 0.1
+          },
+          {
+            "field": "batteryCurrent",
+            "address": 8199,
+            "words": 2,
+            "signed": true,
+            "scale": 0.01
+          },
+          {
+            "field": "batteryTemperature",
+            "address": 8193,
+            "signed": true
+          },
+          {
+            "field": "gridPower",
+            "address": 4864,
+            "words": 2,
+            "signed": true,
+            "scale": 0.1
+          },
+          {
+            "field": "gridVoltageL1",
+            "address": 4890,
+            "scale": 0.1
+          },
+          {
+            "field": "gridFrequency",
+            "address": 4920,
+            "scale": 0.01
+          },
+          {
+            "field": "loadPower",
+            "address": 4874,
+            "words": 2,
+            "signed": true,
+            "scale": 0.1
+          },
+          {
+            "field": "loadVoltageL1",
+            "address": 4899,
+            "scale": 0.1
+          },
+          {
+            "field": "pv1Voltage",
+            "address": 4112,
+            "scale": 0.1
+          },
+          {
+            "field": "pv1Current",
+            "address": 4113,
+            "scale": 0.01
+          },
+          {
+            "field": "pv2Voltage",
+            "address": 4116,
+            "scale": 0.1
+          },
+          {
+            "field": "pv2Current",
+            "address": 4117,
+            "scale": 0.01
+          },
+          {
+            "field": "pv1Power",
+            "address": 4114,
+            "words": 2,
+            "scale": 0.1
+          },
+          {
+            "field": "pv2Power",
+            "address": 4118,
+            "words": 2,
+            "scale": 0.1
+          },
+          {
+            "field": "dailyPvEnergy",
+            "address": 4135,
+            "words": 2,
+            "scale": 0.001
+          },
+          {
+            "field": "dailyGridImportEnergy",
+            "address": 4914,
+            "words": 2,
+            "scale": 0.01
+          },
+          {
+            "field": "dailyGridExportEnergy",
+            "address": 4916,
+            "words": 2,
+            "scale": 0.01
+          },
+          {
+            "field": "dailyLoadEnergy",
+            "address": 4918,
+            "words": 2,
+            "scale": 0.01
+          },
+          {
+            "field": "dailyBatteryChargeEnergy",
+            "address": 8203,
+            "words": 2,
+            "scale": 0.01
+          },
+          {
+            "field": "dailyBatteryDischargeEnergy",
+            "address": 8207,
+            "words": 2,
+            "scale": 0.01
+          }
+        ],
+        "derivations": [
+          {
+            "field": "batteryPower",
+            "op": "builtin",
+            "inputs": [
+              "batteryVoltage",
+              "batteryCurrent"
+            ],
+            "builtin": "battery_power_from_vi"
+          },
+          {
+            "field": "batteryTemperature",
+            "op": "builtin",
+            "inputs": [
+              "batteryTemperature"
+            ],
+            "builtin": "battery_temp_clamp"
+          },
+          {
+            "field": "totalPvPower",
+            "op": "sum",
+            "inputs": [
+              "pv1Power",
+              "pv2Power"
+            ]
+          }
+        ],
+        "writes": [],
+        "transport": "solarman_v5",
+        "sourceRefs": [
+          {
+            "project": "APD / CHINT OEM hybrid Modbus protocol V4.25 (via CHINT support)",
+            "url": "https://github.com/user-attachments/files/17295986/Hybrid.Modbus.Protocol.per.inverter.ibridi.pdf",
+            "retrievedAt": "2026-08-17"
+          }
+        ],
+        "confidence": "single_source"
+      },
+      "rawRegisters": {
+        "1": {
+          "4112": 3850,
+          "4113": 1224,
+          "4114": 0,
+          "4115": 47120,
+          "4116": 3620,
+          "4117": 552,
+          "4118": 0,
+          "4119": 20000,
+          "4135": 0,
+          "4136": 41300,
+          "4864": 65535,
+          "4865": 60062,
+          "4874": 0,
+          "4875": 36120,
+          "4890": 2318,
+          "4899": 2316,
+          "4914": 0,
+          "4915": 260,
+          "4916": 0,
+          "4917": 940,
+          "4918": 0,
+          "4919": 3180,
+          "4920": 5002,
+          "8192": 58,
+          "8193": 22,
+          "8198": 512,
+          "8199": 65535,
+          "8200": 57536,
+          "8203": 0,
+          "8204": 610,
+          "8207": 0,
+          "8208": 430
+        }
+      },
+      "expectedFields": {
+        "batterySoc": 58.0,
+        "batteryPower": 4096.0,
+        "batteryVoltage": 51.2,
+        "gridPower": -547.4,
+        "loadPower": 3612.0,
+        "totalPvPower": 6712.0,
+        "dailyPvEnergy": 41.300000000000004
+      }
+    },
+    {
+      "modelId": "invt_xd_6k",
+      "spec": {
+        "modelId": "invt_xd_6k",
+        "version": 1,
+        "source": "generated",
+        "verified": false,
+        "protocol": "solarman_v5",
+        "port": 8899,
+        "defaultSlaveId": 1,
+        "flags": {
+          "pvPowerFromVoltageCurrent": true
+        },
+        "reads": [
+          {
+            "field": "batterySoc",
+            "address": 14651
+          },
+          {
+            "field": "batteryVoltage",
+            "address": 14602,
+            "scale": 0.1
+          },
+          {
+            "field": "batteryPower",
+            "address": 14600,
+            "words": 2,
+            "signed": true,
+            "scale": 0.1
+          },
+          {
+            "field": "batteryCurrent",
+            "address": 14603,
+            "signed": true,
+            "scale": 0.1
+          },
+          {
+            "field": "batteryTemperature",
+            "address": 14662,
+            "signed": true,
+            "scale": 0.1
+          },
+          {
+            "field": "gridPower",
+            "address": 14375,
+            "words": 2,
+            "signed": true,
+            "scale": 0.1
+          },
+          {
+            "field": "gridVoltageL1",
+            "address": 14356,
+            "scale": 0.1
+          },
+          {
+            "field": "gridFrequency",
+            "address": 14362,
+            "scale": 0.01
+          },
+          {
+            "field": "loadPower",
+            "address": 14626,
+            "words": 2,
+            "signed": true,
+            "scale": 0.1
+          },
+          {
+            "field": "pv1Voltage",
+            "address": 14390,
+            "scale": 0.1
+          },
+          {
+            "field": "pv1Current",
+            "address": 14391,
+            "signed": true,
+            "scale": 0.01
+          },
+          {
+            "field": "pv2Voltage",
+            "address": 14392,
+            "scale": 0.1
+          },
+          {
+            "field": "pv2Current",
+            "address": 14393,
+            "signed": true,
+            "scale": 0.01
+          },
+          {
+            "field": "dailyPvEnergy",
+            "address": 14383,
+            "scale": 0.1
+          },
+          {
+            "field": "dailyGridImportEnergy",
+            "address": 14488,
+            "scale": 0.1
+          },
+          {
+            "field": "dailyGridExportEnergy",
+            "address": 14485,
+            "scale": 0.1
+          },
+          {
+            "field": "dailyLoadEnergy",
+            "address": 14482,
+            "scale": 0.1
+          },
+          {
+            "field": "dailyBatteryChargeEnergy",
+            "address": 14491,
+            "scale": 0.1
+          },
+          {
+            "field": "dailyBatteryDischargeEnergy",
+            "address": 14494,
+            "scale": 0.1
+          },
+          {
+            "field": "bmsChargeCurrentLimit",
+            "address": 14649,
+            "scale": 0.1
+          },
+          {
+            "field": "bmsDischargeCurrentLimit",
+            "address": 14650,
+            "scale": 0.1
+          }
+        ],
+        "derivations": [
+          {
+            "field": "batteryPower",
+            "op": "builtin",
+            "inputs": [
+              "batteryPower"
+            ],
+            "builtin": "battery_sign_normalize"
+          },
+          {
+            "field": "batteryTemperature",
+            "op": "builtin",
+            "inputs": [
+              "batteryTemperature"
+            ],
+            "builtin": "battery_temp_clamp"
+          },
+          {
+            "field": "pv1Power",
+            "op": "builtin",
+            "inputs": [
+              "pv1Voltage",
+              "pv1Current"
+            ],
+            "builtin": "pv_power_from_vi"
+          },
+          {
+            "field": "pv2Power",
+            "op": "builtin",
+            "inputs": [
+              "pv2Voltage",
+              "pv2Current"
+            ],
+            "builtin": "pv_power_from_vi"
+          },
+          {
+            "field": "totalPvPower",
+            "op": "sum",
+            "inputs": [
+              "pv1Power",
+              "pv2Power"
+            ]
+          }
+        ],
+        "writes": [],
+        "transport": "solarman_v5",
+        "sourceRefs": [
+          {
+            "project": "INVT SOLAR RS485 Communication Protocol V1.38 (INVT Solar R&D Center, 16-07-2024)",
+            "url": "https://github.com/user-attachments/files/17638743/INVT.Modbus.July.2024.pdf",
+            "retrievedAt": "2026-08-17"
+          }
+        ],
+        "confidence": "single_source"
+      },
+      "rawRegisters": {
+        "1": {
+          "12392": 1,
+          "14353": 4009,
+          "14356": 2315,
+          "14362": 5001,
+          "14375": 65535,
+          "14376": 53536,
+          "14383": 284,
+          "14390": 3850,
+          "14391": 862,
+          "14392": 3720,
+          "14393": 640,
+          "14482": 193,
+          "14485": 116,
+          "14488": 42,
+          "14491": 98,
+          "14494": 75,
+          "14600": 0,
+          "14601": 23880,
+          "14602": 518,
+          "14603": 461,
+          "14626": 0,
+          "14627": 21000,
+          "14649": 1000,
+          "14650": 1000,
+          "14651": 74,
+          "14662": 243
+        }
+      },
+      "expectedFields": {
+        "batterySoc": 74.0,
+        "batteryPower": 2388.0,
+        "batteryVoltage": 51.800000000000004,
+        "gridPower": -1200.0,
+        "loadPower": 2100.0,
+        "totalPvPower": 5699.5,
+        "dailyPvEnergy": 28.400000000000002
+      }
+    },
+    {
+      "modelId": "eg4_18kpv",
+      "spec": {
+        "modelId": "eg4_18kpv",
+        "version": 1,
+        "source": "generated",
+        "verified": false,
+        "protocol": "modbus_tcp",
+        "port": 8899,
+        "defaultSlaveId": 1,
+        "flags": {
+          "usesInputRegisters": true
+        },
+        "reads": [
+          {
+            "field": "batterySoc",
+            "address": 5,
+            "functionCode": "FC04",
+            "mask": 255
+          },
+          {
+            "field": "batteryVoltage",
+            "address": 4,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "batteryCurrent",
+            "address": 98,
+            "signed": true,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "batteryTemperature",
+            "address": 67,
+            "signed": true,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "batteryChargePower",
+            "address": 10,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "batteryDischargePower",
+            "address": 11,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "gridImportPower",
+            "address": 27,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "gridExportPower",
+            "address": 26,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "gridVoltageL1",
+            "address": 193,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "gridVoltageL2",
+            "address": 194,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "gridFrequency",
+            "address": 15,
+            "scale": 0.01,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "loadPower",
+            "address": 170,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv1Voltage",
+            "address": 1,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv2Voltage",
+            "address": 2,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv3Voltage",
+            "address": 3,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv1Power",
+            "address": 7,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv2Power",
+            "address": 8,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv3Power",
+            "address": 9,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyPv1Energy",
+            "address": 28,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyPv2Energy",
+            "address": 29,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyPv3Energy",
+            "address": 30,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyGridImportEnergy",
+            "address": 37,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyGridExportEnergy",
+            "address": 36,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyLoadEnergy",
+            "address": 171,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyBatteryChargeEnergy",
+            "address": 33,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyBatteryDischargeEnergy",
+            "address": 34,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "bmsChargeCurrentLimit",
+            "address": 81,
+            "scale": 0.01,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "bmsDischargeCurrentLimit",
+            "address": 82,
+            "scale": 0.01,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "generatorPower",
+            "address": 123,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "generatorVoltage",
+            "address": 121,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "generatorFrequency",
+            "address": 122,
+            "scale": 0.01,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyGeneratorEnergy",
+            "address": 124,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          }
+        ],
+        "derivations": [
+          {
+            "field": "batteryDischargePower",
+            "op": "negate",
+            "inputs": [
+              "batteryDischargePower"
+            ]
+          },
+          {
+            "field": "batteryPower",
+            "op": "builtin",
+            "inputs": [
+              "batteryChargePower",
+              "batteryDischargePower"
+            ],
+            "builtin": "battery_sign_normalize"
+          },
+          {
+            "field": "gridExportPower",
+            "op": "negate",
+            "inputs": [
+              "gridExportPower"
+            ]
+          },
+          {
+            "field": "gridPower",
+            "op": "builtin",
+            "inputs": [
+              "gridImportPower",
+              "gridExportPower"
+            ],
+            "builtin": "grid_sign_normalize"
+          },
+          {
+            "field": "dailyPvEnergy",
+            "op": "sum",
+            "inputs": [
+              "dailyPv1Energy",
+              "dailyPv2Energy",
+              "dailyPv3Energy"
+            ]
+          },
+          {
+            "field": "batteryTemperature",
+            "op": "builtin",
+            "inputs": [
+              "batteryTemperature"
+            ],
+            "builtin": "battery_temp_clamp"
+          },
+          {
+            "field": "totalPvPower",
+            "op": "sum",
+            "inputs": [
+              "pv1Power",
+              "pv2Power",
+              "pv3Power"
+            ]
+          }
+        ],
+        "writes": [],
+        "transport": "modbus_tcp",
+        "batches": [
+          {
+            "startRegister": 1,
+            "count": 37,
+            "functionCode": "FC04",
+            "unitId": 1
+          },
+          {
+            "startRegister": 67,
+            "count": 1,
+            "functionCode": "FC04",
+            "unitId": 1
+          },
+          {
+            "startRegister": 81,
+            "count": 18,
+            "functionCode": "FC04",
+            "unitId": 1
+          },
+          {
+            "startRegister": 121,
+            "count": 4,
+            "functionCode": "FC04",
+            "unitId": 1
+          },
+          {
+            "startRegister": 170,
+            "count": 25,
+            "functionCode": "FC04",
+            "unitId": 1
+          }
+        ],
+        "maxBatchRegisters": 40,
+        "sourceRefs": [
+          {
+            "project": "EG4 Electronics / Lux Power vendor \"Modbus RTU Protocol\" (rev V58, 2023-10-28; rev V23, 2025-06-14)",
+            "url": "https://github.com/galets/eg4-modbus-monitor/blob/master/doc/EG4-18kPV-12LV%20-%20MODBUS%20Communication%20Protocol%20.pdf",
+            "retrievedAt": "2026-08-17",
+            "independentOf": "luxpower_vendor_modbus_pdf"
+          },
+          {
+            "project": "galets/eg4-modbus-monitor (live EG4 18kPV over wired RS-485)",
+            "url": "https://github.com/galets/eg4-modbus-monitor/blob/master/src/registers-18kpv.yaml",
+            "retrievedAt": "2026-08-17",
+            "independentOf": "luxpower_vendor_modbus_pdf"
+          },
+          {
+            "project": "joyfulhouse/eg4_web_monitor (RAW live register dump, 18kPV + FlexBOSS21)",
+            "url": "https://github.com/joyfulhouse/eg4_web_monitor/blob/main/docs/reference/firmware/re/REGISTER_MAP_LIVE_PROBE.md",
+            "retrievedAt": "2026-08-17"
+          },
+          {
+            "project": "poldim/EG4-Inverter-Modbus (live EG4 12kPV over Modbus TCP through an RS-485 gateway)",
+            "url": "https://github.com/poldim/EG4-Inverter-Modbus/blob/main/custom_components/eg4_inverter_modbus/hub.py",
+            "retrievedAt": "2026-08-17"
+          }
+        ],
+        "confidence": "dual_source"
+      },
+      "rawRegisters": {
+        "1": {
+          "1": 3850,
+          "2": 3720,
+          "3": 0,
+          "4": 536,
+          "5": 25670,
+          "7": 3319,
+          "8": 2381,
+          "9": 0,
+          "10": 1667,
+          "11": 0,
+          "12": 2315,
+          "15": 5000,
+          "26": 1920,
+          "27": 0,
+          "28": 284,
+          "29": 196,
+          "30": 0,
+          "33": 98,
+          "34": 75,
+          "36": 116,
+          "37": 42,
+          "67": 24,
+          "81": 6000,
+          "82": 6000,
+          "98": 300,
+          "121": 0,
+          "122": 0,
+          "123": 0,
+          "124": 0,
+          "170": 2100,
+          "171": 193,
+          "193": 1205,
+          "194": 1198
+        }
+      },
+      "expectedFields": {
+        "batterySoc": 70.0,
+        "batteryPower": 1667.0,
+        "batteryVoltage": 53.6,
+        "gridPower": -1920.0,
+        "loadPower": 2100.0,
+        "totalPvPower": 5700.0,
+        "dailyPvEnergy": 48.0
+      }
+    },
+    {
+      "modelId": "eg4_12kpv",
+      "spec": {
+        "modelId": "eg4_12kpv",
+        "version": 1,
+        "source": "generated",
+        "verified": false,
+        "protocol": "modbus_tcp",
+        "port": 8899,
+        "defaultSlaveId": 1,
+        "flags": {
+          "usesInputRegisters": true
+        },
+        "reads": [
+          {
+            "field": "batterySoc",
+            "address": 5,
+            "functionCode": "FC04",
+            "mask": 255
+          },
+          {
+            "field": "batteryVoltage",
+            "address": 4,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "batteryCurrent",
+            "address": 98,
+            "signed": true,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "batteryTemperature",
+            "address": 67,
+            "signed": true,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "batteryChargePower",
+            "address": 10,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "batteryDischargePower",
+            "address": 11,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "gridImportPower",
+            "address": 27,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "gridExportPower",
+            "address": 26,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "gridVoltageL1",
+            "address": 193,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "gridVoltageL2",
+            "address": 194,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "gridFrequency",
+            "address": 15,
+            "scale": 0.01,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "loadPower",
+            "address": 170,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv1Voltage",
+            "address": 1,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv2Voltage",
+            "address": 2,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv3Voltage",
+            "address": 3,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv1Power",
+            "address": 7,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv2Power",
+            "address": 8,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv3Power",
+            "address": 9,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyPv1Energy",
+            "address": 28,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyPv2Energy",
+            "address": 29,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyPv3Energy",
+            "address": 30,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyGridImportEnergy",
+            "address": 37,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyGridExportEnergy",
+            "address": 36,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyLoadEnergy",
+            "address": 171,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyBatteryChargeEnergy",
+            "address": 33,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyBatteryDischargeEnergy",
+            "address": 34,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "bmsChargeCurrentLimit",
+            "address": 81,
+            "scale": 0.01,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "bmsDischargeCurrentLimit",
+            "address": 82,
+            "scale": 0.01,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "generatorPower",
+            "address": 123,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "generatorVoltage",
+            "address": 121,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "generatorFrequency",
+            "address": 122,
+            "scale": 0.01,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyGeneratorEnergy",
+            "address": 124,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          }
+        ],
+        "derivations": [
+          {
+            "field": "batteryDischargePower",
+            "op": "negate",
+            "inputs": [
+              "batteryDischargePower"
+            ]
+          },
+          {
+            "field": "batteryPower",
+            "op": "builtin",
+            "inputs": [
+              "batteryChargePower",
+              "batteryDischargePower"
+            ],
+            "builtin": "battery_sign_normalize"
+          },
+          {
+            "field": "gridExportPower",
+            "op": "negate",
+            "inputs": [
+              "gridExportPower"
+            ]
+          },
+          {
+            "field": "gridPower",
+            "op": "builtin",
+            "inputs": [
+              "gridImportPower",
+              "gridExportPower"
+            ],
+            "builtin": "grid_sign_normalize"
+          },
+          {
+            "field": "dailyPvEnergy",
+            "op": "sum",
+            "inputs": [
+              "dailyPv1Energy",
+              "dailyPv2Energy",
+              "dailyPv3Energy"
+            ]
+          },
+          {
+            "field": "batteryTemperature",
+            "op": "builtin",
+            "inputs": [
+              "batteryTemperature"
+            ],
+            "builtin": "battery_temp_clamp"
+          },
+          {
+            "field": "totalPvPower",
+            "op": "sum",
+            "inputs": [
+              "pv1Power",
+              "pv2Power",
+              "pv3Power"
+            ]
+          }
+        ],
+        "writes": [],
+        "transport": "modbus_tcp",
+        "batches": [
+          {
+            "startRegister": 1,
+            "count": 37,
+            "functionCode": "FC04",
+            "unitId": 1
+          },
+          {
+            "startRegister": 67,
+            "count": 1,
+            "functionCode": "FC04",
+            "unitId": 1
+          },
+          {
+            "startRegister": 81,
+            "count": 18,
+            "functionCode": "FC04",
+            "unitId": 1
+          },
+          {
+            "startRegister": 121,
+            "count": 4,
+            "functionCode": "FC04",
+            "unitId": 1
+          },
+          {
+            "startRegister": 170,
+            "count": 25,
+            "functionCode": "FC04",
+            "unitId": 1
+          }
+        ],
+        "maxBatchRegisters": 40,
+        "sourceRefs": [
+          {
+            "project": "EG4 Electronics / Lux Power vendor \"Modbus RTU Protocol\" (rev V58, 2023-10-28; rev V23, 2025-06-14)",
+            "url": "https://github.com/galets/eg4-modbus-monitor/blob/master/doc/EG4-18kPV-12LV%20-%20MODBUS%20Communication%20Protocol%20.pdf",
+            "retrievedAt": "2026-08-17",
+            "independentOf": "luxpower_vendor_modbus_pdf"
+          },
+          {
+            "project": "galets/eg4-modbus-monitor (live EG4 18kPV over wired RS-485)",
+            "url": "https://github.com/galets/eg4-modbus-monitor/blob/master/src/registers-18kpv.yaml",
+            "retrievedAt": "2026-08-17",
+            "independentOf": "luxpower_vendor_modbus_pdf"
+          },
+          {
+            "project": "joyfulhouse/eg4_web_monitor (RAW live register dump, 18kPV + FlexBOSS21)",
+            "url": "https://github.com/joyfulhouse/eg4_web_monitor/blob/main/docs/reference/firmware/re/REGISTER_MAP_LIVE_PROBE.md",
+            "retrievedAt": "2026-08-17"
+          },
+          {
+            "project": "poldim/EG4-Inverter-Modbus (live EG4 12kPV over Modbus TCP through an RS-485 gateway)",
+            "url": "https://github.com/poldim/EG4-Inverter-Modbus/blob/main/custom_components/eg4_inverter_modbus/hub.py",
+            "retrievedAt": "2026-08-17"
+          }
+        ],
+        "confidence": "dual_source"
+      },
+      "rawRegisters": {
+        "1": {
+          "1": 3850,
+          "2": 3720,
+          "3": 0,
+          "4": 536,
+          "5": 25670,
+          "7": 3319,
+          "8": 2381,
+          "9": 0,
+          "10": 1667,
+          "11": 0,
+          "12": 2315,
+          "15": 5000,
+          "26": 1920,
+          "27": 0,
+          "28": 284,
+          "29": 196,
+          "30": 0,
+          "33": 98,
+          "34": 75,
+          "36": 116,
+          "37": 42,
+          "67": 24,
+          "81": 6000,
+          "82": 6000,
+          "98": 300,
+          "121": 0,
+          "122": 0,
+          "123": 0,
+          "124": 0,
+          "170": 2100,
+          "171": 193,
+          "193": 1205,
+          "194": 1198
+        }
+      },
+      "expectedFields": {
+        "batterySoc": 70.0,
+        "batteryPower": 1667.0,
+        "batteryVoltage": 53.6,
+        "gridPower": -1920.0,
+        "loadPower": 2100.0,
+        "totalPvPower": 5700.0,
+        "dailyPvEnergy": 48.0
+      }
+    },
+    {
+      "modelId": "eg4_flexboss21",
+      "spec": {
+        "modelId": "eg4_flexboss21",
+        "version": 1,
+        "source": "generated",
+        "verified": false,
+        "protocol": "modbus_tcp",
+        "port": 8899,
+        "defaultSlaveId": 1,
+        "flags": {
+          "usesInputRegisters": true
+        },
+        "reads": [
+          {
+            "field": "batterySoc",
+            "address": 5,
+            "functionCode": "FC04",
+            "mask": 255
+          },
+          {
+            "field": "batteryVoltage",
+            "address": 4,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "batteryCurrent",
+            "address": 98,
+            "signed": true,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "batteryTemperature",
+            "address": 67,
+            "signed": true,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "batteryChargePower",
+            "address": 10,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "batteryDischargePower",
+            "address": 11,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "gridImportPower",
+            "address": 27,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "gridExportPower",
+            "address": 26,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "gridVoltageL1",
+            "address": 193,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "gridVoltageL2",
+            "address": 194,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "gridFrequency",
+            "address": 15,
+            "scale": 0.01,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "loadPower",
+            "address": 170,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv1Voltage",
+            "address": 1,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv2Voltage",
+            "address": 2,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv3Voltage",
+            "address": 3,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv1Power",
+            "address": 7,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv2Power",
+            "address": 8,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv3Power",
+            "address": 9,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyPv1Energy",
+            "address": 28,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyPv2Energy",
+            "address": 29,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyPv3Energy",
+            "address": 30,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyGridImportEnergy",
+            "address": 37,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyGridExportEnergy",
+            "address": 36,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyLoadEnergy",
+            "address": 171,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyBatteryChargeEnergy",
+            "address": 33,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyBatteryDischargeEnergy",
+            "address": 34,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "bmsChargeCurrentLimit",
+            "address": 81,
+            "scale": 0.01,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "bmsDischargeCurrentLimit",
+            "address": 82,
+            "scale": 0.01,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "generatorPower",
+            "address": 123,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "generatorVoltage",
+            "address": 121,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "generatorFrequency",
+            "address": 122,
+            "scale": 0.01,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyGeneratorEnergy",
+            "address": 124,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          }
+        ],
+        "derivations": [
+          {
+            "field": "batteryDischargePower",
+            "op": "negate",
+            "inputs": [
+              "batteryDischargePower"
+            ]
+          },
+          {
+            "field": "batteryPower",
+            "op": "builtin",
+            "inputs": [
+              "batteryChargePower",
+              "batteryDischargePower"
+            ],
+            "builtin": "battery_sign_normalize"
+          },
+          {
+            "field": "gridExportPower",
+            "op": "negate",
+            "inputs": [
+              "gridExportPower"
+            ]
+          },
+          {
+            "field": "gridPower",
+            "op": "builtin",
+            "inputs": [
+              "gridImportPower",
+              "gridExportPower"
+            ],
+            "builtin": "grid_sign_normalize"
+          },
+          {
+            "field": "dailyPvEnergy",
+            "op": "sum",
+            "inputs": [
+              "dailyPv1Energy",
+              "dailyPv2Energy",
+              "dailyPv3Energy"
+            ]
+          },
+          {
+            "field": "batteryTemperature",
+            "op": "builtin",
+            "inputs": [
+              "batteryTemperature"
+            ],
+            "builtin": "battery_temp_clamp"
+          },
+          {
+            "field": "totalPvPower",
+            "op": "sum",
+            "inputs": [
+              "pv1Power",
+              "pv2Power",
+              "pv3Power"
+            ]
+          }
+        ],
+        "writes": [],
+        "transport": "modbus_tcp",
+        "batches": [
+          {
+            "startRegister": 1,
+            "count": 37,
+            "functionCode": "FC04",
+            "unitId": 1
+          },
+          {
+            "startRegister": 67,
+            "count": 1,
+            "functionCode": "FC04",
+            "unitId": 1
+          },
+          {
+            "startRegister": 81,
+            "count": 18,
+            "functionCode": "FC04",
+            "unitId": 1
+          },
+          {
+            "startRegister": 121,
+            "count": 4,
+            "functionCode": "FC04",
+            "unitId": 1
+          },
+          {
+            "startRegister": 170,
+            "count": 25,
+            "functionCode": "FC04",
+            "unitId": 1
+          }
+        ],
+        "maxBatchRegisters": 40,
+        "sourceRefs": [
+          {
+            "project": "EG4 Electronics / Lux Power vendor \"Modbus RTU Protocol\" (rev V58, 2023-10-28; rev V23, 2025-06-14)",
+            "url": "https://github.com/galets/eg4-modbus-monitor/blob/master/doc/EG4-18kPV-12LV%20-%20MODBUS%20Communication%20Protocol%20.pdf",
+            "retrievedAt": "2026-08-17",
+            "independentOf": "luxpower_vendor_modbus_pdf"
+          },
+          {
+            "project": "galets/eg4-modbus-monitor (live EG4 18kPV over wired RS-485)",
+            "url": "https://github.com/galets/eg4-modbus-monitor/blob/master/src/registers-18kpv.yaml",
+            "retrievedAt": "2026-08-17",
+            "independentOf": "luxpower_vendor_modbus_pdf"
+          },
+          {
+            "project": "joyfulhouse/eg4_web_monitor (RAW live register dump, 18kPV + FlexBOSS21)",
+            "url": "https://github.com/joyfulhouse/eg4_web_monitor/blob/main/docs/reference/firmware/re/REGISTER_MAP_LIVE_PROBE.md",
+            "retrievedAt": "2026-08-17"
+          },
+          {
+            "project": "poldim/EG4-Inverter-Modbus (live EG4 12kPV over Modbus TCP through an RS-485 gateway)",
+            "url": "https://github.com/poldim/EG4-Inverter-Modbus/blob/main/custom_components/eg4_inverter_modbus/hub.py",
+            "retrievedAt": "2026-08-17"
+          }
+        ],
+        "confidence": "dual_source"
+      },
+      "rawRegisters": {
+        "1": {
+          "1": 3850,
+          "2": 3720,
+          "3": 0,
+          "4": 536,
+          "5": 25670,
+          "7": 3319,
+          "8": 2381,
+          "9": 0,
+          "10": 1667,
+          "11": 0,
+          "12": 2315,
+          "15": 5000,
+          "26": 1920,
+          "27": 0,
+          "28": 284,
+          "29": 196,
+          "30": 0,
+          "33": 98,
+          "34": 75,
+          "36": 116,
+          "37": 42,
+          "67": 24,
+          "81": 6000,
+          "82": 6000,
+          "98": 300,
+          "121": 0,
+          "122": 0,
+          "123": 0,
+          "124": 0,
+          "170": 2100,
+          "171": 193,
+          "193": 1205,
+          "194": 1198
+        }
+      },
+      "expectedFields": {
+        "batterySoc": 70.0,
+        "batteryPower": 1667.0,
+        "batteryVoltage": 53.6,
+        "gridPower": -1920.0,
+        "loadPower": 2100.0,
+        "totalPvPower": 5700.0,
+        "dailyPvEnergy": 48.0
+      }
+    },
+    {
+      "modelId": "luxpower_lxp_lb_eu_7k",
+      "spec": {
+        "modelId": "luxpower_lxp_lb_eu_7k",
+        "version": 1,
+        "source": "generated",
+        "verified": false,
+        "protocol": "modbus_tcp",
+        "port": 8899,
+        "defaultSlaveId": 1,
+        "flags": {
+          "usesInputRegisters": true
+        },
+        "reads": [
+          {
+            "field": "batterySoc",
+            "address": 5,
+            "functionCode": "FC04",
+            "mask": 255
+          },
+          {
+            "field": "batteryVoltage",
+            "address": 4,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "batteryCurrent",
+            "address": 98,
+            "signed": true,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "batteryTemperature",
+            "address": 67,
+            "signed": true,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "batteryChargePower",
+            "address": 10,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "batteryDischargePower",
+            "address": 11,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "gridImportPower",
+            "address": 27,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "gridExportPower",
+            "address": 26,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "gridVoltageL1",
+            "address": 12,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "gridFrequency",
+            "address": 15,
+            "scale": 0.01,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "loadPower",
+            "address": 170,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv1Voltage",
+            "address": 1,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv2Voltage",
+            "address": 2,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv3Voltage",
+            "address": 3,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv1Power",
+            "address": 7,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv2Power",
+            "address": 8,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv3Power",
+            "address": 9,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyPv1Energy",
+            "address": 28,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyPv2Energy",
+            "address": 29,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyPv3Energy",
+            "address": 30,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyGridImportEnergy",
+            "address": 37,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyGridExportEnergy",
+            "address": 36,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyLoadEnergy",
+            "address": 171,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyBatteryChargeEnergy",
+            "address": 33,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyBatteryDischargeEnergy",
+            "address": 34,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "bmsChargeCurrentLimit",
+            "address": 81,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "bmsDischargeCurrentLimit",
+            "address": 82,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          }
+        ],
+        "derivations": [
+          {
+            "field": "batteryDischargePower",
+            "op": "negate",
+            "inputs": [
+              "batteryDischargePower"
+            ]
+          },
+          {
+            "field": "batteryPower",
+            "op": "builtin",
+            "inputs": [
+              "batteryChargePower",
+              "batteryDischargePower"
+            ],
+            "builtin": "battery_sign_normalize"
+          },
+          {
+            "field": "gridExportPower",
+            "op": "negate",
+            "inputs": [
+              "gridExportPower"
+            ]
+          },
+          {
+            "field": "gridPower",
+            "op": "builtin",
+            "inputs": [
+              "gridImportPower",
+              "gridExportPower"
+            ],
+            "builtin": "grid_sign_normalize"
+          },
+          {
+            "field": "dailyPvEnergy",
+            "op": "sum",
+            "inputs": [
+              "dailyPv1Energy",
+              "dailyPv2Energy",
+              "dailyPv3Energy"
+            ]
+          },
+          {
+            "field": "batteryTemperature",
+            "op": "builtin",
+            "inputs": [
+              "batteryTemperature"
+            ],
+            "builtin": "battery_temp_clamp"
+          },
+          {
+            "field": "totalPvPower",
+            "op": "sum",
+            "inputs": [
+              "pv1Power",
+              "pv2Power",
+              "pv3Power"
+            ]
+          }
+        ],
+        "writes": [],
+        "transport": "modbus_tcp",
+        "batches": [
+          {
+            "startRegister": 1,
+            "count": 37,
+            "functionCode": "FC04",
+            "unitId": 1
+          },
+          {
+            "startRegister": 67,
+            "count": 1,
+            "functionCode": "FC04",
+            "unitId": 1
+          },
+          {
+            "startRegister": 81,
+            "count": 18,
+            "functionCode": "FC04",
+            "unitId": 1
+          },
+          {
+            "startRegister": 170,
+            "count": 2,
+            "functionCode": "FC04",
+            "unitId": 1
+          }
+        ],
+        "maxBatchRegisters": 40,
+        "sourceRefs": [
+          {
+            "project": "Shenzhen Lux Power Technology \"Modbus RTU Protocol\" rev V23, 2025-06-14",
+            "url": "https://github.com/OwlBawl/Luxpower-Modbus-RTU/blob/main/ModBus_protocol_updated_on_2025.06.14.pdf",
+            "retrievedAt": "2026-08-17",
+            "independentOf": "luxpower_vendor_modbus_pdf"
+          },
+          {
+            "project": "totaldebug/luxmodbus (live LXP-LB-EU 7K, model code EAAB)",
+            "url": "https://github.com/totaldebug/luxmodbus/blob/main/src/luxmodbus/registers.py",
+            "retrievedAt": "2026-08-17"
+          }
+        ],
+        "confidence": "single_source"
+      },
+      "rawRegisters": {
+        "1": {
+          "1": 3850,
+          "2": 3720,
+          "3": 0,
+          "4": 536,
+          "5": 25670,
+          "7": 3319,
+          "8": 2381,
+          "9": 0,
+          "10": 1667,
+          "11": 0,
+          "12": 2315,
+          "15": 5000,
+          "26": 1920,
+          "27": 0,
+          "28": 284,
+          "29": 196,
+          "30": 0,
+          "33": 98,
+          "34": 75,
+          "36": 116,
+          "37": 42,
+          "67": 24,
+          "81": 6000,
+          "82": 6000,
+          "98": 300,
+          "121": 0,
+          "122": 0,
+          "123": 0,
+          "124": 0,
+          "170": 2100,
+          "171": 193,
+          "193": 1205,
+          "194": 1198
+        }
+      },
+      "expectedFields": {
+        "batterySoc": 70.0,
+        "batteryPower": 1667.0,
+        "batteryVoltage": 53.6,
+        "gridPower": -1920.0,
+        "loadPower": 2100.0,
+        "totalPvPower": 5700.0,
+        "dailyPvEnergy": 48.0
+      }
+    },
+    {
+      "modelId": "solax_x3_hybrid_g4_15k",
+      "spec": {
+        "modelId": "solax_x3_hybrid_g4_15k",
+        "version": 1,
+        "source": "generated",
+        "verified": false,
+        "protocol": "modbus_tcp",
+        "port": 8899,
+        "defaultSlaveId": 1,
+        "flags": {
+          "gridPositiveIsExport": true,
+          "usesInputRegisters": true
+        },
+        "reads": [
+          {
+            "field": "batterySoc",
+            "address": 28,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "batteryVoltage",
+            "address": 20,
+            "signed": true,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "batteryPower",
+            "address": 22,
+            "signed": true,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "batteryCurrent",
+            "address": 21,
+            "signed": true,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "batteryTemperature",
+            "address": 24,
+            "signed": true,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "gridPower",
+            "address": 70,
+            "words": 2,
+            "lowWordFirst": true,
+            "signed": true,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "gridVoltageL1",
+            "address": 202,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "gridVoltageL2",
+            "address": 203,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "gridVoltageL3",
+            "address": 204,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "gridPowerL1",
+            "address": 130,
+            "words": 2,
+            "lowWordFirst": true,
+            "signed": true,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "gridPowerL2",
+            "address": 132,
+            "words": 2,
+            "lowWordFirst": true,
+            "signed": true,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "gridPowerL3",
+            "address": 134,
+            "words": 2,
+            "lowWordFirst": true,
+            "signed": true,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "gridFrequency",
+            "address": 200,
+            "scale": 0.01,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "loadVoltageL1",
+            "address": 118,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "loadVoltageL2",
+            "address": 122,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "loadVoltageL3",
+            "address": 126,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "inverterPowerL1",
+            "address": 120,
+            "signed": true,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "inverterPowerL2",
+            "address": 124,
+            "signed": true,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "inverterPowerL3",
+            "address": 128,
+            "signed": true,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv1Voltage",
+            "address": 3,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv1Current",
+            "address": 5,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv2Voltage",
+            "address": 4,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv2Current",
+            "address": 6,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv1Power",
+            "address": 10,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv2Power",
+            "address": 11,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyPvEnergy",
+            "address": 150,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyGridImportEnergy",
+            "address": 154,
+            "words": 2,
+            "lowWordFirst": true,
+            "scale": 0.01,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyGridExportEnergy",
+            "address": 152,
+            "words": 2,
+            "lowWordFirst": true,
+            "scale": 0.01,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyBatteryChargeEnergy",
+            "address": 35,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyBatteryDischargeEnergy",
+            "address": 32,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "bmsChargeCurrentLimit",
+            "address": 36,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "bmsDischargeCurrentLimit",
+            "address": 37,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          }
+        ],
+        "derivations": [
+          {
+            "field": "batteryPower",
+            "op": "builtin",
+            "inputs": [
+              "batteryPower"
+            ],
+            "builtin": "battery_sign_normalize"
+          },
+          {
+            "field": "gridPower",
+            "op": "builtin",
+            "inputs": [
+              "gridPower"
+            ],
+            "builtin": "grid_sign_normalize"
+          },
+          {
+            "field": "batteryTemperature",
+            "op": "builtin",
+            "inputs": [
+              "batteryTemperature"
+            ],
+            "builtin": "battery_temp_clamp"
+          },
+          {
+            "field": "totalPvPower",
+            "op": "sum",
+            "inputs": [
+              "pv1Power",
+              "pv2Power"
+            ]
+          },
+          {
+            "field": "loadPower",
+            "op": "builtin",
+            "inputs": [
+              "totalPvPower",
+              "batteryPower",
+              "gridPower"
+            ],
+            "builtin": "load_energy_balance"
+          }
+        ],
+        "writes": [],
+        "transport": "modbus_tcp",
+        "sourceRefs": [
+          {
+            "project": "SolaX \"Energy Storage Inverter Modbus TCP&RTU Communication protocols\" V3.21, English public version (52 pp)",
+            "url": "https://www.gbc-solino.cz/files/uploads/FAQ%20SolaX/Hybrid-X1X3-G4-ModbusTCPRTU-V3.21-English_0622-public-version.pdf",
+            "retrievedAt": "2026-08-23",
+            "independentOf": "solax_vendor_modbus_pdf"
+          },
+          {
+            "project": "evcc-io/evcc meter template (Hybrid X1/X3 G3/G4 + Qcells Q.HOME rebrand) — corroborates the grid and battery sign conventions and the little-word-first 32-bit order",
+            "url": "https://github.com/evcc-io/evcc/blob/master/templates/definition/meter/solax.yaml",
+            "retrievedAt": "2026-08-23",
+            "independentOf": "solax_vendor_modbus_pdf"
+          },
+          {
+            "project": "Live capture of SolaX X3-Hybrid G4 unit H34A15IB610126 (2026-08-23 13:35:45, site OFF-GRID) — a measurement with no document lineage",
+            "url": "https://github.com/ivanursul/svitgrid/blob/main/docs/inverter-research/captures/2026-08-23-solax-x3-hybrid-g4-h34a15ib610126.json",
+            "retrievedAt": "2026-08-23"
+          }
+        ],
+        "confidence": "dual_source"
+      },
+      "rawRegisters": {
+        "1": {
+          "3": 3442,
+          "4": 0,
+          "5": 35,
+          "6": 0,
+          "10": 1222,
+          "11": 0,
+          "20": 2402,
+          "21": 27,
+          "22": 672,
+          "24": 26,
+          "28": 59,
+          "32": 42,
+          "35": 47,
+          "36": 300,
+          "37": 300,
+          "70": 64036,
+          "71": 65535,
+          "118": 2299,
+          "120": 0,
+          "122": 2299,
+          "124": 166,
+          "126": 2300,
+          "128": 256,
+          "130": 65036,
+          "131": 65535,
+          "132": 65036,
+          "133": 65535,
+          "134": 65036,
+          "135": 65535,
+          "150": 129,
+          "152": 0,
+          "153": 0,
+          "154": 0,
+          "155": 0,
+          "200": 4998,
+          "202": 2301,
+          "203": 2298,
+          "204": 2302
+        }
+      },
+      "expectedFields": {
+        "batterySoc": 59.0,
+        "batteryPower": 672.0,
+        "batteryVoltage": 240.20000000000002,
+        "gridPower": 1500.0,
+        "loadPower": 2050.0,
+        "totalPvPower": 1222.0,
+        "dailyPvEnergy": 12.9
       }
     }
   ]

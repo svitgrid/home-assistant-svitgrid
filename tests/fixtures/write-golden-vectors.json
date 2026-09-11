@@ -1,5 +1,5 @@
 {
-  "sourceCommit": "dev",
+  "sourceCommit": "9d5acee8c60549ed3c4189199659cbbc4a6788de",
   "vectors": [
     {
       "modelId": "deye_sg04lp3",
@@ -223,7 +223,7 @@
               "base": 172,
               "onValue": 1,
               "offValue": 0,
-              "clearMask": 3
+              "clearMask": 1
             }
           ]
         }
@@ -257,7 +257,7 @@
         {
           "unitId": 1,
           "address": 174,
-          "value": 241
+          "value": 243
         }
       ]
     },
@@ -318,7 +318,7 @@
               "base": 172,
               "onValue": 1,
               "offValue": 0,
-              "clearMask": 3
+              "clearMask": 1
             }
           ]
         }
@@ -352,7 +352,33 @@
         {
           "unitId": 1,
           "address": 177,
-          "value": 240
+          "value": 242
+        }
+      ]
+    },
+    {
+      "modelId": "deye_sg04lp3",
+      "command": "set_energy_pattern",
+      "payload": {
+        "energyPattern": 1
+      },
+      "priorRegisters": {
+        "141": 0
+      },
+      "writeCommand": {
+        "command": "set_energy_pattern",
+        "fields": [
+          {
+            "payloadField": "energyPattern",
+            "address": 141
+          }
+        ]
+      },
+      "expectedRegisterWrites": [
+        {
+          "unitId": 1,
+          "address": 141,
+          "value": 1
         }
       ]
     },
@@ -576,7 +602,7 @@
               "base": 274,
               "onValue": 1,
               "offValue": 0,
-              "clearMask": 3
+              "clearMask": 1
             }
           ]
         }
@@ -610,7 +636,7 @@
         {
           "unitId": 1,
           "address": 276,
-          "value": 241
+          "value": 243
         }
       ]
     },
@@ -671,7 +697,7 @@
               "base": 274,
               "onValue": 1,
               "offValue": 0,
-              "clearMask": 3
+              "clearMask": 1
             }
           ]
         }
@@ -705,7 +731,33 @@
         {
           "unitId": 1,
           "address": 279,
-          "value": 240
+          "value": 242
+        }
+      ]
+    },
+    {
+      "modelId": "deye_sg03lp1",
+      "command": "set_energy_pattern",
+      "payload": {
+        "energyPattern": 1
+      },
+      "priorRegisters": {
+        "243": 0
+      },
+      "writeCommand": {
+        "command": "set_energy_pattern",
+        "fields": [
+          {
+            "payloadField": "energyPattern",
+            "address": 243
+          }
+        ]
+      },
+      "expectedRegisterWrites": [
+        {
+          "unitId": 1,
+          "address": 243,
+          "value": 1
         }
       ]
     }
