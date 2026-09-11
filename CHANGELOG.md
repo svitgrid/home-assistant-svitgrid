@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.22.3 — 2026-09-11
 
 ### Fixed
 - **Pairing ended with "Unknown error occurred" when the cloud refused the
