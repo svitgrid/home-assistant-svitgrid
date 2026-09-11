@@ -70,13 +70,28 @@ _CONFIG_BLOCK_SPAN = range(303, 344)
 def bench_registers() -> dict[int, int]:
     """The bench unit's factory profile."""
     space = dict.fromkeys(_CONFIG_BLOCK_SPAN, 0)
-    space.update({
-        324: 282, 325: 270, 332: 600, 333: 300,
-        323: 320, 327: 230, 329: 210,
-        341: 20, 342: 30, 343: 15,
-        313: 0, 334: 292, 335: 60, 336: 120, 337: 30,
-        320: 2300, 321: 5000, 303: 3,
-    })
+    space.update(
+        {
+            324: 282,
+            325: 270,
+            332: 600,
+            333: 300,
+            323: 320,
+            327: 230,
+            329: 210,
+            341: 20,
+            342: 30,
+            343: 15,
+            313: 0,
+            334: 292,
+            335: 60,
+            336: 120,
+            337: 30,
+            320: 2300,
+            321: 5000,
+            303: 3,
+        }
+    )
     return space
 
 
@@ -149,6 +164,7 @@ def make_executor(
 
 # ── contract shape ──────────────────────────────────────────────────────
 
+
 async def test_read_returns_the_contract_shape():
     ex = make_executor(registers=bench_registers(), protocol_number=11, pack_voltage=24)
     result = await ex.dispatch("read_inverter_settings", {})
@@ -201,12 +217,14 @@ async def test_a_contradicted_derived_bound_locks_the_whole_group():
     ex = make_executor(registers=regs, protocol_number=11, pack_voltage=48)
     result = await ex.dispatch("read_inverter_settings", {})
     assert set(result["unconfirmed"]) == {
-        "maxChargeVoltage", "floatChargeVoltage", "batteryOverVoltage",
-        "lowVoltageCutoffOnMains", "lowVoltageCutoffOffGrid", "equalizationVoltage",
+        "maxChargeVoltage",
+        "floatChargeVoltage",
+        "batteryOverVoltage",
+        "lowVoltageCutoffOnMains",
+        "lowVoltageCutoffOffGrid",
+        "equalizationVoltage",
     }
-    w = await ex.dispatch(
-        "set_inverter_setting", {"setting": "floatChargeVoltage", "value": 54.0}
-    )
+    w = await ex.dispatch("set_inverter_setting", {"setting": "floatChargeVoltage", "value": 54.0})
     assert w["ok"] is False
     assert ex.link.writes == []
     # ...but a pack-independent setting on the same device stays writable
@@ -215,14 +233,13 @@ async def test_a_contradicted_derived_bound_locks_the_whole_group():
 
 
 async def test_a_short_read_fails_closed():
-    ex = make_executor(
-        link=truncating(bench_48v(), to=10), protocol_number=11, pack_voltage=48
-    )
+    ex = make_executor(link=truncating(bench_48v(), to=10), protocol_number=11, pack_voltage=48)
     result = await ex.dispatch("read_inverter_settings", {})
     assert len(result["unconfirmed"]) == 6
 
 
 # ── additional coverage mirroring the Dart suite ──────────────────────────
+
 
 async def test_readall_reports_every_catalogued_setting_in_display_units():
     ex = make_executor(registers=bench_registers(), protocol_number=11, pack_voltage=24)
@@ -353,9 +370,7 @@ async def test_unrecognised_protocol_publishes_nothing():
     result = await ex.dispatch("read_inverter_settings", {})
     assert result["settings"] == {}
     assert result["unconfirmed"] == []
-    write = await ex.dispatch(
-        "set_inverter_setting", {"setting": "buzzerMode", "value": 0}
-    )
+    write = await ex.dispatch("set_inverter_setting", {"setting": "buzzerMode", "value": 0})
     assert write["ok"] is False
     assert ex.link.writes == []
 
@@ -419,9 +434,7 @@ async def test_refuses_every_command_when_no_collector_is_connected():
     with pytest.raises(NoCollectorConnected):
         await ex.dispatch("read_inverter_settings", {})
     with pytest.raises(NoCollectorConnected):
-        await ex.dispatch(
-            "set_inverter_setting", {"setting": "maxChargeVoltage", "value": 29.0}
-        )
+        await ex.dispatch("set_inverter_setting", {"setting": "maxChargeVoltage", "value": 29.0})
     assert session.writes == []
 
 

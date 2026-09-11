@@ -27,10 +27,10 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 
 
-class SmgRisk(str, Enum):
+class SmgRisk(StrEnum):
     """How much damage a wrong value here can do."""
 
     ROUTINE = "routine"
@@ -90,60 +90,119 @@ class SmgSetting:
 _PACK_INDEPENDENT: tuple[SmgSetting, ...] = (
     # Nameplate: AC charger DC output 27 V, max 120 A (default 30 A).
     SmgSetting(
-        key="maxChargeCurrent", address=332, scale=0.1, unit="A", decimals=1,
-        raw_min=0, raw_max=1200,  # 600 = 60.0 A
+        key="maxChargeCurrent",
+        address=332,
+        scale=0.1,
+        unit="A",
+        decimals=1,
+        raw_min=0,
+        raw_max=1200,  # 600 = 60.0 A
     ),
     SmgSetting(
-        key="maxMainsChargeCurrent", address=333, scale=0.1, unit="A", decimals=1,
-        raw_min=0, raw_max=1200,  # 300 = 30.0 A
+        key="maxMainsChargeCurrent",
+        address=333,
+        scale=0.1,
+        unit="A",
+        decimals=1,
+        raw_min=0,
+        raw_max=1200,  # 300 = 30.0 A
     ),
-
     # -- protection ----------------------------------------------------------
     SmgSetting(
-        key="socBackToUtility", address=341, scale=1.0, unit="%", decimals=0,
-        raw_min=0, raw_max=100, risk=SmgRisk.PROTECTIVE,  # 20
+        key="socBackToUtility",
+        address=341,
+        scale=1.0,
+        unit="%",
+        decimals=0,
+        raw_min=0,
+        raw_max=100,
+        risk=SmgRisk.PROTECTIVE,  # 20
     ),
     SmgSetting(
-        key="socBackToBattery", address=342, scale=1.0, unit="%", decimals=0,
-        raw_min=0, raw_max=100, risk=SmgRisk.PROTECTIVE,  # 30
+        key="socBackToBattery",
+        address=342,
+        scale=1.0,
+        unit="%",
+        decimals=0,
+        raw_min=0,
+        raw_max=100,
+        risk=SmgRisk.PROTECTIVE,  # 30
     ),
     SmgSetting(
-        key="socLowDcCutoff", address=343, scale=1.0, unit="%", decimals=0,
-        raw_min=0, raw_max=100, risk=SmgRisk.PROTECTIVE,  # 15
+        key="socLowDcCutoff",
+        address=343,
+        scale=1.0,
+        unit="%",
+        decimals=0,
+        raw_min=0,
+        raw_max=100,
+        risk=SmgRisk.PROTECTIVE,  # 15
     ),
-
     # -- equalization ----------------------------------------------------------
     SmgSetting(
-        key="equalizationEnabled", address=313, scale=1.0, unit="", decimals=0,
-        raw_min=0, raw_max=1,  # 0 = disabled
+        key="equalizationEnabled",
+        address=313,
+        scale=1.0,
+        unit="",
+        decimals=0,
+        raw_min=0,
+        raw_max=1,  # 0 = disabled
     ),
     SmgSetting(
-        key="equalizationMinutes", address=335, scale=1.0, unit="min", decimals=0,
-        raw_min=5, raw_max=900,  # 60
+        key="equalizationMinutes",
+        address=335,
+        scale=1.0,
+        unit="min",
+        decimals=0,
+        raw_min=5,
+        raw_max=900,  # 60
     ),
     SmgSetting(
-        key="equalizationTimeoutMinutes", address=336, scale=1.0, unit="min", decimals=0,
-        raw_min=5, raw_max=900,  # 120
+        key="equalizationTimeoutMinutes",
+        address=336,
+        scale=1.0,
+        unit="min",
+        decimals=0,
+        raw_min=5,
+        raw_max=900,  # 120
     ),
     SmgSetting(
-        key="equalizationIntervalDays", address=337, scale=1.0, unit="d", decimals=0,
-        raw_min=0, raw_max=90,  # 30
+        key="equalizationIntervalDays",
+        address=337,
+        scale=1.0,
+        unit="d",
+        decimals=0,
+        raw_min=0,
+        raw_max=90,  # 30
     ),
-
     # -- output ----------------------------------------------------------
     SmgSetting(
-        key="outputVoltage", address=320, scale=0.1, unit="V", decimals=1,
-        raw_min=2000, raw_max=2400,  # 2300 = 230.0 V
+        key="outputVoltage",
+        address=320,
+        scale=0.1,
+        unit="V",
+        decimals=1,
+        raw_min=2000,
+        raw_max=2400,  # 2300 = 230.0 V
     ),
     SmgSetting(
-        key="outputFrequency", address=321, scale=0.01, unit="Hz", decimals=2,
-        raw_min=5000, raw_max=6000,  # 5000 = 50.00 Hz
+        key="outputFrequency",
+        address=321,
+        scale=0.01,
+        unit="Hz",
+        decimals=2,
+        raw_min=5000,
+        raw_max=6000,  # 5000 = 50.00 Hz
     ),
-
     # -- device ----------------------------------------------------------
     SmgSetting(
-        key="buzzerMode", address=303, scale=1.0, unit="", decimals=0,
-        raw_min=0, raw_max=3,  # 3 = faults only
+        key="buzzerMode",
+        address=303,
+        scale=1.0,
+        unit="",
+        decimals=0,
+        raw_min=0,
+        raw_max=3,  # 3 = faults only
     ),
 )
 
@@ -152,32 +211,66 @@ _PACK_INDEPENDENT: tuple[SmgSetting, ...] = (
 _PACK_DEPENDENT_24V: tuple[SmgSetting, ...] = (
     # -- charge profile ----------------------------------------------------------
     SmgSetting(
-        key="maxChargeVoltage", address=324, scale=0.1, unit="V", decimals=1,
-        raw_min=240, raw_max=320, risk=SmgRisk.PROTECTIVE,  # 282 = 28.2 V
+        key="maxChargeVoltage",
+        address=324,
+        scale=0.1,
+        unit="V",
+        decimals=1,
+        raw_min=240,
+        raw_max=320,
+        risk=SmgRisk.PROTECTIVE,  # 282 = 28.2 V
     ),
     SmgSetting(
-        key="floatChargeVoltage", address=325, scale=0.1, unit="V", decimals=1,
-        raw_min=240, raw_max=300, risk=SmgRisk.PROTECTIVE,  # 270 = 27.0 V
+        key="floatChargeVoltage",
+        address=325,
+        scale=0.1,
+        unit="V",
+        decimals=1,
+        raw_min=240,
+        raw_max=300,
+        risk=SmgRisk.PROTECTIVE,  # 270 = 27.0 V
     ),
-
     # -- protection ----------------------------------------------------------
     SmgSetting(
-        key="batteryOverVoltage", address=323, scale=0.1, unit="V", decimals=1,
-        raw_min=260, raw_max=340, risk=SmgRisk.PROTECTIVE,  # 320 = 32.0 V
+        key="batteryOverVoltage",
+        address=323,
+        scale=0.1,
+        unit="V",
+        decimals=1,
+        raw_min=260,
+        raw_max=340,
+        risk=SmgRisk.PROTECTIVE,  # 320 = 32.0 V
     ),
     SmgSetting(
-        key="lowVoltageCutoffOnMains", address=327, scale=0.1, unit="V", decimals=1,
-        raw_min=190, raw_max=260, risk=SmgRisk.PROTECTIVE,  # 230 = 23.0 V
+        key="lowVoltageCutoffOnMains",
+        address=327,
+        scale=0.1,
+        unit="V",
+        decimals=1,
+        raw_min=190,
+        raw_max=260,
+        risk=SmgRisk.PROTECTIVE,  # 230 = 23.0 V
     ),
     SmgSetting(
-        key="lowVoltageCutoffOffGrid", address=329, scale=0.1, unit="V", decimals=1,
-        raw_min=180, raw_max=250, risk=SmgRisk.PROTECTIVE,  # 210 = 21.0 V
+        key="lowVoltageCutoffOffGrid",
+        address=329,
+        scale=0.1,
+        unit="V",
+        decimals=1,
+        raw_min=180,
+        raw_max=250,
+        risk=SmgRisk.PROTECTIVE,  # 210 = 21.0 V
     ),
-
     # -- equalization ----------------------------------------------------------
     SmgSetting(
-        key="equalizationVoltage", address=334, scale=0.1, unit="V", decimals=1,
-        raw_min=240, raw_max=320, risk=SmgRisk.PROTECTIVE,  # 292 = 29.2 V
+        key="equalizationVoltage",
+        address=334,
+        scale=0.1,
+        unit="V",
+        decimals=1,
+        raw_min=240,
+        raw_max=320,
+        risk=SmgRisk.PROTECTIVE,  # 292 = 29.2 V
     ),
 )
 
@@ -302,9 +395,7 @@ def validate_smg_settings(values: dict[int, int]) -> list[SmgConstraintViolation
     return violations
 
 
-def unevaluatable_constraints_for(
-    address: int, values: dict[int, int]
-) -> list[tuple[str, int]]:
+def unevaluatable_constraints_for(address: int, values: dict[int, int]) -> list[tuple[str, int]]:
     """`(constraint key, missing register)` for every constraint involving
     `address` that `values` cannot evaluate.
 

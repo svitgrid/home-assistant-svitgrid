@@ -215,9 +215,7 @@ def parse_write_multiple_response(frame: bytes) -> tuple[int, int]:
             f"(this protocol writes only with {FC_WRITE_MULTIPLE:#04x})"
         )
     if len(frame) != 8:
-        raise ModbusError(
-            f"write acknowledgement must be 8 bytes, got {len(frame)}: {frame.hex()}"
-        )
+        raise ModbusError(f"write acknowledgement must be 8 bytes, got {len(frame)}: {frame.hex()}")
     return ((frame[2] << 8) | frame[3], (frame[4] << 8) | frame[5])
 
 

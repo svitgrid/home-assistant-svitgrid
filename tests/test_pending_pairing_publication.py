@@ -45,9 +45,7 @@ async def test_the_code_is_published_while_the_owner_is_looking_at_it(
         assert _pending(hass) == {"code": "7K9PA2"}
 
 
-async def test_only_the_code_is_published(
-    hass: HomeAssistant, enable_custom_integrations
-) -> None:
+async def test_only_the_code_is_published(hass: HomeAssistant, enable_custom_integrations) -> None:
     """The view serving this is unauthenticated. The pairing SECRET is what
     finalizes a pairing — publishing it beside the code would let anyone on the
     network complete the pairing themselves."""
@@ -87,9 +85,7 @@ async def test_the_code_stops_being_published_once_the_pairing_ends(
 
     with (
         patch("custom_components.svitgrid.config_flow.PairingClient") as mock_client_cls,
-        patch(
-            "custom_components.svitgrid.config_flow.asyncio.sleep", side_effect=_instant_sleep
-        ),
+        patch("custom_components.svitgrid.config_flow.asyncio.sleep", side_effect=_instant_sleep),
     ):
         mock_client = mock_client_cls.return_value
         mock_client.start = AsyncMock(
