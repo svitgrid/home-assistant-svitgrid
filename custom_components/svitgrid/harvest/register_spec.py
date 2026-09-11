@@ -73,6 +73,17 @@ class ReadDef:
     # (Megarevo, SRNE/Swatten, LuxPower/EG4). Getting this wrong fails
     # SILENTLY: the counter is a large, plausible, wrong number.
     low_word_first: bool = False
+    # Bit mask ANDed with the raw word BEFORE signedness, scale and offset.
+    # LuxPower/EG4 input register 5 is SOC in the low byte, SOH in the high
+    # byte (`mask: 255`); unmasked, a 70 % pack reads 25670 and the reader
+    # clamp turns it into a permanent 100 % (svitgrid#568). The sentinel is
+    # still compared against the UNMASKED word, as in Dart.
+    mask: int | None = None
+    # Keys in the spec document this add-on does not know how to execute.
+    # Kept rather than dropped so validate() can refuse the spec: a knob
+    # parsed away decodes a wrong number in silence, and that is exactly how
+    # `mask` went unnoticed.
+    unknown_keys: tuple[str, ...] = ()
 
     @staticmethod
     def from_dict(d: dict) -> ReadDef:
@@ -87,7 +98,29 @@ class ReadDef:
             sentinel=d.get("sentinel"),
             function_code=d.get("functionCode", "FC03"),
             low_word_first=bool(d.get("lowWordFirst", False)),
+            mask=(int(d["mask"]) if d.get("mask") is not None else None),
+            unknown_keys=tuple(sorted(k for k in d if k not in READ_KNOBS)),
         )
+
+
+# Every read-level key this decoder executes. A spec carrying any other key is
+# refused whole by validate(), the way an unknown builtin is. Adding a knob
+# here means implementing it in decoder.py in the same change.
+READ_KNOBS = frozenset(
+    {
+        "field",
+        "address",
+        "words",
+        "signed",
+        "scale",
+        "offset",
+        "unitId",
+        "sentinel",
+        "functionCode",
+        "lowWordFirst",
+        "mask",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -248,6 +281,14 @@ class RegisterSpec:
     def validate(self) -> list[str]:
         problems: list[str] = []
         known = {r.field for r in self.reads} | {x.field for x in self.derivations}
+        for r in self.reads:
+            if r.unknown_keys:
+                problems.append(
+                    f"read {r.field} carries knob(s) this add-on cannot execute: "
+                    f"{', '.join(r.unknown_keys)}"
+                )
+            if r.mask is not None and r.words != 1:
+                problems.append(f"read {r.field}: mask is only valid on a 1-word read")
         for x in self.derivations:
             if x.op == "builtin" and (x.builtin not in BUILTIN_CATALOG):
                 problems.append(f"unknown builtin: {x.builtin}")
