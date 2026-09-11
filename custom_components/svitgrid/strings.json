@@ -76,7 +76,8 @@
       }
     },
     "progress": {
-      "waiting_for_mobile": "Open Svitgrid on your phone and enter this code:\n\n# {code}\n\nThis code expires in 5 minutes."
+      "waiting_for_mobile": "Open Svitgrid on your phone and enter this code:\n\n# {code}\n\nThis code expires in 5 minutes.",
+      "waiting_for_mobile_after_refusal": "Open Svitgrid on your phone and enter this NEW code:\n\n# {code}\n\nThe previous code was refused: the Svitgrid app claimed this Home Assistant without an inverter profile, so the cloud would not create the station. Nothing was created, and that code can no longer be used. Update the Svitgrid app on your phone, then enter the code above. It expires in 5 minutes."
     },
     "abort": {
       "not_implemented_yet": "Not yet implemented.",

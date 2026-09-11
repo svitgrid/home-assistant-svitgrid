@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+- **A refused pairing now hands you a new code instead of a dead end.** When
+  the cloud answers 422 `no_buildable_inverter` — the app claimed this Home
+  Assistant without an inverter profile — 0.22.3 explained the refusal and
+  stopped. That was the wrong place to stop: the refused code stays `claimed`
+  on the cloud and is rejected from then on, so the only way forward was to
+  find "Add integration" again and walk the whole flow a second time. The
+  add-on now calls `/ha-pairing/start` itself and shows the new code on the
+  same waiting screen, under text saying that the previous claim was refused
+  because the phone sent no inverter profile, that nothing was created, and
+  that the app needs updating before the new code is entered. One restart
+  only: a second refusal in the same pairing means the app is still the same,
+  so the flow ends as it did before.
+
 ## 0.22.3 — 2026-09-11
 
 ### Fixed

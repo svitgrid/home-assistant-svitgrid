@@ -330,6 +330,12 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
         self._signing_key_id: str | None = None
         self._pair_task: asyncio.Task | None = None
         self._final_payload: dict[str, Any] | None = None
+        # True once a `no_buildable_inverter` refusal has restarted pairing in
+        # this flow. It picks the progress text (the second code needs to say
+        # why it exists) and it caps the recovery at one attempt: a second
+        # refusal means the phone is still sending no profile, so a third code
+        # would be refused too.
+        self._restarted_after_refusal = False
         # Manual-mode state. Stays None in preset (pair) mode; populated
         # by async_step_manual_meta → async_step_manual_entities and
         # submitted in /finalize's body when the pair completes.
@@ -622,7 +628,11 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
         if not self._pair_task.done():
             return self.async_show_progress(
                 step_id="pair",
-                progress_action="waiting_for_mobile",
+                progress_action=(
+                    "waiting_for_mobile_after_refusal"
+                    if self._restarted_after_refusal
+                    else "waiting_for_mobile"
+                ),
                 progress_task=self._pair_task,
                 description_placeholders={"code": self._code},
             )
@@ -695,12 +705,28 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
             except PairingRefused as err:
                 # The cloud refused to build the station from what the app
                 # claimed — nothing was created, and this code cannot be
-                # claimed again, so the owner must start over with a new one.
+                # claimed again (/claim answers 409 to it from here on), so
+                # the only way forward is a fresh /ha-pairing/start.
                 # Said in the owner's terms; before this the exception went
                 # uncaught and Home Assistant showed "Unknown error occurred".
                 _LOGGER.error("Pairing finalize refused by the cloud: %s", err)
                 if err.code == "no_buildable_inverter":
-                    return self.async_abort(reason="claim_not_buildable")
+                    if self._restarted_after_refusal:
+                        # Second refusal in this flow: the phone is still
+                        # sending no inverter profile, so another code buys
+                        # nothing. End it naming the app as the thing to fix.
+                        return self.async_abort(reason="claim_not_buildable")
+                    # Start over automatically rather than making the owner
+                    # find "Add integration" again. Everything the pair step
+                    # reads to decide it is a first entry goes back to None,
+                    # so async_step_pair calls /start and shows the new code.
+                    self._restarted_after_refusal = True
+                    self._pair_task = None
+                    self._secret = None
+                    self._code = None
+                    self._claimed_status = None
+                    self._final_payload = None
+                    return await self.async_step_pair()
                 return self.async_abort(
                     reason="pairing_refused",
                     description_placeholders={"reason": err.message or err.code},

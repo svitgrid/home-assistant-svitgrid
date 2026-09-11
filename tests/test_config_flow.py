@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -631,33 +632,43 @@ async def test_pair_finalize_defaults_trusted_key_status_to_approved(
     assert data["trusted_key_status"] == "approved"
 
 
-@pytest.mark.asyncio
-async def test_pair_finalize_refused_claim_aborts_with_its_own_reason(
-    hass: HomeAssistant, enable_custom_integrations
-) -> None:
-    """A 422 `no_buildable_inverter` at finalize ends the flow with a message
-    that names the cause and the way out (pair again for a new code) — and
-    creates no entry. Before this it went uncaught: Home Assistant showed
-    "Unknown error occurred" and the log held a traceback."""
+_REFUSAL = (
+    422,
+    "no_buildable_inverter",
+    "None of the claimed inverters can be created: each needs a preset or a manual spec.",
+)
+
+
+async def _drive_refused_pair_flow(
+    hass: HomeAssistant,
+    *,
+    start_results: list[dict],
+    finalize_side_effect: list,
+) -> tuple[list[dict], AsyncMock]:
+    """Run the pair → poll → finalize sequence with a scripted /start and /finalize.
+
+    Returns every flow result, in order, plus the mocked PairingClient. The
+    progress screens are the point of these tests, so the poll task must
+    actually suspend: `asyncio.sleep` is replaced by a single event-loop yield
+    rather than a no-op, or an eager task finishes before the step can return
+    `async_show_progress` and no screen is ever produced. Each round is then
+    driven the way the frontend drives it — block until the poll task is done,
+    then call `async_configure` again — until the flow stops showing progress.
+    """
     from cryptography.hazmat.primitives.asymmetric import ec
 
-    from custom_components.svitgrid.pairing_client import PairingClaimed, PairingRefused
+    from custom_components.svitgrid.pairing_client import PairingClaimed
 
     fake_priv = ec.generate_private_key(ec.SECP256R1())
+    # Bound before the patch: patching `config_flow.asyncio.sleep` replaces the
+    # attribute on the real asyncio module, so calling it here would recurse.
+    real_sleep = asyncio.sleep
 
-    async def _instant_sleep(_: float) -> None:
-        """No-op sleep so the poll loop runs immediately."""
+    async def _one_loop_tick(_: float) -> None:
+        """Yield to the loop once, so the poll task is pending but not slow."""
+        await real_sleep(0)
 
-    results: list[dict] = []
     manager = hass.config_entries.flow
-    original_configure = manager.async_configure
-
-    async def _recording_configure(*args, **kwargs):
-        # The flow manager advances a finished progress step by calling
-        # itself; recording that call is the only way to read the abort.
-        result = await original_configure(*args, **kwargs)
-        results.append(result)
-        return result
 
     with (
         patch("custom_components.svitgrid.config_flow.PairingClient") as mock_client_cls,
@@ -665,33 +676,115 @@ async def test_pair_finalize_refused_claim_aborts_with_its_own_reason(
             "custom_components.svitgrid.config_flow.generate_keypair",
             return_value=(fake_priv, "04" + "a" * 128),
         ),
-        patch("custom_components.svitgrid.config_flow.asyncio.sleep", side_effect=_instant_sleep),
-        patch.object(manager, "async_configure", _recording_configure),
+        patch("custom_components.svitgrid.config_flow.asyncio.sleep", side_effect=_one_loop_tick),
     ):
         mock_client = mock_client_cls.return_value
-        mock_client.start = AsyncMock(
-            return_value={"secret": "secret-1", "code": "7K9PA2", "expiresIn": 300}
-        )
+        mock_client.start = AsyncMock(side_effect=start_results)
         mock_client.get_status = AsyncMock(
             return_value=PairingClaimed(household_id="h-abc", preset_id=None)
         )
-        mock_client.finalize = AsyncMock(
-            side_effect=PairingRefused(
-                422,
-                "no_buildable_inverter",
-                "None of the claimed inverters can be created: each needs a preset or a manual spec.",
-            )
-        )
+        mock_client.finalize = AsyncMock(side_effect=finalize_side_effect)
 
-        result = await hass.config_entries.flow.async_init(
+        init = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": config_entries.SOURCE_USER}
         )
-        await manager.async_configure(result["flow_id"], user_input={"next_step_id": "pair"})
+        flow_id = init["flow_id"]
+        results = [await manager.async_configure(flow_id, user_input={"next_step_id": "pair"})]
+        # Bounded: one round per code on offer, plus a margin that would catch
+        # a restart loop instead of hanging the suite.
+        for _ in range(len(start_results) + 2):
+            if results[-1]["type"] != FlowResultType.SHOW_PROGRESS:
+                break
+            await hass.async_block_till_done()
+            results.append(await manager.async_configure(flow_id))
         await hass.async_block_till_done()
 
+    return results, mock_client
+
+
+@pytest.mark.asyncio
+async def test_pair_finalize_refused_claim_starts_a_new_pairing(
+    hass: HomeAssistant, enable_custom_integrations
+) -> None:
+    """A 422 `no_buildable_inverter` at finalize hands the owner a NEW code
+    instead of ending the flow.
+
+    This test used to assert an abort with reason `claim_not_buildable`, which
+    is what 0.22.3 shipped. The abort was correct about the cause and useless
+    about the cure: the refused code stays `claimed` server-side and /claim
+    answers 409 to it forever, so the owner had to find "Add integration"
+    again and walk the whole flow a second time to get a code that works. The
+    add-on now calls /ha-pairing/start itself and shows the new code on the
+    same progress screen, under text that says why there is a new one.
+    """
+    from custom_components.svitgrid.pairing_client import PairingRefused
+
+    results, mock_client = await _drive_refused_pair_flow(
+        hass,
+        start_results=[
+            {"secret": "secret-1", "code": "7K9PA2", "expiresIn": 300},
+            {"secret": "secret-2", "code": "QW3ZR8", "expiresIn": 300},
+        ],
+        finalize_side_effect=[PairingRefused(*_REFUSAL), PairingRefused(*_REFUSAL)],
+    )
+
+    assert mock_client.start.await_count == 2, "the refusal did not start a new pairing"
+
+    progress = [r for r in results if r["type"] == FlowResultType.SHOW_PROGRESS]
+    assert len(progress) >= 2, f"expected a second progress screen: {[r['type'] for r in results]}"
+    assert progress[0]["progress_action"] == "waiting_for_mobile"
+    assert progress[0]["description_placeholders"] == {"code": "7K9PA2"}
+    # The second screen carries the new code AND says why it is new.
+    assert progress[-1]["progress_action"] == "waiting_for_mobile_after_refusal"
+    assert progress[-1]["description_placeholders"] == {"code": "QW3ZR8"}
+
+
+@pytest.mark.asyncio
+async def test_pair_finalize_refused_twice_aborts_claim_not_buildable(
+    hass: HomeAssistant, enable_custom_integrations
+) -> None:
+    """One automatic restart, not an endless supply of codes.
+
+    If the owner enters the new code from the same un-updated app, the cloud
+    refuses again — a third code would refuse too. The second refusal ends the
+    flow with `claim_not_buildable`, which names the app as the thing to fix,
+    and creates no entry."""
+    from custom_components.svitgrid.pairing_client import PairingRefused
+
+    results, mock_client = await _drive_refused_pair_flow(
+        hass,
+        start_results=[
+            {"secret": "secret-1", "code": "7K9PA2", "expiresIn": 300},
+            {"secret": "secret-2", "code": "QW3ZR8", "expiresIn": 300},
+        ],
+        finalize_side_effect=[PairingRefused(*_REFUSAL), PairingRefused(*_REFUSAL)],
+    )
+
+    assert mock_client.start.await_count == 2, "a third pairing was started"
     aborts = [r for r in results if r["type"] == FlowResultType.ABORT]
     assert aborts, f"the flow never aborted: {[r['type'] for r in results]}"
     assert aborts[-1]["reason"] == "claim_not_buildable"
+    assert hass.config_entries.async_entries(DOMAIN) == []
+
+
+@pytest.mark.asyncio
+async def test_pair_finalize_other_refusal_code_still_aborts(
+    hass: HomeAssistant, enable_custom_integrations
+) -> None:
+    """Only `no_buildable_inverter` is recoverable by a new code. Any other
+    refusal still ends the flow as `pairing_refused`, with the cloud's own
+    wording, and starts no second pairing."""
+    from custom_components.svitgrid.pairing_client import PairingRefused
+
+    results, mock_client = await _drive_refused_pair_flow(
+        hass,
+        start_results=[{"secret": "secret-1", "code": "7K9PA2", "expiresIn": 300}],
+        finalize_side_effect=[PairingRefused(409, "already_claimed", "That code is used.")],
+    )
+
+    assert mock_client.start.await_count == 1
+    aborts = [r for r in results if r["type"] == FlowResultType.ABORT]
+    assert aborts and aborts[-1]["reason"] == "pairing_refused"
     assert hass.config_entries.async_entries(DOMAIN) == []
 
 
