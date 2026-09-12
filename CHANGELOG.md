@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.22.4 — 2026-09-12
 
 ### Changed
 - **A refused pairing now hands you a new code instead of a dead end.** When
