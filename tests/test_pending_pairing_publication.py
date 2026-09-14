@@ -35,11 +35,8 @@ async def test_the_code_is_published_while_the_owner_is_looking_at_it(
         # exactly the window the app is scanning in.
         mock_client.get_status = AsyncMock(side_effect=Exception("still waiting"))
 
-        result = await hass.config_entries.flow.async_init(
+        await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": config_entries.SOURCE_USER}
-        )
-        await hass.config_entries.flow.async_configure(
-            result["flow_id"], user_input={"next_step_id": "pair"}
         )
 
         assert _pending(hass) == {"code": "7K9PA2"}
@@ -56,11 +53,8 @@ async def test_only_the_code_is_published(hass: HomeAssistant, enable_custom_int
         )
         mock_client.get_status = AsyncMock(side_effect=Exception("still waiting"))
 
-        result = await hass.config_entries.flow.async_init(
+        await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": config_entries.SOURCE_USER}
-        )
-        await hass.config_entries.flow.async_configure(
-            result["flow_id"], user_input={"next_step_id": "pair"}
         )
 
         assert set(_pending(hass)) == {"code"}
@@ -93,11 +87,8 @@ async def test_the_code_stops_being_published_once_the_pairing_ends(
         )
         mock_client.get_status = AsyncMock(side_effect=error)
 
-        result = await hass.config_entries.flow.async_init(
+        await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": config_entries.SOURCE_USER}
-        )
-        await hass.config_entries.flow.async_configure(
-            result["flow_id"], user_input={"next_step_id": "pair"}
         )
         await hass.async_block_till_done()
 

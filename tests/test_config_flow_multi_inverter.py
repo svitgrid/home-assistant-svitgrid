@@ -58,11 +58,8 @@ async def _run_pairing(hass: HomeAssistant, finalize_payload: dict) -> dict:
         )
         mock_client.finalize = AsyncMock(return_value=finalize_payload)
 
-        result = await hass.config_entries.flow.async_init(
+        await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": config_entries.SOURCE_USER}
-        )
-        await hass.config_entries.flow.async_configure(
-            result["flow_id"], user_input={"next_step_id": "pair"}
         )
         await hass.async_block_till_done()
 

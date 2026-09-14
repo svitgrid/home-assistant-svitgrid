@@ -295,10 +295,7 @@ async def test_island_full_flow_entry_has_cloud_ingest_enabled(
         )
         mock_client.finalize = AsyncMock(return_value=finalize_resp)
 
-        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
-        await hass.config_entries.flow.async_configure(
-            result["flow_id"], user_input={"next_step_id": "pair"}
-        )
+        await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
         await hass.async_block_till_done()
 
     entries = hass.config_entries.async_entries(DOMAIN)
@@ -358,10 +355,7 @@ async def test_island_full_flow_finalize_body_excludes_island_key(
         )
         mock_client.finalize = AsyncMock(side_effect=_capture_finalize)
 
-        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
-        await hass.config_entries.flow.async_configure(
-            result["flow_id"], user_input={"next_step_id": "pair"}
-        )
+        await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
         await hass.async_block_till_done()
 
     # finalize POST body must NOT carry the key (app owns it; cloud got it via claim)

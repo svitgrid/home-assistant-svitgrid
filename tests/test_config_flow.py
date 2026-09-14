@@ -14,14 +14,27 @@ from custom_components.svitgrid.const import DOMAIN
 
 
 @pytest.mark.asyncio
-async def test_user_step_shows_menu(hass: HomeAssistant, enable_custom_integrations) -> None:
-    """The user step should present the Pair vs Manual menu."""
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": config_entries.SOURCE_USER}
-    )
-    assert result["type"] == FlowResultType.MENU
-    assert "pair" in result["menu_options"]
-    assert "manual" in result["menu_options"]
+async def test_user_step_goes_straight_to_pair(
+    hass: HomeAssistant, enable_custom_integrations
+) -> None:
+    """Pairing with the mobile app is the only setup offered, so the user step
+    opens the pairing screen directly instead of a one-option menu. The manual
+    and direct-harvest steps stay in the code but are not offered here."""
+    with patch("custom_components.svitgrid.config_flow.PairingClient") as mock_client_cls:
+        mock_client = mock_client_cls.return_value
+        mock_client.start = AsyncMock(
+            return_value={"secret": "secret-abc-def" * 4, "code": "7K9PA2", "expiresIn": 300}
+        )
+        mock_client.get_status = AsyncMock(side_effect=Exception("don't poll yet"))
+
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": config_entries.SOURCE_USER}
+        )
+
+    assert result["type"] == FlowResultType.SHOW_PROGRESS
+    assert result["step_id"] == "pair"
+    assert "menu_options" not in result
+    mock_client.start.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -45,9 +58,6 @@ async def test_pair_step_calls_start_and_shows_code(
 
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": config_entries.SOURCE_USER}
-        )
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"], user_input={"next_step_id": "pair"}
         )
 
         assert result["type"] == FlowResultType.SHOW_PROGRESS
@@ -104,11 +114,8 @@ async def test_pair_finalize_creates_entry(hass: HomeAssistant, enable_custom_in
             }
         )
 
-        result = await hass.config_entries.flow.async_init(
+        await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": config_entries.SOURCE_USER}
-        )
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"], user_input={"next_step_id": "pair"}
         )
         # SHOW_PROGRESS → eventually CREATE_ENTRY after the polling loop sees claimed.
         await hass.async_block_till_done()
@@ -181,11 +188,8 @@ async def test_pair_finalize_persists_preset_fields(
             }
         )
 
-        result = await hass.config_entries.flow.async_init(
+        await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": config_entries.SOURCE_USER}
-        )
-        await hass.config_entries.flow.async_configure(
-            result["flow_id"], user_input={"next_step_id": "pair"}
         )
         await hass.async_block_till_done()
 
@@ -281,11 +285,8 @@ async def test_pair_finalize_populates_inverters_list(
             }
         )
 
-        result = await hass.config_entries.flow.async_init(
+        await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": config_entries.SOURCE_USER}
-        )
-        await hass.config_entries.flow.async_configure(
-            result["flow_id"], user_input={"next_step_id": "pair"}
         )
         await hass.async_block_till_done()
 
@@ -369,11 +370,8 @@ async def test_pair_finalize_phase_1_compat_when_no_preset(
             }
         )
 
-        result = await hass.config_entries.flow.async_init(
+        await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": config_entries.SOURCE_USER}
-        )
-        await hass.config_entries.flow.async_configure(
-            result["flow_id"], user_input={"next_step_id": "pair"}
         )
         await hass.async_block_till_done()
 
@@ -592,11 +590,8 @@ async def _run_pair_flow_with_finalize(hass, finalize_payload):
         )
         mock_client.finalize = AsyncMock(return_value=finalize_payload)
 
-        result = await hass.config_entries.flow.async_init(
+        await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": config_entries.SOURCE_USER}
-        )
-        await hass.config_entries.flow.async_configure(
-            result["flow_id"], user_input={"next_step_id": "pair"}
         )
         await hass.async_block_till_done()
         # Snapshot INSIDE the patch context: leaving it lets HA re-enter setup
@@ -689,7 +684,8 @@ async def _drive_refused_pair_flow(
             DOMAIN, context={"source": config_entries.SOURCE_USER}
         )
         flow_id = init["flow_id"]
-        results = [await manager.async_configure(flow_id, user_input={"next_step_id": "pair"})]
+        # The user step opens pairing directly, so init is the first progress screen.
+        results = [init]
         # Bounded: one round per code on offer, plus a margin that would catch
         # a restart loop instead of hanging the suite.
         for _ in range(len(start_results) + 2):
@@ -833,7 +829,8 @@ async def test_pair_finalize_plain_failure_aborts_as_pairing_failed(
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": config_entries.SOURCE_USER}
         )
-        await manager.async_configure(result["flow_id"], user_input={"next_step_id": "pair"})
+        # The user step opens pairing directly; record that first result too.
+        results.append(result)
         await hass.async_block_till_done()
 
     aborts = [r for r in results if r["type"] == FlowResultType.ABORT]

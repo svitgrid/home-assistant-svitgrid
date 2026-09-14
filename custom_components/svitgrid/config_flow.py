@@ -22,7 +22,7 @@ import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.components.http import current_request
 from homeassistant.core import callback
-from homeassistant.data_entry_flow import FlowResult
+from homeassistant.data_entry_flow import FlowResult, FlowResultType
 from homeassistant.helpers import aiohttp_client
 from homeassistant.helpers.selector import (
     BooleanSelector,
@@ -419,17 +419,28 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
         return preset
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
-        """First step — present Pair vs Manual vs direct-harvest."""
+        """First step — go straight to pairing with the Svitgrid mobile app.
+
+        Pairing is the only setup offered (decided 2026-09-14). The manual and
+        direct-harvest steps stay below so existing installs and the options
+        flow keep working; they are hidden from this entry point, not removed.
+        A menu with a single option would only add a click.
+        """
         # Opening this flow is the first moment Home Assistant loads us on an
         # install that has never paired — and the moment the Svitgrid app is
         # scanning the network for exactly this box. Registering the hello
         # view here is what lets it find us, and what lets it prefill the
         # pairing code the next step puts on screen.
         ensure_hello_view(self.hass)
-        return self.async_show_menu(
-            step_id="user",
-            menu_options=["pair", "manual", "harvest_config"],
-        )
+        result = await self.async_step_pair()
+        # `async_configure` follows a progress-done result into its next step,
+        # but `async_init` returns it as-is. When the claim poll has already
+        # finished by the time pair returns, continue here, as the menu path
+        # through `async_configure` used to.
+        if result["type"] == FlowResultType.SHOW_PROGRESS_DONE:
+            # A progress-done result names its next step in `step_id`.
+            return await getattr(self, f"async_step_{result['step_id']}")()
+        return result
 
     # ─── Manual branch (Phase 2A M3–M7) ──────────────────────────────────
 
