@@ -73,3 +73,21 @@ def test_seed_active_does_not_call_activity():
     a = _Act()
     LifecycleState(activity=a)  # state=ACTIVE by default
     assert a.calls == []
+
+
+def test_on_deprovision_fires_once_on_the_transition():
+    """Issue #6: the entry revokes its island keys when the device is deprovisioned."""
+    calls = []
+    lc = LifecycleState(on_deprovision=lambda: calls.append(1))
+    lc.pause("paused", "2026-06-25T09:00:00Z")
+    assert calls == []
+    lc.deprovision("revoked", "2026-06-25T10:00:00Z")
+    lc.deprovision("revoked again", "2026-06-25T11:00:00Z")
+    assert calls == [1]
+
+
+def test_on_deprovision_does_not_fire_for_a_seeded_deprovisioned_state():
+    calls = []
+    lc = LifecycleState(state="deprovisioned", on_deprovision=lambda: calls.append(1))
+    lc.deprovision("revoked", "2026-06-25T10:00:00Z")
+    assert calls == []

@@ -58,7 +58,12 @@ from .harvest.write_executor import WriteExecutor
 from .http_views import ensure_hello_view, register_views
 from .inverter_entry import harvest_config_from_api
 from .island_event_store import IslandEventStore
-from .keystore import SvitgridKeystore
+from .keystore import (
+    ENTRY_ISLAND_DEVICE_IDS,
+    PAIRING_ISLAND_DEVICE_ID_PREFIX,
+    SvitgridKeystore,
+    pairing_island_device_id,
+)
 from .lifecycle import DEPROVISIONED, LifecycleState
 from .mqtt_control import MqttControlState
 from .mqtt_wake import run_loop as run_mqtt_wake_loop
@@ -663,10 +668,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # same key. The key then leaves entry.data: setup runs on every reload, and
     # re-adopting it each time would undo a revoke at the next restart. Runs
     # before the update listener is registered, so the write does not reload.
+    #
+    # The key leaves, so the roster id holding it is recorded instead: it is
+    # what async_remove_entry revokes (issue #6).
     _pairing_island_key = data.get("island_key")
     if _pairing_island_key:
         _created_at = getattr(entry, "created_at", None)
-        await keystore.async_adopt_pairing_island_key(
+        _adopted_id = await keystore.async_adopt_pairing_island_key(
             _pairing_island_key,
             paired_at=(
                 _created_at.astimezone(UTC).isoformat().replace("+00:00", "Z")
@@ -674,9 +682,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 else None
             ),
         )
-        hass.config_entries.async_update_entry(
-            entry, data={k: v for k, v in entry.data.items() if k != "island_key"}
-        )
+        _new_data = {k: v for k, v in entry.data.items() if k != "island_key"}
+        if _adopted_id is not None:
+            _new_data[ENTRY_ISLAND_DEVICE_IDS] = sorted(
+                {*(entry.data.get(ENTRY_ISLAND_DEVICE_IDS) or []), _adopted_id}
+            )
+        hass.config_entries.async_update_entry(entry, data=_new_data)
         data = entry.data
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN]["keystore"] = keystore
@@ -733,6 +744,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             discharge_positive_ids=discharge_positive_ids,
             control=control,
             device_id=entry.data.get("edge_device_id"),
+        )
+        # A deprovisioned device's island keys go with it (issue #6): the
+        # household no longer owns this add-on, so the phones it paired must
+        # stop authenticating LAN requests too.
+        lifecycle.on_deprovision = lambda: hass.async_create_task(
+            _revoke_entry_island_keys(hass, entry), "svitgrid_revoke_island_keys"
         )
         cadence.interval_s = _initial_cadence_seconds(dict(entry.data))
         hass.data.setdefault(DOMAIN, {})
@@ -1106,3 +1123,53 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # A subsequent async_setup_entry re-creates it, so the reload path is safe.
     hass.data.get(DOMAIN, {}).pop("event_store", None)
     return True
+
+
+async def _revoke_entry_island_keys(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Revoke the island keys `entry` adopted at pairing (issue #6).
+
+    The keystore belongs to the Home Assistant install, not to an entry, so
+    without this every key an entry adopted keeps authenticating LAN requests
+    after the entry is gone.
+
+    Setup records the adopted roster ids in `entry.data`. An entry that never
+    finished setup still holds its key, which names its id. An entry adopted
+    before ids were recorded names neither: when no other Svitgrid entry
+    remains, the pairing-time ids (`paired-...`) can only be its own, so those
+    go; beside another entry nothing does, because the owner cannot be told
+    apart. Never raises: removing an entry must not fail on its keys.
+    """
+    try:
+        # The shared instance, when setup left one: it is what LAN auth reads,
+        # and a separate Store instance can serve it stale data after this write.
+        keystore = hass.data.get(DOMAIN, {}).get("keystore") or SvitgridKeystore(hass)
+        key = entry.data.get("island_key")
+        device_ids = set(entry.data.get(ENTRY_ISLAND_DEVICE_IDS) or [])
+        if key:
+            device_ids.add(pairing_island_device_id(key))
+        if not device_ids and not key:
+            others = [
+                e for e in hass.config_entries.async_entries(DOMAIN) if e.entry_id != entry.entry_id
+            ]
+            if others:
+                return
+            state = await keystore.load()
+            if state is None:
+                return
+            device_ids = {
+                did for did in state.island_keys if did.startswith(PAIRING_ISLAND_DEVICE_ID_PREFIX)
+            }
+        if not device_ids and not key:
+            return
+        removed = await keystore.async_revoke_island_keys(sorted(device_ids), key=key)
+        if removed:
+            _LOGGER.info(
+                "Revoked %d island key(s) adopted by config entry %s", len(removed), entry.entry_id
+            )
+    except Exception:  # noqa: BLE001
+        _LOGGER.exception("Could not revoke the island keys of config entry %s", entry.entry_id)
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """The entry is being deleted: revoke the island keys it adopted."""
+    await _revoke_entry_island_keys(hass, entry)

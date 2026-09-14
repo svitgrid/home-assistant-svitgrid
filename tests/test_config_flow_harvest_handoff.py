@@ -1,13 +1,16 @@
-"""Tests for the SP-D finalize harvestConfig handoff + blocking reachability.
+"""Tests for the SP-D finalize harvestConfig handoff.
 
 When the cloud /finalize response carries a camelCase ``harvestConfig`` block,
-``async_step_pair_finalize`` snake-cases it into ``self._harvest_config``, fetches
-the model's register-spec via the public API, and runs a BLOCKING reachability
-check against a REAL register (spec.reads[0].address) rather than the generic
-fallback register 1 that Deye inverters don't implement.
+``async_step_pair_finalize`` snake-cases it into ``self._harvest_config`` and
+creates the entry.
 
-A relay pairing (no ``harvestConfig``) must skip the reachability check entirely
-and create an entry with NO ``harvest_config`` key (regression guard).
+It does NOT probe the inverter first (issue #6). By the time /finalize has
+answered, the cloud has built the station and the pairing code is spent, so a
+failed probe that re-showed the form left a station in the cloud and nothing in
+Home Assistant. An unreachable inverter is reported by the harvest loop instead.
+
+A relay pairing (no ``harvestConfig``) creates an entry with NO
+``harvest_config`` key (regression guard).
 """
 
 from __future__ import annotations
@@ -94,40 +97,40 @@ def _mock_api_client(spec_dict: dict | None = _MINIMAL_SPEC_DICT):
     )
 
 
-@pytest.mark.asyncio
-async def test_finalize_with_harvest_config_reachable_creates_entry(
-    hass: HomeAssistant,
-) -> None:
-    """harvestConfig present + spec fetched + reachable True → entry with spec passed."""
-    flow = _make_flow(hass, harvest_config=_HARVEST_CONFIG_CAMEL)
-    checker = AsyncMock(return_value=True)
-    api_patch, mock_cls, mock_instance = _mock_api_client()
-
-    with (
-        api_patch,
+def _no_probe_patches():
+    """Patch every way pairing could touch the inverter, so a test can assert
+    that none of them ran."""
+    checker = AsyncMock(return_value=False)
+    read_word = AsyncMock(return_value=None)
+    return (
+        checker,
+        read_word,
         patch(
             "custom_components.svitgrid.harvest.reachability.check_inverter_reachable",
             new=checker,
         ),
-    ):
+        patch("custom_components.svitgrid.harvest.transport.read_word", new=read_word),
+    )
+
+
+@pytest.mark.asyncio
+async def test_finalize_with_harvest_config_creates_entry_without_probing(
+    hass: HomeAssistant,
+) -> None:
+    """harvestConfig present → entry created, and the inverter is not probed."""
+    flow = _make_flow(hass, harvest_config=_HARVEST_CONFIG_CAMEL)
+    api_patch, _, _ = _mock_api_client()
+    checker, read_word, checker_patch, read_word_patch = _no_probe_patches()
+
+    with api_patch, checker_patch, read_word_patch:
         result = await flow.async_step_pair_finalize()
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
     invs = result["data"]["inverters"]
     assert len(invs) == 1
     assert invs[0]["harvest_config"] == _HARVEST_CONFIG_SNAKE
-
-    # get_register_spec was called with the right model_id.
-    mock_instance.get_register_spec.assert_awaited_once_with("deye_sg04lp3")
-
-    # check_inverter_reachable was called exactly once, with the snake-cased
-    # config AND a non-None spec (the real register spec).
-    checker.assert_awaited_once()
-    passed_config = checker.await_args.args[1]
-    assert passed_config == _HARVEST_CONFIG_SNAKE
-    passed_spec = checker.await_args.kwargs.get("spec")
-    assert passed_spec is not None, "spec must be passed so a real register is probed"
-    assert passed_spec.reads[0].address == 588  # battery SOC — not the fallback reg 1
+    checker.assert_not_awaited()
+    read_word.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -155,13 +158,7 @@ async def test_finalize_with_flat_and_array_harvest_config_stores_snake_case(
     ]
     api_patch, _, _ = _mock_api_client()
 
-    with (
-        api_patch,
-        patch(
-            "custom_components.svitgrid.harvest.reachability.check_inverter_reachable",
-            new=AsyncMock(return_value=True),
-        ),
-    ):
+    with api_patch:
         result = await flow.async_step_pair_finalize()
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
@@ -169,45 +166,36 @@ async def test_finalize_with_flat_and_array_harvest_config_stores_snake_case(
 
 
 @pytest.mark.asyncio
-async def test_finalize_with_harvest_config_unreachable_shows_error(
+async def test_finalize_with_an_unreachable_logger_still_creates_entry(
     hass: HomeAssistant,
 ) -> None:
-    """harvestConfig present + reachable False → form error, NO entry created."""
+    """The cloud has already built the station: an inverter that does not answer
+    must not stop the entry from being created (issue #6)."""
     flow = _make_flow(hass, harvest_config=_HARVEST_CONFIG_CAMEL)
-    checker = AsyncMock(return_value=False)
     api_patch, _, _ = _mock_api_client()
+    checker, read_word, checker_patch, read_word_patch = _no_probe_patches()
+    # Every read fails, as it would against a logger that is off the network.
+    read_word.side_effect = ConnectionError("no route to host")
 
-    with (
-        api_patch,
-        patch(
-            "custom_components.svitgrid.harvest.reachability.check_inverter_reachable",
-            new=checker,
-        ),
-    ):
+    with api_patch, checker_patch, read_word_patch:
         result = await flow.async_step_pair_finalize()
 
-    assert result["type"] == FlowResultType.FORM
-    assert result["step_id"] == "pair_finalize"
-    assert result["errors"] == {"base": "cannot_reach_inverter"}
-    checker.assert_awaited_once()
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert result.get("errors") is None
+    assert result["data"]["inverters"][0]["harvest_config"] == _HARVEST_CONFIG_SNAKE
+    assert result["data"]["api_key"] == "k"
 
 
 @pytest.mark.asyncio
-async def test_finalize_relay_skips_reachability_and_has_no_harvest_config(
+async def test_finalize_relay_has_no_harvest_config(
     hass: HomeAssistant,
 ) -> None:
-    """No harvestConfig (relay) → reachability NOT called; no harvest_config key."""
+    """No harvestConfig (relay) → no probe, no spec fetch, no harvest_config key."""
     flow = _make_flow(hass, harvest_config=None)
-    checker = AsyncMock(return_value=True)
     api_patch, _, mock_instance = _mock_api_client()
+    checker, _, checker_patch, read_word_patch = _no_probe_patches()
 
-    with (
-        api_patch,
-        patch(
-            "custom_components.svitgrid.harvest.reachability.check_inverter_reachable",
-            new=checker,
-        ),
-    ):
+    with api_patch, checker_patch, read_word_patch:
         result = await flow.async_step_pair_finalize()
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
@@ -215,57 +203,4 @@ async def test_finalize_relay_skips_reachability_and_has_no_harvest_config(
     assert len(invs) == 1
     assert "harvest_config" not in invs[0]
     checker.assert_not_awaited()
-    # No spec fetch for relay pairings.
     mock_instance.get_register_spec.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_finalize_spec_fetch_returns_none_falls_back_to_no_spec(
-    hass: HomeAssistant,
-) -> None:
-    """get_register_spec returns None → spec=None passed; entry still created."""
-    flow = _make_flow(hass, harvest_config=_HARVEST_CONFIG_CAMEL)
-    checker = AsyncMock(return_value=True)
-    api_patch, _, mock_instance = _mock_api_client(spec_dict=None)
-
-    with (
-        api_patch,
-        patch(
-            "custom_components.svitgrid.harvest.reachability.check_inverter_reachable",
-            new=checker,
-        ),
-    ):
-        result = await flow.async_step_pair_finalize()
-
-    assert result["type"] == FlowResultType.CREATE_ENTRY
-    mock_instance.get_register_spec.assert_awaited_once_with("deye_sg04lp3")
-    # Fallback: spec=None means the generic probe register is used.
-    passed_spec = checker.await_args.kwargs.get("spec")
-    assert passed_spec is None
-
-
-@pytest.mark.asyncio
-async def test_finalize_spec_fetch_raises_falls_back_to_no_spec(
-    hass: HomeAssistant,
-) -> None:
-    """get_register_spec raises → spec=None; no regression, entry still created."""
-    flow = _make_flow(hass, harvest_config=_HARVEST_CONFIG_CAMEL)
-    checker = AsyncMock(return_value=True)
-
-    mock_instance = MagicMock()
-    mock_instance.get_register_spec = AsyncMock(side_effect=Exception("network error"))
-    mock_cls = MagicMock(return_value=mock_instance)
-
-    with (
-        patch("custom_components.svitgrid.config_flow.SvitgridApiClient", new=mock_cls),
-        patch(
-            "custom_components.svitgrid.harvest.reachability.check_inverter_reachable", new=checker
-        ),
-    ):
-        result = await flow.async_step_pair_finalize()
-
-    assert result["type"] == FlowResultType.CREATE_ENTRY
-    # Even though spec fetch raised, the reachability check still ran.
-    checker.assert_awaited_once()
-    passed_spec = checker.await_args.kwargs.get("spec")
-    assert passed_spec is None  # graceful fallback

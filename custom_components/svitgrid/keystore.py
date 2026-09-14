@@ -20,6 +20,13 @@ from .const import LEGACY_ISLAND_DEVICE_ID, STORAGE_KEY, STORAGE_VERSION
 # the device itself.
 PAIRING_ISLAND_DEVICE_LABEL = "Phone used for setup"
 
+# Config-entry data key listing the island roster ids that entry adopted at
+# pairing. Removing the entry revokes exactly these (issue #6).
+ENTRY_ISLAND_DEVICE_IDS = "island_device_ids"
+
+# Roster ids minted by `pairing_island_device_id` start with this.
+PAIRING_ISLAND_DEVICE_ID_PREFIX = "paired-"
+
 
 def generate_island_key() -> str:
     """Return a new random URL-safe island API key (≥32 chars)."""
@@ -33,7 +40,7 @@ def pairing_island_device_id(key: str) -> str:
     instead of adding a duplicate. A truncated SHA-256 names the key without
     revealing it.
     """
-    return "paired-" + hashlib.sha256(key.encode("utf-8")).hexdigest()[:12]
+    return PAIRING_ISLAND_DEVICE_ID_PREFIX + hashlib.sha256(key.encode("utf-8")).hexdigest()[:12]
 
 
 def _normalise_island_entry(value: Any) -> dict[str, Any] | None:
@@ -248,7 +255,7 @@ class SvitgridKeystore:
         *,
         label: str = PAIRING_ISLAND_DEVICE_LABEL,
         paired_at: str | None = None,
-    ) -> None:
+    ) -> str | None:
         """Store a pairing-time island key as a named `island_keys` entry.
 
         Pairing used to write the key into the legacy `island_key` scalar, which
@@ -260,16 +267,23 @@ class SvitgridKeystore:
         Idempotent: a key that any entry already holds is not added again, and
         that entry keeps its label and pairing time. A no-op on an empty
         keystore, like `async_add_island_key`.
+
+        Returns the roster id that holds the key afterwards, so the config entry
+        can record it and revoke it on removal, or None on an empty keystore.
         """
         current = await self.load()
         if current is None:
-            return
+            return None
         changed = False
-        held = any(entry.get("key") == key for entry in current.island_keys.values())
-        if not held:
+        holder = next(
+            (did for did, entry in current.island_keys.items() if entry.get("key") == key),
+            None,
+        )
+        if holder is None:
+            holder = pairing_island_device_id(key)
             current.island_keys = {
                 **current.island_keys,
-                pairing_island_device_id(key): {
+                holder: {
                     "key": key,
                     "label": label,
                     "pairedAt": paired_at,
@@ -281,6 +295,31 @@ class SvitgridKeystore:
             changed = True
         if changed:
             await self._store.async_save(asdict(current))
+        return holder
+
+    async def async_revoke_island_keys(
+        self, device_ids: list[str], *, key: str | None = None
+    ) -> list[str]:
+        """Revoke every roster id in `device_ids` in one write.
+
+        The legacy scalar is cleared only when it is this caller's key: equal to
+        `key`, or a key whose pairing id is among `device_ids`. A scalar holding
+        any other key came from somewhere else and stays. Returns the ids that
+        were actually removed. Idempotent, and a no-op on an empty keystore.
+        """
+        current = await self.load()
+        if current is None:
+            return []
+        ids = set(device_ids)
+        removed = [did for did in current.island_keys if did in ids]
+        current.island_keys = {k: v for k, v in current.island_keys.items() if k not in ids}
+        scalar = current.island_key
+        clear_scalar = bool(scalar) and (scalar == key or pairing_island_device_id(scalar) in ids)
+        if clear_scalar:
+            current.island_key = None
+        if removed or clear_scalar:
+            await self._store.async_save(asdict(current))
+        return removed
 
     async def async_revoke_island_key(self, device_id: str) -> bool:
         """Remove one device's island access.  Returns True iff something was

@@ -16,6 +16,8 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
 from custom_components.svitgrid.harvest.reachability import (
     _PROBE_ADDRESS,
     check_inverter_reachable,
@@ -34,6 +36,13 @@ _HARVEST_CFG = {
 }
 
 _HASS = object()  # transport is fully patched; hass is not exercised directly
+
+
+@pytest.fixture(autouse=True)
+def _no_backoff_sleep():
+    """The probe backs off between attempts; tests must not wait for real."""
+    with patch(f"{MODULE}.asyncio.sleep", new=AsyncMock()) as sleep:
+        yield sleep
 
 
 # ---------------------------------------------------------------------------
@@ -203,3 +212,44 @@ async def test_probe_falls_back_to_fc03_without_a_spec():
     with patch(f"{MODULE}.transport.read_word", mock_rw):
         await check_inverter_reachable(_HASS, _HARVEST_CFG, spec=None)
     assert mock_rw.call_args.kwargs.get("function_code") == "FC03"
+
+
+# ---------------------------------------------------------------------------
+# Retries on a fresh session (issue #6). A Solarman V5 stick often answers the
+# first session's reads with empty frames and briefly holds its connection slot
+# after a quick connect/close, so one failed read does not mean unreachable.
+# ---------------------------------------------------------------------------
+
+
+async def test_empty_first_attempt_then_success_is_reachable(_no_backoff_sleep):
+    mock_rw = AsyncMock(side_effect=[None, 42])
+    with patch(f"{MODULE}.transport.read_word", mock_rw):
+        assert await check_inverter_reachable(_HASS, _HARVEST_CFG) is True
+    assert mock_rw.await_count == 2
+    _no_backoff_sleep.assert_awaited_once()
+
+
+async def test_raising_first_attempt_then_success_is_reachable():
+    mock_rw = AsyncMock(side_effect=[ConnectionError("slot busy"), 7])
+    with patch(f"{MODULE}.transport.read_word", mock_rw):
+        assert await check_inverter_reachable(_HASS, _HARVEST_CFG) is True
+    assert mock_rw.await_count == 2
+
+
+async def test_gives_up_after_the_attempt_budget(_no_backoff_sleep):
+    mock_rw = AsyncMock(return_value=None)
+    with patch(f"{MODULE}.transport.read_word", mock_rw):
+        assert await check_inverter_reachable(_HASS, _HARVEST_CFG) is False
+    assert mock_rw.await_count == 3
+    # Back-off between attempts only, and about 10 s in total.
+    assert _no_backoff_sleep.await_count == 2
+    total = sum(call.args[0] for call in _no_backoff_sleep.await_args_list)
+    assert 5 <= total <= 12
+
+
+async def test_success_on_first_attempt_does_not_sleep(_no_backoff_sleep):
+    mock_rw = AsyncMock(return_value=1)
+    with patch(f"{MODULE}.transport.read_word", mock_rw):
+        assert await check_inverter_reachable(_HASS, _HARVEST_CFG) is True
+    assert mock_rw.await_count == 1
+    _no_backoff_sleep.assert_not_awaited()
