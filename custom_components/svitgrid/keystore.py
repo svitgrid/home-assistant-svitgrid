@@ -3,6 +3,7 @@ signingKeyId, the cached trustedKeyIds list, and the island API key."""
 
 from __future__ import annotations
 
+import hashlib
 import secrets
 from dataclasses import asdict, dataclass, field
 from typing import Any
@@ -14,10 +15,25 @@ from homeassistant.helpers.storage import Store
 
 from .const import LEGACY_ISLAND_DEVICE_ID, STORAGE_KEY, STORAGE_VERSION
 
+# The roster label for the phone that paired this add-on. The pairing claim
+# carries the phone's island key but no device id or label, so the add-on names
+# the device itself.
+PAIRING_ISLAND_DEVICE_LABEL = "Phone used for setup"
+
 
 def generate_island_key() -> str:
     """Return a new random URL-safe island API key (≥32 chars)."""
     return secrets.token_urlsafe(32)
+
+
+def pairing_island_device_id(key: str) -> str:
+    """Return the roster device id for a key that arrived through pairing.
+
+    Derived from the key, so adopting the same key again finds the same entry
+    instead of adding a duplicate. A truncated SHA-256 names the key without
+    revealing it.
+    """
+    return "paired-" + hashlib.sha256(key.encode("utf-8")).hexdigest()[:12]
 
 
 def _normalise_island_entry(value: Any) -> dict[str, Any] | None:
@@ -225,6 +241,46 @@ class SvitgridKeystore:
             device_id: {"key": key, "label": label, "pairedAt": paired_at},
         }
         await self._store.async_save(asdict(current))
+
+    async def async_adopt_pairing_island_key(
+        self,
+        key: str,
+        *,
+        label: str = PAIRING_ISLAND_DEVICE_LABEL,
+        paired_at: str | None = None,
+    ) -> None:
+        """Store a pairing-time island key as a named `island_keys` entry.
+
+        Pairing used to write the key into the legacy `island_key` scalar, which
+        the roster reports as an unidentifiable pre-0.16.0 device. When the
+        scalar holds this same key, it moves into the map, so the phone
+        presenting it keeps authenticating. A scalar holding a different key
+        came from a genuinely old `enable_island` and stays the legacy row.
+
+        Idempotent: a key that any entry already holds is not added again, and
+        that entry keeps its label and pairing time. A no-op on an empty
+        keystore, like `async_add_island_key`.
+        """
+        current = await self.load()
+        if current is None:
+            return
+        changed = False
+        held = any(entry.get("key") == key for entry in current.island_keys.values())
+        if not held:
+            current.island_keys = {
+                **current.island_keys,
+                pairing_island_device_id(key): {
+                    "key": key,
+                    "label": label,
+                    "pairedAt": paired_at,
+                },
+            }
+            changed = True
+        if current.island_key == key:
+            current.island_key = None
+            changed = True
+        if changed:
+            await self._store.async_save(asdict(current))
 
     async def async_revoke_island_key(self, device_id: str) -> bool:
         """Remove one device's island access.  Returns True iff something was

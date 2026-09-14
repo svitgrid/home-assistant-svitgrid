@@ -14,6 +14,7 @@ import asyncio
 import contextlib
 import logging
 import os
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -647,9 +648,28 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         signing_key_id=data["signing_key_id"],
         trusted_key_ids=_trusted_key_ids,
         trusted_public_keys_hex=_trusted_public_keys_hex,
-        # Explicit pass: non-None writes the island key; None preserves existing.
-        island_key=data.get("island_key"),
     )
+    # The pairing-time island key becomes a named roster entry, not the legacy
+    # scalar the roster cannot identify (ivanursul/svitgrid#751). This also
+    # migrates an install that paired before the fix, whose scalar holds this
+    # same key. The key then leaves entry.data: setup runs on every reload, and
+    # re-adopting it each time would undo a revoke at the next restart. Runs
+    # before the update listener is registered, so the write does not reload.
+    _pairing_island_key = data.get("island_key")
+    if _pairing_island_key:
+        _created_at = getattr(entry, "created_at", None)
+        await keystore.async_adopt_pairing_island_key(
+            _pairing_island_key,
+            paired_at=(
+                _created_at.astimezone(UTC).isoformat().replace("+00:00", "Z")
+                if isinstance(_created_at, datetime)
+                else None
+            ),
+        )
+        hass.config_entries.async_update_entry(
+            entry, data={k: v for k, v in entry.data.items() if k != "island_key"}
+        )
+        data = entry.data
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN]["keystore"] = keystore
 

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import UTC, datetime
 from secrets import token_hex
 from typing import Any
 
@@ -689,8 +690,13 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
                     # already exists. For fresh installs the blob doesn't exist
                     # yet (it's created in async_setup_entry), so this call is a
                     # no-op; the authoritative write happens in async_setup_entry
-                    # via entry.data["island_key"] → keystore.save(island_key=…).
-                    await SvitgridKeystore(self.hass).async_set_island_key(island_key)
+                    # from entry.data["island_key"]. Either way the key becomes a
+                    # named roster entry, not the legacy scalar
+                    # (ivanursul/svitgrid#751).
+                    await SvitgridKeystore(self.hass).async_adopt_pairing_island_key(
+                        island_key,
+                        paired_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                    )
 
             try:
                 self._final_payload = await self._pairing_client.finalize(
