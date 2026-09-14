@@ -44,6 +44,7 @@ from .const import (
     REQUIRED_FIELDS,
     ROLLUP_INTERVAL_S,
 )
+from .entry_reload import consume_listener_reload_skip
 from .executors import create_executor
 from .executors.smg_settings_executor import EybondSmgSettingsExecutor
 from .executors.yaml_dispatcher import YamlDispatcher
@@ -293,7 +294,13 @@ async def _async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     `_skip_reload_once` is set by callers (harvest_config_apply) that perform
     their OWN explicit reload after async_update_entry — without it, this
     listener would ALSO reload, producing two concurrent setups (e.g. two
-    direct-harvest loops fighting over a single-connection logger)."""
+    direct-harvest loops fighting over a single-connection logger).
+
+    `update_entry_skipping_listener_reload` does the same per entry, for the
+    cloud-ingest and island commands (ivanursul/svitgrid#751). It is checked
+    first so it never consumes another caller's flag."""
+    if consume_listener_reload_skip(hass, entry):
+        return
     data = hass.data.get(DOMAIN, {})
     cadence_only = data.pop("_cadence_only_update", False)
     skip_once = data.pop("_skip_reload_once", False)

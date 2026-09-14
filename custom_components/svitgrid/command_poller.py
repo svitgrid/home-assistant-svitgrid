@@ -39,6 +39,7 @@ from .const import (
     SET_READ_SOURCE_COMMAND,
     TRUSTED_KEY_RESYNC_MIN_INTERVAL_S,
 )
+from .entry_reload import update_entry_skipping_listener_reload
 from .harvest_config_apply import (
     apply_add_inverter,
     apply_harvest_config_change,
@@ -803,7 +804,8 @@ async def process_command(
         )
 
         new_data = {**entry.data, "cloud_ingest_enabled": cloud_ingest}
-        hass.config_entries.async_update_entry(entry, data=new_data)
+        # The reload below is the only one: skip the update listener's.
+        update_entry_skipping_listener_reload(hass, entry, new_data)
         _LOGGER.info(
             "%s: cloud_ingest_enabled -> %s, reloading entry. cmd_id=%s",
             cmd_type,
@@ -878,7 +880,8 @@ async def process_command(
         )
 
         new_data = {**entry.data, "cloud_ingest_enabled": enabled}
-        hass.config_entries.async_update_entry(entry, data=new_data)
+        # The reload below is the only one: skip the update listener's.
+        update_entry_skipping_listener_reload(hass, entry, new_data)
         _LOGGER.info(
             "set_cloud_ingest: cloud_ingest_enabled -> %s, reloading entry. cmd_id=%s",
             enabled,

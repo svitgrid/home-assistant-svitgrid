@@ -38,6 +38,7 @@ from .const import (
     MAX_INVERTERS,
     SET_CLOUD_INGEST_COMMAND,
 )
+from .entry_reload import update_entry_skipping_listener_reload
 from .hourly_energy import per_hour_deltas, to_local_hour_rows
 from .island_auth import island_key_present_and_valid, island_request_authorized
 from .local_time import local_day_of, local_hour_index
@@ -350,8 +351,9 @@ class SvitgridCommandsView(HomeAssistantView):
             return self._json_error(404, "no_config_entry")
 
         for entry in entries:
-            hass.config_entries.async_update_entry(
-                entry, data={**entry.data, "cloud_ingest_enabled": enabled}
+            # The reload below is the only one: skip the update listener's.
+            update_entry_skipping_listener_reload(
+                hass, entry, {**entry.data, "cloud_ingest_enabled": enabled}
             )
 
         # Build the response BEFORE scheduling the reload, and never await the
