@@ -19,6 +19,7 @@ Auth logic (``_BaseView._authorize``):
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import json
 import logging
@@ -39,6 +40,7 @@ from .const import (
     SET_CLOUD_INGEST_COMMAND,
 )
 from .entry_reload import update_entry_skipping_listener_reload
+from .harvest.read_now import find_triggers
 from .hourly_energy import per_hour_deltas, to_local_hour_rows
 from .island_auth import island_key_present_and_valid, island_request_authorized
 from .local_time import local_day_of, local_hour_index
@@ -213,7 +215,87 @@ class SvitgridSyncStatusView(_BaseView):
     async def get(self, request):
         if not await self._authorize(request):
             return web.Response(status=401)
-        return self.json(await self._store.sync_status())
+        status = dict(await self._store.sync_status())
+        status["last_attempt"] = _last_attempt(request.app["hass"])
+        return self.json(status)
+
+
+def _last_attempt(hass) -> dict | None:
+    """The most recent read attempt, so the panel can say why nothing was sent.
+
+    ``status`` is ``ok``, ``skipped`` (reading incomplete, see
+    ``missing_fields``) or ``error`` (see ``reason``). None before any attempt.
+    """
+    for state in (hass.data.get(DOMAIN) or {}).values():
+        activity = state.get("activity") if isinstance(state, dict) else None
+        if activity is None or activity.last_ingest_status is None:
+            continue
+        recent = list(activity.recent_ingests())
+        last = recent[-1] if recent else {}
+        return {
+            "status": activity.last_ingest_status,
+            "at": activity.last_ingest_at.isoformat() if activity.last_ingest_at else None,
+            "reason": last.get("reason"),
+            "missing_fields": list(last.get("missing_fields") or []),
+        }
+    return None
+
+
+# Longest the read-now endpoint waits for the poll it triggered. A Solarman
+# read retries its connection and each failing range, so allow for that.
+_READ_NOW_TIMEOUT_S = 45
+
+
+class SvitgridReadNowView(_BaseView):
+    """POST /api/svitgrid/read-now — one immediate poll of direct-harvest inverters.
+
+    Body ``{"inverter_id": str}`` targets one inverter; an empty body targets
+    all of them. Waits for each poll and returns
+    ``{"results": [{"inverterId", "outcome", "missingFields", "detail"}]}``,
+    where ``outcome`` is ``stored`` (reading taken and queued for sending),
+    ``incomplete``, ``unreachable``, ``failed``, ``no_spec``, ``busy`` (a poll
+    was already in flight) or ``timeout``. With no direct-harvest inverter,
+    ``results`` is empty and ``reason`` is ``no_direct_harvest``.
+
+    Auth: island key OR authenticated HA session (``_BaseView._authorize``).
+    """
+
+    url = "/api/svitgrid/read-now"
+    name = "api:svitgrid:read-now"
+
+    async def post(self, request):  # noqa: D102
+        if not await self._authorize(request):
+            return web.Response(status=401)
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001 — an empty body means "all inverters"
+            body = {}
+        target = body.get("inverter_id") if isinstance(body, dict) else None
+        triggers = find_triggers(request.app["hass"], target if isinstance(target, str) else None)
+        if not triggers:
+            return self.json({"results": [], "reason": "no_direct_harvest"})
+
+        pending = {inv_id: trigger.request() for inv_id, trigger in triggers.items()}
+        results = []
+        for inv_id, fut in pending.items():
+            base = {"inverterId": inv_id, "missingFields": [], "detail": ""}
+            if fut is None:
+                results.append({**base, "outcome": "busy"})
+                continue
+            try:
+                outcome = await asyncio.wait_for(fut, _READ_NOW_TIMEOUT_S)
+            except TimeoutError:
+                results.append({**base, "outcome": "timeout"})
+                continue
+            results.append(
+                {
+                    **base,
+                    "outcome": outcome.get("outcome"),
+                    "missingFields": list(outcome.get("missingFields") or []),
+                    "detail": outcome.get("detail") or "",
+                }
+            )
+        return self.json({"results": results})
 
 
 class SvitgridHealthView(_BaseView):
@@ -1017,6 +1099,7 @@ def register_views(hass: HomeAssistant, store) -> None:
         SvitgridTodayView(store),
         SvitgridHistoryView(store),
         SvitgridSyncStatusView(store),
+        SvitgridReadNowView(store),
         SvitgridHealthView(store),
         SvitgridCommandsView(),
         SvitgridTrustKeyView(),

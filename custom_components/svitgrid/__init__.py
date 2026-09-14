@@ -51,6 +51,7 @@ from .executors.yaml_dispatcher import YamlDispatcher
 from .eybond_at.setup import is_eybond_harvest, start_eybond_hub
 from .harvest.engine import run_direct_harvest_loop
 from .harvest.event_scheduler_loop import run_event_scheduler_loop
+from .harvest.read_now import ReadNowTrigger
 from .harvest.spec_cache import load_spec
 from .harvest.spec_health import build_spec
 from .harvest.write_executor import WriteExecutor
@@ -778,6 +779,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     eybond_hub = None
     eybond_inverters: list[dict] = []
+    # "Read now" per direct-harvest inverter (button, panel, app poll_now).
+    read_now_triggers: dict[str, ReadNowTrigger] = {}
     command_task = None
     mqtt_wake_task = None
     scheduler_task = None
@@ -832,6 +835,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         spec_holder=spec_holder,
                         lifecycle=lifecycle,
                         activity=activity,
+                        read_now=read_now_triggers.setdefault(inverter_id, ReadNowTrigger()),
                     ),
                     name=f"svitgrid_harvest_{inverter_id}",
                 )
@@ -1050,9 +1054,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "lifecycle": lifecycle,
         "mqtt_control": control,
         "update_coordinator": update_coordinator,
+        "read_now": read_now_triggers,
     }
     await hass.config_entries.async_forward_entry_setups(
-        entry, ["sensor", "binary_sensor", "update"]
+        entry, ["sensor", "binary_sensor", "update", "button"]
     )
     hass.async_create_background_task(
         update_coordinator.async_refresh(), name="svitgrid_update_first_check"
@@ -1068,7 +1073,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Cancel background tasks when the user removes the integration."""
-    await hass.config_entries.async_unload_platforms(entry, ["sensor", "binary_sensor", "update"])
+    await hass.config_entries.async_unload_platforms(
+        entry, ["sensor", "binary_sensor", "update", "button"]
+    )
     remove_panel(hass)
     state = hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
     if state is None:

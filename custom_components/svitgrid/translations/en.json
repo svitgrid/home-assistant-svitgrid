@@ -100,6 +100,11 @@
       "problem": {
         "name": "Problem"
       }
+    },
+    "button": {
+      "read_now": {
+        "name": "Read now"
+      }
     }
   },
   "options": {
