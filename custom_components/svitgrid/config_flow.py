@@ -60,7 +60,7 @@ from .eybond_at.setup import (
     subnet_announce_targets,
 )
 from .http_views import ensure_hello_view
-from .inverter_entry import inverters_from_finalize
+from .inverter_entry import harvest_config_from_api, inverters_from_finalize
 from .keystore import SvitgridKeystore
 from .pairing_client import (
     PairingClaimed,
@@ -743,8 +743,9 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
         # and creates NO entry, so the dormant SP-B reads / SP-C writes only
         # activate once we can actually reach the inverter. Relay pairings
         # (no harvestConfig) skip the check entirely.
-        hc = self._final_payload.get("harvestConfig")
-        if hc is not None:
+        hc_wire = self._final_payload.get("harvestConfig")
+        if hc_wire is not None:
+            hc = harvest_config_from_api(hc_wire)
             if hc.get("protocol") == EYBOND_PROTOCOL:
                 # What the PICKER collected wins. It carries inverter_serial,
                 # advertised_ip and announce_target -- none of which the cloud
@@ -757,9 +758,9 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
                 # raise here and abort an otherwise valid pairing.
                 from_cloud = build_manual_config(
                     {
-                        "port": hc.get("listenPort") or hc.get("port"),
-                        "slave_id": hc.get("slaveId", 1),
-                        "model_id": hc.get("modelId"),
+                        "port": hc.get("listen_port") or hc.get("port"),
+                        "slave_id": hc.get("slave_id", 1),
+                        "model_id": hc.get("model_id"),
                     }
                 )
                 local = self._harvest_config or {}
@@ -769,12 +770,10 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
                 self._harvest_config = merged
             else:
                 self._harvest_config = {
-                    "protocol": hc.get("protocol"),
-                    "ip": hc.get("ip"),
+                    **hc,
                     "port": int(hc.get("port")),
-                    "slave_id": int(hc.get("slaveId", 1)),
-                    "model_id": hc.get("modelId"),
-                    "logger_serial": hc.get("loggerSerial"),
+                    "slave_id": int(hc.get("slave_id", 1)),
+                    "logger_serial": hc.get("logger_serial"),
                 }
             # Fetch the model's register spec so the reachability check can
             # probe a REAL register (e.g. battery SOC at address 588) instead
@@ -865,8 +864,18 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
         # second inverter's address arrives in the response's own array.
         # Absent on the preset / HA-only paths, so only set when collected,
         # and never over an address the cloud already named.
-        if self._harvest_config is not None and "harvest_config" not in inverters[0]:
-            inverters[0]["harvest_config"] = self._harvest_config
+        #
+        # When the cloud did name one, `inverters_from_finalize` has already
+        # snake-cased it, so it is kept. The exception is an EyBond collector:
+        # the picker collected inverter_serial, advertised_ip and
+        # announce_target, which no cloud payload carries, and dropping them
+        # leaves the hub with no routing key. Those fields win.
+        if self._harvest_config is not None:
+            cloud_config = inverters[0].get("harvest_config")
+            if cloud_config is None:
+                inverters[0]["harvest_config"] = self._harvest_config
+            elif self._harvest_config.get("protocol") == EYBOND_PROTOCOL:
+                inverters[0]["harvest_config"] = {**cloud_config, **self._harvest_config}
         return self.async_create_entry(
             title=self._entry_title(),
             data={

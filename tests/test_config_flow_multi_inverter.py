@@ -188,7 +188,13 @@ async def test_a_direct_modbus_inverter_keeps_its_own_address(
     invs = data["inverters"]
     assert invs[0]["harvest_config"]["ip"] == "192.168.1.10"
     assert invs[1]["harvest_config"]["ip"] == "192.168.1.11"
-    assert invs[1]["harvest_config"]["loggerSerial"] == "222"
+    # Stored in the entry's own spelling. The setup loop reads `model_id`; a
+    # camelCase copy stored verbatim leaves the spec unloaded and the inverter
+    # polled by nothing (issue #5).
+    assert invs[1]["harvest_config"]["logger_serial"] == "222"
+    assert invs[0]["harvest_config"]["model_id"] == "deye_sg04lp3"
+    assert invs[1]["harvest_config"]["slave_id"] == 1
+    assert "loggerSerial" not in invs[1]["harvest_config"]
 
 
 async def test_an_api_without_the_array_still_pairs_one_inverter(

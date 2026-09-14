@@ -146,6 +146,42 @@ async def test_the_picked_collector_reaches_the_created_entry(hass: HomeAssistan
 
 
 @pytest.mark.asyncio
+async def test_the_picker_fields_survive_a_cloud_config_in_the_inverters_array(
+    hass: HomeAssistant,
+) -> None:
+    """`/finalize` can describe the collector twice: flat and inside
+    `inverters[0]`. The array copy must not replace what the picker collected.
+
+    The cloud copy carries no inverter_serial, so letting it win leaves the
+    hub with no routing key and the inverter never publishes.
+    """
+    flow = _make_flow(hass, preset_id=None)
+    cloud = {"protocol": "eybond_at", "port": 8899, "slaveId": 1, "modelId": "anenji_anj_6200"}
+    flow._final_payload["harvestConfig"] = dict(cloud)
+    flow._final_payload["inverters"] = [
+        {"inverterId": "ha-78a3a28be0ca", "entityMap": {}, "harvestConfig": dict(cloud)}
+    ]
+    flow._harvest_config = {
+        "protocol": "eybond_at",
+        "listen_port": 8899,
+        "slave_id": 1,
+        "model_id": "",
+        "inverter_serial": SERIAL,
+        "advertised_ip": "192.168.1.34",
+    }
+
+    result = await flow.async_step_pair_finalize()
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    cfg = result["data"]["inverters"][0]["harvest_config"]
+    assert cfg["inverter_serial"] == SERIAL
+    assert cfg["advertised_ip"] == "192.168.1.34"
+    # A blank picker model id is a gap, so the cloud's fills it.
+    assert cfg["model_id"] == "anenji_anj_6200"
+    assert "modelId" not in cfg
+
+
+@pytest.mark.asyncio
 async def test_a_relay_preset_still_finishes_without_asking(hass: HomeAssistant) -> None:
     """Regression guard: every other preset must be untouched by this."""
     flow = _make_flow(hass, preset_id="anenji-generic-v1")

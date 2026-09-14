@@ -53,6 +53,7 @@ from .harvest.spec_cache import load_spec
 from .harvest.spec_health import build_spec
 from .harvest.write_executor import WriteExecutor
 from .http_views import ensure_hello_view, register_views
+from .inverter_entry import harvest_config_from_api
 from .island_event_store import IslandEventStore
 from .keystore import SvitgridKeystore
 from .lifecycle import DEPROVISIONED, LifecycleState
@@ -319,6 +320,39 @@ def _inverters_from_entry(entry: ConfigEntry) -> list[dict]:
     return []
 
 
+def _snake_case_stored_harvest_configs(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Rewrite any camelCase `harvest_config` stored on the entry.
+
+    Add-on 0.22.x stored the `harvestConfig` from `/finalize` and `add_inverter`
+    verbatim, so those entries carry `modelId` where every reader expects
+    `model_id`: the spec never loads and the inverter is polled by nothing
+    (issue #5). Rewriting at setup lets those installs recover on the next
+    restart without pairing again.
+
+    This writes `entry.data`, not only the list setup builds, because settings
+    sync and the `set_harvest_config` arm read `entry.data` directly. Call it
+    before the update listener is registered, so the write does not reload.
+    """
+    stored = entry.data.get("inverters") or []
+    rewritten = []
+    changed = False
+    for inv in stored:
+        harvest_config = inv.get("harvest_config")
+        if harvest_config:
+            snake = harvest_config_from_api(harvest_config)
+            if snake != harvest_config:
+                inv = {**inv, "harvest_config": snake}
+                changed = True
+        rewritten.append(inv)
+    if not changed:
+        return
+    hass.config_entries.async_update_entry(entry, data={**entry.data, "inverters": rewritten})
+    _LOGGER.info(
+        "Rewrote camelCase harvest_config keys to snake_case on entry %s",
+        entry.entry_id,
+    )
+
+
 def _migrate_v1_to_v2(data: dict) -> dict:
     """Wrap legacy scalar fields into a single-element inverters list."""
     new = {
@@ -558,6 +592,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     readings loop and (when recipes are present) one YamlDispatcher per inverter.
     A single command poller and MQTT wake loop are shared across all inverters.
     """
+    _snake_case_stored_harvest_configs(hass, entry)
     data = entry.data
     session = aiohttp_client.async_get_clientsession(hass)
     api_client = SvitgridApiClient(session, api_base=data["api_base"])

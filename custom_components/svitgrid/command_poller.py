@@ -45,7 +45,7 @@ from .harvest_config_apply import (
     apply_read_source_change,
     probe_modbus_reachable,
 )
-from .inverter_entry import inverter_entry_from_api
+from .inverter_entry import harvest_config_from_api, inverter_entry_from_api
 from .keystore import SvitgridKeystore
 from .signing import sign_payload
 
@@ -630,14 +630,14 @@ async def process_command(
                     executor_version=executor_version,
                 )
                 return
-            # snake-case for storage (mirrors SP-D finalize)
+            # snake-case for storage, through the same converter as /finalize
+            # and add_inverter, with this arm's defaults for absent fields.
             harvest_config = {
-                "protocol": hc_wire.get("protocol", "solarman_v5"),
-                "ip": hc_wire["ip"],
-                "port": hc_wire["port"],
-                "slave_id": hc_wire.get("slaveId", 1),
-                "model_id": hc_wire.get("modelId"),
-                "logger_serial": hc_wire.get("loggerSerial", ""),
+                "protocol": "solarman_v5",
+                "slave_id": 1,
+                "model_id": None,
+                "logger_serial": "",
+                **harvest_config_from_api(hc_wire),
             }
 
         await _send_signed_ack(

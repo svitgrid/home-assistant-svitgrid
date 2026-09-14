@@ -131,6 +131,44 @@ async def test_finalize_with_harvest_config_reachable_creates_entry(
 
 
 @pytest.mark.asyncio
+async def test_finalize_with_flat_and_array_harvest_config_stores_snake_case(
+    hass: HomeAssistant,
+) -> None:
+    """The shape prod `/finalize` returns: a flat `harvestConfig` AND the same
+    config inside `inverters[0]`. The array copy used to be stored verbatim in
+    camelCase and shadow the snake-cased flat copy, so setup read no `model_id`
+    and the harvest loop idled forever (issue #5)."""
+    flow = _make_flow(hass, harvest_config=_HARVEST_CONFIG_CAMEL)
+    flow._final_payload["inverters"] = [
+        {
+            "inverterId": "ha-h",
+            "presetId": None,
+            "entityMap": {},
+            "brand": "Deye",
+            "model": "SG04LP3",
+            "phases": 3,
+            "hasBattery": True,
+            "pvStrings": 2,
+            "commands": [],
+            "harvestConfig": dict(_HARVEST_CONFIG_CAMEL),
+        }
+    ]
+    api_patch, _, _ = _mock_api_client()
+
+    with (
+        api_patch,
+        patch(
+            "custom_components.svitgrid.harvest.reachability.check_inverter_reachable",
+            new=AsyncMock(return_value=True),
+        ),
+    ):
+        result = await flow.async_step_pair_finalize()
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert result["data"]["inverters"][0]["harvest_config"] == _HARVEST_CONFIG_SNAKE
+
+
+@pytest.mark.asyncio
 async def test_finalize_with_harvest_config_unreachable_shows_error(
     hass: HomeAssistant,
 ) -> None:
