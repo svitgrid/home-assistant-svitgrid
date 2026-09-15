@@ -59,7 +59,7 @@ from .island_lan import (
     signed_lan_request,
 )
 from .local_time import local_day_of, local_hour_index
-from .settings_sync import find_settings_snapshot
+from .settings_sync import find_settings_snapshot, seed_onboarding_settings
 from .signing import compute_key_id, public_key_from_hex, verify_payload
 
 _LOGGER = logging.getLogger(__name__)
@@ -346,6 +346,61 @@ class SvitgridSettingsView(_BaseView):
                 "startRegister": snapshot["start_register"],
                 "registers": list(snapshot["registers"]),
                 "readAt": snapshot["read_at"],
+            }
+        )
+
+
+class SvitgridOnboardingSnapshotView(_BaseView):
+    """POST /api/svitgrid/onboarding-snapshot?inverter_id=<id> — settings the app read during onboarding.
+
+    The body is the API's own onboarding snapshot:
+    ``{"settings": {"modelId", "startRegister", "registers", "readAt"}, "reading"?}``.
+    An island station with cloud sync off sends it here instead, so the
+    settings view answers straight after pairing, without waiting for the
+    settings loop's first read. See ``seed_onboarding_settings`` for the rules.
+
+    Answers the API route's shape, ``{"settings": {"ok", "error"?}, "reading": null}``,
+    so the app reads both with one parser. A refused block is a 200 with
+    ``ok: false``. 400 ``missing_inverter_id`` or ``invalid_body``; 404
+    ``unknown_inverter`` for an inverter no entry harvests.
+
+    The reading is ignored: it would go into ``readings_raw``, which is queued
+    for the cloud and feeds the rollups, and the add-on's own first reading
+    already retries fast after setup.
+
+    Auth: island key OR authenticated HA session (``_BaseView._authorize``).
+    """
+
+    url = "/api/svitgrid/onboarding-snapshot"
+    name = "api:svitgrid:onboarding-snapshot"
+
+    async def post(self, request):
+        if not await self._authorize(request):
+            return web.Response(status=401)
+        inverter_id = request.query.get("inverter_id")
+        if not inverter_id:
+            return self.json({"error": "missing_inverter_id"}, status_code=400)
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001 — any unreadable body is a bad request
+            body = None
+        settings = body.get("settings") if isinstance(body, dict) else None
+        if not isinstance(settings, dict):
+            return self.json({"error": "invalid_body"}, status_code=400)
+        refusal = await seed_onboarding_settings(
+            request.app["hass"],
+            inverter_id,
+            model_id=settings.get("modelId"),
+            start_register=settings.get("startRegister"),
+            registers=settings.get("registers"),
+            read_at=settings.get("readAt"),
+        )
+        if refusal == "unknown_inverter":
+            return self.json({"error": "unknown_inverter"}, status_code=404)
+        return self.json(
+            {
+                "settings": {"ok": True} if refusal is None else {"ok": False, "error": refusal},
+                "reading": None,
             }
         )
 
@@ -1391,6 +1446,7 @@ def register_views(hass: HomeAssistant, store) -> None:
         SvitgridSyncStatusView(store),
         SvitgridReadNowView(store),
         SvitgridSettingsView(store),
+        SvitgridOnboardingSnapshotView(store),
         SvitgridHealthView(store),
         SvitgridCommandsView(),
         SvitgridTrustKeyView(),

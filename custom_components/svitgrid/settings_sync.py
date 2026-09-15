@@ -48,6 +48,97 @@ def find_settings_snapshot(hass, inverter_id: str) -> dict | None:
     return None
 
 
+def _parse_read_at(value) -> datetime | None:
+    """An ISO 8601 instant with a zone, or None. A naive time is refused:
+    nothing says which clock it was read on."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else None
+
+
+async def seed_onboarding_settings(
+    hass,
+    inverter_id: str,
+    *,
+    model_id,
+    start_register,
+    registers,
+    read_at,
+) -> str | None:
+    """Seed the settings the app read while onboarding identified the inverter.
+
+    An island station with cloud sync off cannot receive them through the API,
+    so the app hands them to the add-on, and the settings view serves them
+    until the settings loop's own first read replaces them.
+
+    Returns None once seeded, or why not: ``unknown_inverter`` (no entry
+    harvests it natively), ``model_mismatch``, ``bad_range`` (not the model's
+    config block), ``bad_registers``, ``bad_read_at``, or ``already_read``.
+    The loop reads after setup, so a read it already made is fresher than the
+    phone's and is never replaced.
+    """
+    state = None
+    harvested_model = None
+    for candidate in (getattr(hass, "data", {}).get(DOMAIN) or {}).values():
+        if not isinstance(candidate, dict):
+            continue
+        for inv in (candidate.get("entry_data") or {}).get("inverters") or []:
+            if inv.get("inverter_id") != inverter_id:
+                continue
+            eligible = _eligible_for_settings_sync(inv)
+            if eligible is not None:
+                state, harvested_model = candidate, eligible[0]
+                break
+        if state is not None:
+            break
+    if state is None:
+        return "unknown_inverter"
+    if model_id != harvested_model:
+        return "model_mismatch"
+
+    # A partial or mis-aligned block maps to zeroed settings; the server
+    # refuses one for the same reason.
+    expected = config_range_for_model(harvested_model)
+    if (
+        expected is None
+        or not isinstance(registers, list)
+        or start_register != expected[0]
+        or len(registers) != expected[1]
+    ):
+        return "bad_range"
+    if not all(type(v) is int and 0 <= v <= 0xFFFF for v in registers):
+        return "bad_registers"
+    parsed = _parse_read_at(read_at)
+    if parsed is None:
+        return "bad_read_at"
+
+    snapshots = state.setdefault("settings_snapshots", {})
+    if inverter_id in snapshots:
+        return "already_read"
+    snapshot = {
+        "inverter_id": inverter_id,
+        "model_id": harvested_model,
+        "start_register": expected[0],
+        "registers": list(registers),
+        "read_at": parsed.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    snapshots[inverter_id] = snapshot
+    store = state.get("store")
+    if store is not None:
+        try:
+            await store.set_settings_snapshot(snapshot)
+        except Exception:  # noqa: BLE001 — the in-memory cache still serves
+            _LOGGER.exception(
+                "settings_sync: could not persist the onboarding read of %s", inverter_id
+            )
+    _LOGGER.info("settings_sync: seeded the onboarding read of inverter %s", inverter_id)
+    return None
+
+
 # How long a settings-sync-rejected (4xx) inverter is skipped before the
 # next POST attempt. A 403 (unbound/evicted device api-key) or other
 # validation rejection is permanent — the request would be rejected forever
