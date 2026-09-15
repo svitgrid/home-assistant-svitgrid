@@ -441,6 +441,10 @@ async def test_settings_sync_loop_spawned_and_cancelled_on_unload(hass, enable_c
         sk = settings_sync.call_args.kwargs
         assert sk["entry"] is entry
         assert sk["lifecycle"] is not None
+        # The island settings view serves the loop's cache from the entry state.
+        state = hass.data[DOMAIN][entry.entry_id]
+        assert sk["snapshots"] is state["settings_snapshots"]
+        assert sk["store"] is state["store"]
 
         task = hass.data[DOMAIN][entry.entry_id]["settings_sync_task"]
         assert task is not None

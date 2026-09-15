@@ -942,6 +942,24 @@ class ReadingStore:
         finally:
             conn.close()
 
+    # The last successful settings read per inverter (settings_sync), so the
+    # island settings view can answer straight after a restart instead of
+    # 404ing until the first read of the new run lands.
+    def _set_settings_snapshot_sync(self, snapshot: dict) -> None:
+        self._set_meta_sync(f"settings_snapshot:{snapshot['inverter_id']}", json.dumps(snapshot))
+
+    def _get_settings_snapshot_sync(self, inverter_id: str) -> dict | None:
+        value = self._get_meta_sync(f"settings_snapshot:{inverter_id}")
+        return json.loads(value) if value else None
+
+    async def set_settings_snapshot(self, snapshot: dict) -> None:
+        await self._hass.async_add_executor_job(self._set_settings_snapshot_sync, snapshot)
+
+    async def get_settings_snapshot(self, inverter_id: str) -> dict | None:
+        return await self._hass.async_add_executor_job(
+            self._get_settings_snapshot_sync, inverter_id
+        )
+
     _LIFECYCLE_KEYS = ("lifecycle_state", "lifecycle_reason", "lifecycle_since")
 
     def _lifecycle_key(self, key: str) -> str:

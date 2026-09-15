@@ -59,6 +59,7 @@ from .island_lan import (
     signed_lan_request,
 )
 from .local_time import local_day_of, local_hour_index
+from .settings_sync import find_settings_snapshot
 from .signing import compute_key_id, public_key_from_hex, verify_payload
 
 _LOGGER = logging.getLogger(__name__)
@@ -311,6 +312,42 @@ class SvitgridReadNowView(_BaseView):
                 }
             )
         return self.json({"results": results})
+
+
+class SvitgridSettingsView(_BaseView):
+    """GET /api/svitgrid/settings?inverter_id=<id> — the inverter's last settings read.
+
+    Serves the settings-sync loop's cache, so it works in island mode with
+    cloud ingest off, where the settings never leave the house. Answers
+    ``{"inverterId", "modelId", "startRegister", "registers", "readAt"}``;
+    400 ``missing_inverter_id`` without the query parameter; 404
+    ``not_read_yet`` for an inverter with no successful read, including an
+    unknown one. The mobile app consumes these field names.
+
+    Auth: island key OR authenticated HA session (``_BaseView._authorize``).
+    """
+
+    url = "/api/svitgrid/settings"
+    name = "api:svitgrid:settings"
+
+    async def get(self, request):
+        if not await self._authorize(request):
+            return web.Response(status=401)
+        inverter_id = request.query.get("inverter_id")
+        if not inverter_id:
+            return self.json({"error": "missing_inverter_id"}, status_code=400)
+        snapshot = find_settings_snapshot(request.app["hass"], inverter_id)
+        if snapshot is None:
+            return self.json({"error": "not_read_yet"}, status_code=404)
+        return self.json(
+            {
+                "inverterId": snapshot["inverter_id"],
+                "modelId": snapshot["model_id"],
+                "startRegister": snapshot["start_register"],
+                "registers": list(snapshot["registers"]),
+                "readAt": snapshot["read_at"],
+            }
+        )
 
 
 class SvitgridHealthView(_BaseView):
@@ -1353,6 +1390,7 @@ def register_views(hass: HomeAssistant, store) -> None:
         SvitgridHistoryView(store),
         SvitgridSyncStatusView(store),
         SvitgridReadNowView(store),
+        SvitgridSettingsView(store),
         SvitgridHealthView(store),
         SvitgridCommandsView(),
         SvitgridTrustKeyView(),

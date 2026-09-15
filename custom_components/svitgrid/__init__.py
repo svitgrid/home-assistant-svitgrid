@@ -870,6 +870,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     eybond_inverters: list[dict] = []
     # "Read now" per direct-harvest inverter (button, panel, app poll_now).
     read_now_triggers: dict[str, ReadNowTrigger] = {}
+    # Last successful settings read per inverter, filled by the settings-sync
+    # loop and served over the LAN by SvitgridSettingsView.
+    settings_snapshots: dict[str, dict] = {}
     command_task = None
     mqtt_wake_task = None
     scheduler_task = None
@@ -1042,9 +1045,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # Relay/preset-only entries are a no-op tick (settings_sync_tick's
         # eligibility filter skips them) — spawned unconditionally like
         # command_task so a later set_read_source switch to native picks it up
-        # without a reload.
+        # without a reload. Every read is cached for the island settings view;
+        # the POST happens only while cloud ingest is on.
         settings_sync_task = hass.async_create_background_task(
-            run_settings_sync_loop(hass=hass, entry=entry, lifecycle=lifecycle),
+            run_settings_sync_loop(
+                hass=hass,
+                entry=entry,
+                lifecycle=lifecycle,
+                snapshots=settings_snapshots,
+                store=store,
+            ),
             name="svitgrid_settings_sync",
         )
 
@@ -1162,6 +1172,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "update_coordinator": update_coordinator,
         "read_now": read_now_triggers,
         "true_island": true_island,
+        "settings_snapshots": settings_snapshots,
     }
     await hass.config_entries.async_forward_entry_setups(
         entry, ["sensor", "binary_sensor", "update", "button"]

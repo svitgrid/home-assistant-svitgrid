@@ -9,6 +9,7 @@ import logging
 import time
 
 from .decoder import RawRegisters
+from .device_lock import logger_lock
 from .register_spec import RegisterSpec
 
 _LOGGER = logging.getLogger(__name__)
@@ -53,13 +54,16 @@ async def read_raw(hass, spec: RegisterSpec, cfg: dict) -> RawRegisters:
 
     Dispatches to ``_read_solarman`` or ``_read_modbus`` depending on
     ``spec.protocol``, running the blocking I/O via
-    ``hass.async_add_executor_job``.
+    ``hass.async_add_executor_job``. Holds the logger's lock (see
+    ``device_lock``) for the whole connection.
     """
     ranges = plan_ranges(spec)
     if spec.protocol == "solarman_v5":
-        return await hass.async_add_executor_job(_read_solarman, cfg, ranges)
+        async with logger_lock(cfg):
+            return await hass.async_add_executor_job(_read_solarman, cfg, ranges)
     if spec.protocol == "modbus_tcp":
-        return await hass.async_add_executor_job(_read_modbus, cfg, ranges)
+        async with logger_lock(cfg):
+            return await hass.async_add_executor_job(_read_modbus, cfg, ranges)
     _LOGGER.error("unsupported harvest protocol: %s", spec.protocol)
     raise ValueError(f"unsupported protocol: {spec.protocol}")
 
@@ -280,9 +284,11 @@ async def read_word(
     try:
         ranges = [(unit_id, address, 1, function_code)]
         if spec.protocol == "solarman_v5":
-            raw = await hass.async_add_executor_job(_read_solarman, cfg, ranges)
+            async with logger_lock(cfg):
+                raw = await hass.async_add_executor_job(_read_solarman, cfg, ranges)
         elif spec.protocol == "modbus_tcp":
-            raw = await hass.async_add_executor_job(_read_modbus, cfg, ranges)
+            async with logger_lock(cfg):
+                raw = await hass.async_add_executor_job(_read_modbus, cfg, ranges)
         else:
             return None
         return raw.get(unit_id, {}).get(address)
@@ -355,9 +361,11 @@ async def write_registers(
     ``hass.async_add_executor_job``.
     """
     if spec.protocol == "solarman_v5":
-        await hass.async_add_executor_job(_write_solarman, cfg, writes)
+        async with logger_lock(cfg):
+            await hass.async_add_executor_job(_write_solarman, cfg, writes)
     elif spec.protocol == "modbus_tcp":
-        await hass.async_add_executor_job(_write_modbus, cfg, writes)
+        async with logger_lock(cfg):
+            await hass.async_add_executor_job(_write_modbus, cfg, writes)
     else:
         raise ValueError(f"unsupported protocol: {spec.protocol}")
 
