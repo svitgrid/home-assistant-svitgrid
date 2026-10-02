@@ -84,6 +84,11 @@ def decode(spec: RegisterSpec, raw: RawRegisters) -> dict[str, float | None]:
 # fields to match the Dart reader's behaviour. Explicitly-None entries (field key
 # present with value None — meaning the register was in reads but data was missing)
 # are intentionally left untouched.
+#
+# `gridPower` is zero-filled here too, because the Dart reader does it and the
+# golden vectors hold the two decoders to the same output. That 0 is NOT a
+# measurement: `spec_measures_grid` tells the upload path to leave the key out
+# (svitgrid#649).
 _STANDARD_ZERO_FIELDS: frozenset[str] = frozenset(
     {
         "batterySoc",
@@ -98,6 +103,19 @@ _STANDARD_ZERO_FIELDS: frozenset[str] = frozenset(
         "dailyLoadEnergy",
     }
 )
+
+
+def spec_measures_grid(spec: RegisterSpec) -> bool:
+    """Whether anything in the spec produces `gridPower`.
+
+    False for a model with no grid read and no grid derivation, such as a
+    grid-tie string inverter with no meter. `sanitize` still hands such a model
+    `gridPower = 0.0` to match the Dart reader, and the server reads any numeric
+    gridPower as a measurement, so the upload path must drop the key for these
+    models instead of sending the 0 (svitgrid#649)."""
+    return any(r.field == "gridPower" for r in spec.reads) or any(
+        d.field == "gridPower" for d in spec.derivations
+    )
 
 
 def sanitize(fields: dict[str, float | None], spec: RegisterSpec) -> dict[str, float | None]:
@@ -155,9 +173,17 @@ def _apply_builtin(d: Derivation, out: dict[str, float | None], spec: RegisterSp
         # inputs = ['gridPower'] for a family with a real total register, or the
         # per-phase legs for one that publishes none. Summing a single input is
         # identity, so one branch covers both (reference_decoder.dart:119-131).
+        #
+        # One missing leg of several counts as 0, as in Dart. When EVERY input
+        # is missing nothing measured the grid, and the result is None rather
+        # than a 0 W the server would read as a measurement (svitgrid#649).
+        legs = [out.get(f) for f in d.inputs]
+        if all(leg is None for leg in legs):
+            out[d.field] = None
+            return
         gp = 0.0
-        for f in d.inputs:
-            gp += out.get(f) or 0.0
+        for leg in legs:
+            gp += leg or 0.0
         if spec.flags.grid_positive_is_export:
             # `+ 0.0` collapses IEEE-754 negative zero, mirroring the reader.
             gp = -gp + 0.0

@@ -27,10 +27,12 @@ def test_core_payload_fields_mirror_the_api_required_set_exactly():
     reading the server would have accepted."""
     from custom_components.svitgrid.const import CORE_PAYLOAD_FIELDS
 
-    assert (
-        frozenset({"batteryPower", "batteryVoltage", "gridPower", "loadPower"})
-        == CORE_PAYLOAD_FIELDS
-    )
+    assert frozenset({"batteryPower", "batteryVoltage"}) == CORE_PAYLOAD_FIELDS
+    # gridPower and loadPower are OPTIONAL server-side. Requiring them made a
+    # meterless inverter either upload nothing or upload a fake 0 W, which the
+    # server reads as a measured zero (svitgrid#649).
+    assert "gridPower" not in CORE_PAYLOAD_FIELDS
+    assert "loadPower" not in CORE_PAYLOAD_FIELDS
     # pvPower is API-required but NOT in the set — the gate defaults it to 0
     # for no-solar systems.
     assert "pvPower" not in CORE_PAYLOAD_FIELDS

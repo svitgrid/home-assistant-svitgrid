@@ -19,7 +19,7 @@ from ..readings_publisher import (
     assemble_payload,
     gate_payload,
 )
-from .decoder import decode, sanitize
+from .decoder import decode, sanitize, spec_measures_grid
 from .read_now import ReadNowTrigger
 from .spec_health import report_spec_unavailable
 from .transport import read_raw
@@ -57,6 +57,10 @@ async def poll_once(
     """
     raw = await read_raw(hass, spec, cfg)
     fields = sanitize(decode(spec, raw), spec)
+    if not spec_measures_grid(spec):
+        # sanitize() zero-fills gridPower for Dart parity. Uploaded, that 0
+        # reads as a measured zero; omitted, the day reads as unmeasured.
+        fields.pop("gridPower", None)
     non_none: dict[str, Any] = {k: v for k, v in fields.items() if v is not None}
     payload = assemble_payload(inverter_id=inverter_id, fields=non_none)
     payload, missing = gate_payload(payload)
