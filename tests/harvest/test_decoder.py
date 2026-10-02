@@ -311,3 +311,18 @@ def test_32bit_low_word_first_missing_word_is_none():
     spec = _spec(reads=[{"field": "p", "address": 200, "words": 2, "lowWordFirst": True}])
     assert decode(spec, {1: {200: 0x0001}})["p"] is None
     assert decode(spec, {1: {201: 0x0001}})["p"] is None
+
+
+def test_grid_sign_normalize_every_input_missing_is_none():
+    """No leg answered, so nothing measured the grid: None, not a fake 0 W
+    (svitgrid#649). One missing leg of several still counts as 0, above."""
+    spec = _grid_spec(
+        inputs=["gridPowerL1", "gridPowerL2"],
+        flags={"gridPositiveIsExport": True},
+        reads=[
+            {"field": "gridPowerL1", "address": 1, "signed": True},
+            {"field": "gridPowerL2", "address": 2, "signed": True},
+        ],
+    )
+    out = decode(spec, {1: {}})
+    assert "gridPower" in out and out["gridPower"] is None
