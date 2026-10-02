@@ -63,9 +63,7 @@ class TestConformsToFixture:
             assert actual.bounds_derived == expected["boundsDerived"], expected["key"]
 
     def test_pack_independent_entries_match(self, fixture):
-        settings = smg_settings_for(
-            protocol_number=smg_ii_protocol_number, nominal_pack_voltage=24
-        )
+        settings = smg_settings_for(protocol_number=smg_ii_protocol_number, nominal_pack_voltage=24)
         for expected in fixture["packIndependent"]:
             actual = _by_key(settings, expected["key"])
             assert actual.address == expected["address"], expected["key"]
@@ -131,9 +129,7 @@ class TestCatalogue:
     def test_to_raw_rounds_a_value_the_user_typed_rather_than_truncating(self):
         """The user's own numbers, not just round-trips of ours: 32.4 V typed
         into the app must reach register 323 as 324, not 323."""
-        settings = smg_settings_for(
-            protocol_number=smg_ii_protocol_number, nominal_pack_voltage=24
-        )
+        settings = smg_settings_for(protocol_number=smg_ii_protocol_number, nominal_pack_voltage=24)
 
         def by_address(a):
             return next(s for s in settings if s.address == a)
@@ -143,11 +139,24 @@ class TestCatalogue:
 
     def test_bench_values_sit_inside_their_published_range(self):
         bench = {
-            324: 282, 325: 270, 332: 600, 333: 300,
-            323: 320, 327: 230, 329: 210,
-            341: 20, 342: 30, 343: 15,
-            334: 292, 335: 60, 336: 120, 337: 30,
-            320: 2300, 321: 5000, 313: 0, 303: 3,
+            324: 282,
+            325: 270,
+            332: 600,
+            333: 300,
+            323: 320,
+            327: 230,
+            329: 210,
+            341: 20,
+            342: 30,
+            343: 15,
+            334: 292,
+            335: 60,
+            336: 120,
+            337: 30,
+            320: 2300,
+            321: 5000,
+            313: 0,
+            303: 3,
         }
         for s in smg_settings_for(protocol_number=smg_ii_protocol_number, nominal_pack_voltage=24):
             if s.address not in bench:
@@ -177,17 +186,26 @@ class TestCatalogueGatedOnProtocolNumber:
     def test_protocol_11_at_24v_publishes_the_full_measured_catalogue(self):
         settings = smg_settings_for(protocol_number=smg_ii_protocol_number, nominal_pack_voltage=24)
         assert len(settings) == 18
-        assert all(not s.bounds_derived for s in settings), "24 V bounds were measured on the bench unit"
+        assert all(not s.bounds_derived for s in settings), (
+            "24 V bounds were measured on the bench unit"
+        )
 
     def test_an_unmeasured_pack_still_gets_every_pack_independent_setting(self):
         settings = smg_settings_for(protocol_number=smg_ii_protocol_number, nominal_pack_voltage=12)
         keys = {s.key for s in settings}
         assert keys == {
-            "maxChargeCurrent", "maxMainsChargeCurrent",
-            "socBackToUtility", "socBackToBattery", "socLowDcCutoff",
-            "equalizationEnabled", "equalizationMinutes",
-            "equalizationTimeoutMinutes", "equalizationIntervalDays",
-            "outputVoltage", "outputFrequency", "buzzerMode",
+            "maxChargeCurrent",
+            "maxMainsChargeCurrent",
+            "socBackToUtility",
+            "socBackToBattery",
+            "socLowDcCutoff",
+            "equalizationEnabled",
+            "equalizationMinutes",
+            "equalizationTimeoutMinutes",
+            "equalizationIntervalDays",
+            "outputVoltage",
+            "outputFrequency",
+            "buzzerMode",
         }
         assert len(settings) == 12
         assert not any(s.address == 324 for s in settings), "maxChargeVoltage is pack-dependent"
@@ -197,11 +215,15 @@ class TestFortyEightVoltBoundsAreDerived:
     def test_every_dc_setpoint_doubles_its_bounds_and_is_marked_derived(self):
         at24 = {
             s.address: s
-            for s in smg_settings_for(protocol_number=smg_ii_protocol_number, nominal_pack_voltage=24)
+            for s in smg_settings_for(
+                protocol_number=smg_ii_protocol_number, nominal_pack_voltage=24
+            )
         }
         at48 = {
             s.address: s
-            for s in smg_settings_for(protocol_number=smg_ii_protocol_number, nominal_pack_voltage=48)
+            for s in smg_settings_for(
+                protocol_number=smg_ii_protocol_number, nominal_pack_voltage=48
+            )
         }
         for address in (324, 325, 323, 327, 329, 334):
             a = at24[address]
@@ -214,15 +236,18 @@ class TestFortyEightVoltBoundsAreDerived:
             assert a.bounds_derived is False, f"{address} at 24 V is measured"
 
     def test_48v_publishes_all_eighteen_settings(self):
-        assert len(
-            smg_settings_for(protocol_number=smg_ii_protocol_number, nominal_pack_voltage=48)
-        ) == 18
+        assert (
+            len(smg_settings_for(protocol_number=smg_ii_protocol_number, nominal_pack_voltage=48))
+            == 18
+        )
 
     def test_cross_field_constraints_still_hold_at_48v_bounds(self):
-        violations = validate_smg_settings({
-            325: 580,  # float 58.0 V
-            324: 564,  # bulk  56.4 V -> float above bulk
-        })
+        violations = validate_smg_settings(
+            {
+                325: 580,  # float 58.0 V
+                324: 564,  # bulk  56.4 V -> float above bulk
+            }
+        )
         assert any(v.key == "floatBelowBulk" for v in violations)
 
 
@@ -230,9 +255,14 @@ class TestValidateSmgSettings:
     @staticmethod
     def valid():
         return {
-            324: 282, 325: 270, 323: 320,
-            327: 230, 329: 210,
-            341: 20, 342: 30, 343: 15,
+            324: 282,
+            325: 270,
+            323: 320,
+            327: 230,
+            329: 210,
+            341: 20,
+            342: 30,
+            343: 15,
             334: 292,
         }
 

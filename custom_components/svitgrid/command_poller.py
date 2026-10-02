@@ -39,13 +39,15 @@ from .const import (
     SET_READ_SOURCE_COMMAND,
     TRUSTED_KEY_RESYNC_MIN_INTERVAL_S,
 )
+from .entry_reload import update_entry_skipping_listener_reload
+from .harvest.read_now import find_triggers
 from .harvest_config_apply import (
     apply_add_inverter,
     apply_harvest_config_change,
     apply_read_source_change,
     probe_modbus_reachable,
 )
-from .inverter_entry import inverter_entry_from_api
+from .inverter_entry import harvest_config_from_api, inverter_entry_from_api
 from .keystore import SvitgridKeystore
 from .signing import sign_payload
 
@@ -630,14 +632,14 @@ async def process_command(
                     executor_version=executor_version,
                 )
                 return
-            # snake-case for storage (mirrors SP-D finalize)
+            # snake-case for storage, through the same converter as /finalize
+            # and add_inverter, with this arm's defaults for absent fields.
             harvest_config = {
-                "protocol": hc_wire.get("protocol", "solarman_v5"),
-                "ip": hc_wire["ip"],
-                "port": hc_wire["port"],
-                "slave_id": hc_wire.get("slaveId", 1),
-                "model_id": hc_wire.get("modelId"),
-                "logger_serial": hc_wire.get("loggerSerial", ""),
+                "protocol": "solarman_v5",
+                "slave_id": 1,
+                "model_id": None,
+                "logger_serial": "",
+                **harvest_config_from_api(hc_wire),
             }
 
         await _send_signed_ack(
@@ -803,7 +805,8 @@ async def process_command(
         )
 
         new_data = {**entry.data, "cloud_ingest_enabled": cloud_ingest}
-        hass.config_entries.async_update_entry(entry, data=new_data)
+        # The reload below is the only one: skip the update listener's.
+        update_entry_skipping_listener_reload(hass, entry, new_data)
         _LOGGER.info(
             "%s: cloud_ingest_enabled -> %s, reloading entry. cmd_id=%s",
             cmd_type,
@@ -878,7 +881,8 @@ async def process_command(
         )
 
         new_data = {**entry.data, "cloud_ingest_enabled": enabled}
-        hass.config_entries.async_update_entry(entry, data=new_data)
+        # The reload below is the only one: skip the update listener's.
+        update_entry_skipping_listener_reload(hass, entry, new_data)
         _LOGGER.info(
             "set_cloud_ingest: cloud_ingest_enabled -> %s, reloading entry. cmd_id=%s",
             enabled,
@@ -889,16 +893,37 @@ async def process_command(
 
     # === Arm 1e: poll_now ("Refresh now") ===
     # Internal (no admin signature) — the app queues this to force an immediate
-    # reading, device-targeted like the edge firmware's poll_now. The HA readings
-    # publisher republishes on its own short cadence (floor 5s), so there's
-    # nothing to force here; this is a no-op that just ACKs success. The ACK is
-    # what matters: without it the command falls through to the signature gate
-    # below and is dropped as "unsigned", leaving pendingCommandCount stuck > 0
-    # and the poller re-fetching + re-skipping it every cycle.
+    # reading, device-targeted like the edge firmware's poll_now.
+    #
+    # A direct-harvest inverter reads the logger itself on a cadence that
+    # defaults to 300 s, so the refresh wakes its loop for ONE immediate poll
+    # (refused while a poll is already in flight: the logger takes one
+    # connection). No inverterId targets every direct-harvest inverter.
+    #
+    # An entity-relay inverter has no trigger: it republishes HA sensor states
+    # on its own cadence, and reading those states sooner would not make the
+    # sensors fresher, so the command stays a plain ACK.
+    #
+    # Either way the ACK is what keeps the command from falling through to the
+    # signature gate below and being dropped as "unsigned", which left
+    # pendingCommandCount stuck > 0 and the poller re-skipping it every cycle.
     if cmd_type == POLL_NOW_COMMAND:
-        _LOGGER.debug(
-            "poll_now acknowledged (no-op — HA republishes on cadence). cmd_id=%s", cmd_id
-        )
+        target = (command.get("payload") or {}).get("inverterId")
+        triggers = find_triggers(hass, target if isinstance(target, str) else None)
+        if triggers:
+            refused = [inv_id for inv_id, t in triggers.items() if t.request() is None]
+            _LOGGER.info(
+                "poll_now: immediate read requested for %s (already reading: %s). cmd_id=%s",
+                sorted(triggers),
+                refused or "none",
+                cmd_id,
+            )
+        else:
+            _LOGGER.debug(
+                "poll_now acknowledged (no direct-harvest inverter — HA republishes on "
+                "cadence). cmd_id=%s",
+                cmd_id,
+            )
         await _send_signed_ack(
             api_client=api_client,
             api_key=api_key,

@@ -232,3 +232,232 @@ async def test_a_spec_arriving_late_clears_the_problem(monkeypatch):
     )
 
     assert activity.spec_problem is None
+
+
+# ---------------------------------------------------------------------------
+# #7: before the first reading is stored, a gated or failed tick retries after
+# a short back-off instead of sleeping out the full cadence (300 s default),
+# which outlasted the app's 90 s first-reading wait.
+# ---------------------------------------------------------------------------
+
+
+def _run_loop_with(monkeypatch, outcomes, *, interval_s=300, read_now=None, clock=None):
+    """Drive the loop with scripted poll outcomes; stop after the last one.
+
+    Each outcome is "stored", "gated" or "error". Returns the recorded
+    asyncio.sleep delays and the number of polls.
+    """
+    delays: list[float] = []
+    polls = 0
+    script = list(outcomes)
+
+    class FakeHass:
+        is_stopping = False
+
+    fake_hass = FakeHass()
+
+    async def fake_poll_once(**kwargs):
+        nonlocal polls
+        polls += 1
+        outcome = script[polls - 1]
+        if polls == len(script):
+            fake_hass.is_stopping = True
+        if outcome == "error":
+            raise RuntimeError("solarman: all ranges failed — logger unreachable")
+        if outcome == "gated":
+            kwargs.get("missing_out", []).append("loadPower")
+            return None
+        return {"inverterId": "inv-1"}
+
+    async def fake_sleep(s):
+        delays.append(s)
+
+    monkeypatch.setattr(eng, "poll_once", fake_poll_once)
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    kwargs = {}
+    if read_now is not None:
+        kwargs["read_now"] = read_now
+    if clock is not None:
+        kwargs["clock"] = clock
+
+    async def go():
+        await eng.run_direct_harvest_loop(
+            hass=fake_hass,
+            store=None,
+            cadence=type("C", (), {"interval_s": interval_s})(),
+            inverter_id="inv-1",
+            cfg={"ip": "x", "logger_serial": "1"},
+            spec_holder=type("SH", (), {"spec": SPEC})(),
+            **kwargs,
+        )
+        return delays, polls
+
+    return go()
+
+
+@pytest.mark.asyncio
+async def test_gated_first_tick_retries_within_seconds(monkeypatch):
+    delays, polls = await _run_loop_with(monkeypatch, ["gated", "gated", "stored"])
+    assert polls == 3
+    # Short back-off before the first stored reading, well inside the app's 90 s.
+    assert delays[0] <= 5
+    assert delays[1] <= 10
+    assert sum(delays[:2]) < 90
+
+
+@pytest.mark.asyncio
+async def test_failed_first_tick_retries_within_seconds(monkeypatch):
+    delays, polls = await _run_loop_with(monkeypatch, ["error", "stored"])
+    assert polls == 2
+    assert delays[0] <= 5
+
+
+@pytest.mark.asyncio
+async def test_first_reading_backoff_is_capped_well_under_the_app_budget(monkeypatch):
+    delays, _ = await _run_loop_with(monkeypatch, ["gated"] * 6 + ["stored"])
+    assert max(delays[:6]) <= 30
+    # The first four retries all land inside the app's 90 s first-reading wait.
+    assert sum(delays[:4]) < 90
+
+
+@pytest.mark.asyncio
+async def test_after_first_stored_reading_the_loop_uses_the_normal_cadence(monkeypatch):
+    delays, _ = await _run_loop_with(monkeypatch, ["gated", "stored", "gated", "stored"])
+    # delays[0] is the fast retry; after the stored reading every sleep is the
+    # cadence, including after a later gated tick.
+    assert delays[1] == 300
+    assert delays[2] == 300
+
+
+@pytest.mark.asyncio
+async def test_gated_tick_is_recorded_with_its_missing_fields(monkeypatch):
+    from custom_components.svitgrid.activity import ActivityTracker
+
+    activity = ActivityTracker()
+
+    class FakeHass:
+        is_stopping = False
+
+    fake_hass = FakeHass()
+
+    async def fake_poll_once(**kwargs):
+        kwargs["missing_out"].append("loadPower")
+        fake_hass.is_stopping = True
+        return None
+
+    monkeypatch.setattr(eng, "poll_once", fake_poll_once)
+    monkeypatch.setattr(asyncio, "sleep", AsyncMock())
+
+    await eng.run_direct_harvest_loop(
+        hass=fake_hass,
+        store=None,
+        cadence=type("C", (), {"interval_s": 300})(),
+        inverter_id="inv-1",
+        cfg={"ip": "x", "logger_serial": "1"},
+        spec_holder=type("SH", (), {"spec": SPEC})(),
+        activity=activity,
+    )
+
+    assert activity.last_ingest_status == "skipped"
+    assert list(activity.recent_ingests())[-1]["missing_fields"] == ["loadPower"]
+
+
+@pytest.mark.asyncio
+async def test_poll_once_reports_missing_fields_when_gated(hass, monkeypatch):
+    monkeypatch.setattr(eng, "read_raw", AsyncMock(return_value={1: {588: 50}}))
+    store = type("S", (), {"append": AsyncMock()})()
+    missing: list[str] = []
+    result = await eng.poll_once(
+        hass=hass,
+        spec=SPEC,
+        cfg={"ip": "x", "logger_serial": "1"},
+        inverter_id="inv-1",
+        store=store,
+        missing_out=missing,
+    )
+    assert result is None
+    assert "loadPower" in missing
+
+
+# ---------------------------------------------------------------------------
+# #7: "Read now" (button, panel, app poll_now) wakes the loop for exactly one
+# extra poll. The regular schedule keeps its original deadline.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_read_now_runs_one_extra_poll_without_resetting_the_cadence(monkeypatch):
+    from custom_components.svitgrid.harvest.read_now import ReadNowTrigger
+
+    now = [0.0]
+    timeouts: list[float] = []
+    # Each wait: (seconds to advance, press Read now?)
+    steps = [(100.0, True), (200.0, False)]
+
+    class ScriptedTrigger(ReadNowTrigger):
+        async def wait(self, seconds):
+            timeouts.append(seconds)
+            advance, press = steps.pop(0)
+            now[0] += advance
+            if press:
+                assert self.request() is not None
+            return self.requested
+
+    trigger = ScriptedTrigger()
+    delays, polls = await _run_loop_with(
+        monkeypatch,
+        ["stored", "stored", "stored"],
+        read_now=trigger,
+        clock=lambda: now[0],
+    )
+    # Regular poll at t=0, extra poll at t=100, regular poll at t=300.
+    assert polls == 3
+    assert timeouts == [300.0, 200.0]
+    assert delays == []  # the trigger replaces asyncio.sleep
+
+
+@pytest.mark.asyncio
+async def test_read_now_is_refused_while_a_poll_is_in_flight(monkeypatch):
+    from custom_components.svitgrid.harvest.read_now import ReadNowTrigger
+
+    trigger = ReadNowTrigger()
+    seen: list = []
+
+    class FakeHass:
+        is_stopping = False
+
+    fake_hass = FakeHass()
+
+    async def fake_poll_once(**kwargs):
+        seen.append(trigger.request())
+        fake_hass.is_stopping = True
+        return {"inverterId": "inv-1"}
+
+    monkeypatch.setattr(eng, "poll_once", fake_poll_once)
+
+    await eng.run_direct_harvest_loop(
+        hass=fake_hass,
+        store=None,
+        cadence=type("C", (), {"interval_s": 300})(),
+        inverter_id="inv-1",
+        cfg={"ip": "x", "logger_serial": "1"},
+        spec_holder=type("SH", (), {"spec": SPEC})(),
+        read_now=trigger,
+    )
+    assert seen == [None]
+    assert trigger.requested is False
+
+
+@pytest.mark.asyncio
+async def test_read_now_request_is_resolved_with_the_poll_outcome():
+    from custom_components.svitgrid.harvest.read_now import ReadNowTrigger
+
+    trigger = ReadNowTrigger()
+    fut = trigger.request()
+    waiters = trigger.begin_tick()
+    assert trigger.in_flight is True
+    trigger.end_tick(waiters, {"outcome": "incomplete", "missingFields": ["loadPower"]})
+    assert trigger.in_flight is False
+    assert (await fut)["missingFields"] == ["loadPower"]
+    assert trigger.last_outcome["outcome"] == "incomplete"

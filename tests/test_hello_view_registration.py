@@ -14,7 +14,7 @@ the moment the pairing code appears on screen — so the flow registers it too.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -65,10 +65,19 @@ async def test_opening_the_config_flow_registers_it(hass, enable_custom_integrat
     # The fixture's hass has no http component until something asks for one.
     assert await async_setup_component(hass, "http", {})
 
-    await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": config_entries.SOURCE_USER}
-    )
-    await hass.async_block_till_done()
+    # Opening the flow now goes straight to pairing, which calls /start. The
+    # view is registered synchronously before that, so the test does not wait
+    # on the claim poll: blocking until it finishes would drive the flow into
+    # its failure path, which is not what this test is about.
+    with patch("custom_components.svitgrid.config_flow.PairingClient") as mock_client_cls:
+        mock_client = mock_client_cls.return_value
+        mock_client.start = AsyncMock(
+            return_value={"secret": "s" * 40, "code": "7K9PA2", "expiresIn": 300}
+        )
+        mock_client.get_status = AsyncMock(side_effect=Exception("still waiting"))
+        await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": config_entries.SOURCE_USER}
+        )
 
     routes = [r for r in hass.http.app.router.routes() if "svitgrid/hello" in str(r.resource)]
     assert routes, "the hello view must be registered once the flow is open"

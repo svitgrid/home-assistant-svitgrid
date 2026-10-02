@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -16,6 +17,9 @@ class LifecycleState:
     reason: str | None = None
     since: str | None = None
     activity: Any = None  # optional ActivityTracker mirror
+    # Called once when the state moves INTO deprovisioned (never for a state
+    # seeded as deprovisioned). The entry revokes its island keys here (#6).
+    on_deprovision: Callable[[], None] | None = None
 
     def __post_init__(self) -> None:
         # C1: mirror a non-active SEEDED state into the activity tracker so
@@ -34,11 +38,14 @@ class LifecycleState:
             return
         if self.state == state and self.reason == reason:
             return
+        entering_deprovisioned = state == DEPROVISIONED and self.state != DEPROVISIONED
         self.state = state
         self.reason = reason
         self.since = now_iso
         if self.activity is not None:
             self.activity.set_lifecycle(state, reason)
+        if entering_deprovisioned and self.on_deprovision is not None:
+            self.on_deprovision()
 
     def deprovision(self, reason: str | None, now_iso: str) -> None:
         self._set(DEPROVISIONED, reason, now_iso)

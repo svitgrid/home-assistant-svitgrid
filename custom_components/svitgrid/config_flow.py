@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import UTC, datetime
 from secrets import token_hex
 from typing import Any
 
@@ -21,7 +22,7 @@ import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.components.http import current_request
 from homeassistant.core import callback
-from homeassistant.data_entry_flow import FlowResult
+from homeassistant.data_entry_flow import FlowResult, FlowResultType
 from homeassistant.helpers import aiohttp_client
 from homeassistant.helpers.selector import (
     BooleanSelector,
@@ -54,13 +55,12 @@ from .eybond_at.setup import (
     lan_ip_from_host_header,
     localhost_advice,
     needs_inverter_ip,
-    needs_reachability_check,
     network_advice,
     no_collectors_advice,
     subnet_announce_targets,
 )
 from .http_views import ensure_hello_view
-from .inverter_entry import inverters_from_finalize
+from .inverter_entry import harvest_config_from_api, inverters_from_finalize
 from .keystore import SvitgridKeystore
 from .pairing_client import (
     PairingClaimed,
@@ -68,6 +68,7 @@ from .pairing_client import (
     PairingError,
     PairingExpired,
     PairingPending,
+    PairingRefused,
 )
 from .signing import generate_keypair, serialize_private_key
 
@@ -329,6 +330,12 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
         self._signing_key_id: str | None = None
         self._pair_task: asyncio.Task | None = None
         self._final_payload: dict[str, Any] | None = None
+        # True once a `no_buildable_inverter` refusal has restarted pairing in
+        # this flow. It picks the progress text (the second code needs to say
+        # why it exists) and it caps the recovery at one attempt: a second
+        # refusal means the phone is still sending no profile, so a third code
+        # would be refused too.
+        self._restarted_after_refusal = False
         # Manual-mode state. Stays None in preset (pair) mode; populated
         # by async_step_manual_meta → async_step_manual_entities and
         # submitted in /finalize's body when the pair completes.
@@ -411,17 +418,28 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
         return preset
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
-        """First step — present Pair vs Manual vs direct-harvest."""
+        """First step — go straight to pairing with the Svitgrid mobile app.
+
+        Pairing is the only setup offered (decided 2026-09-14). The manual and
+        direct-harvest steps stay below so existing installs and the options
+        flow keep working; they are hidden from this entry point, not removed.
+        A menu with a single option would only add a click.
+        """
         # Opening this flow is the first moment Home Assistant loads us on an
         # install that has never paired — and the moment the Svitgrid app is
         # scanning the network for exactly this box. Registering the hello
         # view here is what lets it find us, and what lets it prefill the
         # pairing code the next step puts on screen.
         ensure_hello_view(self.hass)
-        return self.async_show_menu(
-            step_id="user",
-            menu_options=["pair", "manual", "harvest_config"],
-        )
+        result = await self.async_step_pair()
+        # `async_configure` follows a progress-done result into its next step,
+        # but `async_init` returns it as-is. When the claim poll has already
+        # finished by the time pair returns, continue here, as the menu path
+        # through `async_configure` used to.
+        if result["type"] == FlowResultType.SHOW_PROGRESS_DONE:
+            # A progress-done result names its next step in `step_id`.
+            return await getattr(self, f"async_step_{result['step_id']}")()
+        return result
 
     # ─── Manual branch (Phase 2A M3–M7) ──────────────────────────────────
 
@@ -621,7 +639,11 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
         if not self._pair_task.done():
             return self.async_show_progress(
                 step_id="pair",
-                progress_action="waiting_for_mobile",
+                progress_action=(
+                    "waiting_for_mobile_after_refusal"
+                    if self._restarted_after_refusal
+                    else "waiting_for_mobile"
+                ),
                 progress_task=self._pair_task,
                 description_placeholders={"code": self._code},
             )
@@ -655,7 +677,7 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
         generates the key and the cloud returns it in the /status response).
 
         When _final_payload is already set (tests that pre-set it directly, or the
-        re-entry after a failed reachability check), the finalize call is skipped."""
+        re-entry from _eybond_finish), the finalize call is skipped."""
         if self._final_payload is None:
             # Normal post-poll path: we must call finalize now.
             if self._claimed_status is None or self._pairing_client is None:
@@ -678,29 +700,70 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
                     # already exists. For fresh installs the blob doesn't exist
                     # yet (it's created in async_setup_entry), so this call is a
                     # no-op; the authoritative write happens in async_setup_entry
-                    # via entry.data["island_key"] → keystore.save(island_key=…).
-                    await SvitgridKeystore(self.hass).async_set_island_key(island_key)
+                    # from entry.data["island_key"]. Either way the key becomes a
+                    # named roster entry, not the legacy scalar
+                    # (ivanursul/svitgrid#751).
+                    await SvitgridKeystore(self.hass).async_adopt_pairing_island_key(
+                        island_key,
+                        paired_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                    )
 
-            self._final_payload = await self._pairing_client.finalize(
-                secret=self._secret,
-                public_key_hex=self._public_key_hex,
-                signing_key_id=self._signing_key_id,
-                # Manual-mode: hand the user-collected inverter spec to the API
-                # so it creates inverters/{hwid} with the right brand / entityMap.
-                # Preset-mode: None — API looks up the preset server-side.
-                inverter=self._manual_inverter,
-            )
+            try:
+                self._final_payload = await self._pairing_client.finalize(
+                    secret=self._secret,
+                    public_key_hex=self._public_key_hex,
+                    signing_key_id=self._signing_key_id,
+                    # Manual-mode: hand the user-collected inverter spec to the API
+                    # so it creates inverters/{hwid} with the right brand / entityMap.
+                    # Preset-mode: None — API looks up the preset server-side.
+                    inverter=self._manual_inverter,
+                )
+            except PairingRefused as err:
+                # The cloud refused to build the station from what the app
+                # claimed — nothing was created, and this code cannot be
+                # claimed again (/claim answers 409 to it from here on), so
+                # the only way forward is a fresh /ha-pairing/start.
+                # Said in the owner's terms; before this the exception went
+                # uncaught and Home Assistant showed "Unknown error occurred".
+                _LOGGER.error("Pairing finalize refused by the cloud: %s", err)
+                if err.code == "no_buildable_inverter":
+                    if self._restarted_after_refusal:
+                        # Second refusal in this flow: the phone is still
+                        # sending no inverter profile, so another code buys
+                        # nothing. End it naming the app as the thing to fix.
+                        return self.async_abort(reason="claim_not_buildable")
+                    # Start over automatically rather than making the owner
+                    # find "Add integration" again. Everything the pair step
+                    # reads to decide it is a first entry goes back to None,
+                    # so async_step_pair calls /start and shows the new code.
+                    self._restarted_after_refusal = True
+                    self._pair_task = None
+                    self._secret = None
+                    self._code = None
+                    self._claimed_status = None
+                    self._final_payload = None
+                    return await self.async_step_pair()
+                return self.async_abort(
+                    reason="pairing_refused",
+                    description_placeholders={"reason": err.message or err.code},
+                )
+            except PairingError:
+                _LOGGER.exception("Pairing finalize failed")
+                return self.async_abort(reason="pairing_failed")
 
         # SP-D: the cloud /finalize response may carry a direct-Modbus
         # `harvestConfig` (camelCase) when the mobile app handed off a
-        # direct-harvest inverter. Snake-case it onto self._harvest_config and
-        # run a BLOCKING reachability check before creating the entry — a
-        # failed probe re-shows this step's form with `cannot_reach_inverter`
-        # and creates NO entry, so the dormant SP-B reads / SP-C writes only
-        # activate once we can actually reach the inverter. Relay pairings
-        # (no harvestConfig) skip the check entirely.
-        hc = self._final_payload.get("harvestConfig")
-        if hc is not None:
+        # direct-harvest inverter. Snake-case it onto self._harvest_config.
+        #
+        # No reachability probe gates the entry (issue #6). /finalize has
+        # already built the station in the cloud and spent the pairing code, so
+        # a failed probe that re-showed the form left a cloud station with no
+        # entry behind it and no code to retry with. A probe here would also
+        # take the logger's connection slot just as the harvest loop starts.
+        # The harvest loop retries and reports an unreachable inverter instead.
+        hc_wire = self._final_payload.get("harvestConfig")
+        if hc_wire is not None:
+            hc = harvest_config_from_api(hc_wire)
             if hc.get("protocol") == EYBOND_PROTOCOL:
                 # What the PICKER collected wins. It carries inverter_serial,
                 # advertised_ip and announce_target -- none of which the cloud
@@ -713,9 +776,9 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
                 # raise here and abort an otherwise valid pairing.
                 from_cloud = build_manual_config(
                     {
-                        "port": hc.get("listenPort") or hc.get("port"),
-                        "slave_id": hc.get("slaveId", 1),
-                        "model_id": hc.get("modelId"),
+                        "port": hc.get("listen_port") or hc.get("port"),
+                        "slave_id": hc.get("slave_id", 1),
+                        "model_id": hc.get("model_id"),
                     }
                 )
                 local = self._harvest_config or {}
@@ -725,55 +788,11 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
                 self._harvest_config = merged
             else:
                 self._harvest_config = {
-                    "protocol": hc.get("protocol"),
-                    "ip": hc.get("ip"),
+                    **hc,
                     "port": int(hc.get("port")),
-                    "slave_id": int(hc.get("slaveId", 1)),
-                    "model_id": hc.get("modelId"),
-                    "logger_serial": hc.get("loggerSerial"),
+                    "slave_id": int(hc.get("slave_id", 1)),
+                    "logger_serial": hc.get("logger_serial"),
                 }
-            # Fetch the model's register spec so the reachability check can
-            # probe a REAL register (e.g. battery SOC at address 588) instead
-            # of the generic fallback register 1 that Deye inverters don't
-            # implement.  The public GET /api/v1/register-specs/:modelId
-            # endpoint requires no auth.  If the fetch fails for any reason
-            # spec stays None and the checker falls back gracefully.
-            from .harvest.reachability import check_inverter_reachable
-            from .harvest.spec_health import build_spec
-
-            # The EyBond map is dispatched from the device at runtime (protocol
-            # number, register 184), so there is no cloud spec to fetch -- and
-            # nothing to TCP-connect to, because the collector dials US.
-            # Probing would fail every pairing for a working device.
-            probe = needs_reachability_check(self._harvest_config)
-            spec = None
-            try:
-                if not probe:
-                    raise RuntimeError("no cloud spec for a device-dispatched map")
-                _spec_session = aiohttp_client.async_get_clientsession(self.hass)
-                _spec_api = SvitgridApiClient(_spec_session, api_base=DEFAULT_API_BASE)
-                spec_dict = await _spec_api.get_register_spec(self._harvest_config["model_id"])
-                # build_spec validates as well as parses and logs any problem at
-                # ERROR naming the model — so a model this add-on cannot decode
-                # is visible from the pairing attempt onward, not only after the
-                # user notices no data hours later.
-                spec = build_spec(spec_dict, model_id=self._harvest_config["model_id"])
-            except Exception:  # noqa: BLE001 — spec fetch is best-effort
-                spec = None
-
-            reachable = True
-            if probe:
-                reachable = await check_inverter_reachable(
-                    self.hass, self._harvest_config, spec=spec
-                )
-            if not reachable:
-                return self.async_show_form(
-                    step_id="pair_finalize",
-                    errors={"base": "cannot_reach_inverter"},
-                    description_placeholders={
-                        "ip": f"{self._harvest_config['ip']}:{self._harvest_config['port']}"
-                    },
-                )
 
         # The recommended path pairs FIRST and asks about hardware after: the
         # app already said which inverter this is, and the preset says how it
@@ -821,8 +840,18 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
         # second inverter's address arrives in the response's own array.
         # Absent on the preset / HA-only paths, so only set when collected,
         # and never over an address the cloud already named.
-        if self._harvest_config is not None and "harvest_config" not in inverters[0]:
-            inverters[0]["harvest_config"] = self._harvest_config
+        #
+        # When the cloud did name one, `inverters_from_finalize` has already
+        # snake-cased it, so it is kept. The exception is an EyBond collector:
+        # the picker collected inverter_serial, advertised_ip and
+        # announce_target, which no cloud payload carries, and dropping them
+        # leaves the hub with no routing key. Those fields win.
+        if self._harvest_config is not None:
+            cloud_config = inverters[0].get("harvest_config")
+            if cloud_config is None:
+                inverters[0]["harvest_config"] = self._harvest_config
+            elif self._harvest_config.get("protocol") == EYBOND_PROTOCOL:
+                inverters[0]["harvest_config"] = {**cloud_config, **self._harvest_config}
         return self.async_create_entry(
             title=self._entry_title(),
             data={

@@ -1,8 +1,9 @@
-"""Tests for the manual direct-harvest menu option (SP-D Task 5).
+"""Tests for the manual direct-harvest step (SP-D Task 5).
 
-Verifies that ``async_step_user`` exposes ``harvest_config`` as a menu option
-and that selecting it reaches ``async_step_harvest_config`` (which shows the
-manual Modbus form).
+The "Add Svitgrid" flow no longer offers ``harvest_config`` from the user step
+(pairing with the mobile app is the only entry point, decided 2026-09-14). The
+step itself stays in the code, so these tests reach it directly by starting the
+flow at that step.
 """
 
 from __future__ import annotations
@@ -18,31 +19,31 @@ from custom_components.svitgrid.const import DOMAIN
 
 
 @pytest.mark.asyncio
-async def test_user_menu_includes_harvest_config(
+async def test_user_step_does_not_offer_harvest_config(
     hass: HomeAssistant, enable_custom_integrations
 ) -> None:
-    """async_step_user must include 'harvest_config' in menu_options."""
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": config_entries.SOURCE_USER}
-    )
-    assert result["type"] == FlowResultType.MENU
-    assert "harvest_config" in result["menu_options"]
+    """The user step opens pairing directly; no menu offers harvest_config."""
+    with patch("custom_components.svitgrid.config_flow.PairingClient") as mock_client_cls:
+        mock_client = mock_client_cls.return_value
+        mock_client.start = AsyncMock(
+            return_value={"secret": "secret-abc-def" * 4, "code": "7K9PA2", "expiresIn": 300}
+        )
+        mock_client.get_status = AsyncMock(side_effect=Exception("don't poll yet"))
+
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": config_entries.SOURCE_USER}
+        )
+
+    assert result["type"] != FlowResultType.MENU
+    assert "harvest_config" not in result.get("menu_options", [])
 
 
 @pytest.mark.asyncio
-async def test_selecting_harvest_config_shows_form(
+async def test_harvest_config_step_shows_form(
     hass: HomeAssistant, enable_custom_integrations
 ) -> None:
-    """Selecting 'harvest_config' from the menu reaches async_step_harvest_config
-    and shows the manual Modbus form (step_id == 'harvest_config')."""
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": config_entries.SOURCE_USER}
-    )
-    assert result["type"] == FlowResultType.MENU
-
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], user_input={"next_step_id": "harvest_config"}
-    )
+    """The hidden async_step_harvest_config still shows the manual Modbus form."""
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "harvest_config"})
     assert result["type"] == FlowResultType.FORM
     assert result["step_id"] == "harvest_config"
 
@@ -53,12 +54,7 @@ async def test_harvest_config_form_submit_proceeds_to_pair(
 ) -> None:
     """Submitting a valid harvest_config form sets _harvest_config and proceeds
     to async_step_pair (the existing pair/finalize path)."""
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": config_entries.SOURCE_USER}
-    )
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], user_input={"next_step_id": "harvest_config"}
-    )
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "harvest_config"})
     assert result["type"] == FlowResultType.FORM
     assert result["step_id"] == "harvest_config"
 

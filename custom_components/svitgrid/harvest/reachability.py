@@ -1,7 +1,9 @@
-"""Inverter reachability checker for the HA config-flow (SP-D).
+"""Inverter reachability checker (SP-D).
 
-Used by the config-flow to verify it can reach the inverter at the supplied
-ip/port/slave_id before completing setup.  Never raises; never writes.
+Checks whether the inverter at the supplied ip/port/slave_id answers a register
+read.  Never raises; never writes.  Pairing no longer gates entry creation on
+it (issue #6): the cloud has built the station by then, so a failed probe must
+not abort the flow.
 
 Transport cfg shape passed to transport.read_word:
   {"ip": str, "port": int, "logger_serial": str, "slave_id": int}
@@ -29,6 +31,7 @@ Read address selection:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from . import transport
@@ -42,6 +45,14 @@ _LOGGER = logging.getLogger(__name__)
 # supply a spec so a real register is probed instead.
 _PROBE_ADDRESS: int = 1
 
+# One failed read does not mean unreachable. A Solarman V5 stick often answers
+# the first session's reads with empty frames, and holds its connection slot for
+# a moment after a quick connect/close. Every attempt is a fresh session
+# (`transport.read_word` opens and closes its own), so the probe tries 3 times
+# with a back-off before each retry: about 10 s in total.
+_PROBE_ATTEMPTS: int = 3
+_PROBE_BACKOFF_S: tuple[float, ...] = (3.0, 7.0)
+
 
 async def check_inverter_reachable(
     hass,
@@ -50,8 +61,10 @@ async def check_inverter_reachable(
 ) -> bool:
     """Return True if the inverter at harvest_config's ip/port responds.
 
-    Attempts ONE register read via the transport layer.  Returns False on
-    None / timeout / any exception.  Never raises, never writes.
+    Reads one register via the transport layer, retrying on a fresh session up
+    to ``_PROBE_ATTEMPTS`` times with a short back-off.  Returns False only when
+    every attempt returned None / timed out / raised.  Never raises, never
+    writes.
 
     Args:
         hass:           Home Assistant instance (passed through to transport).
@@ -98,28 +111,34 @@ async def check_inverter_reachable(
         )
         address = _PROBE_ADDRESS
 
-    try:
-        result = await transport.read_word(
-            hass, probe_spec, cfg, unit_id, address, function_code=function_code
-        )
-        if result is None:
+    for attempt in range(_PROBE_ATTEMPTS):
+        if attempt:
+            await asyncio.sleep(_PROBE_BACKOFF_S[min(attempt - 1, len(_PROBE_BACKOFF_S) - 1)])
+        try:
+            result = await transport.read_word(
+                hass, probe_spec, cfg, unit_id, address, function_code=function_code
+            )
+        except Exception as exc:  # noqa: BLE001
             _LOGGER.warning(
-                "reachability check returned None for %s:%s (address=%s fc=%s) — "
-                "inverter unreachable",
+                "reachability check attempt %d/%d raised for %s:%s (address=%s fc=%s): %s",
+                attempt + 1,
+                _PROBE_ATTEMPTS,
                 harvest_config.get("ip"),
                 harvest_config.get("port"),
                 address,
                 function_code,
+                exc,
             )
-            return False
-        return True
-    except Exception as exc:  # noqa: BLE001
+            continue
+        if result is not None:
+            return True
         _LOGGER.warning(
-            "reachability check raised for %s:%s (address=%s fc=%s): %s",
+            "reachability check attempt %d/%d returned no data for %s:%s (address=%s fc=%s)",
+            attempt + 1,
+            _PROBE_ATTEMPTS,
             harvest_config.get("ip"),
             harvest_config.get("port"),
             address,
             function_code,
-            exc,
         )
-        return False
+    return False

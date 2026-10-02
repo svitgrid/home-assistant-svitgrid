@@ -161,8 +161,10 @@ async def show_frame(session) -> None:
             print(f"  DISAGREES (ratio {ratio:.2f}) -> wrong address, scale or sign.")
     if pbat and ((pbat > 0) != (ibat > 0)):
         print("  NOTE: reported power and current disagree in SIGN.")
-    print(f"  sign: current is {'POSITIVE' if ibat > 0 else 'NEGATIVE'} right now — "
-          "record whether the battery is CHARGING or DISCHARGING.")
+    print(
+        f"  sign: current is {'POSITIVE' if ibat > 0 else 'NEGATIVE'} right now — "
+        "record whether the battery is CHARGING or DISCHARGING."
+    )
 
 
 async def sweep(session, start: int, end: int) -> None:

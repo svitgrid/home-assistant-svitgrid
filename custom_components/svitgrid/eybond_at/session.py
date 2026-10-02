@@ -268,9 +268,7 @@ class CollectorSession:
         Raises `WriteRefused` when the device declines, so the caller can say
         which of the three documented refusals it was.
         """
-        raw = await self._transact(
-            build_write_multiple(self.slave_id, address, [value]), timeout_s
-        )
+        raw = await self._transact(build_write_multiple(self.slave_id, address, [value]), timeout_s)
         try:
             acked_address, acked_quantity = parse_write_multiple_response(raw)
         except ModbusExceptionError as err:
@@ -292,9 +290,7 @@ class CollectorSession:
                 f"write ack is for register {acked_address}, expected {address}"
             )
         if acked_quantity != 1:
-            raise TransactionFailed(
-                f"write ack covers {acked_quantity} registers, expected 1"
-            )
+            raise TransactionFailed(f"write ack covers {acked_quantity} registers, expected 1")
 
     async def at_query(self, command: str, timeout_s: float = 3.0) -> str:
         raw = await self._transact(build_query(command), timeout_s)

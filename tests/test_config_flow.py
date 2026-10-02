@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -13,14 +14,27 @@ from custom_components.svitgrid.const import DOMAIN
 
 
 @pytest.mark.asyncio
-async def test_user_step_shows_menu(hass: HomeAssistant, enable_custom_integrations) -> None:
-    """The user step should present the Pair vs Manual menu."""
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": config_entries.SOURCE_USER}
-    )
-    assert result["type"] == FlowResultType.MENU
-    assert "pair" in result["menu_options"]
-    assert "manual" in result["menu_options"]
+async def test_user_step_goes_straight_to_pair(
+    hass: HomeAssistant, enable_custom_integrations
+) -> None:
+    """Pairing with the mobile app is the only setup offered, so the user step
+    opens the pairing screen directly instead of a one-option menu. The manual
+    and direct-harvest steps stay in the code but are not offered here."""
+    with patch("custom_components.svitgrid.config_flow.PairingClient") as mock_client_cls:
+        mock_client = mock_client_cls.return_value
+        mock_client.start = AsyncMock(
+            return_value={"secret": "secret-abc-def" * 4, "code": "7K9PA2", "expiresIn": 300}
+        )
+        mock_client.get_status = AsyncMock(side_effect=Exception("don't poll yet"))
+
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": config_entries.SOURCE_USER}
+        )
+
+    assert result["type"] == FlowResultType.SHOW_PROGRESS
+    assert result["step_id"] == "pair"
+    assert "menu_options" not in result
+    mock_client.start.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -44,9 +58,6 @@ async def test_pair_step_calls_start_and_shows_code(
 
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": config_entries.SOURCE_USER}
-        )
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"], user_input={"next_step_id": "pair"}
         )
 
         assert result["type"] == FlowResultType.SHOW_PROGRESS
@@ -103,11 +114,8 @@ async def test_pair_finalize_creates_entry(hass: HomeAssistant, enable_custom_in
             }
         )
 
-        result = await hass.config_entries.flow.async_init(
+        await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": config_entries.SOURCE_USER}
-        )
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"], user_input={"next_step_id": "pair"}
         )
         # SHOW_PROGRESS → eventually CREATE_ENTRY after the polling loop sees claimed.
         await hass.async_block_till_done()
@@ -180,11 +188,8 @@ async def test_pair_finalize_persists_preset_fields(
             }
         )
 
-        result = await hass.config_entries.flow.async_init(
+        await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": config_entries.SOURCE_USER}
-        )
-        await hass.config_entries.flow.async_configure(
-            result["flow_id"], user_input={"next_step_id": "pair"}
         )
         await hass.async_block_till_done()
 
@@ -280,11 +285,8 @@ async def test_pair_finalize_populates_inverters_list(
             }
         )
 
-        result = await hass.config_entries.flow.async_init(
+        await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": config_entries.SOURCE_USER}
-        )
-        await hass.config_entries.flow.async_configure(
-            result["flow_id"], user_input={"next_step_id": "pair"}
         )
         await hass.async_block_till_done()
 
@@ -368,11 +370,8 @@ async def test_pair_finalize_phase_1_compat_when_no_preset(
             }
         )
 
-        result = await hass.config_entries.flow.async_init(
+        await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": config_entries.SOURCE_USER}
-        )
-        await hass.config_entries.flow.async_configure(
-            result["flow_id"], user_input={"next_step_id": "pair"}
         )
         await hass.async_block_till_done()
 
@@ -591,11 +590,8 @@ async def _run_pair_flow_with_finalize(hass, finalize_payload):
         )
         mock_client.finalize = AsyncMock(return_value=finalize_payload)
 
-        result = await hass.config_entries.flow.async_init(
+        await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": config_entries.SOURCE_USER}
-        )
-        await hass.config_entries.flow.async_configure(
-            result["flow_id"], user_input={"next_step_id": "pair"}
         )
         await hass.async_block_till_done()
         # Snapshot INSIDE the patch context: leaving it lets HA re-enter setup
@@ -629,3 +625,214 @@ async def test_pair_finalize_defaults_trusted_key_status_to_approved(
     mean approved, or every healthy household shows a false approval warning."""
     data = await _run_pair_flow_with_finalize(hass, dict(_BASE_FINALIZE))
     assert data["trusted_key_status"] == "approved"
+
+
+_REFUSAL = (
+    422,
+    "no_buildable_inverter",
+    "None of the claimed inverters can be created: each needs a preset or a manual spec.",
+)
+
+
+async def _drive_refused_pair_flow(
+    hass: HomeAssistant,
+    *,
+    start_results: list[dict],
+    finalize_side_effect: list,
+) -> tuple[list[dict], AsyncMock]:
+    """Run the pair → poll → finalize sequence with a scripted /start and /finalize.
+
+    Returns every flow result, in order, plus the mocked PairingClient. The
+    progress screens are the point of these tests, so the poll task must
+    actually suspend: `asyncio.sleep` is replaced by a single event-loop yield
+    rather than a no-op, or an eager task finishes before the step can return
+    `async_show_progress` and no screen is ever produced. Each round is then
+    driven the way the frontend drives it — block until the poll task is done,
+    then call `async_configure` again — until the flow stops showing progress.
+    """
+    from cryptography.hazmat.primitives.asymmetric import ec
+
+    from custom_components.svitgrid.pairing_client import PairingClaimed
+
+    fake_priv = ec.generate_private_key(ec.SECP256R1())
+    # Bound before the patch: patching `config_flow.asyncio.sleep` replaces the
+    # attribute on the real asyncio module, so calling it here would recurse.
+    real_sleep = asyncio.sleep
+
+    async def _one_loop_tick(_: float) -> None:
+        """Yield to the loop once, so the poll task is pending but not slow."""
+        await real_sleep(0)
+
+    manager = hass.config_entries.flow
+
+    with (
+        patch("custom_components.svitgrid.config_flow.PairingClient") as mock_client_cls,
+        patch(
+            "custom_components.svitgrid.config_flow.generate_keypair",
+            return_value=(fake_priv, "04" + "a" * 128),
+        ),
+        patch("custom_components.svitgrid.config_flow.asyncio.sleep", side_effect=_one_loop_tick),
+    ):
+        mock_client = mock_client_cls.return_value
+        mock_client.start = AsyncMock(side_effect=start_results)
+        mock_client.get_status = AsyncMock(
+            return_value=PairingClaimed(household_id="h-abc", preset_id=None)
+        )
+        mock_client.finalize = AsyncMock(side_effect=finalize_side_effect)
+
+        init = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": config_entries.SOURCE_USER}
+        )
+        flow_id = init["flow_id"]
+        # The user step opens pairing directly, so init is the first progress screen.
+        results = [init]
+        # Bounded: one round per code on offer, plus a margin that would catch
+        # a restart loop instead of hanging the suite.
+        for _ in range(len(start_results) + 2):
+            if results[-1]["type"] != FlowResultType.SHOW_PROGRESS:
+                break
+            await hass.async_block_till_done()
+            results.append(await manager.async_configure(flow_id))
+        await hass.async_block_till_done()
+
+    return results, mock_client
+
+
+@pytest.mark.asyncio
+async def test_pair_finalize_refused_claim_starts_a_new_pairing(
+    hass: HomeAssistant, enable_custom_integrations
+) -> None:
+    """A 422 `no_buildable_inverter` at finalize hands the owner a NEW code
+    instead of ending the flow.
+
+    This test used to assert an abort with reason `claim_not_buildable`, which
+    is what 0.22.3 shipped. The abort was correct about the cause and useless
+    about the cure: the refused code stays `claimed` server-side and /claim
+    answers 409 to it forever, so the owner had to find "Add integration"
+    again and walk the whole flow a second time to get a code that works. The
+    add-on now calls /ha-pairing/start itself and shows the new code on the
+    same progress screen, under text that says why there is a new one.
+    """
+    from custom_components.svitgrid.pairing_client import PairingRefused
+
+    results, mock_client = await _drive_refused_pair_flow(
+        hass,
+        start_results=[
+            {"secret": "secret-1", "code": "7K9PA2", "expiresIn": 300},
+            {"secret": "secret-2", "code": "QW3ZR8", "expiresIn": 300},
+        ],
+        finalize_side_effect=[PairingRefused(*_REFUSAL), PairingRefused(*_REFUSAL)],
+    )
+
+    assert mock_client.start.await_count == 2, "the refusal did not start a new pairing"
+
+    progress = [r for r in results if r["type"] == FlowResultType.SHOW_PROGRESS]
+    assert len(progress) >= 2, f"expected a second progress screen: {[r['type'] for r in results]}"
+    assert progress[0]["progress_action"] == "waiting_for_mobile"
+    assert progress[0]["description_placeholders"] == {"code": "7K9PA2"}
+    # The second screen carries the new code AND says why it is new.
+    assert progress[-1]["progress_action"] == "waiting_for_mobile_after_refusal"
+    assert progress[-1]["description_placeholders"] == {"code": "QW3ZR8"}
+
+
+@pytest.mark.asyncio
+async def test_pair_finalize_refused_twice_aborts_claim_not_buildable(
+    hass: HomeAssistant, enable_custom_integrations
+) -> None:
+    """One automatic restart, not an endless supply of codes.
+
+    If the owner enters the new code from the same un-updated app, the cloud
+    refuses again — a third code would refuse too. The second refusal ends the
+    flow with `claim_not_buildable`, which names the app as the thing to fix,
+    and creates no entry."""
+    from custom_components.svitgrid.pairing_client import PairingRefused
+
+    results, mock_client = await _drive_refused_pair_flow(
+        hass,
+        start_results=[
+            {"secret": "secret-1", "code": "7K9PA2", "expiresIn": 300},
+            {"secret": "secret-2", "code": "QW3ZR8", "expiresIn": 300},
+        ],
+        finalize_side_effect=[PairingRefused(*_REFUSAL), PairingRefused(*_REFUSAL)],
+    )
+
+    assert mock_client.start.await_count == 2, "a third pairing was started"
+    aborts = [r for r in results if r["type"] == FlowResultType.ABORT]
+    assert aborts, f"the flow never aborted: {[r['type'] for r in results]}"
+    assert aborts[-1]["reason"] == "claim_not_buildable"
+    assert hass.config_entries.async_entries(DOMAIN) == []
+
+
+@pytest.mark.asyncio
+async def test_pair_finalize_other_refusal_code_still_aborts(
+    hass: HomeAssistant, enable_custom_integrations
+) -> None:
+    """Only `no_buildable_inverter` is recoverable by a new code. Any other
+    refusal still ends the flow as `pairing_refused`, with the cloud's own
+    wording, and starts no second pairing."""
+    from custom_components.svitgrid.pairing_client import PairingRefused
+
+    results, mock_client = await _drive_refused_pair_flow(
+        hass,
+        start_results=[{"secret": "secret-1", "code": "7K9PA2", "expiresIn": 300}],
+        finalize_side_effect=[PairingRefused(409, "already_claimed", "That code is used.")],
+    )
+
+    assert mock_client.start.await_count == 1
+    aborts = [r for r in results if r["type"] == FlowResultType.ABORT]
+    assert aborts and aborts[-1]["reason"] == "pairing_refused"
+    assert hass.config_entries.async_entries(DOMAIN) == []
+
+
+@pytest.mark.asyncio
+async def test_pair_finalize_plain_failure_aborts_as_pairing_failed(
+    hass: HomeAssistant, enable_custom_integrations
+) -> None:
+    """Any other finalize error still ends the flow, as `pairing_failed`, not
+    as an uncaught exception."""
+    from cryptography.hazmat.primitives.asymmetric import ec
+
+    from custom_components.svitgrid.pairing_client import PairingClaimed, PairingError
+
+    fake_priv = ec.generate_private_key(ec.SECP256R1())
+
+    async def _instant_sleep(_: float) -> None:
+        """No-op sleep."""
+
+    results: list[dict] = []
+    manager = hass.config_entries.flow
+    original_configure = manager.async_configure
+
+    async def _recording_configure(*args, **kwargs):
+        result = await original_configure(*args, **kwargs)
+        results.append(result)
+        return result
+
+    with (
+        patch("custom_components.svitgrid.config_flow.PairingClient") as mock_client_cls,
+        patch(
+            "custom_components.svitgrid.config_flow.generate_keypair",
+            return_value=(fake_priv, "04" + "a" * 128),
+        ),
+        patch("custom_components.svitgrid.config_flow.asyncio.sleep", side_effect=_instant_sleep),
+        patch.object(manager, "async_configure", _recording_configure),
+    ):
+        mock_client = mock_client_cls.return_value
+        mock_client.start = AsyncMock(
+            return_value={"secret": "secret-1", "code": "7K9PA2", "expiresIn": 300}
+        )
+        mock_client.get_status = AsyncMock(
+            return_value=PairingClaimed(household_id="h-abc", preset_id=None)
+        )
+        mock_client.finalize = AsyncMock(side_effect=PairingError("finalize failed: HTTP 503"))
+
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": config_entries.SOURCE_USER}
+        )
+        # The user step opens pairing directly; record that first result too.
+        results.append(result)
+        await hass.async_block_till_done()
+
+    aborts = [r for r in results if r["type"] == FlowResultType.ABORT]
+    assert aborts and aborts[-1]["reason"] == "pairing_failed"
+    assert hass.config_entries.async_entries(DOMAIN) == []

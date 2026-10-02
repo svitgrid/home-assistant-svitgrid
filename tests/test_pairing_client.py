@@ -12,6 +12,7 @@ from custom_components.svitgrid.pairing_client import (
     PairingExpired,
     PairingNotFound,
     PairingPending,
+    PairingRefused,
 )
 
 
@@ -181,3 +182,51 @@ async def test_finalize_post_body_excludes_island_key_and_cloud_ingest(mock_sess
     posted_json = mock_session.post.call_args.kwargs.get("json", {})
     assert "islandKey" not in posted_json
     assert "cloudIngestEnabled" not in posted_json
+
+
+@pytest.mark.asyncio
+async def test_finalize_refused_carries_the_cloud_code(mock_session):
+    """A 4xx with a JSON `code` is a refusal the flow can name, not a bare error.
+
+    The cloud answers 422 `no_buildable_inverter` when the app's claim named
+    inverters none of which resolve to a preset or a manual spec. Until this
+    was typed, the flow re-raised it as an unknown error and Home Assistant
+    showed "Unknown error occurred" with a traceback in the log.
+    """
+    mock_session.post.return_value = _mock_response(
+        422,
+        {
+            "error": "None of the claimed inverters can be created: each needs a preset or a manual spec.",
+            "code": "no_buildable_inverter",
+        },
+    )
+    client = PairingClient(mock_session, api_base="https://api.example.com")
+    with pytest.raises(PairingRefused) as exc:
+        await client.finalize(
+            secret="secret-abc",
+            public_key_hex="04" + "a" * 128,
+            signing_key_id="ha-home-01",
+        )
+    assert exc.value.code == "no_buildable_inverter"
+    assert exc.value.status == 422
+    assert "preset" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_finalize_non_json_failure_is_still_a_plain_error(mock_session):
+    """A 5xx with no JSON body stays a PairingError; nothing to name."""
+    cm = _mock_response(503)
+    resp = await cm.__aenter__()
+    resp.json = AsyncMock(side_effect=ValueError("not json"))
+    mock_session.post.return_value = cm
+    client = PairingClient(mock_session, api_base="https://api.example.com")
+    from custom_components.svitgrid.pairing_client import PairingError
+
+    with pytest.raises(PairingError) as exc:
+        await client.finalize(
+            secret="secret-abc",
+            public_key_hex="04" + "a" * 128,
+            signing_key_id="ha-home-01",
+        )
+    assert not isinstance(exc.value, PairingRefused)
+    assert "503" in str(exc.value)

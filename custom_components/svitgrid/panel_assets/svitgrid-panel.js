@@ -85,6 +85,19 @@ import {
     kwh: "kWh",
     stale: "Stale",
     syncedAll: "All readings synced",
+    noReadingYet: "No reading sent yet",
+    lastReadIncomplete: "last read incomplete — missing",
+    lastReadFailed: "last read failed",
+    readNow: "Read now",
+    readNowRunning: "Reading…",
+    readNowStored: "Reading taken — sending it now",
+    readNowIncomplete: "Reading incomplete — missing",
+    readNowUnreachable: "Logger unreachable",
+    readNowFailed: "Read failed",
+    readNowBusy: "A read is already in progress",
+    readNowTimeout: "No answer from the inverter yet",
+    readNowNoSpec: "Register map not loaded yet",
+    readNowUnavailable: "Read now works for inverters read directly over the network",
     islandLocalOnly: "Island mode — stored locally",
     readingsStored: "readings stored locally",
     lastSent: "last sent",
@@ -238,6 +251,26 @@ import {
       color: var(--sg-text-2);
       white-space: nowrap;
     }
+    .panel-header { flex-wrap: wrap; }
+    .read-now-btn {
+      font: inherit;
+      font-size: 12px;
+      padding: 4px var(--sp-3);
+      border-radius: var(--sg-radius);
+      border: 1px solid var(--sg-divider);
+      background: var(--sg-card-bg);
+      color: var(--accent);
+      cursor: pointer;
+    }
+    .read-now-btn:disabled { opacity: 0.6; cursor: default; }
+    .read-now-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .read-now-status {
+      flex-basis: 100%;
+      text-align: right;
+      font-size: 12px;
+      color: var(--sg-text-2);
+    }
+    .read-now-status:empty { display: none; }
 
     /* Section titles */
     h2.section-title {
@@ -985,6 +1018,20 @@ import {
       this._updatedLabel = updated;
       header.appendChild(updated);
 
+      const readNow = document.createElement("button");
+      readNow.type = "button";
+      readNow.className = "read-now-btn";
+      readNow.textContent = STR.readNow;
+      readNow.addEventListener("click", () => this._readNow());
+      this._readNowBtn = readNow;
+      header.appendChild(readNow);
+
+      const readNowStatus = document.createElement("div");
+      readNowStatus.className = "read-now-status";
+      readNowStatus.setAttribute("role", "status");
+      this._readNowStatus = readNowStatus;
+      header.appendChild(readNowStatus);
+
       root.appendChild(header);
 
       this._panelBody = root;
@@ -1188,6 +1235,41 @@ import {
 
     _call(path) {
       return this._hass.callApi("GET", path);
+    }
+
+    // One immediate poll of every direct-harvest inverter, then refresh.
+    async _readNow() {
+      if (!this._hass || !this._readNowBtn || this._readNowBtn.disabled) return;
+      this._readNowBtn.disabled = true;
+      this._readNowStatus.textContent = STR.readNowRunning;
+      let text;
+      try {
+        const data = await this._hass.callApi("POST", "svitgrid/read-now", {});
+        const results = data && Array.isArray(data.results) ? data.results : [];
+        if (!results.length) {
+          text = STR.readNowUnavailable;
+        } else {
+          text = results.map((r) => this._readNowText(r)).join(" · ");
+        }
+      } catch (err) {
+        text = STR.readNowFailed + ": " + (err && err.message ? err.message : String(err));
+      }
+      this._readNowStatus.textContent = text;
+      this._readNowBtn.disabled = false;
+      this._refresh();
+    }
+
+    _readNowText(r) {
+      const missing = Array.isArray(r.missingFields) ? r.missingFields.join(", ") : "";
+      switch (r.outcome) {
+        case "stored": return STR.readNowStored;
+        case "incomplete": return STR.readNowIncomplete + ": " + (missing || "—");
+        case "unreachable": return STR.readNowUnreachable;
+        case "busy": return STR.readNowBusy;
+        case "timeout": return STR.readNowTimeout;
+        case "no_spec": return STR.readNowNoSpec;
+        default: return STR.readNowFailed + (r.detail ? ": " + r.detail : "");
+      }
     }
 
     // ---------------------------------------------------------------- //
@@ -3462,6 +3544,34 @@ import {
           detail.textContent = "· " + stored + " " + STR.readingsStored;
           this._syncFooter.appendChild(lead);
           this._syncFooter.appendChild(detail);
+          return true;
+        }
+
+        // Nothing stored and nothing ever sent: that is "no reading yet", not
+        // "all synced". Say why the last read produced nothing, when known.
+        if (!(data && data.last_sent_ts) && sent + pending + failed === 0) {
+          this._syncFooter.className = "sync-footer";
+          this._syncFooter.innerHTML = "";
+          const lead = document.createElement("span");
+          lead.className = "sync-lead";
+          lead.textContent = STR.noReadingYet;
+          this._syncFooter.appendChild(lead);
+          const attempt = data && data.last_attempt;
+          let reason = "";
+          if (attempt && attempt.status === "skipped") {
+            const missing = Array.isArray(attempt.missing_fields)
+              ? attempt.missing_fields.join(", ")
+              : "";
+            reason = STR.lastReadIncomplete + ": " + (missing || "—");
+          } else if (attempt && attempt.status === "error") {
+            reason = STR.lastReadFailed + (attempt.reason ? ": " + attempt.reason : "");
+          }
+          if (reason) {
+            const detail = document.createElement("span");
+            detail.className = "sync-detail";
+            detail.textContent = "· " + reason;
+            this._syncFooter.appendChild(detail);
+          }
           return true;
         }
 

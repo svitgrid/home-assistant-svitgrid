@@ -101,7 +101,7 @@ def _make_flow(
 @pytest.mark.asyncio
 async def test_island_finalize_reads_key_from_status_and_stores(hass: HomeAssistant) -> None:
     """Island pairing: key is read from PairingClaimed.island_key (app-provided),
-    stored via async_set_island_key, async_get_island_key() returns the key,
+    stored as a named island_keys entry rather than the legacy scalar,
     generate_island_key is NOT called, entry.data has cloud_ingest_enabled=True."""
     app_island_key = "sk-app-123"
     finalize_resp = {**_FINALIZE_RESPONSE_BASE, "island": True, "cloudIngest": True}
@@ -129,8 +129,10 @@ async def test_island_finalize_reads_key_from_status_and_stores(hass: HomeAssist
     assert result["type"] == FlowResultType.CREATE_ENTRY
 
     # island key stored in keystore — must equal the app-provided key
-    stored_key = await ks.async_get_island_key()
-    assert stored_key == app_island_key
+    assert await ks.async_get_island_key() is None
+    assert await ks.async_get_island_keys() == [app_island_key]
+    devices = await ks.async_list_island_devices()
+    assert [d["isLegacy"] for d in devices] == [False]
 
     # cloud_ingest_enabled in entry data
     assert result["data"].get("cloud_ingest_enabled") is True
@@ -293,10 +295,7 @@ async def test_island_full_flow_entry_has_cloud_ingest_enabled(
         )
         mock_client.finalize = AsyncMock(return_value=finalize_resp)
 
-        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
-        await hass.config_entries.flow.async_configure(
-            result["flow_id"], user_input={"next_step_id": "pair"}
-        )
+        await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
         await hass.async_block_till_done()
 
     entries = hass.config_entries.async_entries(DOMAIN)
@@ -356,10 +355,7 @@ async def test_island_full_flow_finalize_body_excludes_island_key(
         )
         mock_client.finalize = AsyncMock(side_effect=_capture_finalize)
 
-        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
-        await hass.config_entries.flow.async_configure(
-            result["flow_id"], user_input={"next_step_id": "pair"}
-        )
+        await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
         await hass.async_block_till_done()
 
     # finalize POST body must NOT carry the key (app owns it; cloud got it via claim)
@@ -465,8 +461,10 @@ async def test_setup_entry_seeds_keystore_with_island_key(hass: HomeAssistant) -
 
     assert ok is True
     ks = SvitgridKeystore(hass)
-    stored = await ks.async_get_island_key()
-    assert stored == island_key, f"Expected {island_key!r} in keystore, got {stored!r}"
+    stored = await ks.async_get_island_keys()
+    assert stored == [island_key], f"Expected {island_key!r} in keystore, got {stored!r}"
+    # A named roster entry, not the unidentifiable legacy scalar (svitgrid#751).
+    assert await ks.async_get_island_key() is None
 
 
 # ---------------------------------------------------------------------------

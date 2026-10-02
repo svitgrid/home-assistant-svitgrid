@@ -14,6 +14,7 @@ import asyncio
 import contextlib
 import logging
 import os
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -43,18 +44,26 @@ from .const import (
     REQUIRED_FIELDS,
     ROLLUP_INTERVAL_S,
 )
+from .entry_reload import consume_listener_reload_skip
 from .executors import create_executor
 from .executors.smg_settings_executor import EybondSmgSettingsExecutor
 from .executors.yaml_dispatcher import YamlDispatcher
 from .eybond_at.setup import is_eybond_harvest, start_eybond_hub
 from .harvest.engine import run_direct_harvest_loop
 from .harvest.event_scheduler_loop import run_event_scheduler_loop
+from .harvest.read_now import ReadNowTrigger
 from .harvest.spec_cache import load_spec
 from .harvest.spec_health import build_spec
 from .harvest.write_executor import WriteExecutor
 from .http_views import ensure_hello_view, register_views
+from .inverter_entry import harvest_config_from_api
 from .island_event_store import IslandEventStore
-from .keystore import SvitgridKeystore
+from .keystore import (
+    ENTRY_ISLAND_DEVICE_IDS,
+    PAIRING_ISLAND_DEVICE_ID_PREFIX,
+    SvitgridKeystore,
+    pairing_island_device_id,
+)
 from .lifecycle import DEPROVISIONED, LifecycleState
 from .mqtt_control import MqttControlState
 from .mqtt_wake import run_loop as run_mqtt_wake_loop
@@ -291,7 +300,13 @@ async def _async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     `_skip_reload_once` is set by callers (harvest_config_apply) that perform
     their OWN explicit reload after async_update_entry — without it, this
     listener would ALSO reload, producing two concurrent setups (e.g. two
-    direct-harvest loops fighting over a single-connection logger)."""
+    direct-harvest loops fighting over a single-connection logger).
+
+    `update_entry_skipping_listener_reload` does the same per entry, for the
+    cloud-ingest and island commands (ivanursul/svitgrid#751). It is checked
+    first so it never consumes another caller's flag."""
+    if consume_listener_reload_skip(hass, entry):
+        return
     data = hass.data.get(DOMAIN, {})
     cadence_only = data.pop("_cadence_only_update", False)
     skip_once = data.pop("_skip_reload_once", False)
@@ -317,6 +332,39 @@ def _inverters_from_entry(entry: ConfigEntry) -> list[dict]:
             result[0]["entity_map"] = dict(opt_map)
         return result
     return []
+
+
+def _snake_case_stored_harvest_configs(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Rewrite any camelCase `harvest_config` stored on the entry.
+
+    Add-on 0.22.x stored the `harvestConfig` from `/finalize` and `add_inverter`
+    verbatim, so those entries carry `modelId` where every reader expects
+    `model_id`: the spec never loads and the inverter is polled by nothing
+    (issue #5). Rewriting at setup lets those installs recover on the next
+    restart without pairing again.
+
+    This writes `entry.data`, not only the list setup builds, because settings
+    sync and the `set_harvest_config` arm read `entry.data` directly. Call it
+    before the update listener is registered, so the write does not reload.
+    """
+    stored = entry.data.get("inverters") or []
+    rewritten = []
+    changed = False
+    for inv in stored:
+        harvest_config = inv.get("harvest_config")
+        if harvest_config:
+            snake = harvest_config_from_api(harvest_config)
+            if snake != harvest_config:
+                inv = {**inv, "harvest_config": snake}
+                changed = True
+        rewritten.append(inv)
+    if not changed:
+        return
+    hass.config_entries.async_update_entry(entry, data={**entry.data, "inverters": rewritten})
+    _LOGGER.info(
+        "Rewrote camelCase harvest_config keys to snake_case on entry %s",
+        entry.entry_id,
+    )
 
 
 def _migrate_v1_to_v2(data: dict) -> dict:
@@ -558,6 +606,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     readings loop and (when recipes are present) one YamlDispatcher per inverter.
     A single command poller and MQTT wake loop are shared across all inverters.
     """
+    _snake_case_stored_harvest_configs(hass, entry)
     data = entry.data
     session = aiohttp_client.async_get_clientsession(hass)
     api_client = SvitgridApiClient(session, api_base=data["api_base"])
@@ -612,9 +661,34 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         signing_key_id=data["signing_key_id"],
         trusted_key_ids=_trusted_key_ids,
         trusted_public_keys_hex=_trusted_public_keys_hex,
-        # Explicit pass: non-None writes the island key; None preserves existing.
-        island_key=data.get("island_key"),
     )
+    # The pairing-time island key becomes a named roster entry, not the legacy
+    # scalar the roster cannot identify (ivanursul/svitgrid#751). This also
+    # migrates an install that paired before the fix, whose scalar holds this
+    # same key. The key then leaves entry.data: setup runs on every reload, and
+    # re-adopting it each time would undo a revoke at the next restart. Runs
+    # before the update listener is registered, so the write does not reload.
+    #
+    # The key leaves, so the roster id holding it is recorded instead: it is
+    # what async_remove_entry revokes (issue #6).
+    _pairing_island_key = data.get("island_key")
+    if _pairing_island_key:
+        _created_at = getattr(entry, "created_at", None)
+        _adopted_id = await keystore.async_adopt_pairing_island_key(
+            _pairing_island_key,
+            paired_at=(
+                _created_at.astimezone(UTC).isoformat().replace("+00:00", "Z")
+                if isinstance(_created_at, datetime)
+                else None
+            ),
+        )
+        _new_data = {k: v for k, v in entry.data.items() if k != "island_key"}
+        if _adopted_id is not None:
+            _new_data[ENTRY_ISLAND_DEVICE_IDS] = sorted(
+                {*(entry.data.get(ENTRY_ISLAND_DEVICE_IDS) or []), _adopted_id}
+            )
+        hass.config_entries.async_update_entry(entry, data=_new_data)
+        data = entry.data
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN]["keystore"] = keystore
 
@@ -671,6 +745,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             control=control,
             device_id=entry.data.get("edge_device_id"),
         )
+        # A deprovisioned device's island keys go with it (issue #6): the
+        # household no longer owns this add-on, so the phones it paired must
+        # stop authenticating LAN requests too.
+        lifecycle.on_deprovision = lambda: hass.async_create_task(
+            _revoke_entry_island_keys(hass, entry), "svitgrid_revoke_island_keys"
+        )
         cadence.interval_s = _initial_cadence_seconds(dict(entry.data))
         hass.data.setdefault(DOMAIN, {})
         hass.data[DOMAIN]["cadence"] = cadence
@@ -716,6 +796,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     eybond_hub = None
     eybond_inverters: list[dict] = []
+    # "Read now" per direct-harvest inverter (button, panel, app poll_now).
+    read_now_triggers: dict[str, ReadNowTrigger] = {}
     command_task = None
     mqtt_wake_task = None
     scheduler_task = None
@@ -770,6 +852,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         spec_holder=spec_holder,
                         lifecycle=lifecycle,
                         activity=activity,
+                        read_now=read_now_triggers.setdefault(inverter_id, ReadNowTrigger()),
                     ),
                     name=f"svitgrid_harvest_{inverter_id}",
                 )
@@ -988,9 +1071,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "lifecycle": lifecycle,
         "mqtt_control": control,
         "update_coordinator": update_coordinator,
+        "read_now": read_now_triggers,
     }
     await hass.config_entries.async_forward_entry_setups(
-        entry, ["sensor", "binary_sensor", "update"]
+        entry, ["sensor", "binary_sensor", "update", "button"]
     )
     hass.async_create_background_task(
         update_coordinator.async_refresh(), name="svitgrid_update_first_check"
@@ -1006,7 +1090,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Cancel background tasks when the user removes the integration."""
-    await hass.config_entries.async_unload_platforms(entry, ["sensor", "binary_sensor", "update"])
+    await hass.config_entries.async_unload_platforms(
+        entry, ["sensor", "binary_sensor", "update", "button"]
+    )
     remove_panel(hass)
     state = hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
     if state is None:
@@ -1037,3 +1123,53 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # A subsequent async_setup_entry re-creates it, so the reload path is safe.
     hass.data.get(DOMAIN, {}).pop("event_store", None)
     return True
+
+
+async def _revoke_entry_island_keys(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Revoke the island keys `entry` adopted at pairing (issue #6).
+
+    The keystore belongs to the Home Assistant install, not to an entry, so
+    without this every key an entry adopted keeps authenticating LAN requests
+    after the entry is gone.
+
+    Setup records the adopted roster ids in `entry.data`. An entry that never
+    finished setup still holds its key, which names its id. An entry adopted
+    before ids were recorded names neither: when no other Svitgrid entry
+    remains, the pairing-time ids (`paired-...`) can only be its own, so those
+    go; beside another entry nothing does, because the owner cannot be told
+    apart. Never raises: removing an entry must not fail on its keys.
+    """
+    try:
+        # The shared instance, when setup left one: it is what LAN auth reads,
+        # and a separate Store instance can serve it stale data after this write.
+        keystore = hass.data.get(DOMAIN, {}).get("keystore") or SvitgridKeystore(hass)
+        key = entry.data.get("island_key")
+        device_ids = set(entry.data.get(ENTRY_ISLAND_DEVICE_IDS) or [])
+        if key:
+            device_ids.add(pairing_island_device_id(key))
+        if not device_ids and not key:
+            others = [
+                e for e in hass.config_entries.async_entries(DOMAIN) if e.entry_id != entry.entry_id
+            ]
+            if others:
+                return
+            state = await keystore.load()
+            if state is None:
+                return
+            device_ids = {
+                did for did in state.island_keys if did.startswith(PAIRING_ISLAND_DEVICE_ID_PREFIX)
+            }
+        if not device_ids and not key:
+            return
+        removed = await keystore.async_revoke_island_keys(sorted(device_ids), key=key)
+        if removed:
+            _LOGGER.info(
+                "Revoked %d island key(s) adopted by config entry %s", len(removed), entry.entry_id
+            )
+    except Exception:  # noqa: BLE001
+        _LOGGER.exception("Could not revoke the island keys of config entry %s", entry.entry_id)
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """The entry is being deleted: revoke the island keys it adopted."""
+    await _revoke_entry_island_keys(hass, entry)

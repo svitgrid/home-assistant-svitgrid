@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.22.4 — 2026-09-12
+
+### Changed
+- **A refused pairing now hands you a new code instead of a dead end.** When
+  the cloud answers 422 `no_buildable_inverter` — the app claimed this Home
+  Assistant without an inverter profile — 0.22.3 explained the refusal and
+  stopped. That was the wrong place to stop: the refused code stays `claimed`
+  on the cloud and is rejected from then on, so the only way forward was to
+  find "Add integration" again and walk the whole flow a second time. The
+  add-on now calls `/ha-pairing/start` itself and shows the new code on the
+  same waiting screen, under text saying that the previous claim was refused
+  because the phone sent no inverter profile, that nothing was created, and
+  that the app needs updating before the new code is entered. One restart
+  only: a second refusal in the same pairing means the app is still the same,
+  so the flow ends as it did before.
+
+## 0.22.3 — 2026-09-11
+
+### Fixed
+- **Pairing ended with "Unknown error occurred" when the cloud refused the
+  claim.** The Svitgrid cloud now answers 422 `no_buildable_inverter` when the
+  app's claim named inverters none of which resolve to a preset or a manual
+  spec (an app build that lost the inverter profile at claim time,
+  2026-09-11). The finalize call did not catch it, so Home Assistant showed
+  its generic error and the log held a traceback, with nothing telling the
+  owner what happened or what to do. The refusal is now typed
+  (`PairingRefused`, carrying the cloud's `code`) and the flow ends with a
+  message that names the cause and the way out: nothing was created, that
+  code cannot be claimed again, update the app and start the pairing again
+  for a new code. Any other finalize error ends the flow as "Pairing failed"
+  instead of escaping.
+
 ## 0.22.2 — 2026-09-10
 
 Merges the 0.21.8 harvest fixes, which were written on a branch while 0.22.0

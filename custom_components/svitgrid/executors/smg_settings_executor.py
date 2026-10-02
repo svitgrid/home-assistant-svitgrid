@@ -142,10 +142,7 @@ async def write_register_verified(
             skipped=False,
             written=value,
             read_back=None,
-            message=(
-                f"wrote {value} to register {address} but could not read it "
-                f"back: {err}"
-            ),
+            message=(f"wrote {value} to register {address} but could not read it back: {err}"),
         )
 
     if read_back == value:
@@ -305,14 +302,20 @@ class SmgSettingsExecutor(BaseExecutor):
         setting = self._by_key(key)
         if setting is None:
             return VerifiedWrite(
-                ok=False, skipped=False, written=0, read_back=None,
+                ok=False,
+                skipped=False,
+                written=0,
+                read_back=None,
                 message=f'unknown setting "{key}"',
             )
 
         raw = setting.to_raw(float(display_value))
         if not setting.contains(raw):
             return VerifiedWrite(
-                ok=False, skipped=False, written=raw, read_back=None,
+                ok=False,
+                skipped=False,
+                written=raw,
+                read_back=None,
                 message=(
                     f"{key} {display_value}{setting.unit} is outside the permitted "
                     f"range {setting.to_display(setting.raw_min)}"
@@ -388,7 +391,10 @@ class SmgSettingsExecutor(BaseExecutor):
                 for constraint_key, partner in unevaluatable
             )
             return VerifiedWrite(
-                ok=False, skipped=False, written=raw, read_back=None,
+                ok=False,
+                skipped=False,
+                written=raw,
+                read_back=None,
                 message=(
                     f"{key} cannot be checked against what the device holds: "
                     f"{detail}. Refusing to write."
@@ -398,7 +404,10 @@ class SmgSettingsExecutor(BaseExecutor):
         violations = validate_smg_settings(for_validation)
         if violations:
             return VerifiedWrite(
-                ok=False, skipped=False, written=raw, read_back=None,
+                ok=False,
+                skipped=False,
+                written=raw,
+                read_back=None,
                 message=f"would break {', '.join(v.key for v in violations)}",
             )
 
@@ -411,9 +420,7 @@ class SmgSettingsExecutor(BaseExecutor):
     async def set_battery_charge(self, payload: dict[str, Any]) -> dict[str, Any]:
         # This executor does not implement the legacy set_battery_charge
         # entry point; it only serves the two commands below.
-        raise NotImplementedError(
-            "SmgSettingsExecutor does not support set_battery_charge"
-        )
+        raise NotImplementedError("SmgSettingsExecutor does not support set_battery_charge")
 
     async def dispatch(self, command_name: str, payload: dict[str, Any]) -> dict[str, Any]:
         if command_name == "read_inverter_settings":
@@ -489,9 +496,7 @@ class EybondSmgSettingsExecutor(BaseExecutor):
         self._timeout_s = timeout_s
 
     async def set_battery_charge(self, payload: dict[str, Any]) -> dict[str, Any]:
-        raise NotImplementedError(
-            "EybondSmgSettingsExecutor does not support set_battery_charge"
-        )
+        raise NotImplementedError("EybondSmgSettingsExecutor does not support set_battery_charge")
 
     async def dispatch(self, command_name: str, payload: dict[str, Any]) -> dict[str, Any]:
         session = self._hub.session_for(self._inverter_serial)
@@ -499,9 +504,7 @@ class EybondSmgSettingsExecutor(BaseExecutor):
             raise NoCollectorConnected(
                 f"no collector connected for serial {self._inverter_serial!r}"
             )
-        protocol_words = await session.read_registers(
-            REG_PROTOCOL, 1, timeout_s=self._timeout_s
-        )
+        protocol_words = await session.read_registers(REG_PROTOCOL, 1, timeout_s=self._timeout_s)
         protocol_number = protocol_words[0] if protocol_words else 0
         inner = SmgSettingsExecutor(
             link=session,
