@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.22.5 — 2026-10-05
+
+### Added
+- **A household with an external current transformer can map it.** The new
+  optional field `gridPortPower` takes the inverter's own grid port. Map
+  `gridPower` to the clamp (on a Deye with the Solarman integration,
+  `sensor.inverter_external_power`) and `gridPortPower` to the port
+  (`sensor.inverter_grid_power`), and the app shows import from the clamp and
+  the load on the grid side of the inverter as its own branch. Set it in the
+  options form for your inverter. No preset maps it, because a household
+  without a clamp would send two identical figures (svitgrid#843).
+
+### Changed
+- **"Add Svitgrid" opens pairing with the mobile app directly.** The menu that
+  also offered manual setup and the direct inverter connection is gone.
+  Existing installs and the options flow are unchanged.
+
+### Fixed
+- **A pairing that cannot reach the inverter still creates the entry.** The
+  station already exists in the cloud at that point, so the harvest loop's
+  retries and diagnostics now report an unreachable inverter instead of the
+  form reappearing with nothing to retry. The reachability check retries three
+  times on a fresh session.
+- **The first reading after pairing arrives in seconds, not five minutes.** A
+  failed first poll retries on a short back-off, and "refresh" in the app now
+  triggers one extra read.
+- **A direct-harvest inverter paired through the app sends readings.** Its
+  harvest configuration was stored with camelCase keys and the loop idled.
+- **Switching cloud sync restarts the integration once, not twice.**
+- **The phone that paired the add-on is listed by name** under local-mode
+  devices, not as "Device paired before this update".
+- **LuxPower/EG4 battery charge reads correctly.** Register 5 packs SOC and
+  SOH into one word, and the add-on ignored the spec's mask, so a 70 % pack
+  read as 100 %.
+- **A meterless inverter, or a frame where no grid register answered, sends no
+  grid figure** instead of a 0 W the app read as a measurement (svitgrid#649).
+
 ## 0.22.4 — 2026-09-12
 
 ### Changed
