@@ -500,3 +500,49 @@ async def test_poll_once_omits_grid_power_for_a_spec_that_reads_no_grid(hass, mo
     store.append.assert_awaited_once()
     assert "gridPower" not in returned
     assert returned["batteryVoltage"] == pytest.approx(52.3)
+
+
+@pytest.mark.asyncio
+async def test_poll_once_omits_grid_power_when_no_grid_leg_answered(hass, monkeypatch):
+    """A spec that derives gridPower from per-phase legs decodes 0.0 when none
+    of them answered, matching the Dart reader. Uploaded, that 0 reads as a
+    measured zero, so the key is left out (svitgrid#649)."""
+    spec = RegisterSpec.from_dict(
+        {
+            "modelId": "legs",
+            "version": 1,
+            "protocol": "solarman_v5",
+            "port": 8899,
+            "defaultSlaveId": 1,
+            "flags": {},
+            "reads": [
+                {"field": "batterySoc", "address": 588},
+                {"field": "batteryPower", "address": 590, "signed": True},
+                {"field": "batteryVoltage", "address": 587, "scale": 0.01},
+                {"field": "gridPowerL1", "address": 622, "signed": True},
+                {"field": "gridPowerL2", "address": 623, "signed": True},
+            ],
+            "derivations": [
+                {
+                    "field": "gridPower",
+                    "op": "builtin",
+                    "builtin": "grid_sign_normalize",
+                    "inputs": ["gridPowerL1", "gridPowerL2"],
+                }
+            ],
+            "writes": [],
+        }
+    )
+    store = type("S", (), {"append": AsyncMock()})()
+    cfg = {"ip": "x", "logger_serial": "1"}
+
+    raw = {1: {588: 78, 590: 1500, 587: 5230}}
+    monkeypatch.setattr(eng, "read_raw", AsyncMock(return_value=raw))
+    returned = await eng.poll_once(hass=hass, spec=spec, cfg=cfg, inverter_id="i", store=store)
+    assert returned is not None
+    assert "gridPower" not in returned
+
+    raw = {1: {588: 78, 590: 1500, 587: 5230, 622: 120, 623: 0}}
+    monkeypatch.setattr(eng, "read_raw", AsyncMock(return_value=raw))
+    returned = await eng.poll_once(hass=hass, spec=spec, cfg=cfg, inverter_id="i", store=store)
+    assert returned["gridPower"] == 120.0

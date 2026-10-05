@@ -1,7 +1,7 @@
 # tests/harvest/test_decoder.py
 import math
 
-from custom_components.svitgrid.harvest.decoder import decode
+from custom_components.svitgrid.harvest.decoder import decode, grid_answered
 from custom_components.svitgrid.harvest.register_spec import RegisterSpec
 
 
@@ -313,10 +313,8 @@ def test_32bit_low_word_first_missing_word_is_none():
     assert decode(spec, {1: {201: 0x0001}})["p"] is None
 
 
-def test_grid_sign_normalize_every_input_missing_is_none():
-    """No leg answered, so nothing measured the grid: None, not a fake 0 W
-    (svitgrid#649). One missing leg of several still counts as 0, above."""
-    spec = _grid_spec(
+def _two_leg_spec():
+    return _grid_spec(
         inputs=["gridPowerL1", "gridPowerL2"],
         flags={"gridPositiveIsExport": True},
         reads=[
@@ -324,5 +322,52 @@ def test_grid_sign_normalize_every_input_missing_is_none():
             {"field": "gridPowerL2", "address": 2, "signed": True},
         ],
     )
-    out = decode(spec, {1: {}})
-    assert "gridPower" in out and out["gridPower"] is None
+
+
+def test_grid_sign_normalize_every_input_missing_is_zero_like_dart():
+    """The Dart reader sums missing legs as 0, and the golden vectors hold the
+    two decoders to the same output (huawei_sun2000_30ktl_m3 carries this exact
+    case). Whether that 0 is uploaded is the engine's call, via grid_answered."""
+    assert decode(_two_leg_spec(), {1: {}})["gridPower"] == 0.0
+
+
+def test_grid_answered_is_false_when_no_leg_answered():
+    """No leg answered, so nothing measured the grid (svitgrid#649)."""
+    assert grid_answered(_two_leg_spec(), {1: {}}) is False
+
+
+def test_grid_answered_is_true_when_one_leg_answered():
+    assert grid_answered(_two_leg_spec(), {1: {2: 40}}) is True
+
+
+def test_grid_answered_follows_a_direct_grid_read():
+    spec = _grid_spec(
+        inputs=["gridPower"],
+        flags={},
+        reads=[{"field": "gridPower", "address": 570, "signed": True}],
+    )
+    assert grid_answered(spec, {1: {570: 0}}) is True
+    assert grid_answered(spec, {1: {}}) is False
+
+
+def test_grid_answered_is_false_for_a_spec_with_no_grid_source():
+    spec = _spec(reads=[{"field": "pv1Power", "address": 672}])
+    assert grid_answered(spec, {1: {672: 1500}}) is False
+
+
+def test_grid_answered_follows_inputs_through_chained_derivations():
+    """A leg that is itself derived (here a scaled read) still counts."""
+    spec = _spec(
+        reads=[{"field": "rawL1", "address": 5, "signed": True}],
+        derivations=[
+            {"field": "gridPowerL1", "op": "scale", "inputs": ["rawL1"], "scale": 10},
+            {
+                "field": "gridPower",
+                "op": "builtin",
+                "builtin": "grid_sign_normalize",
+                "inputs": ["gridPowerL1"],
+            },
+        ],
+    )
+    assert grid_answered(spec, {1: {5: 3}}) is True
+    assert grid_answered(spec, {1: {}}) is False
