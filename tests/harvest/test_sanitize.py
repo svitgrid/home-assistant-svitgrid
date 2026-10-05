@@ -52,3 +52,9 @@ def test_pure_does_not_mutate_input():
     src = {"batterySoc": 120.0}
     sanitize(src, _spec())
     assert src["batterySoc"] == 120.0
+
+
+def test_structurally_absent_grid_power_is_zero_filled_for_dart_parity():
+    # The golden vectors hold sanitize() to the Dart reader, which zero-fills.
+    # The upload path, not sanitize(), keeps that 0 out of the payload.
+    assert sanitize({"batterySoc": 50.0}, _spec())["gridPower"] == 0.0
