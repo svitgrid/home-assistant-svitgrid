@@ -15,21 +15,23 @@ def _raw_of(raw: RawRegisters, unit_id: int, address: int) -> int | None:
 
 
 def _convert(read: ReadDef, raw_value: int) -> float:
-    # RegisterDef.convert: sentinel, sign, scale, offset.
+    # RegisterDef.convert: sentinel, mask, sign, scale, offset. The sentinel is
+    # compared against the UNMASKED word, so a dead register reads 0 rather
+    # than 0xFFFF & mask.
     if not read.signed and raw_value == 0xFFFF:
         return 0.0
     if read.signed and raw_value == 0x7FFF:
         return 0.0
+    if read.mask is not None:
+        raw_value &= read.mask
     value = float(raw_value)
     if read.signed and raw_value >= 32768:
         value = float(raw_value - 65536)
     return value * read.scale + read.offset
 
 
-def decode(spec: RegisterSpec, raw: RawRegisters) -> dict[str, float | None]:
+def _decode_reads(spec: RegisterSpec, raw: RawRegisters) -> dict[str, float | None]:
     out: dict[str, float | None] = {}
-
-    # 1. raw reads
     for d in spec.reads:
         if d.words == 2:
             # 32-bit read spanning `address` and `address + 1`. Which of the two
@@ -52,6 +54,12 @@ def decode(spec: RegisterSpec, raw: RawRegisters) -> dict[str, float | None]:
         else:
             v = _raw_of(raw, d.unit_id, d.address)
             out[d.field] = None if v is None else _convert(d, v)
+    return out
+
+
+def decode(spec: RegisterSpec, raw: RawRegisters) -> dict[str, float | None]:
+    # 1. raw reads
+    out = _decode_reads(spec, raw)
 
     # 2. derivations (declared order)
     for x in spec.derivations:
@@ -84,6 +92,11 @@ def decode(spec: RegisterSpec, raw: RawRegisters) -> dict[str, float | None]:
 # fields to match the Dart reader's behaviour. Explicitly-None entries (field key
 # present with value None — meaning the register was in reads but data was missing)
 # are intentionally left untouched.
+#
+# `gridPower` is zero-filled here too, because the Dart reader does it and the
+# golden vectors hold the two decoders to the same output. That 0 is NOT a
+# measurement: `grid_answered` tells the upload path to leave the key out
+# (svitgrid#649).
 _STANDARD_ZERO_FIELDS: frozenset[str] = frozenset(
     {
         "batterySoc",
@@ -98,6 +111,26 @@ _STANDARD_ZERO_FIELDS: frozenset[str] = frozenset(
         "dailyLoadEnergy",
     }
 )
+
+
+def grid_answered(spec: RegisterSpec, raw: RawRegisters) -> bool:
+    """Whether any register behind `gridPower` returned data in this frame.
+
+    `decode` mirrors the Dart reader, which sums missing grid legs as 0, so a
+    frame where no leg answered still decodes `gridPower = 0.0`. The server
+    reads any numeric gridPower as a measurement, so the upload path drops the
+    key when this is False (svitgrid#649). Inputs are followed through chained
+    derivations, and a spec with no grid source at all is False."""
+    wanted = {"gridPower"}
+    grew = True
+    while grew:
+        grew = False
+        for d in spec.derivations:
+            if d.field in wanted and not wanted.issuperset(d.inputs):
+                wanted.update(d.inputs)
+                grew = True
+    reads = _decode_reads(spec, raw)
+    return any(reads.get(f) is not None for f in wanted)
 
 
 def sanitize(fields: dict[str, float | None], spec: RegisterSpec) -> dict[str, float | None]:
@@ -155,6 +188,10 @@ def _apply_builtin(d: Derivation, out: dict[str, float | None], spec: RegisterSp
         # inputs = ['gridPower'] for a family with a real total register, or the
         # per-phase legs for one that publishes none. Summing a single input is
         # identity, so one branch covers both (reference_decoder.dart:119-131).
+        #
+        # A missing leg counts as 0, as in Dart, even when every leg is
+        # missing. The engine leaves that 0 out of the upload when no leg
+        # answered (`grid_answered`, svitgrid#649).
         gp = 0.0
         for f in d.inputs:
             gp += out.get(f) or 0.0

@@ -54,7 +54,13 @@ REQUIRED_FIELDS = frozenset(
 # "unknown"; the app shows "Calculating"). One unavailable BMS sensor there
 # silently blanked an entire install — including its perfectly good PV data.
 # Removed 2026-08-05 (found on rostislav.dudka@gmail.com, Victron GX).
-CORE_PAYLOAD_FIELDS = frozenset({"batteryPower", "batteryVoltage", "gridPower", "loadPower"})
+#
+# `gridPower` and `loadPower` used to be listed and are NOT API-required either.
+# The server calls a day "measured" when a reading carried a numeric gridPower,
+# so a meterless inverter has to upload a reading WITHOUT the key. With the key
+# required here it could only upload nothing, or a fake 0 W that priced its
+# unmeasured days as self-consumed solar. Removed 2026-10-02 (svitgrid#649).
+CORE_PAYLOAD_FIELDS = frozenset({"batteryPower", "batteryVoltage"})
 
 # All recognized canonical fields (required + optional)
 ALL_FIELDS = REQUIRED_FIELDS | frozenset(

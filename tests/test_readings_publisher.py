@@ -136,10 +136,11 @@ def test_gate_payload_keeps_existing_pv_power():
 def test_gate_payload_reports_missing_core_fields_sorted():
     payload = {"inverterId": "inv-1", "timestamp": "t", "source": "edge"}
     finalized, missing = gate_payload(payload)
-    # pvPower defaulted, but the four core fields are absent. batterySoc is
-    # NOT among them — it is optional server-side (see CORE_PAYLOAD_FIELDS).
+    # pvPower defaulted, but the two core fields are absent. batterySoc,
+    # gridPower and loadPower are NOT among them — they are optional
+    # server-side (see CORE_PAYLOAD_FIELDS).
     assert finalized["pvPower"] == 0.0
-    assert missing == ["batteryPower", "batteryVoltage", "gridPower", "loadPower"]
+    assert missing == ["batteryPower", "batteryVoltage"]
 
 
 # ── Phase 2 T10a: adaptive ingest cadence ─────────────────────────────
@@ -723,7 +724,7 @@ def test_gate_accepts_a_reading_with_no_battery_soc():
     assert "batterySoc" not in payload
 
 
-@pytest.mark.parametrize("dropped", ["batteryPower", "batteryVoltage", "gridPower", "loadPower"])
+@pytest.mark.parametrize("dropped", ["batteryPower", "batteryVoltage"])
 def test_gate_still_rejects_a_reading_missing_any_api_required_field(dropped):
     complete = {
         "inverterId": "inv-1",
@@ -868,3 +869,28 @@ async def test_run_loop_warns_once_per_change_about_unresolved_sensors(monkeypat
     hits = [r for r in caplog.records if "pv1Power" in r.getMessage()]
     assert len(hits) == 1, [r.getMessage() for r in hits]
     assert "sensor.inverter_pv1_power" in hits[0].getMessage()
+
+
+# ── An unmeasured grid is omitted, never sent as 0 (svitgrid#649) ─────────
+#
+# The server calls a day "measured" when a reading carried a numeric
+# gridPower. A meterless inverter that uploads gridPower 0 is therefore priced
+# as self-consumed solar, and «Не вимірюється» never appears. The API accepts
+# a reading with no gridPower and no loadPower, so the gate must too.
+
+
+@pytest.mark.parametrize("dropped", ["gridPower", "loadPower"])
+def test_gate_accepts_a_reading_with_no_grid_or_load(dropped):
+    complete = {
+        "inverterId": "inv-1",
+        "batterySoc": 55.0,
+        "batteryPower": -1500.0,
+        "batteryVoltage": 48.6,
+        "gridPower": 2016.0,
+        "loadPower": 2025.0,
+        "pvPower": 1128.0,
+    }
+    del complete[dropped]
+    payload, missing = gate_payload(complete)
+    assert missing == []
+    assert dropped not in payload
