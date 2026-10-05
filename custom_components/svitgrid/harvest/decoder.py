@@ -15,11 +15,15 @@ def _raw_of(raw: RawRegisters, unit_id: int, address: int) -> int | None:
 
 
 def _convert(read: ReadDef, raw_value: int) -> float:
-    # RegisterDef.convert: sentinel, sign, scale, offset.
+    # RegisterDef.convert: sentinel, mask, sign, scale, offset. The sentinel is
+    # compared against the UNMASKED word, so a dead register reads 0 rather
+    # than 0xFFFF & mask.
     if not read.signed and raw_value == 0xFFFF:
         return 0.0
     if read.signed and raw_value == 0x7FFF:
         return 0.0
+    if read.mask is not None:
+        raw_value &= read.mask
     value = float(raw_value)
     if read.signed and raw_value >= 32768:
         value = float(raw_value - 65536)
