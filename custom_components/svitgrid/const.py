@@ -85,6 +85,11 @@ ALL_FIELDS = REQUIRED_FIELDS | frozenset(
         "gridPowerL2",
         "gridPowerL3",
         "gridFrequency",
+        # The inverter's own grid port, for a household with an external CT
+        # whose `gridPower` is mapped to the clamp. The API publishes
+        # gridPower - gridPortPower as the grid-side load (svitgrid#843).
+        # Per household only: never in a preset (tests/test_grid_port_power.py).
+        "gridPortPower",
         "loadPowerL1",
         "loadPowerL2",
         "loadPowerL3",
@@ -143,6 +148,10 @@ MAPPABLE_FIELDS: list[tuple[str, str]] = [
     ("gridPowerL2", "Grid power L2 (W — positive = import)"),
     ("gridPowerL3", "Grid power L3 (W — positive = import)"),
     ("gridFrequency", "Grid frequency (Hz)"),
+    (
+        "gridPortPower",
+        "Inverter grid port power (W, positive = import; only with an external CT)",
+    ),
     ("loadPower", "Load power (W)"),
     ("loadPowerL1", "Load power L1 (W)"),
     ("loadPowerL2", "Load power L2 (W)"),
