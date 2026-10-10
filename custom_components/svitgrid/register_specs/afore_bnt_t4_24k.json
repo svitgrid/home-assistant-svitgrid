@@ -1,0 +1,144 @@
+{
+  "modelId": "afore_bnt_t4_24k",
+  "version": 1,
+  "source": "generated",
+  "verified": false,
+  "protocol": "solarman_v5",
+  "port": 8899,
+  "defaultSlaveId": 1,
+  "flags": {
+    "pvPowerFromVoltageCurrent": true,
+    "batteryPositiveIsDischarge": true,
+    "dailyGridUnavailable": true,
+    "usesInputRegisters": true
+  },
+  "reads": [
+    {
+      "field": "gridVoltageL1",
+      "address": 1,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "gridVoltageL2",
+      "address": 2,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "gridVoltageL3",
+      "address": 3,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "gridFrequency",
+      "address": 13,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv1Voltage",
+      "address": 7,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv1Current",
+      "address": 8,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv2Voltage",
+      "address": 9,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv2Current",
+      "address": 10,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv3Voltage",
+      "address": 11,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv3Current",
+      "address": 12,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "dailyPvEnergy",
+      "address": 16,
+      "words": 2,
+      "scale": 0.001,
+      "functionCode": "FC04"
+    }
+  ],
+  "derivations": [
+    {
+      "field": "pv1Power",
+      "op": "builtin",
+      "inputs": [
+        "pv1Voltage",
+        "pv1Current"
+      ],
+      "builtin": "pv_power_from_vi"
+    },
+    {
+      "field": "pv2Power",
+      "op": "builtin",
+      "inputs": [
+        "pv2Voltage",
+        "pv2Current"
+      ],
+      "builtin": "pv_power_from_vi"
+    },
+    {
+      "field": "pv3Power",
+      "op": "builtin",
+      "inputs": [
+        "pv3Voltage",
+        "pv3Current"
+      ],
+      "builtin": "pv_power_from_vi"
+    },
+    {
+      "field": "totalPvPower",
+      "op": "sum",
+      "inputs": [
+        "pv1Power",
+        "pv2Power",
+        "pv3Power"
+      ]
+    },
+    {
+      "field": "dailyGridImportEnergy",
+      "op": "builtin",
+      "inputs": [],
+      "builtin": "daily_grid_unavailable"
+    },
+    {
+      "field": "dailyGridExportEnergy",
+      "op": "builtin",
+      "inputs": [],
+      "builtin": "daily_grid_unavailable"
+    }
+  ],
+  "writes": [],
+  "transport": "solarman_v5",
+  "sourceRefs": [
+    {
+      "project": "Afore vendor T4 protocol (MODBUS RTU for 3 phase inverters)",
+      "url": "https://github.com/user-attachments/files/17586963/MODBUS.RTU.for.3.phase.inverters.AFORE.T4.protcol.pdf",
+      "retrievedAt": "2026-08-17"
+    }
+  ],
+  "confidence": "single_source"
+}

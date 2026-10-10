@@ -35,8 +35,11 @@ from .command_poller import run_loop as run_command_loop
 from .const import (
     COMMAND_POLL_INTERVAL_S,
     CONF_AUTO_UPDATE,
+    CONF_LOCAL_ONLY,
+    DEFAULT_API_BASE,
     DOMAIN,
     HOURLY_RETENTION_S,
+    LOCAL_PAIRING_GRANT,
     RAW_RETENTION_S,
     READINGS_DB_FILE,
     READINGS_DB_SUBDIR,
@@ -52,14 +55,15 @@ from .eybond_at.setup import is_eybond_harvest, start_eybond_hub
 from .harvest.engine import run_direct_harvest_loop
 from .harvest.event_scheduler_loop import run_event_scheduler_loop
 from .harvest.read_now import ReadNowTrigger
-from .harvest.spec_cache import load_spec
 from .harvest.spec_health import build_spec
+from .harvest.spec_source import RegisterSpecStore, resolve_register_spec
 from .harvest.write_executor import WriteExecutor
 from .http_views import ensure_hello_view, register_views
 from .inverter_entry import harvest_config_from_api
 from .island_event_store import IslandEventStore
 from .keystore import (
     ENTRY_ISLAND_DEVICE_IDS,
+    ENTRY_TRUSTED_KEY_IDS,
     PAIRING_ISLAND_DEVICE_ID_PREFIX,
     SvitgridKeystore,
     pairing_island_device_id,
@@ -609,8 +613,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _snake_case_stored_harvest_configs(hass, entry)
     data = entry.data
     session = aiohttp_client.async_get_clientsession(hass)
-    api_client = SvitgridApiClient(session, api_base=data["api_base"])
-    api_key = data["api_key"]
+    # A local-only entry was paired over the LAN by a guest with no cloud
+    # account: it has no api_key, api_base, edge_device_id or household_id.
+    # It gets no API client at all, so nothing below can call the cloud and
+    # log a 401 every few seconds.
+    local_only = bool(data.get(CONF_LOCAL_ONLY))
+    api_client = (
+        None
+        if local_only
+        else SvitgridApiClient(session, api_base=data.get("api_base") or DEFAULT_API_BASE)
+    )
+    api_key = data.get("api_key") or ""
     activity = ActivityTracker()
     # Surface a still-unapproved signing key on the Diagnostics sensor. Absent
     # (older entry, or an API that predates the field) means approved — see the
@@ -654,11 +667,28 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if _existing is not None and _existing.trusted_public_keys_hex:
         _trusted_public_keys_hex = dict(_existing.trusted_public_keys_hex)
         _trusted_key_ids = sorted(_trusted_public_keys_hex)
+    _identity = {
+        "api_key": api_key,
+        "public_key_hex": data.get("public_key_hex") or "",
+        "private_key_pem": data.get("private_key_pem") or "",
+        "signing_key_id": data.get("signing_key_id") or "",
+    }
+    if local_only and _existing is not None and _existing.api_key:
+        # One install, one owner: pair-local refuses while any entry exists,
+        # so this should not happen. Should it, the cloud identity stays:
+        # replacing its api_key and keypair would cut the cloud entry off.
+        _LOGGER.warning(
+            "Local-only entry %s found a cloud identity in the keystore; keeping it",
+            entry.entry_id,
+        )
+        _identity = {
+            "api_key": _existing.api_key,
+            "public_key_hex": _existing.public_key_hex,
+            "private_key_pem": _existing.private_key_pem,
+            "signing_key_id": _existing.signing_key_id,
+        }
     await keystore.save(
-        api_key=data["api_key"],
-        public_key_hex=data["public_key_hex"],
-        private_key_pem=data["private_key_pem"],
-        signing_key_id=data["signing_key_id"],
+        **_identity,
         trusted_key_ids=_trusted_key_ids,
         trusted_public_keys_hex=_trusted_public_keys_hex,
     )
@@ -689,6 +719,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             )
         hass.config_entries.async_update_entry(entry, data=_new_data)
         data = entry.data
+    # What a LAN pairing granted: same once-only adoption as the island key
+    # above, for the same reason.
+    if data.get(LOCAL_PAIRING_GRANT):
+        await _adopt_local_pairing_grant(hass, entry, keystore)
+        data = entry.data
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN]["keystore"] = keystore
 
@@ -717,6 +752,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "cloud_ingest_enabled",
         entry.options.get("cloud_ingest_enabled", True),
     )
+    if local_only:
+        # Nothing to upload to: there is no cloud account behind this entry.
+        cloud_ingest_enabled = False
 
     if inverters:
         active_ids = {inv["inverter_id"] for inv in inverters}
@@ -743,7 +781,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             cloud_ingest_enabled=cloud_ingest_enabled,
             discharge_positive_ids=discharge_positive_ids,
             control=control,
-            device_id=entry.data.get("edge_device_id"),
+            # A local-only entry has no edge device. Its own id still scopes
+            # the lifecycle rows, so a `deprovisioned` left by an earlier
+            # cloud pairing on this install cannot stop it.
+            device_id=entry.data.get("edge_device_id")
+            or (f"local:{entry.entry_id}" if local_only else None),
         )
         # A deprovisioned device's island keys go with it (issue #6): the
         # household no longer owns this add-on, so the phones it paired must
@@ -774,7 +816,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Refresh entity_map from preset before starting the publisher so the
     # publisher always uses the most up-to-date field mappings. Skip when
     # deprovisioned (no loops will start anyway). Fail-open: never blocks setup.
-    if loops_active:
+    # A local-only entry has no cloud to refresh from; its entity_map came
+    # from the bundled preset at pairing.
+    if loops_active and not local_only:
 
         async def _fetch_preset(pid):
             return await api_client.get_preset(pid)
@@ -804,6 +848,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     settings_sync_task = None
 
     if loops_active:
+        spec_store = RegisterSpecStore(hass)
         for inv in inverters:
             inverter_id = inv["inverter_id"]
             harvest_config = inv.get("harvest_config")
@@ -818,14 +863,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 # Direct-Modbus harvest path (SP-B): poll the inverter itself
                 # via the register spec instead of reading HA entities. Load the
                 # spec once at setup (SP-D revisits periodic refresh) into a tiny
-                # mutable holder the loop re-reads each tick. Fail-open: a failed
-                # load leaves spec=None and the loop idles until a spec exists.
+                # mutable holder the loop re-reads each tick. The cloud comes
+                # first and every answer is saved; without the cloud the saved
+                # copy or the bundled one runs the loop. Fail-open: no spec from
+                # any source leaves spec=None and the loop idles.
                 spec_holder = SimpleNamespace(spec=None)
                 try:
-                    spec_dict, _changed = await load_spec(
-                        api_client.get_register_spec,
+                    spec_dict = await resolve_register_spec(
+                        hass,
                         harvest_config["model_id"],
-                        cached=None,
+                        fetch=None if local_only else api_client.get_register_spec,
+                        store=spec_store,
                     )
                     # build_spec parses AND validates, and surfaces any problem
                     # at ERROR + on the diagnostics sensor. A spec this add-on
@@ -895,6 +943,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         config=dict(inv.get("command_config") or {}),
                     )
 
+    if loops_active and not local_only:
+        # The cloud loops. A local-only entry has no API key to poll with, no
+        # MQTT broker credentials and no cloud settings mirror, so it starts
+        # none of them; signed commands reach it over the LAN instead
+        # (POST /api/svitgrid/commands).
         wake_event = asyncio.Event()
         command_task = hass.async_create_background_task(
             run_command_loop(
@@ -960,6 +1013,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             name="svitgrid_settings_sync",
         )
 
+    if loops_active:
         # Island event scheduler — spawned ONLY in pure island mode (cloud-sync off).
         # With cloud_ingest_enabled=True the cloud engine handles calendar events;
         # running both would double-fire commands.
@@ -1125,6 +1179,54 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return True
 
 
+async def _adopt_local_pairing_grant(
+    hass: HomeAssistant, entry: ConfigEntry, keystore: SvitgridKeystore
+) -> None:
+    """Move what `POST /api/svitgrid/pair-local` granted into the keystore.
+
+    The grant names the app's island key under its device id, with its label,
+    and the signing key it proved it holds. The island key joins the roster
+    beside any other device's, and the signing key joins the trusted keys
+    beside any trusted earlier: a second pairing on one install must not
+    revoke the first.
+
+    The grant then leaves `entry.data`, and the device id is recorded so
+    removing the entry revokes it (issue #6). Setup runs on every reload, so a
+    grant left behind would re-add a key the owner revoked.
+    """
+    grant = dict(entry.data.get(LOCAL_PAIRING_GRANT) or {})
+    device_id = grant.get("deviceId")
+    island_key = grant.get("islandKey")
+    if device_id and island_key:
+        await keystore.async_add_island_key(
+            device_id,
+            island_key,
+            label=grant.get("deviceLabel"),
+            paired_at=grant.get("pairedAt"),
+        )
+    key_id = grant.get("signingKeyId")
+    public_key_hex = grant.get("publicKeyHex")
+    if key_id and public_key_hex:
+        state = await keystore.load()
+        trusted = dict(state.trusted_public_keys_hex) if state is not None else {}
+        trusted[key_id] = public_key_hex
+        await keystore.update_trusted_keys_hex(trusted)
+    new_data = {k: v for k, v in entry.data.items() if k != LOCAL_PAIRING_GRANT}
+    if key_id and public_key_hex:
+        # Recorded so removing the entry untrusts it again.
+        new_data[ENTRY_TRUSTED_KEY_IDS] = sorted(
+            {*(entry.data.get(ENTRY_TRUSTED_KEY_IDS) or []), key_id}
+        )
+    if device_id and island_key:
+        new_data[ENTRY_ISLAND_DEVICE_IDS] = sorted(
+            {*(entry.data.get(ENTRY_ISLAND_DEVICE_IDS) or []), device_id}
+        )
+    # Runs before the update listener is registered, so this write does not
+    # reload the entry.
+    hass.config_entries.async_update_entry(entry, data=new_data)
+    _LOGGER.info("Adopted the LAN pairing grant of entry %s (device %s)", entry.entry_id, device_id)
+
+
 async def _revoke_entry_island_keys(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Revoke the island keys `entry` adopted at pairing (issue #6).
 
@@ -1170,6 +1272,31 @@ async def _revoke_entry_island_keys(hass: HomeAssistant, entry: ConfigEntry) -> 
         _LOGGER.exception("Could not revoke the island keys of config entry %s", entry.entry_id)
 
 
+async def _untrust_entry_signing_keys(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Untrust the signing keys a LAN pairing trusted for this entry.
+
+    The trusted keys belong to the install, not the entry, so a key left
+    behind could still sign commands for whatever is paired here next. Only
+    the ids this entry recorded are removed. Never raises.
+    """
+    key_ids = set(entry.data.get(ENTRY_TRUSTED_KEY_IDS) or [])
+    if not key_ids:
+        return
+    try:
+        keystore = hass.data.get(DOMAIN, {}).get("keystore") or SvitgridKeystore(hass)
+        state = await keystore.load()
+        if state is None:
+            return
+        trusted = {k: v for k, v in state.trusted_public_keys_hex.items() if k not in key_ids}
+        if trusted != state.trusted_public_keys_hex:
+            await keystore.update_trusted_keys_hex(trusted)
+            _LOGGER.info("Untrusted the signing key(s) of config entry %s", entry.entry_id)
+    except Exception:  # noqa: BLE001
+        _LOGGER.exception("Could not untrust the signing keys of config entry %s", entry.entry_id)
+
+
 async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """The entry is being deleted: revoke the island keys it adopted."""
+    """The entry is being deleted: revoke the island keys it adopted, and for
+    a LAN pairing, untrust the app's signing key."""
     await _revoke_entry_island_keys(hass, entry)
+    await _untrust_entry_signing_keys(hass, entry)

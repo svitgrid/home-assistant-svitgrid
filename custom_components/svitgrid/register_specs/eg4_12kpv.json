@@ -1,0 +1,318 @@
+{
+  "modelId": "eg4_12kpv",
+  "version": 1,
+  "source": "generated",
+  "verified": false,
+  "protocol": "modbus_tcp",
+  "port": 8899,
+  "defaultSlaveId": 1,
+  "flags": {
+    "usesInputRegisters": true
+  },
+  "reads": [
+    {
+      "field": "batterySoc",
+      "address": 5,
+      "functionCode": "FC04",
+      "mask": 255
+    },
+    {
+      "field": "batteryVoltage",
+      "address": 4,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "batteryCurrent",
+      "address": 98,
+      "signed": true,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "batteryTemperature",
+      "address": 67,
+      "signed": true,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "batteryChargePower",
+      "address": 10,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "batteryDischargePower",
+      "address": 11,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "gridImportPower",
+      "address": 27,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "gridExportPower",
+      "address": 26,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "gridVoltageL1",
+      "address": 193,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "gridVoltageL2",
+      "address": 194,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "gridFrequency",
+      "address": 15,
+      "scale": 0.01,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "loadPower",
+      "address": 170,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv1Voltage",
+      "address": 1,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv2Voltage",
+      "address": 2,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv3Voltage",
+      "address": 3,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv1Power",
+      "address": 7,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv2Power",
+      "address": 8,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv3Power",
+      "address": 9,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "dailyPv1Energy",
+      "address": 28,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "dailyPv2Energy",
+      "address": 29,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "dailyPv3Energy",
+      "address": 30,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "dailyGridImportEnergy",
+      "address": 37,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "dailyGridExportEnergy",
+      "address": 36,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "dailyLoadEnergy",
+      "address": 171,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "dailyBatteryChargeEnergy",
+      "address": 33,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "dailyBatteryDischargeEnergy",
+      "address": 34,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "bmsChargeCurrentLimit",
+      "address": 81,
+      "scale": 0.01,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "bmsDischargeCurrentLimit",
+      "address": 82,
+      "scale": 0.01,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "generatorPower",
+      "address": 123,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "generatorVoltage",
+      "address": 121,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "generatorFrequency",
+      "address": 122,
+      "scale": 0.01,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "dailyGeneratorEnergy",
+      "address": 124,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    }
+  ],
+  "derivations": [
+    {
+      "field": "batteryDischargePower",
+      "op": "negate",
+      "inputs": [
+        "batteryDischargePower"
+      ]
+    },
+    {
+      "field": "batteryPower",
+      "op": "builtin",
+      "inputs": [
+        "batteryChargePower",
+        "batteryDischargePower"
+      ],
+      "builtin": "battery_sign_normalize"
+    },
+    {
+      "field": "gridExportPower",
+      "op": "negate",
+      "inputs": [
+        "gridExportPower"
+      ]
+    },
+    {
+      "field": "gridPower",
+      "op": "builtin",
+      "inputs": [
+        "gridImportPower",
+        "gridExportPower"
+      ],
+      "builtin": "grid_sign_normalize"
+    },
+    {
+      "field": "dailyPvEnergy",
+      "op": "sum",
+      "inputs": [
+        "dailyPv1Energy",
+        "dailyPv2Energy",
+        "dailyPv3Energy"
+      ]
+    },
+    {
+      "field": "batteryTemperature",
+      "op": "builtin",
+      "inputs": [
+        "batteryTemperature"
+      ],
+      "builtin": "battery_temp_clamp"
+    },
+    {
+      "field": "totalPvPower",
+      "op": "sum",
+      "inputs": [
+        "pv1Power",
+        "pv2Power",
+        "pv3Power"
+      ]
+    }
+  ],
+  "writes": [],
+  "transport": "modbus_tcp",
+  "batches": [
+    {
+      "startRegister": 1,
+      "count": 37,
+      "functionCode": "FC04",
+      "unitId": 1
+    },
+    {
+      "startRegister": 67,
+      "count": 1,
+      "functionCode": "FC04",
+      "unitId": 1
+    },
+    {
+      "startRegister": 81,
+      "count": 18,
+      "functionCode": "FC04",
+      "unitId": 1
+    },
+    {
+      "startRegister": 121,
+      "count": 4,
+      "functionCode": "FC04",
+      "unitId": 1
+    },
+    {
+      "startRegister": 170,
+      "count": 25,
+      "functionCode": "FC04",
+      "unitId": 1
+    }
+  ],
+  "maxBatchRegisters": 40,
+  "sourceRefs": [
+    {
+      "project": "EG4 Electronics / Lux Power vendor \"Modbus RTU Protocol\" (rev V58, 2023-10-28; rev V23, 2025-06-14)",
+      "url": "https://github.com/galets/eg4-modbus-monitor/blob/master/doc/EG4-18kPV-12LV%20-%20MODBUS%20Communication%20Protocol%20.pdf",
+      "retrievedAt": "2026-08-17",
+      "independentOf": "luxpower_vendor_modbus_pdf"
+    },
+    {
+      "project": "galets/eg4-modbus-monitor (live EG4 18kPV over wired RS-485)",
+      "url": "https://github.com/galets/eg4-modbus-monitor/blob/master/src/registers-18kpv.yaml",
+      "retrievedAt": "2026-08-17",
+      "independentOf": "luxpower_vendor_modbus_pdf"
+    },
+    {
+      "project": "joyfulhouse/eg4_web_monitor (RAW live register dump, 18kPV + FlexBOSS21)",
+      "url": "https://github.com/joyfulhouse/eg4_web_monitor/blob/main/docs/reference/firmware/re/REGISTER_MAP_LIVE_PROBE.md",
+      "retrievedAt": "2026-08-17"
+    },
+    {
+      "project": "poldim/EG4-Inverter-Modbus (live EG4 12kPV over Modbus TCP through an RS-485 gateway)",
+      "url": "https://github.com/poldim/EG4-Inverter-Modbus/blob/main/custom_components/eg4_inverter_modbus/hub.py",
+      "retrievedAt": "2026-08-17"
+    }
+  ],
+  "confidence": "dual_source"
+}

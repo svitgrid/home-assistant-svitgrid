@@ -1,0 +1,185 @@
+{
+  "modelId": "solplanet_asw110k_lt",
+  "version": 1,
+  "source": "hand-authored",
+  "verified": false,
+  "protocol": "modbus_tcp",
+  "port": 9999,
+  "defaultSlaveId": 239,
+  "flags": {
+    "pvPowerFromVoltageCurrent": true,
+    "batteryPositiveIsDischarge": true,
+    "dailyGridUnavailable": true,
+    "usesInputRegisters": true
+  },
+  "reads": [
+    {
+      "field": "gridVoltageL1",
+      "address": 1358,
+      "scale": 0.1,
+      "unitId": 239,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "gridVoltageL2",
+      "address": 1360,
+      "scale": 0.1,
+      "unitId": 239,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "gridVoltageL3",
+      "address": 1362,
+      "scale": 0.1,
+      "unitId": 239,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "gridFrequency",
+      "address": 1367,
+      "scale": 0.01,
+      "unitId": 239,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv1Voltage",
+      "address": 1318,
+      "scale": 0.1,
+      "unitId": 239,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv1Current",
+      "address": 1319,
+      "scale": 0.01,
+      "unitId": 239,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv2Voltage",
+      "address": 1320,
+      "scale": 0.1,
+      "unitId": 239,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv2Current",
+      "address": 1321,
+      "scale": 0.01,
+      "unitId": 239,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv3Voltage",
+      "address": 1322,
+      "scale": 0.1,
+      "unitId": 239,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv3Current",
+      "address": 1323,
+      "scale": 0.01,
+      "unitId": 239,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv4Voltage",
+      "address": 1324,
+      "scale": 0.1,
+      "unitId": 239,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv4Current",
+      "address": 1325,
+      "scale": 0.01,
+      "unitId": 239,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "dailyPvEnergy",
+      "address": 1302,
+      "words": 2,
+      "scale": 0.1,
+      "unitId": 239,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "runningState",
+      "address": 1308,
+      "unitId": 239,
+      "functionCode": "FC04"
+    }
+  ],
+  "derivations": [
+    {
+      "field": "pv1Power",
+      "op": "builtin",
+      "inputs": [
+        "pv1Voltage",
+        "pv1Current"
+      ],
+      "builtin": "pv_power_from_vi"
+    },
+    {
+      "field": "pv2Power",
+      "op": "builtin",
+      "inputs": [
+        "pv2Voltage",
+        "pv2Current"
+      ],
+      "builtin": "pv_power_from_vi"
+    },
+    {
+      "field": "pv3Power",
+      "op": "builtin",
+      "inputs": [
+        "pv3Voltage",
+        "pv3Current"
+      ],
+      "builtin": "pv_power_from_vi"
+    },
+    {
+      "field": "pv4Power",
+      "op": "builtin",
+      "inputs": [
+        "pv4Voltage",
+        "pv4Current"
+      ],
+      "builtin": "pv_power_from_vi"
+    },
+    {
+      "field": "totalPvPower",
+      "op": "sum",
+      "inputs": [
+        "pv1Power",
+        "pv2Power",
+        "pv3Power",
+        "pv4Power"
+      ]
+    },
+    {
+      "field": "dailyGridImportEnergy",
+      "op": "builtin",
+      "inputs": [],
+      "builtin": "daily_grid_unavailable"
+    },
+    {
+      "field": "dailyGridExportEnergy",
+      "op": "builtin",
+      "inputs": [],
+      "builtin": "daily_grid_unavailable"
+    }
+  ],
+  "writes": [],
+  "transport": "modbus_tcp",
+  "sourceRefs": [
+    {
+      "project": "AISWEI Ai-logger Modbus TCP (UM0058 V03)",
+      "url": "https://solplanet.net/wp-content/uploads/2024/04/UM0058_Ai-logger-Modbus-TCP_EN_V03_0424.pdf",
+      "retrievedAt": "2026-08-15"
+    }
+  ],
+  "confidence": "single_source"
+}

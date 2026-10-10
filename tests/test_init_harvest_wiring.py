@@ -130,11 +130,12 @@ async def test_harvest_config_spawns_direct_harvest_loop_not_entity_loop(
 
 @pytest.mark.asyncio
 async def test_spec_load_failure_does_not_crash_setup(hass, enable_custom_integrations):
-    """load_spec is fail-open: a failed spec fetch leaves spec_holder.spec=None
-    and setup still completes (the loop idles until a spec exists)."""
+    """load_spec is fail-open: a failed spec fetch for a model with no saved or
+    bundled copy leaves spec_holder.spec=None and setup still completes (the
+    loop idles until a spec exists)."""
     from custom_components.svitgrid import async_setup_entry
 
-    entry = _make_entry({"model_id": "deye_sg04lp3", "host": "10.0.0.5"})
+    entry = _make_entry({"model_id": "unbundled_model", "host": "10.0.0.5"})
     entry.add_to_hass(hass)
 
     with (
@@ -164,6 +165,79 @@ async def test_spec_load_failure_does_not_crash_setup(hass, enable_custom_integr
     assert harvest.call_count == 1
     # Fail-open: holder.spec stays None, loop tolerates it.
     assert harvest.call_args.kwargs["spec_holder"].spec is None
+
+
+@pytest.mark.asyncio
+async def test_an_unreachable_cloud_harvests_with_the_bundled_spec(
+    hass, enable_custom_integrations
+):
+    """Without the cloud, a bundled model still gets a spec, so the harvest
+    loop reads instead of idling."""
+    from custom_components.svitgrid import async_setup_entry
+    from custom_components.svitgrid.harvest.register_spec import RegisterSpec
+
+    entry = _make_entry({"model_id": "deye_sg04lp3", "host": "10.0.0.5"})
+    entry.add_to_hass(hass)
+
+    with (
+        patch("custom_components.svitgrid.run_readings_loop", new_callable=AsyncMock),
+        patch(
+            "custom_components.svitgrid.run_direct_harvest_loop", new_callable=AsyncMock
+        ) as harvest,
+        patch("custom_components.svitgrid.run_command_loop", new_callable=AsyncMock),
+        patch("custom_components.svitgrid.run_mqtt_wake_loop", new_callable=AsyncMock),
+        patch("custom_components.svitgrid.run_sender_loop", new_callable=AsyncMock),
+        patch("custom_components.svitgrid.register_views"),
+        patch("custom_components.svitgrid.register_panel", new_callable=AsyncMock),
+        patch("custom_components.svitgrid.remove_panel"),
+        patch.object(
+            hass.config_entries, "async_forward_entry_setups", AsyncMock(return_value=True)
+        ),
+        patch("custom_components.svitgrid.SvitgridApiClient") as mock_cls,
+    ):
+        client = mock_cls.return_value
+        client.get_register_spec = AsyncMock(side_effect=RuntimeError("network"))
+        client.get_preset = AsyncMock(return_value=None)
+
+        ok = await async_setup_entry(hass, entry)
+        await hass.async_block_till_done()
+
+    assert ok is True
+    spec = harvest.call_args.kwargs["spec_holder"].spec
+    assert isinstance(spec, RegisterSpec)
+    assert spec.model_id == "deye_sg04lp3"
+
+
+@pytest.mark.asyncio
+async def test_a_fetched_spec_is_saved_for_the_next_start(hass, enable_custom_integrations):
+    from custom_components.svitgrid import async_setup_entry
+    from custom_components.svitgrid.harvest.spec_source import RegisterSpecStore
+
+    entry = _make_entry({"model_id": "deye_sg04lp3", "host": "10.0.0.5"})
+    entry.add_to_hass(hass)
+
+    with (
+        patch("custom_components.svitgrid.run_readings_loop", new_callable=AsyncMock),
+        patch("custom_components.svitgrid.run_direct_harvest_loop", new_callable=AsyncMock),
+        patch("custom_components.svitgrid.run_command_loop", new_callable=AsyncMock),
+        patch("custom_components.svitgrid.run_mqtt_wake_loop", new_callable=AsyncMock),
+        patch("custom_components.svitgrid.run_sender_loop", new_callable=AsyncMock),
+        patch("custom_components.svitgrid.register_views"),
+        patch("custom_components.svitgrid.register_panel", new_callable=AsyncMock),
+        patch("custom_components.svitgrid.remove_panel"),
+        patch.object(
+            hass.config_entries, "async_forward_entry_setups", AsyncMock(return_value=True)
+        ),
+        patch("custom_components.svitgrid.SvitgridApiClient") as mock_cls,
+    ):
+        client = mock_cls.return_value
+        client.get_register_spec = AsyncMock(return_value=dict(_MINIMAL_SPEC))
+        client.get_preset = AsyncMock(return_value=None)
+
+        assert await async_setup_entry(hass, entry) is True
+        await hass.async_block_till_done()
+
+    assert await RegisterSpecStore(hass).async_get("deye_sg04lp3") == _MINIMAL_SPEC
 
 
 @pytest.mark.asyncio

@@ -1,0 +1,149 @@
+{
+  "modelId": "afore_bnt_t6_24k",
+  "version": 1,
+  "source": "generated",
+  "verified": false,
+  "protocol": "solarman_v5",
+  "port": 8899,
+  "defaultSlaveId": 1,
+  "flags": {
+    "batteryPositiveIsDischarge": true,
+    "dailyGridUnavailable": true,
+    "usesInputRegisters": true
+  },
+  "reads": [
+    {
+      "field": "gridVoltageL1",
+      "address": 507,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "gridVoltageL2",
+      "address": 508,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "gridVoltageL3",
+      "address": 509,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "gridFrequency",
+      "address": 513,
+      "scale": 0.01,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv1Voltage",
+      "address": 555,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv1Current",
+      "address": 556,
+      "scale": 0.01,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv2Voltage",
+      "address": 558,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv2Current",
+      "address": 559,
+      "scale": 0.01,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv3Voltage",
+      "address": 561,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv3Current",
+      "address": 562,
+      "scale": 0.01,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv4Voltage",
+      "address": 564,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv4Current",
+      "address": 565,
+      "scale": 0.01,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv1Power",
+      "address": 557,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv2Power",
+      "address": 560,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv3Power",
+      "address": 563,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv4Power",
+      "address": 566,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "dailyPvEnergy",
+      "address": 1006,
+      "words": 2,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    }
+  ],
+  "derivations": [
+    {
+      "field": "totalPvPower",
+      "op": "sum",
+      "inputs": [
+        "pv1Power",
+        "pv2Power",
+        "pv3Power",
+        "pv4Power"
+      ]
+    },
+    {
+      "field": "dailyGridImportEnergy",
+      "op": "builtin",
+      "inputs": [],
+      "builtin": "daily_grid_unavailable"
+    },
+    {
+      "field": "dailyGridExportEnergy",
+      "op": "builtin",
+      "inputs": [],
+      "builtin": "daily_grid_unavailable"
+    }
+  ],
+  "writes": [],
+  "transport": "solarman_v5",
+  "sourceRefs": [
+    {
+      "project": "Afore vendor T6 communication protocol V1.0 (2021-11-09)",
+      "url": "https://github.com/user-attachments/files/17139137/211208.-.Afore.T6.communication.protocol.V1.0-211109.xlsx",
+      "retrievedAt": "2026-08-17"
+    }
+  ],
+  "confidence": "single_source"
+}

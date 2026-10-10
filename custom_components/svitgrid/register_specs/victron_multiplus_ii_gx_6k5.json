@@ -1,0 +1,155 @@
+{
+  "modelId": "victron_multiplus_ii_gx_6k5",
+  "version": 1,
+  "source": "generated",
+  "verified": false,
+  "protocol": "modbus_tcp",
+  "port": 502,
+  "defaultSlaveId": 1,
+  "flags": {
+    "dailyGridUnavailable": true
+  },
+  "reads": [
+    {
+      "field": "batterySoc",
+      "address": 843,
+      "unitId": 100
+    },
+    {
+      "field": "batteryVoltage",
+      "address": 840,
+      "scale": 0.1,
+      "unitId": 100
+    },
+    {
+      "field": "batteryPower",
+      "address": 842,
+      "signed": true,
+      "unitId": 100
+    },
+    {
+      "field": "batteryCurrent",
+      "address": 841,
+      "signed": true,
+      "scale": 0.1,
+      "unitId": 100
+    },
+    {
+      "field": "batteryTemperature",
+      "address": 843,
+      "signed": true,
+      "unitId": 100
+    },
+    {
+      "field": "gridPower",
+      "address": 820,
+      "signed": true,
+      "unitId": 100
+    },
+    {
+      "field": "gridVoltageL1",
+      "address": 3,
+      "scale": 0.1,
+      "unitId": 100
+    },
+    {
+      "field": "loadPower",
+      "address": 817,
+      "unitId": 100
+    },
+    {
+      "field": "pv1Voltage",
+      "address": 776,
+      "scale": 0.01,
+      "unitId": 247
+    },
+    {
+      "field": "pv1Current",
+      "address": 777,
+      "signed": true,
+      "scale": 0.1,
+      "unitId": 247
+    },
+    {
+      "field": "pv2Voltage",
+      "address": 776,
+      "scale": 0.01,
+      "unitId": 247
+    },
+    {
+      "field": "pv2Current",
+      "address": 777,
+      "signed": true,
+      "scale": 0.1,
+      "unitId": 247
+    },
+    {
+      "field": "pv1Power",
+      "address": 850,
+      "unitId": 100
+    },
+    {
+      "field": "pv2Power",
+      "address": 850,
+      "unitId": 100
+    },
+    {
+      "field": "dailyPvEnergy",
+      "address": 784,
+      "scale": 0.01,
+      "unitId": 247
+    },
+    {
+      "field": "bmsChargeCurrentLimit",
+      "address": 307,
+      "scale": 0.1,
+      "unitId": 245
+    },
+    {
+      "field": "bmsDischargeCurrentLimit",
+      "address": 308,
+      "scale": 0.1,
+      "unitId": 245
+    }
+  ],
+  "derivations": [
+    {
+      "field": "batteryPower",
+      "op": "builtin",
+      "inputs": [
+        "batteryPower"
+      ],
+      "builtin": "battery_sign_normalize"
+    },
+    {
+      "field": "batteryTemperature",
+      "op": "builtin",
+      "inputs": [
+        "batteryTemperature"
+      ],
+      "builtin": "battery_temp_clamp"
+    },
+    {
+      "field": "totalPvPower",
+      "op": "sum",
+      "inputs": [
+        "pv1Power"
+      ]
+    },
+    {
+      "field": "dailyGridImportEnergy",
+      "op": "builtin",
+      "inputs": [],
+      "builtin": "daily_grid_unavailable"
+    },
+    {
+      "field": "dailyGridExportEnergy",
+      "op": "builtin",
+      "inputs": [],
+      "builtin": "daily_grid_unavailable"
+    }
+  ],
+  "writes": [],
+  "transport": "modbus_tcp",
+  "confidence": "extrapolated"
+}

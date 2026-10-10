@@ -1,0 +1,284 @@
+{
+  "modelId": "solax_x3_hybrid_g4_15k",
+  "version": 1,
+  "source": "generated",
+  "verified": false,
+  "protocol": "modbus_tcp",
+  "port": 8899,
+  "defaultSlaveId": 1,
+  "flags": {
+    "gridPositiveIsExport": true,
+    "usesInputRegisters": true
+  },
+  "reads": [
+    {
+      "field": "batterySoc",
+      "address": 28,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "batteryVoltage",
+      "address": 20,
+      "signed": true,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "batteryPower",
+      "address": 22,
+      "signed": true,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "batteryCurrent",
+      "address": 21,
+      "signed": true,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "batteryTemperature",
+      "address": 24,
+      "signed": true,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "gridPower",
+      "address": 70,
+      "words": 2,
+      "lowWordFirst": true,
+      "signed": true,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "gridVoltageL1",
+      "address": 202,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "gridVoltageL2",
+      "address": 203,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "gridVoltageL3",
+      "address": 204,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "gridPowerL1",
+      "address": 130,
+      "words": 2,
+      "lowWordFirst": true,
+      "signed": true,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "gridPowerL2",
+      "address": 132,
+      "words": 2,
+      "lowWordFirst": true,
+      "signed": true,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "gridPowerL3",
+      "address": 134,
+      "words": 2,
+      "lowWordFirst": true,
+      "signed": true,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "gridFrequency",
+      "address": 200,
+      "scale": 0.01,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "loadVoltageL1",
+      "address": 118,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "loadVoltageL2",
+      "address": 122,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "loadVoltageL3",
+      "address": 126,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "inverterPowerL1",
+      "address": 120,
+      "signed": true,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "inverterPowerL2",
+      "address": 124,
+      "signed": true,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "inverterPowerL3",
+      "address": 128,
+      "signed": true,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv1Voltage",
+      "address": 3,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv1Current",
+      "address": 5,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv2Voltage",
+      "address": 4,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv2Current",
+      "address": 6,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv1Power",
+      "address": 10,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv2Power",
+      "address": 11,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "dailyPvEnergy",
+      "address": 150,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "dailyGridImportEnergy",
+      "address": 154,
+      "words": 2,
+      "lowWordFirst": true,
+      "scale": 0.01,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "dailyGridExportEnergy",
+      "address": 152,
+      "words": 2,
+      "lowWordFirst": true,
+      "scale": 0.01,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "dailyBatteryChargeEnergy",
+      "address": 35,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "dailyBatteryDischargeEnergy",
+      "address": 32,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "bmsChargeCurrentLimit",
+      "address": 36,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "bmsDischargeCurrentLimit",
+      "address": 37,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    }
+  ],
+  "derivations": [
+    {
+      "field": "batteryPower",
+      "op": "builtin",
+      "inputs": [
+        "batteryPower"
+      ],
+      "builtin": "battery_sign_normalize"
+    },
+    {
+      "field": "gridPower",
+      "op": "builtin",
+      "inputs": [
+        "gridPower"
+      ],
+      "builtin": "grid_sign_normalize"
+    },
+    {
+      "field": "batteryTemperature",
+      "op": "builtin",
+      "inputs": [
+        "batteryTemperature"
+      ],
+      "builtin": "battery_temp_clamp"
+    },
+    {
+      "field": "totalPvPower",
+      "op": "sum",
+      "inputs": [
+        "pv1Power",
+        "pv2Power"
+      ]
+    },
+    {
+      "field": "loadPower",
+      "op": "builtin",
+      "inputs": [
+        "totalPvPower",
+        "batteryPower",
+        "gridPower"
+      ],
+      "builtin": "load_energy_balance"
+    }
+  ],
+  "writes": [],
+  "transport": "modbus_tcp",
+  "sourceRefs": [
+    {
+      "project": "SolaX \"Energy Storage Inverter Modbus TCP&RTU Communication protocols\" V3.21, English public version (52 pp)",
+      "url": "https://www.gbc-solino.cz/files/uploads/FAQ%20SolaX/Hybrid-X1X3-G4-ModbusTCPRTU-V3.21-English_0622-public-version.pdf",
+      "retrievedAt": "2026-08-23",
+      "independentOf": "solax_vendor_modbus_pdf"
+    },
+    {
+      "project": "evcc-io/evcc meter template (Hybrid X1/X3 G3/G4 + Qcells Q.HOME rebrand) — corroborates the grid and battery sign conventions and the little-word-first 32-bit order",
+      "url": "https://github.com/evcc-io/evcc/blob/master/templates/definition/meter/solax.yaml",
+      "retrievedAt": "2026-08-23",
+      "independentOf": "solax_vendor_modbus_pdf"
+    },
+    {
+      "project": "Live capture of SolaX X3-Hybrid G4 unit H34A15IB610126 (2026-08-23 13:35:45, site OFF-GRID) — a measurement with no document lineage",
+      "url": "https://github.com/ivanursul/svitgrid/blob/main/docs/inverter-research/captures/2026-08-23-solax-x3-hybrid-g4-h34a15ib610126.json",
+      "retrievedAt": "2026-08-23"
+    }
+  ],
+  "confidence": "dual_source"
+}

@@ -1,0 +1,28 @@
+# Svitgrid HA Preset — Anenji ANJ-6200-48PL, via its own SmartESS/EyBond WiFi collector.
+#
+# One of the EASUN/ISolar SMG II family. The add-on takes the collector over
+# and decodes registers itself, so `entityMap` is empty: no Home Assistant
+# entity is in the path. See docs/anenji-eybond-at.md.
+#
+# The MODEL DOES NOT SELECT THE REGISTER MAP. That is dispatched at runtime
+# from register 184, the protocol number, because picking a map by brand or
+# model name is what produced a wrong map for this family once already. The
+# model here sets the label the owner sees, sensible defaults below, and the
+# reading-core key that bounds validation.
+#
+# UNMEASURED. Same 6200 W rating as the single-output model, so it shares its
+# reading-core key; the 48 V parallel-capable form is the difference.
+
+id: anenji-anj-6200-48pl-smartess-v1
+version: "1"
+brand: Anenji
+model: ANJ-6200-48PL
+modelId: anenji_anj_6200
+phases: 1
+hasBattery: true
+pvStrings: 2
+protocolId: home_assistant_eybond
+
+entityMap: {}
+
+commands: []

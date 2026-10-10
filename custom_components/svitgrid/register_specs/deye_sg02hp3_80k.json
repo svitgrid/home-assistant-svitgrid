@@ -1,0 +1,483 @@
+{
+  "modelId": "deye_sg02hp3_80k",
+  "version": 1,
+  "source": "generated",
+  "verified": true,
+  "protocol": "solarman_v5",
+  "port": 8899,
+  "defaultSlaveId": 1,
+  "flags": {
+    "pvPowerFromVoltageCurrent": true,
+    "batteryPositiveIsDischarge": true
+  },
+  "reads": [
+    {
+      "field": "batterySoc",
+      "address": 588
+    },
+    {
+      "field": "batteryVoltage",
+      "address": 587,
+      "scale": 0.1
+    },
+    {
+      "field": "batteryPower",
+      "address": 590,
+      "signed": true,
+      "scale": 10.0
+    },
+    {
+      "field": "batteryCurrent",
+      "address": 591,
+      "signed": true,
+      "scale": 0.01
+    },
+    {
+      "field": "batteryTemperature",
+      "address": 586,
+      "scale": 0.1,
+      "offset": -100.0
+    },
+    {
+      "field": "gridPower",
+      "address": 625,
+      "signed": true
+    },
+    {
+      "field": "gridVoltageL1",
+      "address": 598,
+      "scale": 0.1
+    },
+    {
+      "field": "gridVoltageL2",
+      "address": 599,
+      "scale": 0.1
+    },
+    {
+      "field": "gridVoltageL3",
+      "address": 600,
+      "scale": 0.1
+    },
+    {
+      "field": "gridPowerL1",
+      "address": 622,
+      "signed": true
+    },
+    {
+      "field": "gridPowerL2",
+      "address": 623,
+      "signed": true
+    },
+    {
+      "field": "gridPowerL3",
+      "address": 624,
+      "signed": true
+    },
+    {
+      "field": "gridFrequency",
+      "address": 609,
+      "scale": 0.01
+    },
+    {
+      "field": "loadPower",
+      "address": 653,
+      "signed": true
+    },
+    {
+      "field": "loadPowerL1",
+      "address": 650,
+      "signed": true
+    },
+    {
+      "field": "loadPowerL2",
+      "address": 651,
+      "signed": true
+    },
+    {
+      "field": "loadPowerL3",
+      "address": 652,
+      "signed": true
+    },
+    {
+      "field": "loadVoltageL1",
+      "address": 644,
+      "scale": 0.1
+    },
+    {
+      "field": "loadVoltageL2",
+      "address": 645,
+      "scale": 0.1
+    },
+    {
+      "field": "loadVoltageL3",
+      "address": 646,
+      "scale": 0.1
+    },
+    {
+      "field": "inverterPowerL1",
+      "address": 633,
+      "signed": true
+    },
+    {
+      "field": "inverterPowerL2",
+      "address": 634,
+      "signed": true
+    },
+    {
+      "field": "inverterPowerL3",
+      "address": 635,
+      "signed": true
+    },
+    {
+      "field": "pv1Voltage",
+      "address": 676,
+      "scale": 0.1
+    },
+    {
+      "field": "pv1Current",
+      "address": 677,
+      "scale": 0.1
+    },
+    {
+      "field": "pv2Voltage",
+      "address": 678,
+      "scale": 0.1
+    },
+    {
+      "field": "pv2Current",
+      "address": 679,
+      "scale": 0.1
+    },
+    {
+      "field": "pv3Voltage",
+      "address": 680,
+      "scale": 0.1
+    },
+    {
+      "field": "pv3Current",
+      "address": 681,
+      "scale": 0.1
+    },
+    {
+      "field": "pv4Voltage",
+      "address": 682,
+      "scale": 0.1
+    },
+    {
+      "field": "pv4Current",
+      "address": 683,
+      "scale": 0.1
+    },
+    {
+      "field": "pv5Voltage",
+      "address": 684,
+      "scale": 0.1
+    },
+    {
+      "field": "pv5Current",
+      "address": 685,
+      "scale": 0.1
+    },
+    {
+      "field": "pv6Voltage",
+      "address": 686,
+      "scale": 0.1
+    },
+    {
+      "field": "pv6Current",
+      "address": 687,
+      "scale": 0.1
+    },
+    {
+      "field": "dailyPvEnergy",
+      "address": 529,
+      "scale": 0.1
+    },
+    {
+      "field": "dailyGridImportEnergy",
+      "address": 520,
+      "scale": 0.1
+    },
+    {
+      "field": "dailyGridExportEnergy",
+      "address": 521,
+      "scale": 0.1
+    },
+    {
+      "field": "dailyLoadEnergy",
+      "address": 526,
+      "scale": 0.1
+    },
+    {
+      "field": "dailyBatteryChargeEnergy",
+      "address": 514,
+      "scale": 0.1
+    },
+    {
+      "field": "dailyBatteryDischargeEnergy",
+      "address": 515,
+      "scale": 0.1
+    },
+    {
+      "field": "bmsChargeCurrentLimit",
+      "address": 212
+    },
+    {
+      "field": "bmsDischargeCurrentLimit",
+      "address": 213
+    },
+    {
+      "field": "batteryCorrectedAh",
+      "address": 592
+    },
+    {
+      "field": "lifetimeBatteryChargeEnergy",
+      "address": 516,
+      "words": 2,
+      "lowWordFirst": true,
+      "scale": 0.1
+    },
+    {
+      "field": "lifetimeBatteryDischargeEnergy",
+      "address": 518,
+      "words": 2,
+      "lowWordFirst": true,
+      "scale": 0.1
+    },
+    {
+      "field": "generatorPower",
+      "address": 667,
+      "signed": true
+    },
+    {
+      "field": "generatorVoltage",
+      "address": 661,
+      "scale": 0.1
+    },
+    {
+      "field": "dailyGeneratorEnergy",
+      "address": 536,
+      "scale": 0.1
+    },
+    {
+      "field": "genPortMode",
+      "address": 133
+    },
+    {
+      "field": "runningState",
+      "address": 500
+    },
+    {
+      "field": "evMaxChargePower",
+      "address": 260
+    },
+    {
+      "field": "evChargeControlPower",
+      "address": 709
+    }
+  ],
+  "derivations": [
+    {
+      "field": "batteryPower",
+      "op": "builtin",
+      "inputs": [
+        "batteryPower"
+      ],
+      "builtin": "battery_sign_normalize"
+    },
+    {
+      "field": "batteryTemperature",
+      "op": "builtin",
+      "inputs": [
+        "batteryTemperature"
+      ],
+      "builtin": "battery_temp_clamp"
+    },
+    {
+      "field": "pv1Power",
+      "op": "builtin",
+      "inputs": [
+        "pv1Voltage",
+        "pv1Current"
+      ],
+      "builtin": "pv_power_from_vi"
+    },
+    {
+      "field": "pv2Power",
+      "op": "builtin",
+      "inputs": [
+        "pv2Voltage",
+        "pv2Current"
+      ],
+      "builtin": "pv_power_from_vi"
+    },
+    {
+      "field": "pv3Power",
+      "op": "builtin",
+      "inputs": [
+        "pv3Voltage",
+        "pv3Current"
+      ],
+      "builtin": "pv_power_from_vi"
+    },
+    {
+      "field": "pv4Power",
+      "op": "builtin",
+      "inputs": [
+        "pv4Voltage",
+        "pv4Current"
+      ],
+      "builtin": "pv_power_from_vi"
+    },
+    {
+      "field": "pv5Power",
+      "op": "builtin",
+      "inputs": [
+        "pv5Voltage",
+        "pv5Current"
+      ],
+      "builtin": "pv_power_from_vi"
+    },
+    {
+      "field": "pv6Power",
+      "op": "builtin",
+      "inputs": [
+        "pv6Voltage",
+        "pv6Current"
+      ],
+      "builtin": "pv_power_from_vi"
+    },
+    {
+      "field": "totalPvPower",
+      "op": "sum",
+      "inputs": [
+        "pv1Power",
+        "pv2Power",
+        "pv3Power",
+        "pv4Power",
+        "pv5Power",
+        "pv6Power"
+      ]
+    }
+  ],
+  "writes": [
+    {
+      "command": "set_gen_force",
+      "fields": [
+        {
+          "payloadField": "on",
+          "address": 132,
+          "onValue": 1,
+          "offValue": 0
+        }
+      ]
+    },
+    {
+      "command": "set_work_mode",
+      "fields": [
+        {
+          "payloadField": "workMode",
+          "address": 142
+        }
+      ]
+    },
+    {
+      "command": "set_solar_sell",
+      "fields": [
+        {
+          "payloadField": "solarSell",
+          "address": 145,
+          "encoding": "bit:0"
+        }
+      ]
+    },
+    {
+      "command": "set_grid_charge_toggle",
+      "fields": [
+        {
+          "payloadField": "gridChargeEnabled",
+          "address": 146,
+          "encoding": "bit:0"
+        }
+      ]
+    },
+    {
+      "command": "set_gen_port_mode",
+      "fields": [
+        {
+          "payloadField": "genPortMode",
+          "address": 133
+        }
+      ]
+    },
+    {
+      "command": "set_sell_power_cap",
+      "fields": [
+        {
+          "payloadField": "sellPowerCapW",
+          "address": 143,
+          "limits": {
+            "min": 0,
+            "max": 15000
+          }
+        }
+      ]
+    },
+    {
+      "command": "set_battery_charge",
+      "slot": {
+        "indexField": "slotIndex",
+        "count": 6,
+        "stride": 1,
+        "endViaNextSlotStart": true,
+        "fields": [
+          {
+            "payloadField": "slotStart",
+            "base": 148
+          },
+          {
+            "payloadField": "slotEnd",
+            "base": 148,
+            "viaNextSlot": true
+          },
+          {
+            "payloadField": "powerLimit",
+            "base": 154
+          },
+          {
+            "payloadField": "chargeVoltage",
+            "base": 160,
+            "limits": {
+              "min": 0,
+              "max": 6500
+            }
+          },
+          {
+            "payloadField": "gridChargeSoc",
+            "base": 166,
+            "limits": {
+              "min": 0,
+              "max": 100
+            }
+          },
+          {
+            "payloadField": "gridChargeEnabled",
+            "base": 172,
+            "onValue": 1,
+            "offValue": 0,
+            "clearMask": 1
+          }
+        ]
+      }
+    }
+  ],
+  "transport": "solarman_v5",
+  "sourceRefs": [
+    {
+      "project": "svitgrid-field-verification",
+      "url": "https://github.com/ivanursul/svitgrid",
+      "retrievedAt": "2026-09-08"
+    }
+  ],
+  "confidence": "verified"
+}

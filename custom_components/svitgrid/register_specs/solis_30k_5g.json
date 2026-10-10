@@ -1,0 +1,112 @@
+{
+  "modelId": "solis_30k_5g",
+  "version": 1,
+  "source": "hand-authored",
+  "verified": false,
+  "protocol": "solarman_v5",
+  "port": 8899,
+  "defaultSlaveId": 1,
+  "flags": {
+    "pvPowerFromVoltageCurrent": true,
+    "batteryPositiveIsDischarge": true,
+    "dailyGridUnavailable": true,
+    "usesInputRegisters": true
+  },
+  "reads": [
+    {
+      "field": "gridVoltageL1",
+      "address": 3033,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "gridVoltageL2",
+      "address": 3034,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "gridVoltageL3",
+      "address": 3035,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "gridFrequency",
+      "address": 3042,
+      "scale": 0.01,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv1Voltage",
+      "address": 3021,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv1Current",
+      "address": 3022,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv2Voltage",
+      "address": 3023,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv2Current",
+      "address": 3024,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "dailyPvEnergy",
+      "address": 3014,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    }
+  ],
+  "derivations": [
+    {
+      "field": "pv1Power",
+      "op": "builtin",
+      "inputs": ["pv1Voltage", "pv1Current"],
+      "builtin": "pv_power_from_vi"
+    },
+    {
+      "field": "pv2Power",
+      "op": "builtin",
+      "inputs": ["pv2Voltage", "pv2Current"],
+      "builtin": "pv_power_from_vi"
+    },
+    {
+      "field": "totalPvPower",
+      "op": "sum",
+      "inputs": ["pv1Power", "pv2Power"]
+    },
+    {
+      "field": "dailyGridImportEnergy",
+      "op": "builtin",
+      "inputs": [],
+      "builtin": "daily_grid_unavailable"
+    },
+    {
+      "field": "dailyGridExportEnergy",
+      "op": "builtin",
+      "inputs": [],
+      "builtin": "daily_grid_unavailable"
+    }
+  ],
+  "writes": [],
+  "transport": "solarman_v5",
+  "sourceRefs": [
+    {
+      "project": "StephanJoubert/home_assistant_solarman",
+      "url": "https://github.com/StephanJoubert/home_assistant_solarman",
+      "retrievedAt": "2026-08-15"
+    }
+  ],
+  "confidence": "single_source"
+}
