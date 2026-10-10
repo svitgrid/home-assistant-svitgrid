@@ -1,0 +1,263 @@
+{
+  "modelId": "kstar_hybrid_3p_12k",
+  "version": 1,
+  "source": "generated",
+  "verified": false,
+  "protocol": "solarman_v5",
+  "port": 8899,
+  "defaultSlaveId": 1,
+  "flags": {
+    "batteryPositiveIsDischarge": true,
+    "gridPositiveIsExport": true,
+    "powerTotalsFromPhases": true,
+    "usesInputRegisters": true
+  },
+  "reads": [
+    {
+      "field": "batterySoc",
+      "address": 3066,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "batteryVoltage",
+      "address": 3063,
+      "scale": 0.01,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "batteryPower",
+      "address": 3065,
+      "signed": true,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "batteryCurrent",
+      "address": 3064,
+      "signed": true,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "batteryTemperature",
+      "address": 3067,
+      "signed": true,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "gridVoltageL1",
+      "address": 3097,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "gridVoltageL2",
+      "address": 3101,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "gridVoltageL3",
+      "address": 3105,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "gridPowerL1",
+      "address": 3100,
+      "signed": true,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "gridPowerL2",
+      "address": 3104,
+      "signed": true,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "gridPowerL3",
+      "address": 3108,
+      "signed": true,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "gridFrequency",
+      "address": 3098,
+      "scale": 0.01,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "loadPowerL1",
+      "address": 3144,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "loadPowerL2",
+      "address": 3145,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "loadPowerL3",
+      "address": 3146,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "inverterPowerL1",
+      "address": 3126,
+      "signed": true,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "inverterPowerL2",
+      "address": 3130,
+      "signed": true,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "inverterPowerL3",
+      "address": 3134,
+      "signed": true,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv1Voltage",
+      "address": 3000,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv1Current",
+      "address": 3012,
+      "signed": true,
+      "scale": 0.01,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv2Voltage",
+      "address": 3001,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv2Current",
+      "address": 3013,
+      "signed": true,
+      "scale": 0.01,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv1Power",
+      "address": 3024,
+      "signed": true,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv2Power",
+      "address": 3025,
+      "signed": true,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "dailyPvEnergy",
+      "address": 3036,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "dailyGridImportEnergy",
+      "address": 3109,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "dailyGridExportEnergy",
+      "address": 3116,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "dailyLoadEnergy",
+      "address": 3147,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "dailyBatteryChargeEnergy",
+      "address": 3301,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "dailyBatteryDischargeEnergy",
+      "address": 3294,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "bmsChargeCurrentLimit",
+      "address": 3070,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "bmsDischargeCurrentLimit",
+      "address": 3071,
+      "functionCode": "FC04"
+    }
+  ],
+  "derivations": [
+    {
+      "field": "batteryPower",
+      "op": "builtin",
+      "inputs": [
+        "batteryPower"
+      ],
+      "builtin": "battery_sign_normalize"
+    },
+    {
+      "field": "gridPower",
+      "op": "builtin",
+      "inputs": [
+        "gridPowerL1",
+        "gridPowerL2",
+        "gridPowerL3"
+      ],
+      "builtin": "grid_sign_normalize"
+    },
+    {
+      "field": "loadPower",
+      "op": "sum",
+      "inputs": [
+        "loadPowerL1",
+        "loadPowerL2",
+        "loadPowerL3"
+      ]
+    },
+    {
+      "field": "batteryTemperature",
+      "op": "builtin",
+      "inputs": [
+        "batteryTemperature"
+      ],
+      "builtin": "battery_temp_clamp"
+    },
+    {
+      "field": "totalPvPower",
+      "op": "sum",
+      "inputs": [
+        "pv1Power",
+        "pv2Power"
+      ]
+    }
+  ],
+  "writes": [],
+  "transport": "solarman_v5",
+  "sourceRefs": [
+    {
+      "project": "KSTAR vendor Modbus specification (SFT-KSE-001 V2.9.1)",
+      "url": "https://github.com/user-attachments/files/17555061/KSTAR.Hybrid.Inverter.Modbus.V2.9.1_2024.07.21.pdf",
+      "retrievedAt": "2026-08-17"
+    }
+  ],
+  "confidence": "single_source"
+}

@@ -1,0 +1,170 @@
+{
+  "modelId": "chint_cps_sce_6k",
+  "version": 1,
+  "source": "generated",
+  "verified": false,
+  "protocol": "solarman_v5",
+  "port": 8899,
+  "defaultSlaveId": 1,
+  "flags": {
+    "batteryPowerFromVoltageCurrent": true,
+    "batteryPositiveIsDischarge": true
+  },
+  "reads": [
+    {
+      "field": "batterySoc",
+      "address": 8192
+    },
+    {
+      "field": "batteryVoltage",
+      "address": 8198,
+      "scale": 0.1
+    },
+    {
+      "field": "batteryCurrent",
+      "address": 8199,
+      "words": 2,
+      "signed": true,
+      "scale": 0.01
+    },
+    {
+      "field": "batteryTemperature",
+      "address": 8193,
+      "signed": true
+    },
+    {
+      "field": "gridPower",
+      "address": 4864,
+      "words": 2,
+      "signed": true,
+      "scale": 0.1
+    },
+    {
+      "field": "gridVoltageL1",
+      "address": 4890,
+      "scale": 0.1
+    },
+    {
+      "field": "gridFrequency",
+      "address": 4920,
+      "scale": 0.01
+    },
+    {
+      "field": "loadPower",
+      "address": 4874,
+      "words": 2,
+      "signed": true,
+      "scale": 0.1
+    },
+    {
+      "field": "loadVoltageL1",
+      "address": 4899,
+      "scale": 0.1
+    },
+    {
+      "field": "pv1Voltage",
+      "address": 4112,
+      "scale": 0.1
+    },
+    {
+      "field": "pv1Current",
+      "address": 4113,
+      "scale": 0.01
+    },
+    {
+      "field": "pv2Voltage",
+      "address": 4116,
+      "scale": 0.1
+    },
+    {
+      "field": "pv2Current",
+      "address": 4117,
+      "scale": 0.01
+    },
+    {
+      "field": "pv1Power",
+      "address": 4114,
+      "words": 2,
+      "scale": 0.1
+    },
+    {
+      "field": "pv2Power",
+      "address": 4118,
+      "words": 2,
+      "scale": 0.1
+    },
+    {
+      "field": "dailyPvEnergy",
+      "address": 4135,
+      "words": 2,
+      "scale": 0.001
+    },
+    {
+      "field": "dailyGridImportEnergy",
+      "address": 4914,
+      "words": 2,
+      "scale": 0.01
+    },
+    {
+      "field": "dailyGridExportEnergy",
+      "address": 4916,
+      "words": 2,
+      "scale": 0.01
+    },
+    {
+      "field": "dailyLoadEnergy",
+      "address": 4918,
+      "words": 2,
+      "scale": 0.01
+    },
+    {
+      "field": "dailyBatteryChargeEnergy",
+      "address": 8203,
+      "words": 2,
+      "scale": 0.01
+    },
+    {
+      "field": "dailyBatteryDischargeEnergy",
+      "address": 8207,
+      "words": 2,
+      "scale": 0.01
+    }
+  ],
+  "derivations": [
+    {
+      "field": "batteryPower",
+      "op": "builtin",
+      "inputs": [
+        "batteryVoltage",
+        "batteryCurrent"
+      ],
+      "builtin": "battery_power_from_vi"
+    },
+    {
+      "field": "batteryTemperature",
+      "op": "builtin",
+      "inputs": [
+        "batteryTemperature"
+      ],
+      "builtin": "battery_temp_clamp"
+    },
+    {
+      "field": "totalPvPower",
+      "op": "sum",
+      "inputs": [
+        "pv1Power",
+        "pv2Power"
+      ]
+    }
+  ],
+  "writes": [],
+  "transport": "solarman_v5",
+  "sourceRefs": [
+    {
+      "project": "APD / CHINT OEM hybrid Modbus protocol V4.25 (via CHINT support)",
+      "url": "https://github.com/user-attachments/files/17295986/Hybrid.Modbus.Protocol.per.inverter.ibridi.pdf",
+      "retrievedAt": "2026-08-17"
+    }
+  ],
+  "confidence": "single_source"
+}

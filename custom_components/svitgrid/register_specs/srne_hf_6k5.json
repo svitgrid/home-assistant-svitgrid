@@ -1,0 +1,149 @@
+{
+  "modelId": "srne_hf_6k5",
+  "version": 1,
+  "source": "generated",
+  "verified": false,
+  "protocol": "solarman_v5",
+  "port": 8899,
+  "defaultSlaveId": 1,
+  "flags": {
+    "batteryPowerFromVoltageCurrent": true,
+    "batteryPositiveIsDischarge": true,
+    "gridPositiveIsExport": true
+  },
+  "reads": [
+    {
+      "field": "batterySoc",
+      "address": 256
+    },
+    {
+      "field": "batteryVoltage",
+      "address": 257,
+      "scale": 0.1
+    },
+    {
+      "field": "batteryCurrent",
+      "address": 258,
+      "signed": true,
+      "scale": 0.1
+    },
+    {
+      "field": "batteryTemperature",
+      "address": 259,
+      "signed": true,
+      "scale": 0.1
+    },
+    {
+      "field": "gridPower",
+      "address": 570,
+      "signed": true
+    },
+    {
+      "field": "gridVoltageL1",
+      "address": 531,
+      "scale": 0.1
+    },
+    {
+      "field": "gridFrequency",
+      "address": 533,
+      "scale": 0.01
+    },
+    {
+      "field": "loadPower",
+      "address": 539
+    },
+    {
+      "field": "pv1Voltage",
+      "address": 263,
+      "scale": 0.1
+    },
+    {
+      "field": "pv1Current",
+      "address": 264,
+      "scale": 0.1
+    },
+    {
+      "field": "pv2Voltage",
+      "address": 271,
+      "scale": 0.1
+    },
+    {
+      "field": "pv2Current",
+      "address": 272,
+      "scale": 0.1
+    },
+    {
+      "field": "pv1Power",
+      "address": 265
+    },
+    {
+      "field": "pv2Power",
+      "address": 273
+    },
+    {
+      "field": "dailyPvEnergy",
+      "address": 61487,
+      "scale": 0.1
+    },
+    {
+      "field": "dailyGridExportEnergy",
+      "address": 61484,
+      "scale": 0.1
+    },
+    {
+      "field": "dailyLoadEnergy",
+      "address": 61488,
+      "scale": 0.1
+    }
+  ],
+  "derivations": [
+    {
+      "field": "batteryPower",
+      "op": "builtin",
+      "inputs": [
+        "batteryVoltage",
+        "batteryCurrent"
+      ],
+      "builtin": "battery_power_from_vi"
+    },
+    {
+      "field": "gridPower",
+      "op": "builtin",
+      "inputs": [
+        "gridPower"
+      ],
+      "builtin": "grid_sign_normalize"
+    },
+    {
+      "field": "batteryTemperature",
+      "op": "builtin",
+      "inputs": [
+        "batteryTemperature"
+      ],
+      "builtin": "battery_temp_clamp"
+    },
+    {
+      "field": "totalPvPower",
+      "op": "sum",
+      "inputs": [
+        "pv1Power",
+        "pv2Power"
+      ]
+    }
+  ],
+  "writes": [],
+  "transport": "solarman_v5",
+  "sourceRefs": [
+    {
+      "project": "RAR/esphome-srne-inverter",
+      "url": "https://github.com/RAR/esphome-srne-inverter/blob/main/REGISTER_MAP.md",
+      "retrievedAt": "2026-08-16"
+    },
+    {
+      "project": "danzelziggy/srne-solarman",
+      "url": "https://github.com/danzelziggy/srne-solarman/blob/main/templates/srne_hesp.yaml",
+      "retrievedAt": "2026-08-16"
+    }
+  ],
+  "confidence": "dual_source"
+}

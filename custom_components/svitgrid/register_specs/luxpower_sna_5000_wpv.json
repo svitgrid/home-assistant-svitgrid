@@ -1,0 +1,235 @@
+{
+  "modelId": "luxpower_sna_5000_wpv",
+  "version": 1,
+  "source": "generated",
+  "verified": false,
+  "protocol": "modbus_tcp",
+  "port": 8899,
+  "defaultSlaveId": 1,
+  "flags": {
+    "usesInputRegisters": true
+  },
+  "reads": [
+    {
+      "field": "batterySoc",
+      "address": 5,
+      "functionCode": "FC04",
+      "mask": 255
+    },
+    {
+      "field": "batteryVoltage",
+      "address": 4,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "batteryTemperature",
+      "address": 67,
+      "signed": true,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "batteryChargePower",
+      "address": 10,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "batteryDischargePower",
+      "address": 11,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "gridImportPower",
+      "address": 27,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "gridExportPower",
+      "address": 26,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "gridVoltageL1",
+      "address": 12,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "gridFrequency",
+      "address": 15,
+      "scale": 0.01,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "loadPower",
+      "address": 170,
+      "signed": true,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv1Voltage",
+      "address": 1,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv2Voltage",
+      "address": 2,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv1Power",
+      "address": 7,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv2Power",
+      "address": 8,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "dailyPv1Energy",
+      "address": 28,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "dailyPv2Energy",
+      "address": 29,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "dailyGridImportEnergy",
+      "address": 37,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "dailyGridExportEnergy",
+      "address": 36,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "dailyLoadEnergy",
+      "address": 171,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "dailyBatteryChargeEnergy",
+      "address": 33,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "dailyBatteryDischargeEnergy",
+      "address": 34,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    }
+  ],
+  "derivations": [
+    {
+      "field": "batteryDischargePower",
+      "op": "negate",
+      "inputs": [
+        "batteryDischargePower"
+      ]
+    },
+    {
+      "field": "batteryPower",
+      "op": "builtin",
+      "inputs": [
+        "batteryChargePower",
+        "batteryDischargePower"
+      ],
+      "builtin": "battery_sign_normalize"
+    },
+    {
+      "field": "gridExportPower",
+      "op": "negate",
+      "inputs": [
+        "gridExportPower"
+      ]
+    },
+    {
+      "field": "gridPower",
+      "op": "builtin",
+      "inputs": [
+        "gridImportPower",
+        "gridExportPower"
+      ],
+      "builtin": "grid_sign_normalize"
+    },
+    {
+      "field": "dailyPvEnergy",
+      "op": "sum",
+      "inputs": [
+        "dailyPv1Energy",
+        "dailyPv2Energy"
+      ]
+    },
+    {
+      "field": "batteryTemperature",
+      "op": "builtin",
+      "inputs": [
+        "batteryTemperature"
+      ],
+      "builtin": "battery_temp_clamp"
+    },
+    {
+      "field": "totalPvPower",
+      "op": "sum",
+      "inputs": [
+        "pv1Power",
+        "pv2Power"
+      ]
+    }
+  ],
+  "writes": [],
+  "transport": "modbus_tcp",
+  "batches": [
+    {
+      "startRegister": 1,
+      "count": 37,
+      "functionCode": "FC04",
+      "unitId": 1
+    },
+    {
+      "startRegister": 67,
+      "count": 1,
+      "functionCode": "FC04",
+      "unitId": 1
+    },
+    {
+      "startRegister": 170,
+      "count": 2,
+      "functionCode": "FC04",
+      "unitId": 1
+    }
+  ],
+  "maxBatchRegisters": 40,
+  "sourceRefs": [
+    {
+      "project": "Shenzhen Lux Power Technology \"Modbus RTU Protocol\" rev V23, 2025-06-14",
+      "url": "https://github.com/OwlBawl/Luxpower-Modbus-RTU/blob/main/ModBus_protocol_updated_on_2025.06.14.pdf",
+      "retrievedAt": "2026-09-24",
+      "independentOf": "luxpower_vendor_modbus_pdf"
+    },
+    {
+      "project": "nicolaERTT/ESP32-luxpower (live LuxPower off-grid unit over RS-485, 19200 8N1, slave 1)",
+      "url": "https://github.com/nicolaERTT/ESP32-luxpower",
+      "retrievedAt": "2026-09-24",
+      "independentOf": "luxpower_vendor_modbus_pdf"
+    },
+    {
+      "project": "joyfulhouse/eg4_web_monitor (live 12000XP and SNA12K-US off-grid dumps, issues #197, #222, #544)",
+      "url": "https://github.com/joyfulhouse/eg4_web_monitor/issues/544",
+      "retrievedAt": "2026-09-24"
+    }
+  ],
+  "confidence": "single_source"
+}

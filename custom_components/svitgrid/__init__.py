@@ -52,8 +52,8 @@ from .eybond_at.setup import is_eybond_harvest, start_eybond_hub
 from .harvest.engine import run_direct_harvest_loop
 from .harvest.event_scheduler_loop import run_event_scheduler_loop
 from .harvest.read_now import ReadNowTrigger
-from .harvest.spec_cache import load_spec
 from .harvest.spec_health import build_spec
+from .harvest.spec_source import RegisterSpecStore, resolve_register_spec
 from .harvest.write_executor import WriteExecutor
 from .http_views import ensure_hello_view, register_views
 from .inverter_entry import harvest_config_from_api
@@ -804,6 +804,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     settings_sync_task = None
 
     if loops_active:
+        spec_store = RegisterSpecStore(hass)
         for inv in inverters:
             inverter_id = inv["inverter_id"]
             harvest_config = inv.get("harvest_config")
@@ -818,14 +819,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 # Direct-Modbus harvest path (SP-B): poll the inverter itself
                 # via the register spec instead of reading HA entities. Load the
                 # spec once at setup (SP-D revisits periodic refresh) into a tiny
-                # mutable holder the loop re-reads each tick. Fail-open: a failed
-                # load leaves spec=None and the loop idles until a spec exists.
+                # mutable holder the loop re-reads each tick. The cloud comes
+                # first and every answer is saved; without the cloud the saved
+                # copy or the bundled one runs the loop. Fail-open: no spec from
+                # any source leaves spec=None and the loop idles.
                 spec_holder = SimpleNamespace(spec=None)
                 try:
-                    spec_dict, _changed = await load_spec(
-                        api_client.get_register_spec,
+                    spec_dict = await resolve_register_spec(
+                        hass,
                         harvest_config["model_id"],
-                        cached=None,
+                        fetch=api_client.get_register_spec,
+                        store=spec_store,
                     )
                     # build_spec parses AND validates, and surfaces any problem
                     # at ERROR + on the diagnostics sensor. A spec this add-on

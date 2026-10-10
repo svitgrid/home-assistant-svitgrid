@@ -1,0 +1,81 @@
+{
+  "modelId": "tsun_tsol_ms400",
+  "version": 1,
+  "source": "generated",
+  "verified": false,
+  "protocol": "solarman_v5",
+  "port": 8899,
+  "defaultSlaveId": 1,
+  "flags": {
+    "batteryPositiveIsDischarge": true,
+    "dailyGridUnavailable": true
+  },
+  "reads": [
+    {
+      "field": "gridVoltageL1",
+      "address": 12297,
+      "scale": 0.1
+    },
+    {
+      "field": "gridFrequency",
+      "address": 12299,
+      "scale": 0.01
+    },
+    {
+      "field": "pv1Voltage",
+      "address": 12304,
+      "scale": 0.1
+    },
+    {
+      "field": "pv1Current",
+      "address": 12305,
+      "scale": 0.01
+    },
+    {
+      "field": "pv1Power",
+      "address": 12306,
+      "scale": 0.1
+    },
+    {
+      "field": "dailyPvEnergy",
+      "address": 12316,
+      "scale": 0.01
+    }
+  ],
+  "derivations": [
+    {
+      "field": "totalPvPower",
+      "op": "sum",
+      "inputs": [
+        "pv1Power"
+      ]
+    },
+    {
+      "field": "dailyGridImportEnergy",
+      "op": "builtin",
+      "inputs": [],
+      "builtin": "daily_grid_unavailable"
+    },
+    {
+      "field": "dailyGridExportEnergy",
+      "op": "builtin",
+      "inputs": [],
+      "builtin": "daily_grid_unavailable"
+    }
+  ],
+  "writes": [],
+  "transport": "solarman_v5",
+  "sourceRefs": [
+    {
+      "project": "davidrapan/ha-solarman",
+      "url": "https://github.com/davidrapan/ha-solarman/blob/main/custom_components/solarman/inverter_definitions/tsun_tsol-ms.yaml",
+      "retrievedAt": "2026-08-17"
+    },
+    {
+      "project": "s-allius/tsun-gen3-proxy",
+      "url": "https://github.com/s-allius/tsun-gen3-proxy/blob/main/app/src/modbus.py",
+      "retrievedAt": "2026-08-17"
+    }
+  ],
+  "confidence": "dual_source"
+}

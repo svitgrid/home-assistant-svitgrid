@@ -1,0 +1,228 @@
+{
+  "modelId": "afore_hybrid_30k",
+  "version": 1,
+  "source": "generated",
+  "verified": false,
+  "protocol": "solarman_v5",
+  "port": 8899,
+  "defaultSlaveId": 1,
+  "flags": {
+    "batteryPositiveIsDischarge": true,
+    "usesInputRegisters": true
+  },
+  "reads": [
+    {
+      "field": "batterySoc",
+      "address": 2002,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "batteryVoltage",
+      "address": 2004,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "batteryPower",
+      "address": 2007,
+      "words": 2,
+      "signed": true,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "batteryCurrent",
+      "address": 2005,
+      "signed": true,
+      "scale": 0.01,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "batteryTemperature",
+      "address": 2001,
+      "signed": true,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "gridPower",
+      "address": 535,
+      "words": 2,
+      "signed": true,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "gridVoltageL1",
+      "address": 507,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "gridVoltageL2",
+      "address": 508,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "gridVoltageL3",
+      "address": 509,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "gridFrequency",
+      "address": 513,
+      "scale": 0.01,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "loadPower",
+      "address": 547,
+      "words": 2,
+      "signed": true,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv1Voltage",
+      "address": 555,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv1Current",
+      "address": 556,
+      "scale": 0.01,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv2Voltage",
+      "address": 558,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv2Current",
+      "address": 559,
+      "scale": 0.01,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv3Voltage",
+      "address": 561,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv3Current",
+      "address": 562,
+      "scale": 0.01,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv4Voltage",
+      "address": 564,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv4Current",
+      "address": 565,
+      "scale": 0.01,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv1Power",
+      "address": 557,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv2Power",
+      "address": 560,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv3Power",
+      "address": 563,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv4Power",
+      "address": 566,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "dailyPvEnergy",
+      "address": 1006,
+      "words": 2,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "dailyGridImportEnergy",
+      "address": 1003,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "dailyGridExportEnergy",
+      "address": 1002,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "dailyLoadEnergy",
+      "address": 1004,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "dailyBatteryChargeEnergy",
+      "address": 2009,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "dailyBatteryDischargeEnergy",
+      "address": 2010,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    }
+  ],
+  "derivations": [
+    {
+      "field": "batteryPower",
+      "op": "builtin",
+      "inputs": [
+        "batteryPower"
+      ],
+      "builtin": "battery_sign_normalize"
+    },
+    {
+      "field": "batteryTemperature",
+      "op": "builtin",
+      "inputs": [
+        "batteryTemperature"
+      ],
+      "builtin": "battery_temp_clamp"
+    },
+    {
+      "field": "totalPvPower",
+      "op": "sum",
+      "inputs": [
+        "pv1Power",
+        "pv2Power",
+        "pv3Power",
+        "pv4Power"
+      ]
+    }
+  ],
+  "writes": [],
+  "transport": "solarman_v5",
+  "sourceRefs": [
+    {
+      "project": "Afore vendor register table v1.4 (2023-12-08, via Afore HQ)",
+      "url": "https://drive.usercontent.google.com/download?id=104F10aIcLQ9UhgXZ0jcbe0ol834A2JnK&export=download",
+      "retrievedAt": "2026-08-17"
+    }
+  ],
+  "confidence": "single_source"
+}

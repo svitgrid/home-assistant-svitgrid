@@ -1,0 +1,156 @@
+{
+  "modelId": "huawei_sun2000",
+  "version": 1,
+  "source": "hand-authored",
+  "verified": false,
+  "protocol": "modbus_tcp",
+  "port": 502,
+  "defaultSlaveId": 1,
+  "flags": {
+    "batteryPositiveIsDischarge": true,
+    "gridPositiveIsExport": true,
+    "dailyGridUnavailable": true
+  },
+  "reads": [
+    {
+      "field": "gridPower",
+      "address": 37113,
+      "words": 2,
+      "signed": true
+    },
+    {
+      "field": "gridVoltageL1",
+      "address": 32069,
+      "scale": 0.1
+    },
+    {
+      "field": "gridVoltageL2",
+      "address": 32070,
+      "scale": 0.1
+    },
+    {
+      "field": "gridVoltageL3",
+      "address": 32071,
+      "scale": 0.1
+    },
+    {
+      "field": "gridPowerL1",
+      "address": 37132,
+      "words": 2,
+      "signed": true
+    },
+    {
+      "field": "gridPowerL2",
+      "address": 37134,
+      "words": 2,
+      "signed": true
+    },
+    {
+      "field": "gridPowerL3",
+      "address": 37136,
+      "words": 2,
+      "signed": true
+    },
+    {
+      "field": "gridFrequency",
+      "address": 32085,
+      "scale": 0.01
+    },
+    {
+      "field": "pv1Voltage",
+      "address": 32016,
+      "signed": true,
+      "scale": 0.1
+    },
+    {
+      "field": "pv1Current",
+      "address": 32017,
+      "signed": true,
+      "scale": 0.01
+    },
+    {
+      "field": "pv2Voltage",
+      "address": 32018,
+      "signed": true,
+      "scale": 0.1
+    },
+    {
+      "field": "pv2Current",
+      "address": 32019,
+      "signed": true,
+      "scale": 0.01
+    },
+    {
+      "field": "pv3Voltage",
+      "address": 32020,
+      "signed": true,
+      "scale": 0.1
+    },
+    {
+      "field": "pv3Current",
+      "address": 32021,
+      "signed": true,
+      "scale": 0.01
+    },
+    {
+      "field": "pv4Voltage",
+      "address": 32022,
+      "signed": true,
+      "scale": 0.1
+    },
+    {
+      "field": "pv4Current",
+      "address": 32023,
+      "signed": true,
+      "scale": 0.01
+    },
+    {
+      "field": "totalPvPower",
+      "address": 32064,
+      "words": 2,
+      "signed": true
+    },
+    {
+      "field": "dailyPvEnergy",
+      "address": 32114,
+      "words": 2,
+      "scale": 0.01
+    },
+    {
+      "field": "runningState",
+      "address": 32089
+    }
+  ],
+  "derivations": [
+    {
+      "field": "gridPower",
+      "op": "builtin",
+      "inputs": [
+        "gridPower"
+      ],
+      "builtin": "grid_sign_normalize"
+    },
+    {
+      "field": "dailyGridImportEnergy",
+      "op": "builtin",
+      "inputs": [],
+      "builtin": "daily_grid_unavailable"
+    },
+    {
+      "field": "dailyGridExportEnergy",
+      "op": "builtin",
+      "inputs": [],
+      "builtin": "daily_grid_unavailable"
+    }
+  ],
+  "writes": [],
+  "transport": "modbus_tcp",
+  "sourceRefs": [
+    {
+      "project": "Huawei SUN2000 Modbus Interface Definitions",
+      "url": "https://support.huawei.com/enterprise/en/doc/EDOC1100050690",
+      "retrievedAt": "2026-08-15"
+    }
+  ],
+  "confidence": "single_source"
+}

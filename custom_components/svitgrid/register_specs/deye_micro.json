@@ -1,0 +1,141 @@
+{
+  "modelId": "deye_micro",
+  "version": 1,
+  "source": "generated",
+  "verified": true,
+  "protocol": "solarman_v5",
+  "port": 8899,
+  "defaultSlaveId": 1,
+  "flags": {
+    "pvPowerFromVoltageCurrent": true,
+    "batteryPositiveIsDischarge": true,
+    "dailyGridUnavailable": true
+  },
+  "reads": [
+    {
+      "field": "gridVoltageL1",
+      "address": 73,
+      "scale": 0.1
+    },
+    {
+      "field": "gridFrequency",
+      "address": 79,
+      "scale": 0.01
+    },
+    {
+      "field": "pv1Voltage",
+      "address": 109,
+      "scale": 0.1
+    },
+    {
+      "field": "pv1Current",
+      "address": 110,
+      "scale": 0.1
+    },
+    {
+      "field": "pv2Voltage",
+      "address": 111,
+      "scale": 0.1
+    },
+    {
+      "field": "pv2Current",
+      "address": 112,
+      "scale": 0.1
+    },
+    {
+      "field": "pv3Voltage",
+      "address": 113,
+      "scale": 0.1
+    },
+    {
+      "field": "pv3Current",
+      "address": 114,
+      "scale": 0.1
+    },
+    {
+      "field": "pv4Voltage",
+      "address": 115,
+      "scale": 0.1
+    },
+    {
+      "field": "pv4Current",
+      "address": 116,
+      "scale": 0.1
+    },
+    {
+      "field": "dailyPvEnergy",
+      "address": 60,
+      "scale": 0.1
+    }
+  ],
+  "derivations": [
+    {
+      "field": "pv1Power",
+      "op": "builtin",
+      "inputs": [
+        "pv1Voltage",
+        "pv1Current"
+      ],
+      "builtin": "pv_power_from_vi"
+    },
+    {
+      "field": "pv2Power",
+      "op": "builtin",
+      "inputs": [
+        "pv2Voltage",
+        "pv2Current"
+      ],
+      "builtin": "pv_power_from_vi"
+    },
+    {
+      "field": "pv3Power",
+      "op": "builtin",
+      "inputs": [
+        "pv3Voltage",
+        "pv3Current"
+      ],
+      "builtin": "pv_power_from_vi"
+    },
+    {
+      "field": "pv4Power",
+      "op": "builtin",
+      "inputs": [
+        "pv4Voltage",
+        "pv4Current"
+      ],
+      "builtin": "pv_power_from_vi"
+    },
+    {
+      "field": "totalPvPower",
+      "op": "sum",
+      "inputs": [
+        "pv1Power",
+        "pv2Power",
+        "pv3Power",
+        "pv4Power"
+      ]
+    },
+    {
+      "field": "dailyGridImportEnergy",
+      "op": "builtin",
+      "inputs": [],
+      "builtin": "daily_grid_unavailable"
+    },
+    {
+      "field": "dailyGridExportEnergy",
+      "op": "builtin",
+      "inputs": [],
+      "builtin": "daily_grid_unavailable"
+    }
+  ],
+  "writes": [],
+  "transport": "solarman_v5",
+  "sourceRefs": [
+    {
+      "project": "svitgrid-field-verification",
+      "url": "https://github.com/ivanursul/svitgrid",
+      "retrievedAt": "2026-09-08"
+    }
+  ],
+  "confidence": "verified"
+}

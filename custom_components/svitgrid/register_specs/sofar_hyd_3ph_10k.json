@@ -1,0 +1,181 @@
+{
+  "modelId": "sofar_hyd_3ph_10k",
+  "version": 1,
+  "source": "generated",
+  "verified": false,
+  "protocol": "solarman_v5",
+  "port": 8899,
+  "defaultSlaveId": 1,
+  "flags": {
+    "batteryPositiveIsDischarge": true
+  },
+  "reads": [
+    {
+      "field": "batterySoc",
+      "address": 1544
+    },
+    {
+      "field": "batteryVoltage",
+      "address": 1540,
+      "scale": 0.1
+    },
+    {
+      "field": "batteryPower",
+      "address": 1542,
+      "signed": true,
+      "scale": 10.0
+    },
+    {
+      "field": "batteryCurrent",
+      "address": 1541,
+      "signed": true,
+      "scale": 0.01
+    },
+    {
+      "field": "batteryTemperature",
+      "address": 1543,
+      "signed": true
+    },
+    {
+      "field": "gridPower",
+      "address": 1160,
+      "signed": true,
+      "scale": 10.0
+    },
+    {
+      "field": "gridVoltageL1",
+      "address": 1165,
+      "scale": 0.1
+    },
+    {
+      "field": "gridVoltageL2",
+      "address": 1176,
+      "scale": 0.1
+    },
+    {
+      "field": "gridVoltageL3",
+      "address": 1187,
+      "scale": 0.1
+    },
+    {
+      "field": "gridFrequency",
+      "address": 1156,
+      "scale": 0.01
+    },
+    {
+      "field": "loadPower",
+      "address": 1199,
+      "signed": true,
+      "scale": 10.0
+    },
+    {
+      "field": "pv1Voltage",
+      "address": 1412,
+      "scale": 0.1
+    },
+    {
+      "field": "pv1Current",
+      "address": 1413,
+      "scale": 0.01
+    },
+    {
+      "field": "pv2Voltage",
+      "address": 1415,
+      "scale": 0.1
+    },
+    {
+      "field": "pv2Current",
+      "address": 1416,
+      "scale": 0.01
+    },
+    {
+      "field": "pv1Power",
+      "address": 1414,
+      "scale": 10.0
+    },
+    {
+      "field": "pv2Power",
+      "address": 1417,
+      "scale": 10.0
+    },
+    {
+      "field": "dailyPvEnergy",
+      "address": 1668,
+      "words": 2,
+      "scale": 0.01
+    },
+    {
+      "field": "dailyGridImportEnergy",
+      "address": 1676,
+      "words": 2,
+      "scale": 0.01
+    },
+    {
+      "field": "dailyGridExportEnergy",
+      "address": 1680,
+      "words": 2,
+      "scale": 0.01
+    },
+    {
+      "field": "dailyLoadEnergy",
+      "address": 1672,
+      "words": 2,
+      "scale": 0.01
+    },
+    {
+      "field": "bmsChargeCurrentLimit",
+      "address": 4171,
+      "scale": 0.01
+    },
+    {
+      "field": "bmsDischargeCurrentLimit",
+      "address": 4172,
+      "scale": 0.01
+    },
+    {
+      "field": "runningState",
+      "address": 1028
+    }
+  ],
+  "derivations": [
+    {
+      "field": "batteryPower",
+      "op": "builtin",
+      "inputs": [
+        "batteryPower"
+      ],
+      "builtin": "battery_sign_normalize"
+    },
+    {
+      "field": "batteryTemperature",
+      "op": "builtin",
+      "inputs": [
+        "batteryTemperature"
+      ],
+      "builtin": "battery_temp_clamp"
+    },
+    {
+      "field": "totalPvPower",
+      "op": "sum",
+      "inputs": [
+        "pv1Power",
+        "pv2Power"
+      ]
+    }
+  ],
+  "writes": [],
+  "transport": "solarman_v5",
+  "sourceRefs": [
+    {
+      "project": "StephanJoubert/home_assistant_solarman",
+      "url": "https://github.com/StephanJoubert/home_assistant_solarman/blob/main/custom_components/solarman/inverter_definitions/sofar_g3hyd.yaml",
+      "retrievedAt": "2026-08-16"
+    },
+    {
+      "project": "wills106/homeassistant-solax-modbus",
+      "url": "https://github.com/wills106/homeassistant-solax-modbus/blob/main/custom_components/solax_modbus/plugin_sofar.py",
+      "retrievedAt": "2026-08-16"
+    }
+  ],
+  "confidence": "dual_source"
+}
