@@ -1,0 +1,27 @@
+# Svitgrid HA Preset — Victron MultiPlus-II 4 kW (via Home Assistant).
+#
+# protocolId: home_assistant. Read in HA via the Victron GX / VE.Bus
+# integrations (user-defined entity_ids) — the map below is a representative
+# starting point; the user remaps each field in HA's config flow.
+#
+# UNVERIFIED placeholders. Readings only — commands[] stays empty.
+
+id: victron-multiplus-ii-4k-v1
+version: "1"
+brand: Victron
+model: MultiPlus-II 4kW
+phases: 1
+hasBattery: true
+pvStrings: 1
+protocolId: home_assistant
+
+entityMap:
+  batterySoc: sensor.victron_battery_soc
+  batteryPower: sensor.victron_battery_power
+  batteryVoltage: sensor.victron_battery_voltage
+  pv1Power: sensor.victron_pv_power
+  gridPower: sensor.victron_grid_power
+  loadPower: sensor.victron_ac_consumption
+  dailyPvEnergy: sensor.victron_pv_yield_today
+
+commands: []

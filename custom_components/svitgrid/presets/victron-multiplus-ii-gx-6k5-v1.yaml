@@ -1,0 +1,29 @@
+# Svitgrid HA Preset — Victron MultiPlus-II GX 6.5 kW (via Home Assistant).
+#
+# protocolId: home_assistant (not Solarman). Victron is read in HA via the
+# Victron GX / VE.Bus integrations, which produce user-defined entity_ids — so
+# the map below is a representative starting point. The user remaps each field
+# to their actual sensors in HA's config flow (EntitySelector step).
+#
+# UNVERIFIED placeholders. Readings only — Victron control is not via these
+# entities, so commands[] stays empty (CLAUDE.md Pending Verification).
+
+id: victron-multiplus-ii-gx-6k5-v1
+version: "1"
+brand: Victron
+model: MultiPlus-II GX 6.5kW
+phases: 1
+hasBattery: true
+pvStrings: 1
+protocolId: home_assistant
+
+entityMap:
+  batterySoc: sensor.victron_battery_soc
+  batteryPower: sensor.victron_battery_power
+  batteryVoltage: sensor.victron_battery_voltage
+  pv1Power: sensor.victron_pv_power
+  gridPower: sensor.victron_grid_power
+  loadPower: sensor.victron_ac_consumption
+  dailyPvEnergy: sensor.victron_pv_yield_today
+
+commands: []

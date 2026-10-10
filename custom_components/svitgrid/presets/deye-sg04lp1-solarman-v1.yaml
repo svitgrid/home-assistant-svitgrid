@@ -1,0 +1,110 @@
+# Svitgrid HA Preset — Deye SG04LP1 (1-phase low-voltage hybrid).
+#
+# Solarman HACS profile: deye_hybrid.yaml.
+# Register family: 1-phase (Sunsynk1PhaseRegisters). Write registers same as the
+# other LV 1-phase hybrids: charge 256, work_mode 244, solar_sell 247,
+# grid_charge_toggle 248.
+# v2 (2026-06-25): added daily load/import/export energy mappings (Solarman today_* sensors).
+# v3 (2026-06-25): added Tier-1 telemetry (inverter/battery temp, battery current, grid frequency).
+# v4 (2026-06-25): added Tier-2 daily energy (battery charge/discharge, generator).
+# v5 (2026-06-25): added Tier-3 telemetry (today losses, load frequency, per-phase grid/load currents).
+
+# v6 (2026-08-18): added per-string PV voltage/current.
+#   The app's per-string "V / A" subline was blank on EVERY HA household —
+#   no per-string voltage/current field was mappable until now.
+
+id: deye-sg04lp1-solarman-v1
+version: "6"
+brand: Deye
+model: SG04LP1
+phases: 1
+hasBattery: true
+pvStrings: 2
+protocolId: home_assistant_solarman
+
+entityMap:
+  batterySoc: sensor.inverter_battery
+  batteryPower: sensor.inverter_battery_power
+  batteryVoltage: sensor.inverter_battery_voltage
+  pv1Power: sensor.inverter_pv1_power
+  pv2Power: sensor.inverter_pv2_power
+  # Per-string voltage/current (Solarman profile: "PV1 Voltage" /
+  # "PV1 Current" sit alongside the "PV1 Power" sensor mapped above).
+  # Feeds the app's per-string "V / A" subline on the solar detail card.
+  pv1Voltage: sensor.inverter_pv1_voltage
+  pv1Current: sensor.inverter_pv1_current
+  pv2Voltage: sensor.inverter_pv2_voltage
+  pv2Current: sensor.inverter_pv2_current
+  gridPower: sensor.inverter_grid_power
+  loadPower: sensor.inverter_load_power
+  dailyPvEnergy: sensor.inverter_today_production
+  # Daily energy counters from the Solarman hybrid profile (today_* sensors).
+  dailyLoadEnergy: sensor.inverter_today_load_consumption
+  dailyGridImportEnergy: sensor.inverter_today_energy_import
+  dailyGridExportEnergy: sensor.inverter_today_energy_export
+  gridVoltageL1: sensor.inverter_grid_voltage
+  # Tier-1 telemetry (Solarman): inverter/battery temp, battery current, grid frequency.
+  batteryTemperature: sensor.inverter_battery_temperature
+  batteryCurrent: sensor.inverter_battery_current
+  gridFrequency: sensor.inverter_grid_frequency
+  inverterTemperature: sensor.inverter_temperature
+  # Tier-2 daily energy (Solarman today_* counters).
+  dailyBatteryChargeEnergy: sensor.inverter_today_battery_charge
+  dailyBatteryDischargeEnergy: sensor.inverter_today_battery_discharge
+  dailyGeneratorEnergy: sensor.inverter_generator_energy_today
+  # Tier-3 telemetry (Solarman): today losses, load frequency, per-phase grid/load currents.
+  dailyLossesEnergy: sensor.inverter_today_losses
+  loadFrequency: sensor.inverter_load_frequency
+  gridCurrentL1: sensor.inverter_external_ct1_current
+  gridCurrentL2: sensor.inverter_external_ct2_current
+  gridCurrentL3: sensor.inverter_external_ct3_current
+  loadCurrentL1: sensor.inverter_output_l1_current
+  loadCurrentL2: sensor.inverter_output_l2_current
+  loadCurrentL3: sensor.inverter_output_l3_current
+
+commands:
+  - id: set_battery_charge
+    service: modbus.write_register
+    args:
+      hub: config.hub_name
+      slave: config.slave_id
+      address: 256
+      value: "int(payload.powerLimit)"
+  - id: set_work_mode
+    service: modbus.write_register
+    args:
+      hub: config.hub_name
+      slave: config.slave_id
+      address: 244
+      value: "int(payload.workMode)"
+  - id: set_solar_sell
+    service: modbus.write_register
+    args:
+      hub: config.hub_name
+      slave: config.slave_id
+      address: 247
+      value: "int(payload.solarSell)"
+  # DELIBERATELY BROKEN — do NOT "fix" this key name.
+  #
+  # The app sends `gridChargeEnabled`, not `enabled`, so this recipe never
+  # resolves and the command fails closed. That mismatch is the only thing
+  # keeping it safe.
+  #
+  # Register 248 is bit 0 = TOU/timer enable, but bits 1-7 are the
+  # DAY-OF-WEEK mask. `modbus.write_register` STAMPS the whole word, and the
+  # relay transport cannot read a register first, so writing `0`/`1` here
+  # would erase the user's day-of-week schedule on every toggle. The
+  # firmware and the direct-harvest path both read-modify-write for exactly
+  # this reason (clearMask: 1); relay has no such facility.
+  #
+  # The real fix is server-side: persist the raw 248 word in the settings
+  # mirror (today only the `timerEnabled` BOOLEAN survives —
+  # register-mapping.ts:308) and have the API send the whole bit-preserving
+  # value for this recipe to stamp. Until then, failing closed is correct.
+  - id: set_grid_charge_toggle
+    service: modbus.write_register
+    args:
+      hub: config.hub_name
+      slave: config.slave_id
+      address: 248
+      value: "int(payload.enabled)"

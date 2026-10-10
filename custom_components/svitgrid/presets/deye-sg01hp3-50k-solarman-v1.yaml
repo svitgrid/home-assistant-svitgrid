@@ -1,0 +1,74 @@
+# Svitgrid HA Preset — Deye SG01HP3 50K BM4 (3-phase HV commercial hybrid).
+#
+# Same register family as SG01HP3. Read-only in v1 (power scaling unverified
+# on live BM4 hardware; commands[] will land after a verified live test).
+# v3 (2026-06-25): added daily load/import/export energy mappings (Solarman today_* sensors).
+# v4 (2026-06-25): added Tier-1 telemetry (inverter/battery temp, battery current, grid frequency).
+# v5 (2026-06-25): added Tier-2 daily energy (battery charge/discharge, generator).
+# v6 (2026-06-25): added Tier-3 telemetry (today losses, load frequency, per-phase grid/load currents).
+
+# v7 (2026-08-18): added per-string PV voltage/current.
+#   The app's per-string "V / A" subline was blank on EVERY HA household —
+#   no per-string voltage/current field was mappable until now.
+
+id: deye-sg01hp3-50k-solarman-v1
+version: "7"
+brand: Deye
+model: SG01HP3 50K
+phases: 3
+hasBattery: true
+pvStrings: 2
+protocolId: home_assistant_solarman
+
+entityMap:
+  batterySoc: sensor.inverter_battery
+  batteryPower: sensor.inverter_battery_power
+  batteryVoltage: sensor.inverter_battery_voltage
+  pv1Power: sensor.inverter_pv1_power
+  pv2Power: sensor.inverter_pv2_power
+  # Per-string voltage/current (Solarman profile: "PV1 Voltage" /
+  # "PV1 Current" sit alongside the "PV1 Power" sensor mapped above).
+  # Feeds the app's per-string "V / A" subline on the solar detail card.
+  pv1Voltage: sensor.inverter_pv1_voltage
+  pv1Current: sensor.inverter_pv1_current
+  pv2Voltage: sensor.inverter_pv2_voltage
+  pv2Current: sensor.inverter_pv2_current
+  gridPower: sensor.inverter_grid_power
+  loadPower: sensor.inverter_load_power
+  dailyPvEnergy: sensor.inverter_today_production
+  # Daily energy counters from the Solarman hybrid profile (today_* sensors).
+  dailyLoadEnergy: sensor.inverter_today_load_consumption
+  dailyGridImportEnergy: sensor.inverter_today_energy_import
+  dailyGridExportEnergy: sensor.inverter_today_energy_export
+  gridVoltageL1: sensor.inverter_grid_l1_voltage
+  gridVoltageL2: sensor.inverter_grid_l2_voltage
+  gridVoltageL3: sensor.inverter_grid_l3_voltage
+  # Per-phase powers (Solarman deye_p3 profile: "Grid Lx Power" regs 622-624,
+  # "Load Lx Power" regs 633-635). The API folds these scalars into its
+  # canonical phaseGridPowers / phaseLoads arrays at ingest.
+  gridPowerL1: sensor.inverter_grid_l1_power
+  gridPowerL2: sensor.inverter_grid_l2_power
+  gridPowerL3: sensor.inverter_grid_l3_power
+  loadPowerL1: sensor.inverter_load_l1_power
+  loadPowerL2: sensor.inverter_load_l2_power
+  loadPowerL3: sensor.inverter_load_l3_power
+  # Tier-1 telemetry (Solarman): inverter/battery temp, battery current, grid frequency.
+  batteryTemperature: sensor.inverter_battery_temperature
+  batteryCurrent: sensor.inverter_battery_current
+  gridFrequency: sensor.inverter_grid_frequency
+  inverterTemperature: sensor.inverter_temperature
+  # Tier-2 daily energy (Solarman today_* counters).
+  dailyBatteryChargeEnergy: sensor.inverter_today_battery_charge
+  dailyBatteryDischargeEnergy: sensor.inverter_today_battery_discharge
+  dailyGeneratorEnergy: sensor.inverter_generator_energy_today
+  # Tier-3 telemetry (Solarman): today losses, load frequency, per-phase grid/load currents.
+  dailyLossesEnergy: sensor.inverter_today_losses
+  loadFrequency: sensor.inverter_load_frequency
+  gridCurrentL1: sensor.inverter_external_ct1_current
+  gridCurrentL2: sensor.inverter_external_ct2_current
+  gridCurrentL3: sensor.inverter_external_ct3_current
+  loadCurrentL1: sensor.inverter_output_l1_current
+  loadCurrentL2: sensor.inverter_output_l2_current
+  loadCurrentL3: sensor.inverter_output_l3_current
+
+commands: []

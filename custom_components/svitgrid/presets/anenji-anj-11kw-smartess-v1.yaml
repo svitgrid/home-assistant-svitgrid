@@ -1,0 +1,31 @@
+# Svitgrid HA Preset — Anenji ANJ-11KW-48V-WIFI-P, via its own SmartESS/EyBond WiFi collector.
+#
+# One of the EASUN/ISolar SMG II family. The add-on takes the collector over
+# and decodes registers itself, so `entityMap` is empty: no Home Assistant
+# entity is in the path. See docs/anenji-eybond-at.md.
+#
+# The MODEL DOES NOT SELECT THE REGISTER MAP. That is dispatched at runtime
+# from register 184, the protocol number, because picking a map by brand or
+# model name is what produced a wrong map for this family once already. The
+# model here sets the label the owner sees, sensible defaults below, and the
+# reading-core key that bounds validation.
+#
+# UNMEASURED, and the one most likely to refuse. Our research finds the 8/11 kW
+# SMG II documented under protocols 3-6 with a PHASE-BLOCK layout, not the
+# protocol 11 our bench unit reports. If this unit reports 3-6 the add-on will
+# publish nothing and name the protocol number it saw -- which is the capture
+# needed to add that map.
+
+id: anenji-anj-11kw-smartess-v1
+version: "1"
+brand: Anenji
+model: ANJ-11KW-48V-WIFI-P
+modelId: anenji_anj_11kw
+phases: 1
+hasBattery: true
+pvStrings: 2
+protocolId: home_assistant_eybond
+
+entityMap: {}
+
+commands: []
