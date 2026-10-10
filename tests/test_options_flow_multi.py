@@ -119,3 +119,28 @@ async def test_remove_last_inverter_is_blocked(hass):
     assert res["type"] == "abort"
     assert res["reason"] == "cannot_remove_last_inverter"
     assert len(entry.data["inverters"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_local_only_entry_is_not_offered_add_inverter(hass):
+    """Adding an inverter registers it with the cloud (POST /ha/inverters),
+    which a local-only entry has no account for. Offering it would fail on
+    the missing api_base."""
+    e = MockConfigEntry(
+        domain=DOMAIN,
+        version=2,
+        data={
+            "local_only": True,
+            "signing_key_id": "sk",
+            "private_key_pem": "pem",
+            "public_key_hex": "pub",
+            "inverters": [{"inverter_id": "local-inv-1", "entity_map": {}}],
+        },
+    )
+    e.add_to_hass(hass)
+    flow = SvitgridOptionsFlow(e)
+    flow.hass = hass
+    res = await flow.async_step_init()
+    assert res["type"] == "menu"
+    assert "add_inverter" not in res["menu_options"]
+    assert {"edit_inverter", "remove_inverter", "settings"} <= set(res["menu_options"])

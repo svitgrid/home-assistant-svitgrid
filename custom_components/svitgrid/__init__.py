@@ -35,8 +35,11 @@ from .command_poller import run_loop as run_command_loop
 from .const import (
     COMMAND_POLL_INTERVAL_S,
     CONF_AUTO_UPDATE,
+    CONF_LOCAL_ONLY,
+    DEFAULT_API_BASE,
     DOMAIN,
     HOURLY_RETENTION_S,
+    LOCAL_PAIRING_GRANT,
     RAW_RETENTION_S,
     READINGS_DB_FILE,
     READINGS_DB_SUBDIR,
@@ -609,8 +612,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _snake_case_stored_harvest_configs(hass, entry)
     data = entry.data
     session = aiohttp_client.async_get_clientsession(hass)
-    api_client = SvitgridApiClient(session, api_base=data["api_base"])
-    api_key = data["api_key"]
+    # A local-only entry was paired over the LAN by a guest with no cloud
+    # account: it has no api_key, api_base, edge_device_id or household_id.
+    # It gets no API client at all, so nothing below can call the cloud and
+    # log a 401 every few seconds.
+    local_only = bool(data.get(CONF_LOCAL_ONLY))
+    api_client = (
+        None
+        if local_only
+        else SvitgridApiClient(session, api_base=data.get("api_base") or DEFAULT_API_BASE)
+    )
+    api_key = data.get("api_key") or ""
     activity = ActivityTracker()
     # Surface a still-unapproved signing key on the Diagnostics sensor. Absent
     # (older entry, or an API that predates the field) means approved — see the
@@ -655,10 +667,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _trusted_public_keys_hex = dict(_existing.trusted_public_keys_hex)
         _trusted_key_ids = sorted(_trusted_public_keys_hex)
     await keystore.save(
-        api_key=data["api_key"],
-        public_key_hex=data["public_key_hex"],
-        private_key_pem=data["private_key_pem"],
-        signing_key_id=data["signing_key_id"],
+        api_key=api_key,
+        public_key_hex=data.get("public_key_hex") or "",
+        private_key_pem=data.get("private_key_pem") or "",
+        signing_key_id=data.get("signing_key_id") or "",
         trusted_key_ids=_trusted_key_ids,
         trusted_public_keys_hex=_trusted_public_keys_hex,
     )
@@ -689,6 +701,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             )
         hass.config_entries.async_update_entry(entry, data=_new_data)
         data = entry.data
+    # What a LAN pairing granted: same once-only adoption as the island key
+    # above, for the same reason.
+    if data.get(LOCAL_PAIRING_GRANT):
+        await _adopt_local_pairing_grant(hass, entry, keystore)
+        data = entry.data
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN]["keystore"] = keystore
 
@@ -717,6 +734,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "cloud_ingest_enabled",
         entry.options.get("cloud_ingest_enabled", True),
     )
+    if local_only:
+        # Nothing to upload to: there is no cloud account behind this entry.
+        cloud_ingest_enabled = False
 
     if inverters:
         active_ids = {inv["inverter_id"] for inv in inverters}
@@ -743,7 +763,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             cloud_ingest_enabled=cloud_ingest_enabled,
             discharge_positive_ids=discharge_positive_ids,
             control=control,
-            device_id=entry.data.get("edge_device_id"),
+            # A local-only entry has no edge device. Its own id still scopes
+            # the lifecycle rows, so a `deprovisioned` left by an earlier
+            # cloud pairing on this install cannot stop it.
+            device_id=entry.data.get("edge_device_id")
+            or (f"local:{entry.entry_id}" if local_only else None),
         )
         # A deprovisioned device's island keys go with it (issue #6): the
         # household no longer owns this add-on, so the phones it paired must
@@ -774,7 +798,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Refresh entity_map from preset before starting the publisher so the
     # publisher always uses the most up-to-date field mappings. Skip when
     # deprovisioned (no loops will start anyway). Fail-open: never blocks setup.
-    if loops_active:
+    # A local-only entry has no cloud to refresh from; its entity_map came
+    # from the bundled preset at pairing.
+    if loops_active and not local_only:
 
         async def _fetch_preset(pid):
             return await api_client.get_preset(pid)
@@ -828,7 +854,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     spec_dict = await resolve_register_spec(
                         hass,
                         harvest_config["model_id"],
-                        fetch=api_client.get_register_spec,
+                        fetch=None if local_only else api_client.get_register_spec,
                         store=spec_store,
                     )
                     # build_spec parses AND validates, and surfaces any problem
@@ -899,6 +925,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         config=dict(inv.get("command_config") or {}),
                     )
 
+    if loops_active and not local_only:
+        # The cloud loops. A local-only entry has no API key to poll with, no
+        # MQTT broker credentials and no cloud settings mirror, so it starts
+        # none of them; signed commands reach it over the LAN instead
+        # (POST /api/svitgrid/commands).
         wake_event = asyncio.Event()
         command_task = hass.async_create_background_task(
             run_command_loop(
@@ -964,6 +995,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             name="svitgrid_settings_sync",
         )
 
+    if loops_active:
         # Island event scheduler — spawned ONLY in pure island mode (cloud-sync off).
         # With cloud_ingest_enabled=True the cloud engine handles calendar events;
         # running both would double-fire commands.
@@ -1127,6 +1159,49 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # A subsequent async_setup_entry re-creates it, so the reload path is safe.
     hass.data.get(DOMAIN, {}).pop("event_store", None)
     return True
+
+
+async def _adopt_local_pairing_grant(
+    hass: HomeAssistant, entry: ConfigEntry, keystore: SvitgridKeystore
+) -> None:
+    """Move what `POST /api/svitgrid/pair-local` granted into the keystore.
+
+    The grant names the app's island key under its device id, with its label,
+    and the signing key it proved it holds. The island key joins the roster
+    beside any other device's, and the signing key joins the trusted keys
+    beside any trusted earlier: a second pairing on one install must not
+    revoke the first.
+
+    The grant then leaves `entry.data`, and the device id is recorded so
+    removing the entry revokes it (issue #6). Setup runs on every reload, so a
+    grant left behind would re-add a key the owner revoked.
+    """
+    grant = dict(entry.data.get(LOCAL_PAIRING_GRANT) or {})
+    device_id = grant.get("deviceId")
+    island_key = grant.get("islandKey")
+    if device_id and island_key:
+        await keystore.async_add_island_key(
+            device_id,
+            island_key,
+            label=grant.get("deviceLabel"),
+            paired_at=grant.get("pairedAt"),
+        )
+    key_id = grant.get("signingKeyId")
+    public_key_hex = grant.get("publicKeyHex")
+    if key_id and public_key_hex:
+        state = await keystore.load()
+        trusted = dict(state.trusted_public_keys_hex) if state is not None else {}
+        trusted[key_id] = public_key_hex
+        await keystore.update_trusted_keys_hex(trusted)
+    new_data = {k: v for k, v in entry.data.items() if k != LOCAL_PAIRING_GRANT}
+    if device_id and island_key:
+        new_data[ENTRY_ISLAND_DEVICE_IDS] = sorted(
+            {*(entry.data.get(ENTRY_ISLAND_DEVICE_IDS) or []), device_id}
+        )
+    # Runs before the update listener is registered, so this write does not
+    # reload the entry.
+    hass.config_entries.async_update_entry(entry, data=new_data)
+    _LOGGER.info("Adopted the LAN pairing grant of entry %s (device %s)", entry.entry_id, device_id)
 
 
 async def _revoke_entry_island_keys(hass: HomeAssistant, entry: ConfigEntry) -> None:

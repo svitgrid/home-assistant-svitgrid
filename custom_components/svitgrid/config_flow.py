@@ -40,6 +40,7 @@ from homeassistant.helpers.selector import (
 from .api_client import SvitgridApiClient
 from .const import (
     CONF_AUTO_UPDATE,
+    CONF_LOCAL_ONLY,
     DEFAULT_API_BASE,
     DOMAIN,
     MAPPABLE_FIELDS,
@@ -949,10 +950,13 @@ class SvitgridOptionsFlow(EybondCollectorSteps, config_entries.OptionsFlow):
 
     # ── menu ────────────────────────────────────────────────────────────
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> FlowResult:
-        return self.async_show_menu(
-            step_id="init",
-            menu_options=["add_inverter", "edit_inverter", "remove_inverter", "settings"],
-        )
+        options = ["add_inverter", "edit_inverter", "remove_inverter", "settings"]
+        if self._entry.data.get(CONF_LOCAL_ONLY):
+            # Adding an inverter registers it with the cloud
+            # (POST /api/v1/ha/inverters), and a local-only entry has no
+            # account to register it under.
+            options.remove("add_inverter")
+        return self.async_show_menu(step_id="init", menu_options=options)
 
     def _inverters(self) -> list[dict[str, Any]]:
         return [dict(i) for i in (self._entry.data.get("inverters") or [])]

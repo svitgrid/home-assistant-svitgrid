@@ -374,3 +374,20 @@ CONF_AUTO_UPDATE = "auto_update"  # entry-options key; default True
 # claim, and an add-on promising more than the server accepts would strand the
 # extra inverters at pairing with nothing said.
 MAX_INVERTERS = 16
+
+# ── LAN pairing (guest, no cloud account) ──────────────────────────────
+# Entry-data flag for an entry paired over the LAN with no cloud account. Such
+# an entry has no api_key, api_base, edge_device_id or household_id, and setup
+# starts nothing that calls the cloud.
+CONF_LOCAL_ONLY = "local_only"
+# Entry-data key carrying what POST /api/svitgrid/pair-local granted: the
+# app's island key under its device id, and the signing key it proved. Setup
+# adopts it into the keystore once and removes it, so a reload cannot undo a
+# later revoke.
+LOCAL_PAIRING_GRANT = "local_pairing_grant"
+# Wrong codes a pending pairing accepts on pair-local before it is cancelled.
+LOCAL_PAIRING_MAX_WRONG_CODES = 5
+# The cloud's pairing-code alphabet: no 0/O, 1/I/L. A code minted locally when
+# the cloud cannot be reached uses the same one, so the app validates both.
+PAIRING_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+PAIRING_CODE_LENGTH = 6
