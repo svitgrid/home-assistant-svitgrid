@@ -86,7 +86,9 @@
       "pairing_failed": "Pairing failed. Check Home Assistant logs.",
       "cannot_connect": "Could not reach the Svitgrid cloud. Check your internet.",
       "claim_not_buildable": "The Svitgrid app paired this Home Assistant without an inverter profile, so the cloud refused to create the station. Nothing was created. Update the Svitgrid app, then start the pairing again — a new code will be shown.",
-      "pairing_refused": "The Svitgrid cloud refused the pairing: {reason}. Start the pairing again for a new code."
+      "pairing_refused": "The Svitgrid cloud refused the pairing: {reason}. Start the pairing again for a new code.",
+      "pairing_cancelled": "The pairing was cancelled after five wrong codes were entered on your network. Start the pairing again for a new code.",
+      "already_in_progress": "This pairing has already been completed."
     },
     "error": {
       "cannot_connect": "Cannot reach the Svitgrid cloud. Check your internet.",

@@ -37,12 +37,14 @@ from homeassistant.helpers.selector import (
     TextSelectorConfig,
 )
 
+from . import local_pairing
 from .api_client import SvitgridApiClient
 from .const import (
     CONF_AUTO_UPDATE,
     CONF_LOCAL_ONLY,
     DEFAULT_API_BASE,
     DOMAIN,
+    LOCAL_PAIRING_GRANT,
     MAPPABLE_FIELDS,
     PAIRING_MAX_POLL_DURATION_S,
     PAIRING_POLL_INTERVAL_S,
@@ -355,6 +357,15 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
         # as instance state so async_create_entry can include it in entry.data
         # even though the variable is local to the finalize block above.
         self._island_key: str | None = None
+        # The code on offer, claimable by the cloud or by pair-local on the
+        # LAN, whichever is first (local_pairing.PendingPairing).
+        self._local_session: local_pairing.PendingPairing | None = None
+        # Set when pair-local won: pair_finalize builds a local-only entry
+        # from it instead of calling the cloud's /finalize.
+        self._lan_claim: local_pairing.LanClaim | None = None
+        self._local_entry_created = False
+        # Why the claim task ended without a claim, for async_step_pair_aborted.
+        self._pair_abort_reason: str | None = None
 
     # ── EyBond hooks (see EybondCollectorSteps) ──────────────────────────
     _eybond_model_id: str | None = None
@@ -623,19 +634,30 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
                     public_key_hex=self._public_key_hex,
                     signing_key_id=self._signing_key_id,
                 )
+                self._secret = start_result["secret"]
+                self._code = start_result["code"]
             except Exception:  # noqa: BLE001
-                _LOGGER.exception("Pairing /start failed")
-                return self.async_abort(reason="cannot_connect")
+                # No cloud: a guest can still pair over the LAN. The code is
+                # minted here from the cloud's alphabet, and only pair-local
+                # can claim it.
+                _LOGGER.warning(
+                    "Pairing /start failed; showing a local code that the "
+                    "Svitgrid app can claim over the LAN only",
+                    exc_info=True,
+                )
+                client = None
+                self._pairing_client = None
+                self._secret = None
+                self._code = local_pairing.mint_code()
 
-            self._secret = start_result["secret"]
-            self._code = start_result["code"]
             # Publish the code — and ONLY the code — for /api/svitgrid/hello,
             # so the Svitgrid app can prefill it rather than asking the owner
-            # to copy six characters between two screens. The secret sitting
-            # beside it here is what finalizes a pairing; publishing that would
-            # let anyone on the LAN complete this pairing themselves.
-            self.hass.data.setdefault(DOMAIN, {})["pending_pairing"] = {"code": self._code}
-            self._pair_task = self.hass.async_create_task(self._poll_for_claim(client))
+            # to copy six characters between two screens. The secret is what
+            # finalizes a cloud pairing; publishing it would let anyone on the
+            # LAN complete this pairing themselves.
+            self._local_session = local_pairing.PendingPairing(self._code, flow_id=self.flow_id)
+            local_pairing.publish(self.hass, self._local_session)
+            self._pair_task = self.hass.async_create_task(self._wait_for_claim(client))
 
         if not self._pair_task.done():
             return self.async_show_progress(
@@ -649,23 +671,35 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
                 description_placeholders={"code": self._code},
             )
 
-        # Task finished — check for errors.
+        # Task finished — check for errors. A progress step may only move to
+        # progress-done, so an ending that is an abort goes through
+        # pair_aborted. Aborting here directly raised ValueError whenever the
+        # window ran out in the background, and the dialog kept spinning.
+        self._pair_abort_reason = None
         try:
             await self._pair_task
         except PairingExpired:
-            return self.async_abort(reason="pairing_expired")
+            self._pair_abort_reason = "pairing_expired"
+        except local_pairing.PairingCancelled:
+            self._pair_abort_reason = "pairing_cancelled"
         except Exception:  # noqa: BLE001
             _LOGGER.exception("Pairing polling failed")
-            return self.async_abort(reason="pairing_failed")
+            self._pair_abort_reason = "pairing_failed"
         finally:
             self._pair_task = None
             # The window closes here on every ending the poll has — claimed,
             # expired and failed all pass through this block. A code still on
             # offer afterwards sends the app into a pairing that cannot finish,
             # which reads as the app being broken.
-            self.hass.data.setdefault(DOMAIN, {})["pending_pairing"] = None
+            local_pairing.close(self.hass, self._local_session)
 
+        if self._pair_abort_reason is not None:
+            return self.async_show_progress_done(next_step_id="pair_aborted")
         return self.async_show_progress_done(next_step_id="pair_finalize")
+
+    async def async_step_pair_aborted(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+        """End a pairing that expired, failed, or was cancelled on the LAN."""
+        return self.async_abort(reason=self._pair_abort_reason or "pairing_failed")
 
     async def async_step_pair_finalize(
         self, user_input: dict[str, Any] | None = None
@@ -678,7 +712,12 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
         generates the key and the cloud returns it in the /status response).
 
         When _final_payload is already set (tests that pre-set it directly, or the
-        re-entry from _eybond_finish), the finalize call is skipped."""
+        re-entry from _eybond_finish), the finalize call is skipped.
+
+        When pair-local claimed the code on the LAN, there is no cloud to
+        finalize with: the entry is local-only, built from the claim."""
+        if self._lan_claim is not None:
+            return self._create_local_entry(self._lan_claim)
         if self._final_payload is None:
             # Normal post-poll path: we must call finalize now.
             if self._claimed_status is None or self._pairing_client is None:
@@ -908,6 +947,56 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
             },
         )
 
+    def _create_local_entry(self, claim: local_pairing.LanClaim) -> FlowResult:
+        """The entry for a pairing claimed over the LAN, with no cloud account.
+
+        No await anywhere in here: pair-local and the browser may both
+        configure this flow, and the guard below only holds if nothing can
+        interleave between checking it and creating the entry.
+        """
+        if self._local_entry_created:
+            return self.async_abort(reason="already_in_progress")
+        self._local_entry_created = True
+        session = self._local_session
+        return self.async_create_entry(
+            title=claim.station_name or "Svitgrid",
+            data={
+                CONF_LOCAL_ONLY: True,
+                # No account, so nothing to upload to.
+                "cloud_ingest_enabled": False,
+                # The integration's own keypair, minted locally at the start of
+                # the flow. Nothing outside this install has seen it.
+                "signing_key_id": self._signing_key_id,
+                "private_key_pem": serialize_private_key(self._private_key),
+                "public_key_hex": self._public_key_hex,
+                "trusted_keys": [],
+                "trusted_key_status": "approved",
+                "preset_id": claim.preset_id,
+                "inverters": claim.inverters,
+                # Lets pair-local find this entry if the browser finished the
+                # flow before it could.
+                "local_pairing_id": session.pairing_id if session else None,
+                # Adopted into the keystore once by async_setup_entry.
+                LOCAL_PAIRING_GRANT: {
+                    "deviceId": claim.device_id,
+                    "islandKey": claim.island_key,
+                    "deviceLabel": claim.device_label,
+                    "pairedAt": claim.paired_at,
+                    "signingKeyId": claim.signing_key_id,
+                    "publicKeyHex": claim.public_key_hex,
+                },
+            },
+        )
+
+    @callback
+    def async_remove(self) -> None:
+        """The flow ended — finished, aborted, or closed by the owner.
+
+        Closing the dialog cancels the claim task without re-entering the pair
+        step, so its cleanup never ran and the code stayed on offer.
+        """
+        local_pairing.close(self.hass, self._local_session)
+
     def _entry_title(self) -> str:
         """Brand+model when known; falls back to householdId for bare pairings."""
         brand = self._final_payload.get("brand")
@@ -915,6 +1004,51 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
         if brand and model:
             return f"Svitgrid — {brand} {model}"
         return f"Svitgrid ({self._final_payload['householdId']})"
+
+    async def _wait_for_claim(self, client: PairingClient | None) -> None:
+        """Background task — wait for the cloud OR the LAN to claim the code.
+
+        The first claim wins; the other source is then ignored (the cloud poll
+        is cancelled; a later pair-local hears `already_claimed`). With no
+        cloud (`client` None) only the LAN can claim. Raises PairingExpired
+        when the window closes unclaimed, and PairingCancelled when pair-local
+        cancelled the pairing after too many wrong codes.
+        """
+        session = self._local_session
+        # Through hass so it is tracked, and started eagerly: a claim the
+        # first poll already sees settles without waiting below.
+        cloud = self.hass.async_create_task(self._poll_for_claim(client)) if client else None
+        try:
+            if session.is_open and not (cloud is not None and cloud.done()):
+                lan = asyncio.ensure_future(session.wait_for_lan())
+                waiting: set[asyncio.Future] = {lan} if cloud is None else {lan, cloud}
+                try:
+                    await asyncio.wait(
+                        waiting,
+                        timeout=PAIRING_MAX_POLL_DURATION_S,
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                finally:
+                    if not lan.done():
+                        lan.cancel()
+                    elif not lan.cancelled():
+                        # Retrieved here so a cancellation is not also logged as
+                        # "exception never retrieved"; session.cancelled says it.
+                        lan.exception()
+            if session.claimed_by == "lan":
+                # The LAN claimed first. Anything the cloud poll saw is moot.
+                self._claimed_status = None
+                self._lan_claim = session.lan_claim
+                return
+            if cloud is not None and cloud.done():
+                cloud.result()  # raises PairingExpired or a poll failure
+                return
+            if session.cancelled:
+                raise local_pairing.PairingCancelled("too many wrong pairing codes")
+            raise PairingExpired("pairing window expired")
+        finally:
+            if cloud is not None and not cloud.done():
+                cloud.cancel()
 
     async def _poll_for_claim(self, client: PairingClient) -> None:
         """Background task — polls /status until claimed.
@@ -935,6 +1069,11 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
             if isinstance(status, PairingPending):
                 continue
             if isinstance(status, PairingClaimed):
+                session = self._local_session
+                if session is not None and not session.claim_cloud():
+                    # The LAN claimed first. The cloud claim is left to expire
+                    # on the server; nothing finalizes it.
+                    return
                 self._claimed_status = status
                 return
         raise PairingExpired("pairing window expired during polling")

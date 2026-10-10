@@ -30,7 +30,9 @@ from aiohttp import web
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.core import HomeAssistant
 
+from . import local_pairing
 from .api_client import _integration_version
+from .bundled_presets import list_bundled_presets
 from .command_auth import verify_signed_command
 from .const import (
     DOMAIN,
@@ -355,6 +357,161 @@ class SvitgridHelloView(HomeAssistantView):
                 "maxInverters": MAX_INVERTERS,
                 "pairingPending": bool(code),
                 **({"code": code} if code else {}),
+                # What answers here. The app's LAN scan finds phone stations
+                # too, and needs to tell the two apart.
+                "kind": "home_assistant",
+                # POST /api/svitgrid/pair-local and GET
+                # /api/svitgrid/local-presets exist. An integration without
+                # this field supports neither, and the app offers a guest
+                # nothing.
+                "localPairing": True,
+            }
+        )
+
+
+def _json_error(status: int, error: str, **extra) -> web.Response:
+    return web.Response(
+        status=status,
+        text=json.dumps({"error": error, **extra}),
+        content_type="application/json",
+    )
+
+
+class SvitgridLocalPresetsView(HomeAssistantView):
+    """GET /api/svitgrid/local-presets — the bundled presets, for a guest.
+
+    A guest app has no account, so it cannot list the cloud's presets. While a
+    pairing is pending it lists these instead, in the shape of the cloud's
+    `GET /api/v1/ha-presets` item, so `HaPreset.fromJson` reads both.
+
+    Unauthenticated, and answers only while a pairing is pending: the list is
+    public knowledge, but there is no reason to serve it at any other time.
+    """
+
+    url = "/api/svitgrid/local-presets"
+    name = "api:svitgrid:local-presets"
+    requires_auth = False
+
+    async def get(self, request):  # noqa: D102
+        hass = request.app["hass"]
+        session = local_pairing.get_session(hass)
+        if session is None or not session.is_open:
+            return _json_error(404, "no_pending_pairing")
+        presets = await hass.async_add_executor_job(list_bundled_presets)
+        return self.json({"presets": presets})
+
+
+class SvitgridPairLocalView(HomeAssistantView):
+    """POST /api/svitgrid/pair-local — a guest claims the pending pairing on the LAN.
+
+    Unauthenticated: the caller has no account and no island key yet. What
+    stands in for authentication is the pairing code on the Home Assistant
+    screen, which is single-use, minutes-lived, and cancelled after
+    LOCAL_PAIRING_MAX_WRONG_CODES wrong guesses. The app's signing key also
+    proves possession, the same check as /trust-key.
+
+    On success the config flow creates a local-only entry, the island key
+    joins the roster under `deviceId`, and the signing key is trusted, so
+    reads, `/commands` and `/events` work at once. The contract (paths,
+    fields, status and error codes) is shared with the Svitgrid app: see the
+    spec "LAN pairing contract" before changing anything here.
+    """
+
+    url = "/api/svitgrid/pair-local"
+    name = "api:svitgrid:pair-local"
+    requires_auth = False
+
+    async def post(self, request) -> web.Response:  # noqa: D102
+        hass = request.app["hass"]
+        session = local_pairing.get_session(hass)
+        if session is None or session.cancelled:
+            return _json_error(404, "no_pending_pairing")
+        if session.claimed_by is not None:
+            return _json_error(409, "already_claimed")
+
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001
+            return _json_error(400, "bad_request")
+        if not isinstance(body, dict) or not isinstance(body.get("code"), str):
+            return _json_error(400, "bad_request")
+
+        # The code first: everything after it is only for the caller who can
+        # read the Home Assistant screen.
+        if not session.code_matches(body["code"]):
+            left = session.record_wrong_code()
+            if left == 0:
+                local_pairing.cancel(hass, session)
+                _LOGGER.warning(
+                    "LAN pairing cancelled after %d wrong codes; start the pairing again",
+                    session.wrong_codes,
+                )
+            return _json_error(403, "wrong_code", attemptsLeft=left)
+
+        try:
+            identity = local_pairing.parse_identity(body)
+        except local_pairing.InvalidClaim as err:
+            return _json_error(400, "bad_request", detail=str(err))
+
+        signing_key_id = body["signingKeyId"]
+        public_key_hex = body["publicKeyHex"]
+        try:
+            public_key_from_hex(public_key_hex)
+        except Exception:  # noqa: BLE001
+            return _json_error(400, "bad_public_key")
+        if signing_key_id != compute_key_id(public_key_hex):
+            return _json_error(400, "key_id_mismatch")
+        # Proof of possession, exactly as /trust-key checks it.
+        if not verify_payload(
+            {"signingKeyId": signing_key_id, "publicKeyHex": public_key_hex},
+            body["signature"],
+            public_key_hex,
+        ):
+            return _json_error(403, "signature_invalid")
+
+        raw_inverters = body.get("inverters")
+        if isinstance(raw_inverters, list) and len(raw_inverters) > MAX_INVERTERS:
+            return _json_error(422, "too_many_inverters", maxInverters=MAX_INVERTERS)
+        try:
+            inverters = await hass.async_add_executor_job(
+                local_pairing.build_local_inverters, raw_inverters
+            )
+        except local_pairing.InvalidClaim as err:
+            return _json_error(400, "bad_request", detail=str(err))
+
+        claim = local_pairing.LanClaim(
+            island_key=identity["island_key"],
+            device_id=identity["device_id"],
+            device_label=identity["device_label"],
+            signing_key_id=signing_key_id,
+            public_key_hex=public_key_hex,
+            station_name=identity["station_name"],
+            preset_id=identity["preset_id"],
+            inverters=inverters,
+            paired_at=_utc_now_iso(),
+        )
+        # The awaits above gave the cloud claim, a cancellation or another
+        # pair-local a chance to land; claim_lan settles it atomically.
+        if not session.claim_lan(claim):
+            if session.cancelled:
+                return _json_error(404, "no_pending_pairing")
+            return _json_error(409, "already_claimed")
+
+        entry_id = await local_pairing.complete_flow(hass, session)
+        if entry_id is None:
+            # The claim was accepted but the flow did not produce an entry.
+            # Not in the contract: nothing the app sends can cause it.
+            _LOGGER.error("LAN pairing was claimed but the config flow created no entry")
+            return _json_error(500, "pairing_failed")
+        _LOGGER.info(
+            "Paired over the LAN with device %s (entry %s)", identity["device_id"], entry_id
+        )
+        return self.json(
+            {
+                "ok": True,
+                "stationId": entry_id,
+                "version": _integration_version(),
+                "maxInverters": MAX_INVERTERS,
             }
         )
 
@@ -1110,6 +1267,8 @@ def register_views(hass: HomeAssistant, store) -> None:
         SvitgridSettlementInputView(store),
         SvitgridIslandDevicesView(store),
         SvitgridIslandDeviceRevokeView(store),
+        SvitgridLocalPresetsView(),
+        SvitgridPairLocalView(),
     ):
         # View routes are GLOBAL to hass.http and PERSIST across config-entry
         # reloads, but the _views_registered guard in hass.data[DOMAIN] is
@@ -1151,10 +1310,13 @@ def ensure_hello_view(hass) -> None:
     http = getattr(hass, "http", None)
     if http is None:
         return
-    try:
-        http.register_view(SvitgridHelloView())
-    except RuntimeError as err:
-        # View routes are GLOBAL to hass.http and outlive a config-entry
-        # reload, so a second registration raises "Added route will never be
-        # executed". The existing route already serves.
-        _LOGGER.debug("hello view already registered: %s", err)
+    # The LAN pairing views serve the same unpaired caller as /hello, so they
+    # are registered with it: register_views() runs only once an entry exists.
+    for view in (SvitgridHelloView(), SvitgridLocalPresetsView(), SvitgridPairLocalView()):
+        try:
+            http.register_view(view)
+        except RuntimeError as err:
+            # View routes are GLOBAL to hass.http and outlive a config-entry
+            # reload, so a second registration raises "Added route will never
+            # be executed". The existing route already serves.
+            _LOGGER.debug("%s already registered: %s", type(view).__name__, err)

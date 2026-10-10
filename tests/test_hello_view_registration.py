@@ -31,8 +31,23 @@ def _hass_with_http():
 def test_registers_the_view():
     hass = _hass_with_http()
     ensure_hello_view(hass)
-    registered = hass.http.register_view.call_args.args[0]
-    assert isinstance(registered, SvitgridHelloView)
+    registered = [c.args[0] for c in hass.http.register_view.call_args_list]
+    assert any(isinstance(v, SvitgridHelloView) for v in registered)
+
+
+def test_registers_the_lan_pairing_views_with_it():
+    """A guest pairs before any entry exists, so pair-local and local-presets
+    need the same registration path as /hello."""
+    from custom_components.svitgrid.http_views import (
+        SvitgridLocalPresetsView,
+        SvitgridPairLocalView,
+    )
+
+    hass = _hass_with_http()
+    ensure_hello_view(hass)
+    registered = [c.args[0] for c in hass.http.register_view.call_args_list]
+    assert any(isinstance(v, SvitgridPairLocalView) for v in registered)
+    assert any(isinstance(v, SvitgridLocalPresetsView) for v in registered)
 
 
 def test_registering_twice_is_harmless():
@@ -81,3 +96,5 @@ async def test_opening_the_config_flow_registers_it(hass, enable_custom_integrat
 
     routes = [r for r in hass.http.app.router.routes() if "svitgrid/hello" in str(r.resource)]
     assert routes, "the hello view must be registered once the flow is open"
+    for path in ("svitgrid/pair-local", "svitgrid/local-presets"):
+        assert [r for r in hass.http.app.router.routes() if path in str(r.resource)], path
