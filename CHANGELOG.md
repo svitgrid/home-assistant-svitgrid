@@ -6,14 +6,21 @@
 - **A guest pairs over the LAN, with no Svitgrid account.** The code the
   pairing screen shows is now accepted two ways, and the first claim wins: a
   signed-in app claims it through the cloud as before, and a guest app claims
-  it on your network with `POST /api/svitgrid/pair-local`. A LAN pairing
-  creates a local-only entry: nothing is sent to the cloud, and the app reads
-  and controls the inverter over the LAN with its island key. Five wrong codes
-  cancel the pairing; start it again in Home Assistant for a new code.
+  it on your network with `POST /api/svitgrid/pair-local`. Because the code is
+  visible to anything on your network, a LAN claim needs your approval: the
+  pairing dialog asks «Підключити <phone>?» / "Connect <phone>?", and nothing
+  is shared until you tap Approve. If you reject it, or do not answer within
+  two minutes, the pairing stays open and the phone can try again. A LAN
+  pairing creates a local-only entry: nothing is sent to the cloud, and the
+  app reads and controls the inverter over the LAN with its island key. Five
+  wrong codes close pairing over the LAN; the signed-in app can still use the
+  same code. LAN pairing is offered only on a Home Assistant with no Svitgrid
+  station yet. Removing the entry also revokes the phone's keys.
 - **Pairing works without the cloud.** When the Svitgrid cloud cannot be
   reached, the pairing screen shows a code made on this Home Assistant instead
   of failing with "Could not reach the Svitgrid cloud". Only a guest pairing
-  over the LAN can claim that code.
+  over the LAN can claim that code. If the internet drops after the code is
+  shown, the pairing keeps waiting rather than failing.
 - **`GET /api/svitgrid/local-presets`** lists the inverter presets that ship
   with the integration while a pairing is pending, for an app that cannot ask
   the cloud.
@@ -27,7 +34,7 @@
 - **Register maps for direct Modbus harvest survive without the cloud.** Every
   map the cloud returns is saved, and the integration bundles a copy of every
   map. Without the cloud, harvest starts on the saved map, or on the bundled
-  one, instead of idling.
+  one, instead of idling. When the cloud answers, its map is always used.
 - **A local-only entry starts nothing that calls the cloud**: no reading
   upload, command polling, MQTT wake, settings sync or preset refresh, so the
   log shows no 401s. Harvest, local history, the island API and the local
