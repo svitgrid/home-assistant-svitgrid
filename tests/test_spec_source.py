@@ -55,8 +55,7 @@ async def test_a_saved_spec_survives_a_new_store_instance(hass):
 @pytest.mark.asyncio
 async def test_an_unreachable_cloud_falls_back_to_the_saved_spec(hass):
     store = RegisterSpecStore(hass)
-    bundled_version = load_bundled_spec(MODEL)["version"]
-    await store.async_put(MODEL, _spec(bundled_version + 5, "saved"))
+    await store.async_put(MODEL, _spec(1, "saved"))
     fetch = AsyncMock(side_effect=RuntimeError("no route to host"))
 
     spec = await resolve_register_spec(hass, MODEL, fetch=fetch, store=store)
@@ -90,15 +89,31 @@ async def test_a_local_only_entry_never_asks_the_cloud(hass):
 
 
 @pytest.mark.asyncio
-async def test_offline_a_newer_bundle_beats_an_older_saved_spec(hass):
-    """An update that ships a newer bundle should not be held back by a copy
-    saved from an older cloud document."""
+async def test_offline_the_saved_spec_beats_the_bundle_whatever_their_versions(hass):
+    """Specs change without a version bump, so versions cannot say which copy
+    is newer. The saved copy came from the cloud more recently than the
+    bundle was made."""
     store = RegisterSpecStore(hass)
     await store.async_put(MODEL, _spec(0, "saved"))
 
     spec = await resolve_register_spec(hass, MODEL, fetch=None, store=store)
 
-    assert spec == load_bundled_spec(MODEL)
+    assert spec["marker"] == "saved"
+
+
+@pytest.mark.asyncio
+async def test_a_cloud_fix_without_a_version_bump_replaces_the_saved_spec(hass):
+    """Regression: every monorepo spec is version 1 and maps are fixed in
+    place. Taking the cloud copy only when its version was strictly higher
+    froze every cloud install on the first copy it saved."""
+    store = RegisterSpecStore(hass)
+    await store.async_put(MODEL, _spec(1, "old map"))
+    fetch = AsyncMock(return_value=_spec(1, "fixed map"))
+
+    spec = await resolve_register_spec(hass, MODEL, fetch=fetch, store=store)
+
+    assert spec["marker"] == "fixed map"
+    assert (await store.async_get(MODEL))["marker"] == "fixed map"
 
 
 @pytest.mark.asyncio
