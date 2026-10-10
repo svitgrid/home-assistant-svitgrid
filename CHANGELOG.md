@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.23.0 — 2026-10-10
+
+### Added
+- **A guest pairs over the LAN, with no Svitgrid account.** The code the
+  pairing screen shows is now accepted two ways, and the first claim wins: a
+  signed-in app claims it through the cloud as before, and a guest app claims
+  it on your network with `POST /api/svitgrid/pair-local`. A LAN pairing
+  creates a local-only entry: nothing is sent to the cloud, and the app reads
+  and controls the inverter over the LAN with its island key. Five wrong codes
+  cancel the pairing; start it again in Home Assistant for a new code.
+- **Pairing works without the cloud.** When the Svitgrid cloud cannot be
+  reached, the pairing screen shows a code made on this Home Assistant instead
+  of failing with "Could not reach the Svitgrid cloud". Only a guest pairing
+  over the LAN can claim that code.
+- **`GET /api/svitgrid/local-presets`** lists the inverter presets that ship
+  with the integration while a pairing is pending, for an app that cannot ask
+  the cloud.
+- **`/api/svitgrid/hello` reports `kind` and `localPairing`**, so the app
+  offers LAN pairing only to an integration that supports it.
+
+### Changed
+- **Presets ship inside the integration.** HACS installs only
+  `custom_components/svitgrid/`, so the presets never reached an install; they
+  are now bundled there too. The cloud stays the source of updates.
+- **Register maps for direct Modbus harvest survive without the cloud.** Every
+  map the cloud returns is saved, and the integration bundles a copy of every
+  map. Without the cloud, harvest starts on the saved map, or on the bundled
+  one, instead of idling.
+- **A local-only entry starts nothing that calls the cloud**: no reading
+  upload, command polling, MQTT wake, settings sync or preset refresh, so the
+  log shows no 401s. Harvest, local history, the island API and the local
+  calendar scheduler run as usual. Its options menu does not offer "Add
+  another inverter", which registers the inverter with the cloud.
+
+### Fixed
+- **A pairing code that expired on screen left the dialog spinning.** Home
+  Assistant refuses to end a waiting step with an error, so the expiry raised
+  an exception and the dialog never said the code had expired. It now does.
+- **Closing the pairing dialog withdraws the code**, which the app could
+  otherwise still read from `/api/svitgrid/hello`.
+
 ## 0.22.5 — 2026-10-05
 
 ### Added
