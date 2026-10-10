@@ -63,6 +63,7 @@ from .inverter_entry import harvest_config_from_api
 from .island_event_store import IslandEventStore
 from .keystore import (
     ENTRY_ISLAND_DEVICE_IDS,
+    ENTRY_TRUSTED_KEY_IDS,
     PAIRING_ISLAND_DEVICE_ID_PREFIX,
     SvitgridKeystore,
     pairing_island_device_id,
@@ -666,11 +667,28 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if _existing is not None and _existing.trusted_public_keys_hex:
         _trusted_public_keys_hex = dict(_existing.trusted_public_keys_hex)
         _trusted_key_ids = sorted(_trusted_public_keys_hex)
+    _identity = {
+        "api_key": api_key,
+        "public_key_hex": data.get("public_key_hex") or "",
+        "private_key_pem": data.get("private_key_pem") or "",
+        "signing_key_id": data.get("signing_key_id") or "",
+    }
+    if local_only and _existing is not None and _existing.api_key:
+        # One install, one owner: pair-local refuses while any entry exists,
+        # so this should not happen. Should it, the cloud identity stays:
+        # replacing its api_key and keypair would cut the cloud entry off.
+        _LOGGER.warning(
+            "Local-only entry %s found a cloud identity in the keystore; keeping it",
+            entry.entry_id,
+        )
+        _identity = {
+            "api_key": _existing.api_key,
+            "public_key_hex": _existing.public_key_hex,
+            "private_key_pem": _existing.private_key_pem,
+            "signing_key_id": _existing.signing_key_id,
+        }
     await keystore.save(
-        api_key=api_key,
-        public_key_hex=data.get("public_key_hex") or "",
-        private_key_pem=data.get("private_key_pem") or "",
-        signing_key_id=data.get("signing_key_id") or "",
+        **_identity,
         trusted_key_ids=_trusted_key_ids,
         trusted_public_keys_hex=_trusted_public_keys_hex,
     )
@@ -1194,6 +1212,11 @@ async def _adopt_local_pairing_grant(
         trusted[key_id] = public_key_hex
         await keystore.update_trusted_keys_hex(trusted)
     new_data = {k: v for k, v in entry.data.items() if k != LOCAL_PAIRING_GRANT}
+    if key_id and public_key_hex:
+        # Recorded so removing the entry untrusts it again.
+        new_data[ENTRY_TRUSTED_KEY_IDS] = sorted(
+            {*(entry.data.get(ENTRY_TRUSTED_KEY_IDS) or []), key_id}
+        )
     if device_id and island_key:
         new_data[ENTRY_ISLAND_DEVICE_IDS] = sorted(
             {*(entry.data.get(ENTRY_ISLAND_DEVICE_IDS) or []), device_id}
@@ -1249,6 +1272,31 @@ async def _revoke_entry_island_keys(hass: HomeAssistant, entry: ConfigEntry) -> 
         _LOGGER.exception("Could not revoke the island keys of config entry %s", entry.entry_id)
 
 
+async def _untrust_entry_signing_keys(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Untrust the signing keys a LAN pairing trusted for this entry.
+
+    The trusted keys belong to the install, not the entry, so a key left
+    behind could still sign commands for whatever is paired here next. Only
+    the ids this entry recorded are removed. Never raises.
+    """
+    key_ids = set(entry.data.get(ENTRY_TRUSTED_KEY_IDS) or [])
+    if not key_ids:
+        return
+    try:
+        keystore = hass.data.get(DOMAIN, {}).get("keystore") or SvitgridKeystore(hass)
+        state = await keystore.load()
+        if state is None:
+            return
+        trusted = {k: v for k, v in state.trusted_public_keys_hex.items() if k not in key_ids}
+        if trusted != state.trusted_public_keys_hex:
+            await keystore.update_trusted_keys_hex(trusted)
+            _LOGGER.info("Untrusted the signing key(s) of config entry %s", entry.entry_id)
+    except Exception:  # noqa: BLE001
+        _LOGGER.exception("Could not untrust the signing keys of config entry %s", entry.entry_id)
+
+
 async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """The entry is being deleted: revoke the island keys it adopted."""
+    """The entry is being deleted: revoke the island keys it adopted, and for
+    a LAN pairing, untrust the app's signing key."""
     await _revoke_entry_island_keys(hass, entry)
+    await _untrust_entry_signing_keys(hass, entry)

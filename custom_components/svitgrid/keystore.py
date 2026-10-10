@@ -24,6 +24,10 @@ PAIRING_ISLAND_DEVICE_LABEL = "Phone used for setup"
 # pairing. Removing the entry revokes exactly these (issue #6).
 ENTRY_ISLAND_DEVICE_IDS = "island_device_ids"
 
+# Config-entry data key listing the signing key ids a LAN pairing trusted for
+# that entry. Removing the entry untrusts exactly these.
+ENTRY_TRUSTED_KEY_IDS = "trusted_key_ids_granted"
+
 # Roster ids minted by `pairing_island_device_id` start with this.
 PAIRING_ISLAND_DEVICE_ID_PREFIX = "paired-"
 

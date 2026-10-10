@@ -230,3 +230,55 @@ async def test_a_grant_keeps_keys_trusted_earlier(hass, enable_custom_integratio
 
     state = await ks.load()
     assert set(state.trusted_public_keys_hex) == {"old-key", app_key_id}
+
+
+@pytest.mark.asyncio
+async def test_removing_the_entry_untrusts_the_apps_signing_key(hass, enable_custom_integrations):
+    """The signing key was trusted for this station only. Left behind, it
+    could still sign commands for whatever is paired here next."""
+    from custom_components.svitgrid import async_remove_entry
+
+    ks = SvitgridKeystore(hass)
+    await ks.save(
+        api_key="",
+        public_key_hex="04" + "b" * 128,
+        private_key_pem="pem",
+        signing_key_id="ha-old",
+        trusted_key_ids=["other-key"],
+        trusted_public_keys_hex={"other-key": "04" + "c" * 128},
+    )
+    entry, app_key_id, _ = _local_entry()
+    await _setup(hass, entry)
+    assert app_key_id in (await ks.load()).trusted_public_keys_hex
+
+    await async_remove_entry(hass, entry)
+
+    # The instance LAN auth reads; a second Store instance can serve stale data.
+    state = await hass.data[DOMAIN]["keystore"].load()
+    assert app_key_id not in state.trusted_public_keys_hex
+    assert "other-key" in state.trusted_public_keys_hex
+    assert DEVICE_ID not in state.island_keys
+
+
+@pytest.mark.asyncio
+async def test_a_local_entry_never_overwrites_an_existing_identity(
+    hass, enable_custom_integrations
+):
+    """One install, one owner: pair-local refuses when an entry exists. Should
+    a local entry still meet a keystore holding a cloud identity, setup keeps
+    that identity rather than replace its api_key and keypair."""
+    ks = SvitgridKeystore(hass)
+    await ks.save(
+        api_key="cloud-api-key",
+        public_key_hex="04" + "b" * 128,
+        private_key_pem="cloud-pem",
+        signing_key_id="ha-cloud",
+        trusted_key_ids=[],
+    )
+    entry, _, _ = _local_entry()
+    await _setup(hass, entry)
+
+    state = await ks.load()
+    assert state.api_key == "cloud-api-key"
+    assert state.private_key_pem == "cloud-pem"
+    assert state.signing_key_id == "ha-cloud"
