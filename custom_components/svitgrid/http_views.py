@@ -395,7 +395,7 @@ class SvitgridLocalPresetsView(HomeAssistantView):
     async def get(self, request):  # noqa: D102
         hass = request.app["hass"]
         session = local_pairing.get_session(hass)
-        if session is None or not session.is_open:
+        if session is None or session.lan_closed or session.claimed_by is not None:
             return _json_error(404, "no_pending_pairing")
         presets = await hass.async_add_executor_job(list_bundled_presets)
         return self.json({"presets": presets})
@@ -404,17 +404,20 @@ class SvitgridLocalPresetsView(HomeAssistantView):
 class SvitgridPairLocalView(HomeAssistantView):
     """POST /api/svitgrid/pair-local — a guest claims the pending pairing on the LAN.
 
-    Unauthenticated: the caller has no account and no island key yet. What
-    stands in for authentication is the pairing code on the Home Assistant
-    screen, which is single-use, minutes-lived, and cancelled after
-    LOCAL_PAIRING_MAX_WRONG_CODES wrong guesses. The app's signing key also
-    proves possession, the same check as /trust-key.
+    Unauthenticated: the caller has no account and no island key yet. The code
+    is not enough on its own, because /hello publishes it to the whole
+    network. A request that passes the code, the body checks and the signing
+    key's proof of possession (the /trust-key check) becomes a question in the
+    Home Assistant pairing dialog, «Підключити <deviceLabel>?», and this
+    request waits for the owner's answer for up to APPROVAL_TIMEOUT_S. Only an
+    approved claim creates the local-only entry, adds the island key under
+    `deviceId` and trusts the signing key.
 
-    On success the config flow creates a local-only entry, the island key
-    joins the roster under `deviceId`, and the signing key is trusted, so
-    reads, `/commands` and `/events` work at once. The contract (paths,
-    fields, status and error codes) is shared with the Svitgrid app: see the
-    spec "LAN pairing contract" before changing anything here.
+    One install, one owner: refused with `already_configured` while any
+    Svitgrid entry exists, so a guest can never put keys into the keystore
+    beside a cloud station. The contract (paths, fields, status and error
+    codes) is shared with the Svitgrid app: see the spec "LAN pairing
+    contract" and "Approval in Home Assistant" before changing anything here.
     """
 
     url = "/api/svitgrid/pair-local"
@@ -423,10 +426,12 @@ class SvitgridPairLocalView(HomeAssistantView):
 
     async def post(self, request) -> web.Response:  # noqa: D102
         hass = request.app["hass"]
+        if hass.config_entries.async_entries(DOMAIN):
+            return _json_error(409, "already_configured")
         session = local_pairing.get_session(hass)
-        if session is None or session.cancelled:
+        if session is None or session.lan_closed or session.window_closed():
             return _json_error(404, "no_pending_pairing")
-        if session.claimed_by is not None:
+        if session.claimed_by is not None or session.candidate is not None:
             return _json_error(409, "already_claimed")
 
         try:
@@ -436,14 +441,14 @@ class SvitgridPairLocalView(HomeAssistantView):
         if not isinstance(body, dict) or not isinstance(body.get("code"), str):
             return _json_error(400, "bad_request")
 
-        # The code first: everything after it is only for the caller who can
-        # read the Home Assistant screen.
+        # The code first: everything after it is only for a caller who has
+        # the code at all.
         if not session.code_matches(body["code"]):
             left = session.record_wrong_code()
             if left == 0:
-                local_pairing.cancel(hass, session)
                 _LOGGER.warning(
-                    "LAN pairing cancelled after %d wrong codes; start the pairing again",
+                    "LAN pairing closed after %d wrong codes; a cloud claim of the "
+                    "same code still works",
                     session.wrong_codes,
                 )
             return _json_error(403, "wrong_code", attemptsLeft=left)
@@ -490,18 +495,37 @@ class SvitgridPairLocalView(HomeAssistantView):
             inverters=inverters,
             paired_at=_utc_now_iso(),
         )
-        # The awaits above gave the cloud claim, a cancellation or another
-        # pair-local a chance to land; claim_lan settles it atomically.
-        if not session.claim_lan(claim):
-            if session.cancelled:
+        # The awaits above gave an entry, a cloud claim, a closed LAN half or
+        # another candidate a chance to land; request_approval settles it.
+        if hass.config_entries.async_entries(DOMAIN):
+            return _json_error(409, "already_configured")
+        decision = session.request_approval(claim)
+        if decision is None:
+            if session.lan_closed or local_pairing.get_session(hass) is not session:
                 return _json_error(404, "no_pending_pairing")
             return _json_error(409, "already_claimed")
 
-        entry_id = await local_pairing.complete_flow(hass, session)
+        try:
+            answer = await asyncio.wait_for(
+                asyncio.shield(decision), local_pairing.APPROVAL_TIMEOUT_S
+            )
+        except TimeoutError:
+            session.withdraw(claim)
+            return _json_error(408, "approval_timeout")
+        finally:
+            # The request went away (client gone, HA stopping): take the
+            # question back off the owner's screen.
+            session.withdraw(claim)
+
+        if answer == local_pairing.REJECTED:
+            return _json_error(403, "rejected")
+        if answer != local_pairing.APPROVED:
+            return _json_error(404, "no_pending_pairing")
+
+        entry_id = await local_pairing.wait_for_entry(hass, session)
         if entry_id is None:
-            # The claim was accepted but the flow did not produce an entry.
-            # Not in the contract: nothing the app sends can cause it.
-            _LOGGER.error("LAN pairing was claimed but the config flow created no entry")
+            # Approved, but no entry appeared. Nothing the app sends causes it.
+            _LOGGER.error("LAN pairing was approved but the config flow created no entry")
             return _json_error(500, "pairing_failed")
         _LOGGER.info(
             "Paired over the LAN with device %s (entry %s)", identity["device_id"], entry_id

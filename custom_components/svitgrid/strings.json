@@ -74,6 +74,14 @@
           "inverter_serial": "Inverter",
           "model_id": "Model id"
         }
+      },
+      "pair_approval": {
+        "title": "Connect {device}?",
+        "description": "A phone called {device} would like to connect to this Home Assistant over your home network, without a Svitgrid account. If it is your phone, or one you expect, approve it. If you do not recognise it, reject it, and nothing is shared.",
+        "menu_options": {
+          "pair_approve": "Approve",
+          "pair_reject": "Reject"
+        }
       }
     },
     "progress": {
@@ -87,7 +95,7 @@
       "cannot_connect": "Could not reach the Svitgrid cloud. Check your internet.",
       "claim_not_buildable": "The Svitgrid app paired this Home Assistant without an inverter profile, so the cloud refused to create the station. Nothing was created. Update the Svitgrid app, then start the pairing again — a new code will be shown.",
       "pairing_refused": "The Svitgrid cloud refused the pairing: {reason}. Start the pairing again for a new code.",
-      "pairing_cancelled": "The pairing was cancelled after five wrong codes were entered on your network. Start the pairing again for a new code.",
+      "pairing_cancelled": "Pairing over your home network stopped after five wrong codes. Start the pairing again for a new code.",
       "already_in_progress": "This pairing has already been completed."
     },
     "error": {

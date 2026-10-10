@@ -1,10 +1,17 @@
-"""A pending pairing that the cloud or the LAN can claim, whichever is first.
+"""A pending pairing that the cloud or the LAN can claim, and the owner decides.
 
 The config flow shows one code. A signed-in Svitgrid app claims it through the
 cloud, which the flow learns by polling `/ha-pairing/{secret}/status`. A guest
 app, with no account, claims it on the LAN with `POST /api/svitgrid/pair-local`.
 `PendingPairing` is the one place both paths record a claim, so the second
 claimant always loses.
+
+`/hello` publishes the code to anyone on the network, so the code alone does
+not authorise a LAN claim. A LAN claim that passes every check becomes a
+*candidate*: the pairing dialog asks the owner to approve it, and pair-local
+waits for the answer, for up to APPROVAL_TIMEOUT_S. Only an approved candidate
+claims the pairing. While a candidate waits, a cloud claim is held back: it
+wins if the owner rejects, and loses (with a warning) if the owner approves.
 
 When the cloud cannot be reached, the flow mints the code here instead, from
 the cloud's alphabet, and only the LAN can claim it.
@@ -22,7 +29,6 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from homeassistant.core import HomeAssistant
-from homeassistant.data_entry_flow import FlowResultType, UnknownFlow
 
 from .bundled_presets import load_bundled_preset
 from .const import (
@@ -40,15 +46,13 @@ _LOGGER = logging.getLogger(__name__)
 PENDING_PAIRING_KEY = "pending_pairing"
 SESSION_KEY = "local_pairing"
 
-# How long pair-local waits for the flow to create the entry. Creating it
-# includes setting the entry up, which opens the local store.
-_COMPLETE_TIMEOUT_S = 30.0
-_COMPLETE_RETRY_S = 0.05
-# How long pair-local leaves an open browser to finish the flow itself. The
-# browser reacts to the progress event by configuring the flow, and finishing
-# it here first would show that browser a "flow not found" error instead of
-# the new entry. With no browser open, pair-local finishes it after this.
-BROWSER_GRACE_S = 3.0
+# How long pair-local holds a request while the owner decides (contract).
+APPROVAL_TIMEOUT_S = 120
+
+# How long pair-local waits, after approval, for the entry to appear.
+# Creating it includes setting the entry up, which opens the local store.
+_ENTRY_TIMEOUT_S = 30.0
+_ENTRY_RETRY_S = 0.05
 
 _DEFAULT_COMMAND_CONFIG = {"hub_name": "solarman", "slave_id": 1, "battery_voltage": 52.8}
 
@@ -56,9 +60,18 @@ _DEFAULT_COMMAND_CONFIG = {"hub_name": "solarman", "slave_id": 1, "battery_volta
 # may legitimately be unknown until the collector reports it.
 _EYBOND_PROTOCOL = "eybond_at"
 
+# Why the LAN half closed.
+LAN_CLOSED_WRONG_CODES = "wrong_codes"
+LAN_CLOSED_CONFIGURED = "already_configured"
+
+# The owner's answer, as pair-local receives it.
+APPROVED = "approved"
+REJECTED = "rejected"
+GONE = "gone"  # the pairing ended while the request waited
+
 
 class PairingCancelled(Exception):
-    """The pending pairing ended: too many wrong codes on pair-local."""
+    """The pairing ended: too many wrong codes, and nothing else can claim it."""
 
 
 class InvalidClaim(ValueError):
@@ -72,7 +85,7 @@ def mint_code() -> str:
 
 @dataclass
 class LanClaim:
-    """What a successful pair-local hands the config flow."""
+    """A LAN claim that passed every check. A candidate until approved."""
 
     island_key: str
     device_id: str
@@ -87,68 +100,149 @@ class LanClaim:
 
 @dataclass
 class PendingPairing:
-    """One pairing code on offer, and who has claimed it."""
+    """One pairing code on offer, who wants it, and who has it."""
 
     code: str
     flow_id: str | None = None
     pairing_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     wrong_codes: int = 0
     claimed_by: str | None = None  # "cloud" | "lan"
-    cancelled: bool = False
+    # The LAN half ends on too many wrong codes, or when the install already
+    # has a station; a cloud claim of the same code is unaffected.
+    lan_closed: bool = False
+    lan_closed_reason: str | None = None
+    # A LAN claim waiting for the owner, and the approved one.
+    candidate: LanClaim | None = None
     lan_claim: LanClaim | None = None
+    # A cloud claim, as the /status poll returned it.
+    cloud_claim: Any = None
+    # Loop time the pairing window closes; pair-local refuses after it.
+    expires_at: float | None = None
 
     def __post_init__(self) -> None:
-        # Set on a LAN claim and on cancellation. An Event rather than a
-        # Future: a waiter cancelled because the cloud won must not cancel the
-        # state every other reader sees.
-        self._settled = asyncio.Event()
+        self._changed = asyncio.Event()
+        self._decision: asyncio.Future[str] | None = None
+
+    # ── waiting ─────────────────────────────────────────────────────────
+    def _notify(self) -> None:
+        self._changed.set()
+
+    def reset_changed(self) -> None:
+        self._changed.clear()
+
+    async def wait_changed(self) -> None:
+        await self._changed.wait()
+
+    # ── state ───────────────────────────────────────────────────────────
+    def window_closed(self) -> bool:
+        return self.expires_at is not None and asyncio.get_running_loop().time() >= self.expires_at
 
     @property
-    def is_open(self) -> bool:
-        """True while a claim can still succeed."""
-        return self.claimed_by is None and not self.cancelled
+    def lan_open(self) -> bool:
+        """True while a LAN claim may still become a candidate."""
+        return self.claimed_by is None and not self.lan_closed and self.candidate is None
 
     def code_matches(self, code: str) -> bool:
         candidate = code.strip().upper() if isinstance(code, str) else ""
         return hmac.compare_digest(candidate.encode(), self.code.upper().encode())
 
     def record_wrong_code(self) -> int:
-        """Count a wrong code and return the attempts left. At zero the
-        pairing is cancelled."""
+        """Count a wrong code and return the attempts left. At zero the LAN
+        half closes."""
         self.wrong_codes += 1
         left = max(0, LOCAL_PAIRING_MAX_WRONG_CODES - self.wrong_codes)
         if left == 0:
-            self.cancel()
+            self.close_lan(LAN_CLOSED_WRONG_CODES)
         return left
 
-    def claim_cloud(self) -> bool:
-        """Record a cloud claim. False when the LAN claimed first."""
-        if not self.is_open:
-            return False
-        self.claimed_by = "cloud"
-        return True
-
-    def claim_lan(self, claim: LanClaim) -> bool:
-        """Record a LAN claim. False when anything claimed first."""
-        if not self.is_open:
-            return False
-        self.claimed_by = "lan"
-        self.lan_claim = claim
-        self._settled.set()
-        return True
-
-    def cancel(self) -> None:
-        if self.claimed_by is not None:
+    def close_lan(self, reason: str) -> None:
+        if self.lan_closed:
             return
-        self.cancelled = True
-        self._settled.set()
+        self.lan_closed = True
+        self.lan_closed_reason = reason
+        self._notify()
 
-    async def wait_for_lan(self) -> LanClaim:
-        """Resolve on a LAN claim; raise PairingCancelled on cancellation."""
-        await self._settled.wait()
-        if self.lan_claim is None:
-            raise PairingCancelled("the pending pairing was cancelled")
-        return self.lan_claim
+    # ── the LAN candidate ───────────────────────────────────────────────
+    def request_approval(self, claim: LanClaim) -> asyncio.Future[str] | None:
+        """Make `claim` the candidate the owner is asked about. None when the
+        LAN half is closed, the pairing is claimed, or another candidate
+        already waits (refused rather than queued: a queue would let a
+        stranger's request be approved by a tap meant for the owner's phone)."""
+        if not self.lan_open:
+            return None
+        self.candidate = claim
+        self._decision = asyncio.get_running_loop().create_future()
+        self._notify()
+        return self._decision
+
+    def _decide(self, answer: str) -> None:
+        if self._decision is not None and not self._decision.done():
+            self._decision.set_result(answer)
+        self._decision = None
+        self.candidate = None
+
+    def approve(self, shown: LanClaim | None) -> bool:
+        """The owner approved `shown`, the candidate the dialog named. False
+        when it no longer waits: it timed out, was withdrawn, or another
+        phone's claim took its place. Approving whatever waits now would grant
+        a phone under another phone's name."""
+        if shown is None or self.candidate is not shown or self.claimed_by is not None:
+            return False
+        self.lan_claim = self.candidate
+        self.claimed_by = "lan"
+        if self.cloud_claim is not None:
+            _LOGGER.warning(
+                "The Svitgrid cloud accepted a claim of this pairing code while "
+                "the owner was approving a LAN claim. The LAN claim wins; the "
+                "cloud keeps that claim until it expires, and nothing finalizes it"
+            )
+        self._decide(APPROVED)
+        self._notify()
+        return True
+
+    def reject(self) -> None:
+        """The owner rejected the waiting candidate. The pairing stays pending."""
+        if self.candidate is None:
+            return
+        self._decide(REJECTED)
+        self._settle_held_cloud_claim()
+        self._notify()
+
+    def withdraw(self, claim: LanClaim) -> None:
+        """Drop `claim` as the candidate: nobody answered in time, or its
+        request went away. The pairing stays pending."""
+        if self.candidate is not claim:
+            return
+        self._decide(GONE)
+        self._settle_held_cloud_claim()
+        self._notify()
+
+    # ── the cloud claim ─────────────────────────────────────────────────
+    def offer_cloud_claim(self, status: Any) -> None:
+        """The /status poll saw a claim. It wins unless the LAN won first; it
+        is held while the owner decides on a LAN candidate."""
+        if self.claimed_by == "lan":
+            _LOGGER.warning(
+                "The Svitgrid cloud reports a claim of this pairing code after a "
+                "LAN claim won. The cloud keeps that claim until it expires, and "
+                "nothing finalizes it"
+            )
+            return
+        if self.claimed_by == "cloud":
+            return
+        self.cloud_claim = status
+        self._settle_held_cloud_claim()
+        self._notify()
+
+    def _settle_held_cloud_claim(self) -> None:
+        if self.cloud_claim is not None and self.claimed_by is None and self.candidate is None:
+            self.claimed_by = "cloud"
+
+    def end(self) -> None:
+        """The pairing is over. A candidate still waiting hears GONE."""
+        if self.candidate is not None:
+            self._decide(GONE)
+        self._notify()
 
 
 def publish(hass: HomeAssistant, session: PendingPairing) -> None:
@@ -177,15 +271,10 @@ def close(hass: HomeAssistant, session: PendingPairing | None) -> None:
     if session is not None and current is not session:
         return
     data[PENDING_PAIRING_KEY] = None
-    if session is not None and session.claimed_by is None:
-        session.cancel()
-        data.pop(SESSION_KEY, None)
-
-
-def cancel(hass: HomeAssistant, session: PendingPairing) -> None:
-    """End the pending pairing now (too many wrong codes)."""
-    session.cancel()
-    close(hass, session)
+    if session is not None:
+        session.end()
+        if session.claimed_by is None:
+            data.pop(SESSION_KEY, None)
 
 
 def build_local_inverters(raw_inverters: list[Any]) -> list[dict[str, Any]]:
@@ -258,44 +347,19 @@ def _entry_for(hass: HomeAssistant, session: PendingPairing) -> str | None:
     return None
 
 
-async def complete_flow(hass: HomeAssistant, session: PendingPairing) -> str | None:
-    """Drive the config flow to its entry and return the entry id.
+async def wait_for_entry(hass: HomeAssistant, session: PendingPairing) -> str | None:
+    """The id of the entry an approved claim created, or None.
 
-    Home Assistant finishes a progress step only when something calls
-    `async_configure`, normally the browser showing the code. A guest pairing
-    must finish with nobody at that screen, so pair-local does it, after
-    giving an open browser BROWSER_GRACE_S to do it first. A still-progressing
-    flow is retried briefly. If the browser finished the flow, the entry is
-    found by the pairing id it carries.
+    The owner's Approve tap runs the step that creates the entry, in the
+    browser's request; pair-local only waits for it to appear.
     """
     loop = asyncio.get_running_loop()
-    deadline = loop.time() + _COMPLETE_TIMEOUT_S
-    grace_end = loop.time() + BROWSER_GRACE_S
-    while loop.time() < grace_end:
+    deadline = loop.time() + _ENTRY_TIMEOUT_S
+    while True:
         entry_id = _entry_for(hass, session)
-        if entry_id is not None:
+        if entry_id is not None or loop.time() >= deadline:
             return entry_id
-        await asyncio.sleep(_COMPLETE_RETRY_S)
-    flow_id = session.flow_id
-    while loop.time() < deadline:
-        if flow_id is None:
-            break
-        try:
-            result = await hass.config_entries.flow.async_configure(flow_id)
-        except UnknownFlow:
-            flow_id = None
-            break
-        if result["type"] == FlowResultType.CREATE_ENTRY:
-            return result["result"].entry_id
-        if result["type"] == FlowResultType.ABORT:
-            break
-        await asyncio.sleep(_COMPLETE_RETRY_S)
-    while loop.time() < deadline:
-        entry_id = _entry_for(hass, session)
-        if entry_id is not None:
-            return entry_id
-        await asyncio.sleep(_COMPLETE_RETRY_S)
-    return _entry_for(hass, session)
+        await asyncio.sleep(_ENTRY_RETRY_S)
 
 
 _ISLAND_KEY = re.compile(r"^[A-Za-z0-9_-]{43,512}$")

@@ -12,7 +12,6 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, patch
 
-import pytest
 from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
 
@@ -60,22 +59,13 @@ async def test_only_the_code_is_published(hass: HomeAssistant, enable_custom_int
         assert set(_pending(hass)) == {"code"}
 
 
-@pytest.mark.parametrize(
-    "failure",
-    [
-        pytest.param("expired", id="the pairing window ran out"),
-        pytest.param("failed", id="polling failed"),
-    ],
-)
-async def test_the_code_stops_being_published_once_the_pairing_ends(
-    hass: HomeAssistant, enable_custom_integrations, failure: str
+async def test_the_code_stops_being_published_once_the_pairing_expires(
+    hass: HomeAssistant, enable_custom_integrations
 ) -> None:
     from custom_components.svitgrid.pairing_client import PairingExpired
 
     async def _instant_sleep(_: float) -> None:
         pass
-
-    error = PairingExpired() if failure == "expired" else RuntimeError("boom")
 
     with (
         patch("custom_components.svitgrid.config_flow.PairingClient") as mock_client_cls,
@@ -85,11 +75,45 @@ async def test_the_code_stops_being_published_once_the_pairing_ends(
         mock_client.start = AsyncMock(
             return_value={"secret": "s" * 40, "code": "7K9PA2", "expiresIn": 300}
         )
-        mock_client.get_status = AsyncMock(side_effect=error)
+        mock_client.get_status = AsyncMock(side_effect=PairingExpired())
 
         await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": config_entries.SOURCE_USER}
         )
         await hass.async_block_till_done()
 
+    assert not _pending(hass)
+
+
+async def test_a_failing_cloud_poll_keeps_the_code_for_the_lan_until_the_window_ends(
+    hass: HomeAssistant, enable_custom_integrations
+) -> None:
+    """Losing the cloud after /start ends only the cloud path. The code stays
+    on offer, because a guest can still claim it over the LAN, and goes when
+    the pairing window does."""
+    import asyncio
+
+    with (
+        patch("custom_components.svitgrid.config_flow.PairingClient") as mock_client_cls,
+        patch("custom_components.svitgrid.config_flow.PAIRING_POLL_INTERVAL_S", 0),
+        patch("custom_components.svitgrid.config_flow.PAIRING_MAX_POLL_DURATION_S", 0.3),
+    ):
+        mock_client = mock_client_cls.return_value
+        mock_client.start = AsyncMock(
+            return_value={"secret": "s" * 40, "code": "7K9PA2", "expiresIn": 300}
+        )
+        mock_client.get_status = AsyncMock(side_effect=RuntimeError("boom"))
+
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": config_entries.SOURCE_USER}
+        )
+        await asyncio.sleep(0.05)
+        assert _pending(hass) == {"code": "7K9PA2"}
+
+        await asyncio.sleep(0.4)
+        await hass.async_block_till_done()
+        ended = await hass.config_entries.flow.async_configure(result["flow_id"])
+
+    assert ended["type"] == "abort"
+    assert ended["reason"] == "pairing_expired"
     assert not _pending(hass)
