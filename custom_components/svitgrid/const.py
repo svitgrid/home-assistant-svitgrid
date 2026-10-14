@@ -280,6 +280,10 @@ INTERNAL_COMMANDS = frozenset(
 DISPATCHABLE_COMMANDS = frozenset(
     {
         "set_battery_charge",
+        # Ends a cloud charge window: the API sends the slot table it captured
+        # from the set_battery_charge ACK. Without it the window's program
+        # stayed on the inverter after the window ended.
+        "restore_battery_charge",
         "set_work_mode",
         "set_solar_sell",
         "set_grid_charge_toggle",

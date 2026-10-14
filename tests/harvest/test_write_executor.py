@@ -141,6 +141,24 @@ def _spec_battery_charge_slot() -> RegisterSpec:
     )
 
 
+def _words_via(read_word):
+    """A read_words stand-in that reads each address through *read_word*.
+
+    Keeps a test's read_word side-effect sequence meaningful: the batched
+    verify read consumes it in write order.
+    """
+
+    async def read_words(hass, spec, cfg, unit, addresses):
+        out = {}
+        for a in addresses:
+            v = await read_word(hass, spec, cfg, unit, a)
+            if v is not None:
+                out[a] = v
+        return out
+
+    return read_words
+
+
 def _make_executor(
     spec: RegisterSpec | None, read_word_side_effect=None, write_registers_side_effect=None
 ):
@@ -181,6 +199,7 @@ async def test_dispatch_full_word_happy_path():
 
     with (
         patch(f"{MODULE}.read_word", mock_read),
+        patch(f"{MODULE}.read_words", _words_via(mock_read)),
         patch(f"{MODULE}.write_registers", mock_write),
     ):
         result = await executor.dispatch("set_work_mode", {"workMode": 3})
@@ -207,6 +226,7 @@ async def test_dispatch_bit_field_prior_read_and_rmw():
 
     with (
         patch(f"{MODULE}.read_word", mock_read),
+        patch(f"{MODULE}.read_words", _words_via(mock_read)),
         patch(f"{MODULE}.write_registers", mock_write),
     ):
         result = await executor.dispatch("set_gen_force", {"genForce": 1})
@@ -224,28 +244,36 @@ async def test_dispatch_bit_field_prior_read_and_rmw():
 
 @pytest.mark.asyncio
 async def test_dispatch_slot_bit_field_prior_rmw():
-    """slot + bit:0 with clear_mask: prior read at slot-resolved address → RMW written → verified.
+    """slot + bit:0 with clear_mask: the slot table is read first, the enable
+    word is a read-modify-write of its live value, and both writes verify.
 
     Setup:
       - slotIndex = 2, count = 6, stride = 1
       - enable field: base = 172, bit:0, clear_mask = 0x03
         → resolved address = 172 + 2*1 = 174
-        → prior seeded as 0xF2 = 0b11110010
+        → live value 0xF2 = 0b11110010
         → written value = (0xF2 & ~0x03) | (1 << 0) = 0xF0 | 1 = 241
       - start field: base = 148, full_word
         → resolved address = 148 + 2*1 = 150
         → written value = 800
-
-    read_word call order: prior@174, verify@150, verify@174
     """
     spec = _spec_battery_charge_slot()
-    executor, mock_read, mock_write = _make_executor(spec)
+    executor, _read, mock_write = _make_executor(spec)
+    registers = {174: 0xF2}
+    table_reads: list[list[int]] = []
 
-    # [prior@174 → 0xF2, verify@150 → 800, verify@174 → 241]
-    mock_read.side_effect = [0xF2, 800, 241]
+    async def fake_read_words(hass, spec_arg, cfg, unit, addresses):
+        table_reads.append(sorted(addresses))
+        return {a: registers.get(a, 0) for a in addresses}
+
+    async def fake_write(hass, spec_arg, cfg, writes):
+        for _u, a, v in writes:
+            registers[a] = v
+
+    mock_write.side_effect = fake_write
 
     with (
-        patch(f"{MODULE}.read_word", mock_read),
+        patch(f"{MODULE}.read_words", fake_read_words),
         patch(f"{MODULE}.write_registers", mock_write),
     ):
         result = await executor.dispatch(
@@ -253,13 +281,13 @@ async def test_dispatch_slot_bit_field_prior_rmw():
             {"slotIndex": 2, "slotStart": 800, "gridChargeEnabled": True},
         )
 
-    # prior was read at address 174 (172 + 2*1)
-    assert mock_read.call_args_list[0].args[-1] == 174
-
-    # write_registers called with exact (unit, address, value) pairs in field order
+    # The whole table first, then the verify of what was written.
+    assert table_reads[0] == [*range(148, 154), *range(172, 178)]
+    assert table_reads[1] == [150, 174]
     mock_write.assert_awaited_once_with(executor._hass, spec, _CFG, [(1, 150, 800), (1, 174, 241)])
-
-    assert result == {"written": [[1, 150, 800], [1, 174, 241]], "verified": True}
+    assert result["written"] == [[1, 150, 800], [1, 174, 241]]
+    assert result["verified"] is True
+    assert result["prevSlots"][2]["enable"] == 0xF2
 
 
 # ---------------------------------------------------------------------------
@@ -274,6 +302,7 @@ async def test_dispatch_unsupported_command_raises():
 
     with (
         patch(f"{MODULE}.read_word", mock_read),
+        patch(f"{MODULE}.read_words", _words_via(mock_read)),
         patch(f"{MODULE}.write_registers", mock_write),
         pytest.raises(NotImplementedError),
     ):
@@ -292,6 +321,7 @@ async def test_dispatch_spec_none_raises():
 
     with (
         patch(f"{MODULE}.read_word", mock_read),
+        patch(f"{MODULE}.read_words", _words_via(mock_read)),
         patch(f"{MODULE}.write_registers", mock_write),
         pytest.raises(RuntimeError, match="spec_not_loaded"),
     ):
@@ -313,6 +343,7 @@ async def test_dispatch_verify_mismatch_raises():
 
     with (
         patch(f"{MODULE}.read_word", mock_read),
+        patch(f"{MODULE}.read_words", _words_via(mock_read)),
         patch(f"{MODULE}.write_registers", mock_write),
         pytest.raises(RuntimeError, match="verify_failed:142"),
     ):
@@ -333,6 +364,7 @@ async def test_dispatch_prior_read_fail_raises():
 
     with (
         patch(f"{MODULE}.read_word", mock_read),
+        patch(f"{MODULE}.read_words", _words_via(mock_read)),
         patch(f"{MODULE}.write_registers", mock_write),
         pytest.raises(RuntimeError, match="prior_read_failed:326"),
     ):
@@ -354,6 +386,7 @@ async def test_set_battery_charge_routes_through_dispatch():
 
     with (
         patch(f"{MODULE}.read_word", mock_read),
+        patch(f"{MODULE}.read_words", _words_via(mock_read)),
         patch(f"{MODULE}.write_registers", mock_write),
     ):
         result = await executor.set_battery_charge({"chargeLimit": 80})
@@ -376,6 +409,7 @@ async def test_dispatch_verify_read_none_raises():
 
     with (
         patch(f"{MODULE}.read_word", mock_read),
+        patch(f"{MODULE}.read_words", _words_via(mock_read)),
         patch(f"{MODULE}.write_registers", mock_write),
         pytest.raises(RuntimeError, match="verify_read_failed:142"),
     ):
@@ -456,6 +490,7 @@ async def test_real_set_prefixed_cloud_command_resolves_against_vendored_spec():
 
     with (
         patch(f"{MODULE}.read_word", fake_read),
+        patch(f"{MODULE}.read_words", _words_via(fake_read)),
         patch(f"{MODULE}.write_registers", fake_write),
     ):
         # Must NOT raise NotImplementedError — the real cloud name now resolves.
@@ -477,6 +512,7 @@ async def test_legacy_set_battery_charge_alias_resolves_against_vendored_spec():
 
     with (
         patch(f"{MODULE}.read_word", fake_read),
+        patch(f"{MODULE}.read_words", _words_via(fake_read)),
         patch(f"{MODULE}.write_registers", fake_write),
     ):
         result = await executor.dispatch("set_battery_charge", vector["payload"])
@@ -486,22 +522,26 @@ async def test_legacy_set_battery_charge_alias_resolves_against_vendored_spec():
 
 
 @pytest.mark.asyncio
-async def test_dispatch_skips_the_prior_read_of_a_field_the_payload_omits():
-    """An omitted read-modify-write field is not written, so it is not read first.
+async def test_dispatch_does_not_write_a_field_the_payload_omits():
+    """An omitted field is not written, and its register keeps its value.
 
-    A failed read of a register the command never writes must not fail it.
+    The slot table is still read in full first, as the edge firmware does: it
+    is the restore's record of the owner's slots.
     """
     spec = _spec_battery_charge_slot()
-    executor, mock_read, mock_write = _make_executor(spec)
-    mock_read.side_effect = [800]  # verify@148 only
+    executor, _read, mock_write = _make_executor(spec)
+
+    async def fake_read_words(hass, spec_arg, cfg, unit, addresses):
+        return {a: (800 if a == 148 else 0) for a in addresses}
 
     with (
-        patch(f"{MODULE}.read_word", mock_read),
+        patch(f"{MODULE}.read_words", fake_read_words),
         patch(f"{MODULE}.write_registers", mock_write),
     ):
         result = await executor.dispatch(
             "set_battery_charge_slot", {"slotIndex": 0, "slotStart": 800}
         )
 
-    assert [c.args[-1] for c in mock_read.call_args_list] == [148]
-    assert result == {"written": [[1, 148, 800]], "verified": True}
+    mock_write.assert_awaited_once_with(executor._hass, spec, _CFG, [(1, 148, 800)])
+    assert result["written"] == [[1, 148, 800]]
+    assert result["verified"] is True

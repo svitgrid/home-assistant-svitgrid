@@ -2,7 +2,9 @@
 
 Handles signed control commands by:
   1. Looking up the WriteCommand in the spec.
-  2. Reading prior register values for bit:N / clear_mask fields (RMW).
+  2. Reading prior register values for bit:N / clear_mask fields (RMW), and
+     for a slot command the whole slot table, which the ACK reports back as
+     ``prevSlots``.
   3. Computing the exact (unit, address, value) writes via compute_register_writes.
   4. Writing them via write_registers.
   5. Reading each written address back and verifying the value matches.
@@ -19,9 +21,15 @@ import logging
 from typing import Any
 
 from ..executors.base import BaseExecutor
-from .register_spec import FieldWrite, RegisterSpec, WriteCommand
-from .transport import read_word, write_registers
-from .write_compute import compute_register_writes, is_set
+from .register_spec import FieldWrite, RegisterSpec, SlotSpec, WriteCommand
+from .transport import read_word, read_words, write_registers
+from .write_compute import compute_register_writes, is_set, program_field
+
+# Commands that run on another command's recipe. The API ends a charge window
+# with ``restore_battery_charge``, whose payload has the same shape as
+# ``set_battery_charge``, and the edge firmware serves both names with one
+# ``execute_battery_charge``. No register spec carries a restore recipe.
+_RECIPE_ALIASES = {"restore_battery_charge": "set_battery_charge"}
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -40,34 +48,81 @@ def _collect_prior_addresses(
     cmd: WriteCommand,
     payload: dict[str, Any],
 ) -> set[int]:
-    """Return the set of register addresses that need a prior read.
+    """Return the top-level register addresses that need a prior read.
 
-    A field the payload omits is not written, so it is not read either.
-    For top-level fields the address is stored directly in ``f.address``.
-    For slot fields the address is ``f.base + slot_idx * stride``, where
-    ``slot_idx`` is read from the payload (or the via_next_slot variant).
+    A field the payload omits is not written, so it is not read either. Slot
+    fields need none of their own: a slot command reads the whole slot table
+    first (see ``_slot_table_addresses``).
     """
-    addrs: set[int] = set()
+    return {
+        f.address
+        for f in cmd.fields
+        if _needs_prior(f) and is_set(f, payload) and f.address is not None
+    }
 
-    for f in cmd.fields:
-        if _needs_prior(f) and is_set(f, payload) and f.address is not None:
-            addrs.add(f.address)
 
-    if cmd.slot is not None:
-        s = cmd.slot
-        idx = int(payload[s.index_field])
-        # Range-check the slot index BEFORE deriving an address, mirroring
-        # compute_register_writes — otherwise a bad slotIndex would read a
-        # bogus prior address before the later ValueError fires.
-        if not (0 <= idx < s.count):
-            raise ValueError(f"slot index {idx} out of range 0..{s.count - 1}")
-        for f in s.fields:
-            if _needs_prior(f) and is_set(f, payload):
-                slot_idx = ((idx + 1) % s.count) if f.via_next_slot else idx
-                addr = f.base + slot_idx * s.stride  # type: ignore[operator]
-                addrs.add(addr)
+def _slot_table_addresses(slot: SlotSpec) -> list[int]:
+    """Every register of every slot: the pre-read a slot command makes.
 
-    return addrs
+    The edge firmware reads the whole table before it writes, and aborts when
+    it cannot (``execute_battery_charge``). The table is the enable word's
+    read-modify-write base and the ``prevSlots`` the ACK reports back, which
+    the API hands to the window-end restore.
+    """
+    return sorted(
+        {f.base + i * slot.stride for f in slot.fields for i in range(slot.count)}  # type: ignore[operator]
+    )
+
+
+def _prev_slot_fields(slot: SlotSpec, table: dict[int, int]) -> dict[str, Any]:
+    """The prior-state fields of the firmware's ``set_battery_charge`` result.
+
+    ``prevSlots`` is the table in the firmware's entry shape; the scalars
+    describe slot 1, as the firmware's do. A register the recipe does not map
+    reports 0, as in the firmware. ``end`` is the next slot's start unless the
+    recipe has an end register (the firmware reports 0 there; the phone
+    harvester reports the next start, as here).
+    """
+
+    def value(key: str, i: int) -> int:
+        f = program_field(slot, key)
+        if f is None:
+            return 0
+        return table.get(f.base + i * slot.stride, 0)  # type: ignore[operator]
+
+    entries = []
+    for i in range(slot.count):
+        has_end = program_field(slot, "end") is not None
+        end = value("end", i) if has_end else value("start", (i + 1) % slot.count)
+        entries.append(
+            {
+                "start": value("start", i),
+                "end": end,
+                "power": value("power", i),
+                "voltage": value("voltage", i),
+                "soc": value("soc", i),
+                "enable": value("enable", i),
+            }
+        )
+    first = entries[0]
+    return {
+        "prevSlotStart": first["start"],
+        "prevSlotEnd": first["end"],
+        "prevPowerLimit": first["power"],
+        "prevChargeVoltage": first["voltage"],
+        "prevGridChargeSoc": first["soc"],
+        "prevGridChargeEnable": first["enable"],
+        "prevSlots": entries,
+    }
+
+
+def _find_command(spec: RegisterSpec, command_name: str) -> WriteCommand | None:
+    """Return the recipe for *command_name*, or for the command it aliases."""
+    for name in (command_name, _RECIPE_ALIASES.get(command_name)):
+        cmd = next((c for c in spec.writes if c.command == name), None)
+        if cmd is not None:
+            return cmd
+    return None
 
 
 class WriteExecutor(BaseExecutor):
@@ -102,11 +157,12 @@ class WriteExecutor(BaseExecutor):
         -----
         1. Validate spec is loaded.
         2. Find the WriteCommand by name (→ NotImplementedError if absent).
-        3. Read prior values for all bit/RMW addresses.
+        3. Read prior values for all bit/RMW addresses and any slot table.
         4. Compute the (unit, address, value) writes.
         5. Write them.
         6. Verify each written address reads back the expected value.
-        7. Return ``{"written": [...], "verified": True}``.
+        7. Return ``{"written": [...], "verified": True}``, plus the
+           firmware's ``prev*`` fields and ``prevSlots`` for a slot command.
         """
         # 1. Spec guard
         spec: RegisterSpec | None = self._spec_holder.spec
@@ -114,32 +170,48 @@ class WriteExecutor(BaseExecutor):
             raise RuntimeError("spec_not_loaded")
 
         # 2. Find command
-        cmd: WriteCommand | None = next((c for c in spec.writes if c.command == command_name), None)
+        cmd = _find_command(spec, command_name)
         if cmd is None:
             raise NotImplementedError(command_name)
 
-        # 3. Gather prior values for bit/RMW fields
-        prior_addrs = _collect_prior_addresses(cmd, payload)
+        # 3. Gather prior values for bit/RMW fields, and a slot command's table
+        unit_id = spec.default_slave_id
         prior: dict[int, int] = {}
-        for addr in prior_addrs:
-            val = await read_word(self._hass, spec, self._cfg, spec.default_slave_id, addr)
+        for addr in _collect_prior_addresses(cmd, payload):
+            val = await read_word(self._hass, spec, self._cfg, unit_id, addr)
             if val is None:
                 raise RuntimeError(f"prior_read_failed:{addr}")
             prior[addr] = val
+        if cmd.slot is not None:
+            wanted = _slot_table_addresses(cmd.slot)
+            table = await read_words(self._hass, spec, self._cfg, unit_id, wanted)
+            missing = [a for a in wanted if a not in table]
+            if missing:
+                raise RuntimeError(f"prior_read_failed:{missing[0]}")
+            prior.update(table)
 
         # 4. Compute writes
-        writes = compute_register_writes(cmd, payload, prior, unit_id=spec.default_slave_id)
+        writes = compute_register_writes(cmd, payload, prior, unit_id=unit_id)
 
         # 5. Write
         await write_registers(self._hass, spec, self._cfg, writes)
 
-        # 6. Verify read-back
+        # 6. Verify read-back, one connection per unit
+        by_unit: dict[int, list[int]] = {}
+        for unit, addr, _expected in writes:
+            by_unit.setdefault(unit, []).append(addr)
+        read_back: dict[tuple[int, int], int] = {}
+        for unit, addrs in by_unit.items():
+            got = await read_words(self._hass, spec, self._cfg, unit, addrs)
+            read_back.update({(unit, a): v for a, v in got.items()})
         for unit, addr, expected in writes:
-            read_back = await read_word(self._hass, spec, self._cfg, unit, addr)
-            if read_back is None:
+            if (unit, addr) not in read_back:
                 raise RuntimeError(f"verify_read_failed:{addr}")
-            if read_back != expected:
+            if read_back[(unit, addr)] != expected:
                 raise RuntimeError(f"verify_failed:{addr}")
 
         # 7. Return result
-        return {"written": [[u, a, v] for u, a, v in writes], "verified": True}
+        result: dict[str, Any] = {"written": [[u, a, v] for u, a, v in writes], "verified": True}
+        if cmd.slot is not None:
+            result.update(_prev_slot_fields(cmd.slot, prior))
+        return result

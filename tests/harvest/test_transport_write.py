@@ -374,3 +374,56 @@ async def test_read_word_honours_an_explicit_fc04():
 
     assert result == 9
     assert captured["ranges"] == [(1, 40, 1, "FC04")]
+
+
+# ---------------------------------------------------------------------------
+# read_words — one connection, contiguous ranges
+# ---------------------------------------------------------------------------
+
+
+async def test_read_words_reads_contiguous_addresses_as_one_range():
+    """A slot table (148..177 on a Deye) is one FC03 frame, not 30 connections."""
+    from custom_components.svitgrid.harvest import transport
+
+    hass = _FakeHass()
+    spec = _spec("solarman_v5")
+    cfg = {"ip": "192.168.1.1", "logger_serial": "12345", "port": "8899", "slave_id": "1"}
+
+    fake_sm = MagicMock()
+    fake_sm.read_holding_registers.side_effect = lambda register_addr, quantity: [
+        register_addr + i for i in range(quantity)
+    ]
+    FakeSM = MagicMock(return_value=fake_sm)
+    fake_mod = types.ModuleType("pysolarmanv5")
+    fake_mod.PySolarmanV5 = FakeSM  # type: ignore[attr-defined]
+
+    with patch.dict(sys.modules, {"pysolarmanv5": fake_mod}):
+        got = await transport.read_words(hass, spec, cfg, 1, [150, 148, 149, 300])
+
+    assert got == {148: 148, 149: 149, 150: 150, 300: 300}
+    assert FakeSM.call_count == 1
+    calls = [c.kwargs for c in fake_sm.read_holding_registers.call_args_list]
+    assert calls == [
+        {"register_addr": 148, "quantity": 3},
+        {"register_addr": 300, "quantity": 1},
+    ]
+
+
+async def test_read_words_returns_empty_on_exception():
+    from custom_components.svitgrid.harvest import transport
+
+    hass = _FakeHass()
+    spec = _spec("solarman_v5")
+    cfg = {"ip": "192.168.1.1", "logger_serial": "12345", "port": "8899", "slave_id": "1"}
+
+    FakeSM = MagicMock(side_effect=OSError("connection refused"))
+    fake_mod = types.ModuleType("pysolarmanv5")
+    fake_mod.PySolarmanV5 = FakeSM  # type: ignore[attr-defined]
+
+    with (
+        patch.dict(sys.modules, {"pysolarmanv5": fake_mod}),
+        patch.object(transport, "_SOLARMAN_CONNECT_BACKOFF", 0),
+    ):
+        got = await transport.read_words(hass, spec, cfg, 1, [148])
+
+    assert got == {}

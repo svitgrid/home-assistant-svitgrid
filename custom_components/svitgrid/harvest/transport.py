@@ -287,6 +287,57 @@ async def read_word(
         return None
 
 
+def _contiguous_ranges(
+    unit_id: int, addresses: list[int], function_code: str
+) -> list[tuple[int, int, int, str]]:
+    """Group *addresses* into ``(unit, start, count, fc)`` ranges of at most
+    ``MAX_RANGE`` registers."""
+    addrs = sorted(set(addresses))
+    if not addrs:
+        return []
+    ranges: list[tuple[int, int, int, str]] = []
+    start = prev = addrs[0]
+    for a in addrs[1:]:
+        if a == prev + 1 and (a - start + 1) <= MAX_RANGE:
+            prev = a
+            continue
+        ranges.append((unit_id, start, prev - start + 1, function_code))
+        start = prev = a
+    ranges.append((unit_id, start, prev - start + 1, function_code))
+    return ranges
+
+
+async def read_words(
+    hass,
+    spec: RegisterSpec,
+    cfg: dict,
+    unit_id: int,
+    addresses: list[int],
+) -> dict[int, int]:
+    """Read holding registers *addresses* over one connection.
+
+    Returns ``{address: value}`` for every register that was read. An address
+    missing from the result was not read; on any error the result is empty.
+    Contiguous addresses go out as one frame, so a Deye slot table (30
+    registers) costs one request instead of 30 connections.
+    """
+    ranges = _contiguous_ranges(unit_id, list(addresses), "FC03")
+    if not ranges:
+        return {}
+    try:
+        if spec.protocol == "solarman_v5":
+            raw = await hass.async_add_executor_job(_read_solarman, cfg, ranges)
+        elif spec.protocol == "modbus_tcp":
+            raw = await hass.async_add_executor_job(_read_modbus, cfg, ranges)
+        else:
+            return {}
+    except Exception:
+        _LOGGER.debug("read_words error unit=%s addrs=%s", unit_id, sorted(addresses))
+        return {}
+    got = raw.get(unit_id, {})
+    return {a: got[a] for a in addresses if a in got}
+
+
 async def write_registers(
     hass,
     spec: RegisterSpec,
