@@ -28,12 +28,25 @@ from custom_components.svitgrid.harvest.event_evaluator import (
 )
 from custom_components.svitgrid.harvest.register_spec import WriteCommand
 from custom_components.svitgrid.harvest.write_compute import compute_register_writes
+from custom_components.svitgrid.harvest.write_executor import _RECIPE_ALIASES
 
 _VECTORS = Path(__file__).parent.parent / "fixtures" / "write-golden-vectors.json"
 
 _NOW = datetime(2026, 10, 14, 10, 30, tzinfo=UTC)
 _SCHEDULE = {"startTime": "10:00", "endTime": "11:00", "recurrence": "daily"}
 _READING = {"batterySoc": 40, "pvPower": 0, "gridPower": 300, "loadPower": 300}
+# A captured slot table (the set_battery_charge ACK's prevSlots).
+_TABLE = [
+    {
+        "start": h * 400,
+        "end": (h + 1) * 400 % 2400,
+        "power": 5000,
+        "voltage": 5300,
+        "soc": 20,
+        "enable": 0,
+    }
+    for h in range(6)
+]
 
 
 def _recipes() -> dict[tuple[str, str], WriteCommand]:
@@ -102,7 +115,9 @@ def _island_commands() -> list[tuple[str, str, dict]]:
         decision = evaluate_event(event, _READING, {}, _NOW, "UTC")
         for name, payload in decision.commands:
             out.append((f"{label}/activate", name, payload))
-        active_state = dict(decision.new_state, status="active", gridFallbackFired=True)
+        active_state = dict(
+            decision.new_state, status="active", gridFallbackFired=True, prevSlots=_TABLE
+        )
         for name, payload in _restore_commands(event, active_state):
             out.append((f"{label}/restore", name, payload))
     return out
@@ -123,8 +138,9 @@ def test_the_island_emits_commands_to_check():
 )
 def test_every_island_payload_computes_on_every_recipe(label, name, payload):
     checked = 0
+    recipe = _RECIPE_ALIASES.get(name, name)
     for (model_id, command), cmd in _recipes().items():
-        if command != name:
+        if command != recipe:
             continue
         writes = compute_register_writes(cmd, payload, {})
         assert writes, f"{model_id}: {name} produced no writes"
