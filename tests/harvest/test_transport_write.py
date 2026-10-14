@@ -12,6 +12,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from custom_components.svitgrid.harvest.register_spec import RegisterSpec
+from tests.harvest.lib_doubles import modbus_instance, solarman_instance, solarman_module
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -46,60 +47,83 @@ class _FakeHass:
 # ---------------------------------------------------------------------------
 
 
-def test_write_solarman_calls_write_holding_registers():
-    """_write_solarman must call write_holding_registers once per (unit,addr,val)."""
+_SM_CFG = {"ip": "192.168.1.1", "logger_serial": "12345", "port": "8899", "slave_id": "1"}
+
+
+def test_write_solarman_writes_each_register_with_fc16():
+    """One FC16 (write multiple registers) frame per register, as the edge
+    firmware (solarman_v5_build_write_frame) and the phone harvester
+    (BatteryChargeExecutor) write a Deye: Deye loggers refuse FC06."""
     from custom_components.svitgrid.harvest.transport import _write_solarman
 
-    fake_sm = MagicMock()
-    FakeSM = MagicMock(return_value=fake_sm)
+    sm = solarman_instance()
+    mod, _ = solarman_module(sm)
 
-    fake_mod = types.ModuleType("pysolarmanv5")
-    fake_mod.PySolarmanV5 = FakeSM  # type: ignore[attr-defined]
+    with patch.dict(sys.modules, {"pysolarmanv5": mod}):
+        _write_solarman(_SM_CFG, [(1, 200, 0xABCD), (1, 166, 100)])
 
-    cfg = {"ip": "192.168.1.1", "logger_serial": "12345", "port": "8899", "slave_id": "1"}
-    writes = [(1, 200, 0xABCD)]
+    calls = [c.kwargs for c in sm.write_multiple_holding_registers.call_args_list]
+    assert calls == [
+        {"register_addr": 200, "values": [0xABCD]},
+        {"register_addr": 166, "values": [100]},
+    ]
+    sm.write_holding_register.assert_not_called()  # FC06
 
-    with patch.dict(sys.modules, {"pysolarmanv5": fake_mod}):
-        _write_solarman(cfg, writes)
 
-    fake_sm.write_holding_registers.assert_called_once_with(register_addr=200, values=[0xABCD])
+def test_write_solarman_reconnects_when_the_logger_drops_the_connection():
+    """A logger that closes the socket after every reply (the mock logger,
+    and the reason the phone harvester opens one connection per request) must
+    still get every register, not only the first."""
+    import pysolarmanv5
 
-
-def test_write_solarman_multiple_writes():
-    """_write_solarman writes every (unit, addr, val) tuple."""
     from custom_components.svitgrid.harvest.transport import _write_solarman
 
-    fake_sm = MagicMock()
-    FakeSM = MagicMock(return_value=fake_sm)
+    first, second = solarman_instance(), solarman_instance()
+    first.write_multiple_holding_registers.side_effect = [
+        None,
+        pysolarmanv5.NoSocketAvailableError("Connection already closed."),
+    ]
+    mod, ctor = solarman_module()
+    ctor.side_effect = [first, second]
 
-    fake_mod = types.ModuleType("pysolarmanv5")
-    fake_mod.PySolarmanV5 = FakeSM  # type: ignore[attr-defined]
+    with patch.dict(sys.modules, {"pysolarmanv5": mod}):
+        _write_solarman(_SM_CFG, [(1, 148, 2351), (1, 149, 51), (1, 166, 100)])
 
-    cfg = {"ip": "192.168.1.1", "logger_serial": "12345", "port": "8899", "slave_id": "1"}
-    writes = [(1, 100, 1), (1, 101, 2)]
+    landed = [
+        c.kwargs["register_addr"]
+        for sm in (first, second)
+        for c in sm.write_multiple_holding_registers.call_args_list
+    ]
+    assert landed == [148, 149, 149, 166]
+    assert ctor.call_count == 2
+    # The retry is the reconnect; the library's own would re-send frames.
+    assert all(c.kwargs["auto_reconnect"] is False for c in ctor.call_args_list)
+    first.disconnect.assert_called()
+    second.disconnect.assert_called_once()
 
-    with patch.dict(sys.modules, {"pysolarmanv5": fake_mod}):
-        _write_solarman(cfg, writes)
 
-    assert fake_sm.write_holding_registers.call_count == 2
+def test_write_solarman_raises_when_the_retry_fails_too():
+    from custom_components.svitgrid.harvest.transport import _write_solarman
+
+    sm = solarman_instance()
+    sm.write_multiple_holding_registers.side_effect = OSError("refused")
+    mod, _ = solarman_module(sm)
+
+    with patch.dict(sys.modules, {"pysolarmanv5": mod}), pytest.raises(OSError):
+        _write_solarman(_SM_CFG, [(1, 148, 1)])
 
 
 def test_write_solarman_calls_disconnect():
     """_write_solarman must call disconnect in finally."""
     from custom_components.svitgrid.harvest.transport import _write_solarman
 
-    fake_sm = MagicMock()
-    FakeSM = MagicMock(return_value=fake_sm)
+    sm = solarman_instance()
+    mod, _ = solarman_module(sm)
 
-    fake_mod = types.ModuleType("pysolarmanv5")
-    fake_mod.PySolarmanV5 = FakeSM  # type: ignore[attr-defined]
+    with patch.dict(sys.modules, {"pysolarmanv5": mod}):
+        _write_solarman(_SM_CFG, [(1, 200, 1)])
 
-    cfg = {"ip": "192.168.1.1", "logger_serial": "12345", "port": "8899", "slave_id": "1"}
-
-    with patch.dict(sys.modules, {"pysolarmanv5": fake_mod}):
-        _write_solarman(cfg, [(1, 200, 1)])
-
-    fake_sm.disconnect.assert_called_once()
+    sm.disconnect.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -111,7 +135,7 @@ def _make_modbus_write_stubs(is_error: bool = False):
     fake_result = MagicMock()
     fake_result.isError.return_value = is_error
 
-    fake_client = MagicMock()
+    fake_client = modbus_instance()
     fake_client.write_registers.return_value = fake_result
 
     FakeClientClass = MagicMock(return_value=fake_client)
@@ -182,7 +206,7 @@ async def test_write_registers_dispatches_solarman():
     spec = _spec("solarman_v5")
     cfg = {"ip": "192.168.1.1", "logger_serial": "12345", "port": "8899", "slave_id": "1"}
 
-    fake_sm = MagicMock()
+    fake_sm = solarman_instance()
     FakeSM = MagicMock(return_value=fake_sm)
     fake_mod = types.ModuleType("pysolarmanv5")
     fake_mod.PySolarmanV5 = FakeSM  # type: ignore[attr-defined]
@@ -190,7 +214,7 @@ async def test_write_registers_dispatches_solarman():
     with patch.dict(sys.modules, {"pysolarmanv5": fake_mod}):
         await transport.write_registers(hass, spec, cfg, [(1, 200, 42)])
 
-    fake_sm.write_holding_registers.assert_called_once_with(register_addr=200, values=[42])
+    fake_sm.write_multiple_holding_registers.assert_called_once_with(register_addr=200, values=[42])
 
 
 async def test_write_registers_dispatches_modbus():
@@ -246,7 +270,7 @@ async def test_read_word_solarman_returns_value():
     spec = _spec("solarman_v5")
     cfg = {"ip": "192.168.1.1", "logger_serial": "12345", "port": "8899", "slave_id": "1"}
 
-    fake_sm = MagicMock()
+    fake_sm = solarman_instance()
     fake_sm.read_holding_registers.return_value = [0xBEEF]
     FakeSM = MagicMock(return_value=fake_sm)
     fake_mod = types.ModuleType("pysolarmanv5")
@@ -270,7 +294,7 @@ async def test_read_word_modbus_returns_value():
     fake_result.isError.return_value = False
     fake_result.registers = [0xCAFE]
 
-    fake_client = MagicMock()
+    fake_client = modbus_instance()
     fake_client.read_holding_registers.return_value = fake_result
     FakeClientClass = MagicMock(return_value=fake_client)
 
@@ -292,7 +316,7 @@ async def test_read_word_returns_none_on_exception():
     spec = _spec("solarman_v5")
     cfg = {"ip": "192.168.1.1", "logger_serial": "12345", "port": "8899", "slave_id": "1"}
 
-    fake_sm = MagicMock()
+    fake_sm = solarman_instance()
     fake_sm.read_holding_registers.side_effect = OSError("connection refused")
     FakeSM = MagicMock(return_value=fake_sm)
     fake_mod = types.ModuleType("pysolarmanv5")
@@ -315,7 +339,7 @@ async def test_read_word_modbus_returns_none_on_error():
     fake_result = MagicMock()
     fake_result.isError.return_value = True
 
-    fake_client = MagicMock()
+    fake_client = modbus_instance()
     fake_client.read_holding_registers.return_value = fake_result
     FakeClientClass = MagicMock(return_value=fake_client)
 
@@ -389,7 +413,7 @@ async def test_read_words_reads_contiguous_addresses_as_one_range():
     spec = _spec("solarman_v5")
     cfg = {"ip": "192.168.1.1", "logger_serial": "12345", "port": "8899", "slave_id": "1"}
 
-    fake_sm = MagicMock()
+    fake_sm = solarman_instance()
     fake_sm.read_holding_registers.side_effect = lambda register_addr, quantity: [
         register_addr + i for i in range(quantity)
     ]
