@@ -38,7 +38,7 @@ from .base import BaseExecutor
 _LOGGER = logging.getLogger(__name__)
 
 
-class UnsupportedCommandError(Exception):
+class UnsupportedCommandError(NotImplementedError):
     """Raised when the preset doesn't have a recipe for the requested command.
     Caller (command_poller) ACKs as rejected='unsupported'."""
 

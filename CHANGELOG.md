@@ -48,6 +48,20 @@
   register. A command now writes only the fields it carries, as the edge
   device and the app do, so the slot's power limit and charge voltage keep
   the values set on the inverter. A `chargeVoltage` of 0 is not written.
+- **A charge event from the cloud reaches the inverter as a whole program.**
+  When the inverter's settings were synced in the last 48 hours, the cloud
+  sends the six time-of-use slots as one program (`prevSlots`, no
+  `slotIndex`), and the add-on failed with `KeyError: 'slotIndex'`. It now
+  writes the program as the edge device does: each slot's start, power,
+  voltage (not 0), SOC and charge-enable word. Bits 0 and 1 of the enable
+  word come from the program; the other bits keep the inverter's own value.
+- **The cloud puts your schedule back when a charge window ends.** The add-on
+  reads all six slots before a battery-charge write and reports them, as the
+  edge device does, and runs `restore_battery_charge`, which writes them
+  back. Before, the restore was refused as unsupported, so the slots the
+  window changed stayed changed. A restore that carries neither a slot table
+  nor a slot index is refused rather than guessed. A battery-charge write
+  that cannot read the six slots first writes nothing.
 - **"Use battery" in local mode clears grid charging.** It sent the field as
   `enabled` instead of `gridChargeEnabled`, so the write failed.
 - **A local event whose write fails no longer shows as active.** It stays in
