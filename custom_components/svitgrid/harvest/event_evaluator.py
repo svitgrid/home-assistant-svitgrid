@@ -18,10 +18,13 @@ TS mapping:
 from __future__ import annotations
 
 import copy
+import logging
 import math
 from dataclasses import dataclass
 from datetime import datetime
 from zoneinfo import ZoneInfo
+
+_LOGGER = logging.getLogger(__name__)
 
 # ─────────────────────────────── Window helpers ───────────────────────────────
 
@@ -433,11 +436,45 @@ def _decide_custom_event(
 # ─────────────────── Restore-command builders ────────────────────────────────
 
 
+# The restore of a battery charge, as the cloud sends it: the six-slot table the
+# activation's set_battery_charge pre-read (the ACK's ``prevSlots``), which
+# WriteExecutor writes back slot by slot on the set_battery_charge recipe.
+RESTORE_CHARGE = "restore_battery_charge"
+
+# ``lastCommandError.reason`` for a restore with no captured table. The app
+# words it as "could not read the inverter's settings".
+_NO_PRIOR_REASON = "prev_read_failed"
+
+
+def _charge_was_written(event: dict, exec_state: dict) -> bool:
+    """Return True when this activation wrote a set_battery_charge to restore."""
+    mode = event.get("mode", "")
+    if mode == "battery_charge":
+        return True
+    return mode == "battery_maintenance" and bool(exec_state.get("gridFallbackFired"))
+
+
+def unrestorable_command(event: dict, exec_state: dict) -> str | None:
+    """Return the restore that cannot run for want of a prior state, or None.
+
+    A battery charge is restored only from the slot table captured when it was
+    written. Without one there is nothing true to write: the old fallback, SOC 0
+    over the event's own window in slot 1, overwrote the owner's slot 1.
+    """
+    if _charge_was_written(event, exec_state) and not exec_state.get("prevSlots"):
+        return RESTORE_CHARGE
+    return None
+
+
 def _restore_commands(event: dict, exec_state: dict) -> list:
-    """Return the restore (de-activation) command list for the given mode."""
+    """Return the restore (de-activation) command list for the given mode.
+
+    A restore whose prior state was never captured is left out; see
+    ``unrestorable_command``.
+    """
     mode = event.get("mode", "")
     config = event.get("config") or {}
-    schedule = event.get("schedule") or {}
+    prev_slots = exec_state.get("prevSlots")
 
     if mode == "sell_to_grid":
         prev = exec_state.get("previousWorkMode", 2)
@@ -458,36 +495,12 @@ def _restore_commands(event: dict, exec_state: dict) -> list:
         cmds: list = []
         prev_sell = exec_state.get("maintenancePriorSolarSell", False)
         cmds.append(("set_solar_sell", {"solarSell": 1 if prev_sell else 0}))
-        if exec_state.get("gridFallbackFired"):
-            cmds.append(
-                (
-                    "set_battery_charge",
-                    {
-                        "gridChargeEnabled": False,
-                        "gridChargeSoc": 0,
-                        "slotIndex": 0,
-                        "disableOtherSlots": False,
-                        "slotStart": _time_to_packed_hhmm(schedule.get("startTime", "00:00")),
-                        "slotEnd": _time_to_packed_hhmm(schedule.get("endTime", "23:59")),
-                    },
-                )
-            )
+        if exec_state.get("gridFallbackFired") and prev_slots:
+            cmds.append((RESTORE_CHARGE, {"prevSlots": prev_slots}))
         return cmds
 
     if mode == "battery_charge":
-        return [
-            (
-                "set_battery_charge",
-                {
-                    "gridChargeEnabled": False,
-                    "gridChargeSoc": 0,
-                    "slotIndex": 0,
-                    "disableOtherSlots": False,
-                    "slotStart": _time_to_packed_hhmm(schedule.get("startTime", "00:00")),
-                    "slotEnd": _time_to_packed_hhmm(schedule.get("endTime", "23:59")),
-                },
-            )
-        ]
+        return [(RESTORE_CHARGE, {"prevSlots": prev_slots})] if prev_slots else []
 
     if mode == "custom":
         actions = config.get("customActions") or []
@@ -498,6 +511,35 @@ def _restore_commands(event: dict, exec_state: dict) -> list:
         ]
 
     return []
+
+
+def restore_decision(event: dict, exec_state: dict, now_utc: datetime) -> tuple[list, dict]:
+    """Return ``(restore commands, idle state)`` for ending an active event.
+
+    Used by the window end and by a cancel (delete or disable) from the app,
+    so both put back the same values. A restore with no captured prior state
+    writes nothing and is reported in ``lastCommandError``, the field the app
+    already shows on the event; retrying could not make one up.
+    """
+    commands = _restore_commands(event, exec_state)
+    new_state = copy.deepcopy(exec_state)
+    new_state["status"] = "idle"
+    for key in ("lastActivatedAt", "conditionMetSince", "conditionLostSince", "prevSlots"):
+        new_state.pop(key, None)
+    missing = unrestorable_command(event, exec_state)
+    if missing is not None:
+        _LOGGER.warning(
+            "Event %s: no %s — the prior slot table was never captured, so nothing "
+            "is written back; the inverter keeps the event's program",
+            event.get("id"),
+            missing,
+        )
+        new_state["lastCommandError"] = {
+            "command": missing,
+            "reason": _NO_PRIOR_REASON,
+            "at": now_utc.isoformat(),
+        }
+    return commands, new_state
 
 
 # ─────────────────── Main entry point ────────────────────────────────────────
@@ -556,11 +598,7 @@ def evaluate_event(
     if not in_window:
         current_status = exec_state.get("status", "idle")
         if current_status == "active":
-            restore_cmds = _restore_commands(event, exec_state)
-            new_state["status"] = "idle"
-            new_state.pop("lastActivatedAt", None)
-            new_state.pop("conditionMetSince", None)
-            new_state.pop("conditionLostSince", None)
+            restore_cmds, new_state = restore_decision(event, exec_state, now_utc)
             return EvaluatorDecision(
                 action="deactivate", commands=restore_cmds, new_state=new_state
             )

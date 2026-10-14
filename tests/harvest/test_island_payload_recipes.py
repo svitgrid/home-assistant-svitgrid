@@ -27,10 +27,23 @@ from custom_components.svitgrid.harvest.event_evaluator import (
 from custom_components.svitgrid.harvest.register_spec import RegisterSpec
 from custom_components.svitgrid.harvest.spec_source import BUNDLED_SPECS_DIR
 from custom_components.svitgrid.harvest.write_compute import compute_register_writes
+from custom_components.svitgrid.harvest.write_executor import _RECIPE_ALIASES
 
 _NOW = datetime(2026, 10, 14, 10, 30, tzinfo=UTC)
 _SCHEDULE = {"startTime": "10:00", "endTime": "11:00", "recurrence": "daily"}
 _READING = {"batterySoc": 40, "pvPower": 0, "gridPower": 300, "loadPower": 300}
+# A captured slot table (the set_battery_charge ACK's prevSlots).
+_TABLE = [
+    {
+        "start": h * 400,
+        "end": (h + 1) * 400 % 2400,
+        "power": 5000,
+        "voltage": 5300,
+        "soc": 20,
+        "enable": 0,
+    }
+    for h in range(6)
+]
 
 
 def _specs() -> list[RegisterSpec]:
@@ -41,7 +54,9 @@ def _specs() -> list[RegisterSpec]:
 
 
 def _cmd(spec: RegisterSpec, name: str):
-    return next((c for c in spec.writes if c.command == name), None)
+    """The recipe *name* runs on (restore_battery_charge runs on the set recipe)."""
+    recipe = _RECIPE_ALIASES.get(name, name)
+    return next((c for c in spec.writes if c.command == recipe), None)
 
 
 def _sg04lp3() -> RegisterSpec:
@@ -103,7 +118,9 @@ def _island_commands() -> list[tuple[str, str, dict]]:
         decision = evaluate_event(event, _READING, {}, _NOW, "UTC")
         for name, payload in decision.commands:
             out.append((f"{label}/activate", name, payload))
-        active_state = dict(decision.new_state, status="active", gridFallbackFired=True)
+        active_state = dict(
+            decision.new_state, status="active", gridFallbackFired=True, prevSlots=_TABLE
+        )
         for name, payload in _restore_commands(event, active_state):
             out.append((f"{label}/restore", name, payload))
     return out

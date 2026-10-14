@@ -42,6 +42,13 @@ class FakeEventStore:
         if event_id in self._events:
             self._events[event_id]["executionState"] = dict(state)
 
+    async def async_get_event(self, event_id: str) -> dict | None:
+        event = self._events.get(event_id)
+        return dict(event) if event is not None else None
+
+    async def async_delete_event(self, event_id: str) -> bool:
+        return self._events.pop(event_id, None) is not None
+
 
 class FakeStore:
     """Minimal ReadingStore stand-in that returns a fixed live snapshot."""
@@ -680,3 +687,179 @@ async def test_no_executor_is_a_dispatch_failure():
     state = event_store._events["evt-1"]["executionState"]
     assert state.get("status", "idle") != "active"
     assert state["lastCommandError"]["reason"] == "inverter_not_found"
+
+
+# ─────────────────── Prior slot table: capture and restore ────────────────────
+
+_TABLE = [
+    {"start": 0, "end": 400, "power": 5000, "voltage": 5300, "soc": 20, "enable": 1},
+    *[
+        {
+            "start": h * 400,
+            "end": (h + 1) * 400 % 2400,
+            "power": 5000,
+            "voltage": 5300,
+            "soc": 30,
+            "enable": 0,
+        }
+        for h in range(1, 6)
+    ],
+]
+
+
+def _charge_event(exec_state: dict | None = None) -> dict:
+    event = _make_use_battery_event(exec_state=exec_state)
+    event["mode"] = "battery_charge"
+    event["config"] = {"chargeSource": "grid", "targetSoc": 100}
+    return event
+
+
+def _acking_executor(table: list) -> AsyncMock:
+    """A WriteExecutor stand-in whose set_battery_charge ACK reports *table*."""
+    executor = AsyncMock()
+
+    async def _dispatch(name, payload):
+        if name == "set_battery_charge":
+            return {"written": [], "verified": True, "prevSlots": table}
+        return {"written": [], "verified": True}
+
+    executor.dispatch = AsyncMock(side_effect=_dispatch)
+    return executor
+
+
+@pytest.mark.asyncio
+async def test_activation_keeps_the_prior_table_the_ack_reports():
+    from custom_components.svitgrid.harvest.event_scheduler_loop import _tick
+
+    event_store = FakeEventStore([_charge_event()])
+    executor = _acking_executor(_TABLE)
+
+    await _tick(FakeStore([_reading_at()]), event_store, lambda _i: executor, "UTC", _NOW_IN_WINDOW)
+
+    state = event_store._events["evt-1"]["executionState"]
+    assert state["status"] == "active"
+    assert state["prevSlots"] == _TABLE
+
+
+@pytest.mark.asyncio
+async def test_window_end_writes_the_captured_table_back():
+    from custom_components.svitgrid.harvest.event_scheduler_loop import _tick
+
+    event_store = FakeEventStore([_charge_event()])
+    executor = _acking_executor(_TABLE)
+    store = FakeStore([_reading_at()])
+
+    await _tick(store, event_store, lambda _i: executor, "UTC", _NOW_IN_WINDOW)
+    await _tick(store, event_store, lambda _i: executor, "UTC", _NOW_OUT_WINDOW)
+
+    assert executor.dispatch.await_args_list[-1].args == (
+        "restore_battery_charge",
+        {"prevSlots": _TABLE},
+    )
+    state = event_store._events["evt-1"]["executionState"]
+    assert state["status"] == "idle"
+    assert "prevSlots" not in state
+
+
+@pytest.mark.asyncio
+async def test_a_restore_with_no_table_and_no_executor_still_ends_the_event():
+    """Nothing to write is not a dispatch failure, even with no executor."""
+    from custom_components.svitgrid.harvest.event_scheduler_loop import _tick
+
+    event_store = FakeEventStore([_charge_event(exec_state={"status": "active"})])
+
+    await _tick(FakeStore([_reading_at()]), event_store, lambda _i: None, "UTC", _NOW_OUT_WINDOW)
+
+    state = event_store._events["evt-1"]["executionState"]
+    assert state["status"] == "idle"
+    assert state["lastCommandError"]["reason"] == "prev_read_failed"
+    assert "dispatchRetryAt" not in state
+
+
+# ─────────────────── Cancel from the app: restore, then remove ────────────────
+
+
+@pytest.mark.asyncio
+async def test_deleting_an_active_charge_restores_the_table_then_deletes():
+    from custom_components.svitgrid.harvest.event_scheduler_loop import (
+        request_removal,
+        settle_removal,
+    )
+
+    event_store = FakeEventStore([_charge_event({"status": "active", "prevSlots": _TABLE})])
+    executor = _acking_executor(_TABLE)
+
+    assert await request_removal(event_store, "evt-1", "delete") == "pending"
+    # Still held until the restore lands, and marked so the app's list hides it.
+    assert event_store._events["evt-1"]["executionState"]["pendingRemoval"] == "delete"
+
+    await settle_removal(event_store, lambda _i: executor, "evt-1", _NOW_IN_WINDOW)
+
+    executor.dispatch.assert_awaited_once_with("restore_battery_charge", {"prevSlots": _TABLE})
+    assert "evt-1" not in event_store._events
+
+
+@pytest.mark.asyncio
+async def test_deleting_an_idle_event_writes_nothing():
+    from custom_components.svitgrid.harvest.event_scheduler_loop import request_removal
+
+    event_store = FakeEventStore([_charge_event({"status": "idle"})])
+
+    assert await request_removal(event_store, "evt-1", "delete") == "done"
+    assert "evt-1" not in event_store._events
+
+
+@pytest.mark.asyncio
+async def test_a_failed_cancel_restore_is_kept_and_retried_by_the_tick():
+    from datetime import timedelta
+
+    from custom_components.svitgrid.harvest.event_scheduler_loop import (
+        _tick,
+        request_removal,
+        settle_removal,
+    )
+
+    event_store = FakeEventStore([_charge_event({"status": "active", "prevSlots": _TABLE})])
+    broken = _failing_executor(RuntimeError("write timeout"))
+
+    await request_removal(event_store, "evt-1", "delete")
+    await settle_removal(event_store, lambda _i: broken, "evt-1", _NOW_IN_WINDOW)
+
+    state = event_store._events["evt-1"]["executionState"]
+    assert state["pendingRemoval"] == "delete"
+    assert state["status"] == "active"
+    assert state["lastCommandError"]["command"] == "restore_battery_charge"
+    assert state["lastCommandError"]["reason"] == "write_failed"
+
+    # The tick retries after the backoff, with no live reading needed, and the
+    # cancelled event is never evaluated (it would re-activate in its window).
+    executor = _acking_executor(_TABLE)
+    await _tick(
+        FakeStore([]),
+        event_store,
+        lambda _i: executor,
+        "UTC",
+        _NOW_IN_WINDOW + timedelta(minutes=2),
+    )
+    executor.dispatch.assert_awaited_once_with("restore_battery_charge", {"prevSlots": _TABLE})
+    assert "evt-1" not in event_store._events
+
+
+@pytest.mark.asyncio
+async def test_disabling_an_active_charge_restores_and_keeps_it_idle():
+    from custom_components.svitgrid.harvest.event_scheduler_loop import (
+        request_removal,
+        settle_removal,
+    )
+
+    event_store = FakeEventStore([_charge_event({"status": "active", "prevSlots": _TABLE})])
+    executor = _acking_executor(_TABLE)
+
+    assert await request_removal(event_store, "evt-1", "disable") == "pending"
+    await settle_removal(event_store, lambda _i: executor, "evt-1", _NOW_IN_WINDOW)
+
+    executor.dispatch.assert_awaited_once_with("restore_battery_charge", {"prevSlots": _TABLE})
+    state = event_store._events["evt-1"]["executionState"]
+    assert state["status"] == "idle"
+    assert "pendingRemoval" not in state
+    assert "prevSlots" not in state

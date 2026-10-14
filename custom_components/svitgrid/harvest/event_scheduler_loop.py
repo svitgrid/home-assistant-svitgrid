@@ -17,6 +17,19 @@ is kept, with ``lastCommandError`` set and a retry scheduled
 again and the app can show why it has not.  The first failure logs at ERROR;
 its retries log at DEBUG.
 
+A battery-charge activation keeps the slot table its set_battery_charge ACK
+reports (``prevSlots``) in the execution state, and the restore writes exactly
+that table back, as the cloud's ``restore_battery_charge`` does.
+
+Cancelling an active event from the app (DELETE, or a PUT that disables it)
+must undo it at the inverter: the scheduler only evaluates events it still
+has, so a plain delete left the charge running to its slot's end.
+``request_removal`` marks the event ``pendingRemoval`` (``delete`` or
+``disable``) and ``settle_removal`` runs the event's restore, the same one the
+window end runs, then deletes or idles it. A failed restore keeps the mark,
+with ``lastCommandError`` and the usual backoff, and every tick retries it. The
+events list the app reads hides an event pending deletion.
+
 Per-event try/except: a failure in one event's evaluation or dispatch is logged
 and skipped; the remaining events in the same tick are still processed.
 
@@ -33,7 +46,7 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from .event_evaluator import evaluate_event
+from .event_evaluator import evaluate_event, restore_decision
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -45,6 +58,16 @@ _DEFAULT_INTERVAL_S = 15
 _RETRY_FIRST_S = 60
 _RETRY_MAX_S = 900
 _RETRY_KEYS = ("dispatchFailures", "dispatchRetryAt")
+
+# Execution-state key marking an event the app cancelled while it was active:
+# "delete" or "disable". Set by request_removal, cleared by settle_removal.
+REMOVAL_KEY = "pendingRemoval"
+REMOVAL_DELETE = "delete"
+REMOVAL_DISABLE = "disable"
+
+# Event ids whose restore is running, so the view's immediate attempt and a
+# tick never write the same restore at once.
+_settling: set[str] = set()
 
 
 @dataclass(frozen=True)
@@ -81,23 +104,42 @@ def _reason_for(exc: BaseException) -> str:
     return "write_failed"
 
 
-async def _dispatch_all(executor: object, commands: list) -> _Failure | None:
-    """Dispatch every command; return the first failure, or None when all landed.
+async def _dispatch_all(executor: object, commands: list) -> tuple[_Failure | None, list]:
+    """Dispatch every command.
 
-    A failed command does not stop the rest: they are independent writes, and a
-    retry re-sends the whole list, which is idempotent.
+    Returns ``(first failure or None, [(command, result), ...])`` for the
+    commands that landed. A failed command does not stop the rest: they are
+    independent writes, and a retry re-sends the whole list, which is
+    idempotent. An empty list has nothing to fail.
     """
+    if not commands:
+        return None, []
     if executor is None:
-        first = commands[0][0] if commands else ""
-        return _Failure(first, "inverter_not_found", None)
+        return _Failure(commands[0][0], "inverter_not_found", None), []
     failure: _Failure | None = None
+    results: list = []
     for cmd_name, payload in commands:
         try:
-            await executor.dispatch(cmd_name, payload)
+            results.append((cmd_name, await executor.dispatch(cmd_name, payload)))
         except Exception as exc:  # noqa: BLE001
             if failure is None:
                 failure = _Failure(cmd_name, _reason_for(exc), exc)
-    return failure
+    return failure, results
+
+
+def _keep_prior_table(state: dict, results: list) -> None:
+    """Store the slot table a set_battery_charge ACK reports, for the restore.
+
+    WriteExecutor pre-reads the whole table before it writes and reports it as
+    ``prevSlots``. A table already held is kept: a second write while active
+    would report the event's own program as the prior one.
+    """
+    if state.get("prevSlots"):
+        return
+    for name, result in results:
+        if name == "set_battery_charge" and isinstance(result, dict) and result.get("prevSlots"):
+            state["prevSlots"] = result["prevSlots"]
+            return
 
 
 def _failed_state(exec_state: dict, failure: _Failure, now_utc: datetime) -> dict:
@@ -159,9 +201,19 @@ async def _tick(
     tz           : IANA timezone string.
     now_utc      : Current UTC time (injectable for testing).
     """
-    # 1. List and filter events
+    # 1. List events; finish any cancel the app asked for first
     all_events = await event_store.async_list_events()
-    enabled_events = [e for e in all_events if e.get("enabled", True)]
+    for event in all_events:
+        if (event.get("executionState") or {}).get(REMOVAL_KEY):
+            try:
+                await _settle(event_store, executor_for, event, now_utc)
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception("Event %s: cancel restore failed", event.get("id"))
+    enabled_events = [
+        e
+        for e in all_events
+        if e.get("enabled", True) and not (e.get("executionState") or {}).get(REMOVAL_KEY)
+    ]
     if not enabled_events:
         return
 
@@ -205,11 +257,13 @@ async def _tick(
             if retry_at is not None and now_utc < retry_at:
                 continue  # backing off after a failed dispatch; state unchanged
 
-            failure = await _dispatch_all(executor_for(inverter_id), decision.commands)
+            failure, results = await _dispatch_all(executor_for(inverter_id), decision.commands)
             if failure is None:
                 state = dict(decision.new_state)
                 for key in _RETRY_KEYS:
                     state.pop(key, None)
+                if decision.action == "activate":
+                    _keep_prior_table(state, results)
             else:
                 state = _failed_state(exec_state, failure, now_utc)
                 _log_failure(event_id, inverter_id, failure, state["dispatchFailures"])
@@ -222,6 +276,76 @@ async def _tick(
                 "Event %s evaluation/dispatch failed; skipping to next event",
                 event_id,
             )
+
+
+async def request_removal(event_store: object, event_id: str, removal: str) -> str:
+    """Record that the app deleted or disabled *event_id*.
+
+    Returns ``"missing"`` for an unknown event, ``"done"`` when nothing is
+    running at the inverter (an inactive event is deleted at once, and a
+    disable needs no restore), and ``"pending"`` when the event is active: it
+    is marked ``pendingRemoval`` and ``settle_removal`` must run its restore.
+    The mark resets any backoff, so the restore is tried at once.
+    """
+    event = await event_store.async_get_event(event_id)
+    if event is None:
+        return "missing"
+    state = dict(event.get("executionState") or {})
+    if state.get("status") != "active":
+        if removal == REMOVAL_DELETE:
+            await event_store.async_delete_event(event_id)
+        return "done"
+    state[REMOVAL_KEY] = removal
+    for key in _RETRY_KEYS:
+        state.pop(key, None)
+    await event_store.async_set_execution_state(event_id, state)
+    return "pending"
+
+
+async def settle_removal(
+    event_store: object,
+    executor_for: object,
+    event_id: str,
+    now_utc: datetime | None = None,
+) -> None:
+    """Run the restore of a cancelled event, then delete or idle it."""
+    event = await event_store.async_get_event(event_id)
+    if event is None:
+        return
+    await _settle(event_store, executor_for, event, now_utc or datetime.now(UTC))
+
+
+async def _settle(
+    event_store: object, executor_for: object, event: dict, now_utc: datetime
+) -> None:
+    event_id = event.get("id")
+    exec_state = event.get("executionState") or {}
+    removal = exec_state.get(REMOVAL_KEY)
+    if not removal or event_id in _settling:
+        return
+    retry_at = _parse_iso(exec_state.get("dispatchRetryAt"))
+    if retry_at is not None and now_utc < retry_at:
+        return
+    _settling.add(event_id)
+    try:
+        commands, done_state = restore_decision(event, exec_state, now_utc)
+        inverter_id = event.get("inverterId")
+        failure, _ = await _dispatch_all(executor_for(inverter_id), commands)
+        if failure is not None:
+            state = _failed_state(exec_state, failure, now_utc)
+            _log_failure(event_id, inverter_id, failure, state["dispatchFailures"])
+            await event_store.async_set_execution_state(event_id, state)
+            return
+        if removal == REMOVAL_DELETE:
+            await event_store.async_delete_event(event_id)
+            _LOGGER.info("Event %s: cancelled, restored and deleted", event_id)
+            return
+        for key in (REMOVAL_KEY, *_RETRY_KEYS):
+            done_state.pop(key, None)
+        await event_store.async_set_execution_state(event_id, done_state)
+        _LOGGER.info("Event %s: disabled and restored", event_id)
+    finally:
+        _settling.discard(event_id)
 
 
 async def run_event_scheduler_loop(

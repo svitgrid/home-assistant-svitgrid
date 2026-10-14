@@ -62,6 +62,22 @@
   window changed stayed changed. A restore that carries neither a slot table
   nor a slot index is refused rather than guessed. A battery-charge write
   that cannot read the six slots first writes nothing.
+- **Writes over a Solarman logger land.** Every direct-Modbus write over
+  Solarman V5 failed with `AttributeError`, because the add-on called a
+  pysolarmanv5 method that does not exist. Each register is now written with
+  FC16, as the edge device and the app write a Deye. A logger that closes
+  the connection after each reply gets every register, not only the first.
+- **A local charge event puts your schedule back exactly.** When a local
+  battery-charge event ends, the add-on writes back the six slots it read
+  before the charge, as the cloud does. Before, it wrote SOC 0 and left the
+  event's own times in slot 1. When the slots were never read, it writes
+  nothing and the app shows "Could not read the inverter's settings" on the
+  event. Battery maintenance's grid fallback is restored the same way.
+- **Cancelling a running local event stops it at the inverter.** Deleting or
+  disabling an active event in the app now runs the event's restore first.
+  Before, the add-on only dropped the event, so a charge ran until its slot
+  ended. If the restore fails, the event leaves the app's list, and the
+  add-on retries the restore with the usual backoff.
 - **"Use battery" in local mode clears grid charging.** It sent the field as
   `enabled` instead of `gridChargeEnabled`, so the write failed.
 - **A local event whose write fails no longer shows as active.** It stays in

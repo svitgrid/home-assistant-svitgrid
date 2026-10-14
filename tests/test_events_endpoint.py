@@ -114,8 +114,18 @@ class _FakeEventStore:
         return list(self._events.values())
 
     async def async_upsert_event(self, event: dict) -> None:
-        self._events[event["id"]] = event
+        # As the SQLite store: an upsert keeps the stored execution state.
+        prior = self._events.get(event["id"], {}).get("executionState")
+        self._events[event["id"]] = event if prior is None else {**event, "executionState": prior}
         self.upsert_calls.append(event)
+
+    async def async_get_event(self, event_id: str) -> dict | None:
+        event = self._events.get(event_id)
+        return dict(event) if event is not None else None
+
+    async def async_set_execution_state(self, event_id: str, state: dict) -> None:
+        if event_id in self._events:
+            self._events[event_id] = {**self._events[event_id], "executionState": dict(state)}
 
     async def async_delete_event(self, event_id: str) -> bool:
         self.delete_calls.append(event_id)
@@ -794,3 +804,137 @@ async def test_get_with_ha_session_no_key_returns_200(hass):
     assert "events" in data
     assert len(data["events"]) == 1
     assert data["events"][0]["id"] == EVENT_ID
+
+
+# ---------------------------------------------------------------------------
+# Cancelling an active event restores the inverter
+# ---------------------------------------------------------------------------
+
+_TABLE = [
+    {
+        "start": h * 400,
+        "end": (h + 1) * 400 % 2400,
+        "power": 5000,
+        "voltage": 5300,
+        "soc": 20,
+        "enable": 0,
+    }
+    for h in range(6)
+]
+
+
+def _active_charge(event_id: str = EVENT_ID) -> dict:
+    return {
+        **_make_event(event_id),
+        "mode": "battery_charge",
+        "executionState": {"status": "active", "prevSlots": _TABLE},
+    }
+
+
+def _install_executor(hass, *, fail: bool = False):
+    from unittest.mock import AsyncMock
+
+    executor = AsyncMock()
+    executor.dispatch = AsyncMock(
+        side_effect=RuntimeError("write timeout") if fail else None,
+        return_value={"written": [], "verified": True},
+    )
+    hass.data.setdefault(DOMAIN, {})
+    hass.data[DOMAIN]["entry-1"] = {"executors_by_inverter": {"inv-abc": executor}}
+    return executor
+
+
+@pytest.mark.asyncio
+async def test_delete_of_an_active_charge_restores_the_inverter_then_removes_it(hass):
+    """Cancel from the app: the view used to delete the row and write nothing,
+    so the charge ran on until its slot ended."""
+    private_key, pub_hex = generate_keypair()
+    _install_keystore(hass, trusted_public_keys_hex={"k": pub_hex})
+    event_store = _install_event_store(hass, initial_events=[_active_charge()])
+    executor = _install_executor(hass)
+
+    view = SvitgridEventDetailView()
+    request = _FakeRequest(
+        hass,
+        island_key_header=ISLAND_KEY,
+        body=_make_signed_delete_body(private_key, "k", EVENT_ID),
+    )
+    resp = await view.delete(request, event_id=EVENT_ID)
+    await hass.async_block_till_done()
+
+    assert resp.status == 200
+    assert json.loads(resp.body)["deleted"] is True
+    executor.dispatch.assert_awaited_once_with("restore_battery_charge", {"prevSlots": _TABLE})
+    assert EVENT_ID not in event_store._events
+
+
+@pytest.mark.asyncio
+async def test_a_cancel_whose_restore_failed_is_hidden_from_the_app_but_kept(hass):
+    private_key, pub_hex = generate_keypair()
+    _install_keystore(hass, trusted_public_keys_hex={"k": pub_hex})
+    event_store = _install_event_store(hass, initial_events=[_active_charge()])
+    _install_executor(hass, fail=True)
+
+    view = SvitgridEventDetailView()
+    request = _FakeRequest(
+        hass,
+        island_key_header=ISLAND_KEY,
+        body=_make_signed_delete_body(private_key, "k", EVENT_ID),
+    )
+    await view.delete(request, event_id=EVENT_ID)
+    await hass.async_block_till_done()
+
+    # Kept for the scheduler to retry the restore...
+    state = event_store._events[EVENT_ID]["executionState"]
+    assert state["pendingRemoval"] == "delete"
+    assert state["lastCommandError"]["reason"] == "write_failed"
+    # ...but gone from the list the app reads.
+    list_resp = await SvitgridEventsView().get(_FakeRequest(hass, island_key_header=ISLAND_KEY))
+    assert json.loads(list_resp.body)["events"] == []
+
+
+@pytest.mark.asyncio
+async def test_put_disabling_an_active_charge_restores_the_inverter(hass):
+    private_key, pub_hex = generate_keypair()
+    _install_keystore(hass, trusted_public_keys_hex={"k": pub_hex})
+    stored = _active_charge()
+    event_store = _install_event_store(hass, initial_events=[stored])
+    executor = _install_executor(hass)
+
+    disabled = {k: v for k, v in stored.items() if k != "executionState"}
+    disabled["enabled"] = False
+    view = SvitgridEventDetailView()
+    request = _FakeRequest(
+        hass,
+        island_key_header=ISLAND_KEY,
+        body=_make_signed_write_body(private_key, "k", disabled),
+    )
+    resp = await view.put(request, event_id=EVENT_ID)
+    await hass.async_block_till_done()
+
+    assert resp.status == 200
+    executor.dispatch.assert_awaited_once_with("restore_battery_charge", {"prevSlots": _TABLE})
+    kept = event_store._events[EVENT_ID]
+    assert kept["enabled"] is False
+    assert kept["executionState"]["status"] == "idle"
+
+
+@pytest.mark.asyncio
+async def test_put_keeping_an_active_event_enabled_writes_nothing(hass):
+    private_key, pub_hex = generate_keypair()
+    _install_keystore(hass, trusted_public_keys_hex={"k": pub_hex})
+    stored = _active_charge()
+    _install_event_store(hass, initial_events=[stored])
+    executor = _install_executor(hass)
+
+    edited = {k: v for k, v in stored.items() if k != "executionState"}
+    view = SvitgridEventDetailView()
+    request = _FakeRequest(
+        hass,
+        island_key_header=ISLAND_KEY,
+        body=_make_signed_write_body(private_key, "k", edited),
+    )
+    await view.put(request, event_id=EVENT_ID)
+    await hass.async_block_till_done()
+
+    executor.dispatch.assert_not_awaited()
