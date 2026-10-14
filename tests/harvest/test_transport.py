@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 
 from custom_components.svitgrid.harvest.register_spec import RegisterSpec
 from custom_components.svitgrid.harvest.transport import plan_ranges
+from tests.harvest.lib_doubles import modbus_instance, solarman_instance
 
 
 def _spec(reads, protocol="solarman_v5"):
@@ -104,7 +105,7 @@ def test_read_solarman_assembles_raw_registers(monkeypatch):
     """Stub PySolarmanV5; assert RawRegisters maps addr->word correctly."""
     from custom_components.svitgrid.harvest.transport import _read_solarman
 
-    fake_instance = MagicMock()
+    fake_instance = solarman_instance()
     # A 2-register range [100, 101] returns [0xAB, 0xCD]
     fake_instance.read_holding_registers.return_value = [0xAB, 0xCD]
 
@@ -147,7 +148,7 @@ def test_read_solarman_assembles_raw_registers(monkeypatch):
 def _fake_solarman_module(fake_instance=None, ctor_side_effect=None):
     """Return a (fake_mod, FakeClass) pair for patching pysolarmanv5."""
     if fake_instance is None:
-        fake_instance = MagicMock()
+        fake_instance = solarman_instance()
     if ctor_side_effect is not None:
         FakeClass = MagicMock(side_effect=ctor_side_effect)
     else:
@@ -163,7 +164,7 @@ def test_read_solarman_partial_success_skips_failing_range():
 
     from custom_components.svitgrid.harvest.transport import _read_solarman
 
-    fake_instance = MagicMock()
+    fake_instance = solarman_instance()
 
     def _read_side_effect(*, register_addr, quantity):
         if register_addr == 100:
@@ -187,7 +188,7 @@ def test_read_solarman_range_retry_succeeds_on_reconnect():
 
     from custom_components.svitgrid.harvest.transport import _read_solarman
 
-    fake_instance = MagicMock()
+    fake_instance = solarman_instance()
     call_count = {"n": 0}
 
     def _read_side_effect(*, register_addr, quantity):
@@ -216,7 +217,7 @@ def test_read_solarman_all_ranges_fail_raises():
 
     from custom_components.svitgrid.harvest.transport import _read_solarman
 
-    fake_instance = MagicMock()
+    fake_instance = solarman_instance()
     fake_instance.read_holding_registers.side_effect = OSError("logger dead")
     fake_mod, _, _ = _fake_solarman_module(fake_instance=fake_instance)
 
@@ -232,7 +233,7 @@ def test_read_solarman_connection_setup_retry_succeeds():
 
     from custom_components.svitgrid.harvest.transport import _read_solarman
 
-    fake_instance = MagicMock()
+    fake_instance = solarman_instance()
     fake_instance.read_holding_registers.return_value = [0xCC]
     ctor_count = {"n": 0}
 
@@ -261,7 +262,7 @@ def test_read_modbus_assembles_raw_registers(monkeypatch):
     fake_result.isError.return_value = False
     fake_result.registers = [0x11, 0x22]
 
-    fake_client = MagicMock()
+    fake_client = modbus_instance()
     fake_client.read_holding_registers.return_value = fake_result
 
     FakeClientClass = MagicMock(return_value=fake_client)
@@ -297,7 +298,7 @@ def test_read_modbus_fc04_uses_input_registers(monkeypatch):
     fake_result.isError.return_value = False
     fake_result.registers = [0x55]
 
-    fake_client = MagicMock()
+    fake_client = modbus_instance()
     fake_client.read_input_registers.return_value = fake_result
 
     FakeClientClass = MagicMock(return_value=fake_client)
@@ -336,7 +337,7 @@ def test_read_modbus_fc04_uses_input_registers(monkeypatch):
 def test_read_solarman_fc04_uses_input_registers():
     from custom_components.svitgrid.harvest.transport import _read_solarman
 
-    fake_instance = MagicMock()
+    fake_instance = solarman_instance()
     fake_instance.read_input_registers.return_value = [0x11, 0x22]
     fake_mod, _, _ = _fake_solarman_module(fake_instance=fake_instance)
 
@@ -352,7 +353,7 @@ def test_read_solarman_fc04_uses_input_registers():
 def test_read_solarman_mixed_fc03_and_fc04_use_their_own_banks():
     from custom_components.svitgrid.harvest.transport import _read_solarman
 
-    fake_instance = MagicMock()
+    fake_instance = solarman_instance()
     fake_instance.read_holding_registers.return_value = [0xAA]
     fake_instance.read_input_registers.return_value = [0xBB]
     fake_mod, _, _ = _fake_solarman_module(fake_instance=fake_instance)
@@ -370,7 +371,7 @@ def test_read_solarman_fc04_retry_stays_on_input_registers():
     """The one-retry resilience path must NOT fall back to the holding bank."""
     from custom_components.svitgrid.harvest.transport import _read_solarman
 
-    fake_instance = MagicMock()
+    fake_instance = solarman_instance()
     calls = {"n": 0}
 
     def _side_effect(*, register_addr, quantity):
@@ -397,7 +398,7 @@ def test_read_solarman_unsupported_function_code_is_loud_not_silently_fc03():
 
     from custom_components.svitgrid.harvest.transport import _read_solarman
 
-    fake_instance = MagicMock()
+    fake_instance = solarman_instance()
     fake_mod, _, _ = _fake_solarman_module(fake_instance=fake_instance)
 
     with patch.dict(sys.modules, {"pysolarmanv5": fake_mod}), patch("time.sleep"):
@@ -415,7 +416,7 @@ def test_read_solarman_logs_a_warning_when_a_range_is_dropped(caplog):
 
     from custom_components.svitgrid.harvest.transport import _read_solarman
 
-    fake_instance = MagicMock()
+    fake_instance = solarman_instance()
 
     def _side_effect(*, register_addr, quantity):
         if register_addr == 100:
