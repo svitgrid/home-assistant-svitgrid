@@ -547,3 +547,136 @@ async def test_unload_entry_removes_event_store_from_hass_data(hass, enable_cust
     assert hass.data.get(DOMAIN, {}).get("event_store") is None, (
         "event_store must be removed from hass.data[DOMAIN] after async_unload_entry"
     )
+
+
+# ─────────────────── Dispatch failure handling ──────────────────────────────
+
+
+def _failing_executor(exc: Exception) -> AsyncMock:
+    executor = AsyncMock()
+    executor.dispatch = AsyncMock(side_effect=exc)
+    return executor
+
+
+@pytest.mark.asyncio
+async def test_failed_dispatch_does_not_mark_the_event_active():
+    """A charge that never reached the inverter must not read as applied."""
+    from custom_components.svitgrid.harvest.event_scheduler_loop import _tick
+
+    event_store = FakeEventStore([_make_use_battery_event()])
+    executor = _failing_executor(KeyError("powerLimit"))
+
+    await _tick(FakeStore([_reading_at()]), event_store, lambda _i: executor, "UTC", _NOW_IN_WINDOW)
+
+    [(_id, state)] = event_store.state_calls
+    assert state.get("status", "idle") != "active"
+    # The shape the app already renders (CalendarEvent.lastCommandError).
+    assert state["lastCommandError"] == {
+        "command": "set_work_mode",
+        "reason": "bad_payload",
+        "at": _NOW_IN_WINDOW.isoformat(),
+    }
+    assert state["dispatchFailures"] == 1
+    assert "dispatchRetryAt" in state
+
+
+@pytest.mark.asyncio
+async def test_failed_dispatch_retries_after_the_backoff_not_every_tick():
+    from datetime import timedelta
+
+    from custom_components.svitgrid.harvest.event_scheduler_loop import _tick
+
+    event_store = FakeEventStore([_make_use_battery_event()])
+    executor = _failing_executor(RuntimeError("verify_failed:142"))
+    store = FakeStore([_reading_at()])
+
+    def executor_for(_inv):
+        return executor
+
+    await _tick(store, event_store, executor_for, "UTC", _NOW_IN_WINDOW)
+    calls_after_first = executor.dispatch.await_count
+
+    # One tick later: still backing off — nothing dispatched.
+    await _tick(store, event_store, executor_for, "UTC", _NOW_IN_WINDOW + timedelta(seconds=15))
+    assert executor.dispatch.await_count == calls_after_first
+
+    # After the backoff: retried, and the backoff grows.
+    await _tick(store, event_store, executor_for, "UTC", _NOW_IN_WINDOW + timedelta(minutes=2))
+    assert executor.dispatch.await_count > calls_after_first
+    state = event_store._events["evt-1"]["executionState"]
+    assert state["dispatchFailures"] == 2
+    assert state["lastCommandError"]["reason"] == "readback_mismatch"
+
+
+@pytest.mark.asyncio
+async def test_retry_that_succeeds_activates_and_clears_the_backoff():
+    from datetime import timedelta
+
+    from custom_components.svitgrid.harvest.event_scheduler_loop import _tick
+
+    event_store = FakeEventStore([_make_use_battery_event()])
+    store = FakeStore([_reading_at()])
+    executor = _failing_executor(RuntimeError("write timeout"))
+
+    await _tick(store, event_store, lambda _i: executor, "UTC", _NOW_IN_WINDOW)
+    executor.dispatch = AsyncMock(return_value={"written": [], "verified": True})
+    await _tick(
+        store, event_store, lambda _i: executor, "UTC", _NOW_IN_WINDOW + timedelta(minutes=2)
+    )
+
+    state = event_store._events["evt-1"]["executionState"]
+    assert state["status"] == "active"
+    assert "dispatchFailures" not in state
+    assert "dispatchRetryAt" not in state
+    # Kept, as the cloud keeps it: its timestamp tells an old failure apart.
+    assert state["lastCommandError"]["reason"] == "write_failed"
+
+
+@pytest.mark.asyncio
+async def test_failed_dispatch_logs_once_per_event(caplog):
+    from datetime import timedelta
+
+    from custom_components.svitgrid.harvest.event_scheduler_loop import _tick
+
+    event_store = FakeEventStore([_make_use_battery_event()])
+    store = FakeStore([_reading_at()])
+    executor = _failing_executor(KeyError("powerLimit"))
+
+    with caplog.at_level("ERROR"):
+        # Every tick inside the 10:00-11:00 window, several past the backoff.
+        for minutes in (0, 0.25, 2, 5, 10, 20):
+            now = _NOW_IN_WINDOW + timedelta(minutes=minutes)
+            await _tick(store, event_store, lambda _i: executor, "UTC", now)
+
+    errors = [r for r in caplog.records if r.levelname == "ERROR"]
+    assert len(errors) == 1
+    assert "evt-1" in errors[0].getMessage()
+
+
+@pytest.mark.asyncio
+async def test_failed_restore_keeps_the_event_active_so_it_is_retried():
+    from custom_components.svitgrid.harvest.event_scheduler_loop import _tick
+
+    event_store = FakeEventStore([_make_use_battery_event(exec_state={"status": "active"})])
+    executor = _failing_executor(RuntimeError("write timeout"))
+
+    await _tick(
+        FakeStore([_reading_at()]), event_store, lambda _i: executor, "UTC", _NOW_OUT_WINDOW
+    )
+
+    state = event_store._events["evt-1"]["executionState"]
+    assert state["status"] == "active"
+    assert state["lastCommandError"]["command"] == "set_work_mode"
+
+
+@pytest.mark.asyncio
+async def test_no_executor_is_a_dispatch_failure():
+    from custom_components.svitgrid.harvest.event_scheduler_loop import _tick
+
+    event_store = FakeEventStore([_make_use_battery_event()])
+
+    await _tick(FakeStore([_reading_at()]), event_store, lambda _i: None, "UTC", _NOW_IN_WINDOW)
+
+    state = event_store._events["evt-1"]["executionState"]
+    assert state.get("status", "idle") != "active"
+    assert state["lastCommandError"]["reason"] == "inverter_not_found"

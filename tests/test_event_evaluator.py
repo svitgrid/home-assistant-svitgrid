@@ -502,7 +502,9 @@ def test_use_battery_activate_in_window():
     assert result.new_state["status"] == "active"
     cmds = dict(result.commands)
     assert cmds["set_work_mode"]["workMode"] == 2
-    assert cmds["set_grid_charge_toggle"]["enabled"] is False
+    # The spec recipe and the cloud both name this field gridChargeEnabled
+    # (evaluator.ts touPayload); "enabled" raised KeyError in write_compute.
+    assert cmds["set_grid_charge_toggle"] == {"gridChargeEnabled": False}
 
 
 def test_use_battery_hold_when_active():

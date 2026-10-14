@@ -21,7 +21,7 @@ from typing import Any
 from ..executors.base import BaseExecutor
 from .register_spec import FieldWrite, RegisterSpec, WriteCommand
 from .transport import read_word, write_registers
-from .write_compute import compute_register_writes
+from .write_compute import compute_register_writes, is_set
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -42,6 +42,7 @@ def _collect_prior_addresses(
 ) -> set[int]:
     """Return the set of register addresses that need a prior read.
 
+    A field the payload omits is not written, so it is not read either.
     For top-level fields the address is stored directly in ``f.address``.
     For slot fields the address is ``f.base + slot_idx * stride``, where
     ``slot_idx`` is read from the payload (or the via_next_slot variant).
@@ -49,7 +50,7 @@ def _collect_prior_addresses(
     addrs: set[int] = set()
 
     for f in cmd.fields:
-        if _needs_prior(f) and f.address is not None:
+        if _needs_prior(f) and is_set(f, payload) and f.address is not None:
             addrs.add(f.address)
 
     if cmd.slot is not None:
@@ -61,7 +62,7 @@ def _collect_prior_addresses(
         if not (0 <= idx < s.count):
             raise ValueError(f"slot index {idx} out of range 0..{s.count - 1}")
         for f in s.fields:
-            if _needs_prior(f):
+            if _needs_prior(f) and is_set(f, payload):
                 slot_idx = ((idx + 1) % s.count) if f.via_next_slot else idx
                 addr = f.base + slot_idx * s.stride  # type: ignore[operator]
                 addrs.add(addr)

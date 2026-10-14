@@ -42,6 +42,18 @@
   another inverter", which registers the inverter with the cloud.
 
 ### Fixed
+- **A battery-charge event reaches the inverter in local mode.** With direct
+  Modbus harvest, a charge event or a quick charge from the app that set no
+  power limit failed with `KeyError: 'powerLimit'` and never wrote a
+  register. A command now writes only the fields it carries, as the edge
+  device and the app do, so the slot's power limit and charge voltage keep
+  the values set on the inverter. A `chargeVoltage` of 0 is not written.
+- **"Use battery" in local mode clears grid charging.** It sent the field as
+  `enabled` instead of `gridChargeEnabled`, so the write failed.
+- **A local event whose write fails no longer shows as active.** It stays in
+  its previous state, the app shows why on the event, and the add-on retries
+  after 1 minute, backing off to 15 minutes. The log gets one error per
+  failure, not one per retry.
 - **A pairing code that expired on screen left the dialog spinning.** Home
   Assistant refuses to end a waiting step with an error, so the expiry raised
   an exception and the dialog never said the code had expired. It now does.

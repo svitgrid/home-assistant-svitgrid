@@ -3,14 +3,37 @@
 Turns a ``WriteCommand`` + command payload + the inverter's prior register
 values into the exact list of ``(unit_id, address, value)`` writes.
 
-No I/O.  Raise ``ValueError`` for an out-of-range slot index or a missing
-required payload field (the latter surfaces naturally as a ``KeyError`` from
-the payload dict).
+No I/O.  Raise ``ValueError`` for an out-of-range slot index, or for a
+payload that sets none of the command's fields.
+
+A field the payload omits (absent or ``None``) is SKIPPED: its register keeps
+the value the user set.  This is what both other executors of the same
+command do — the firmware's ``execute_battery_charge`` (``power_limit >= 0``,
+``s_voltage > 0``) and the mobile harvester's ``BatteryChargeExecutor``
+("skip if absent") — and what the API relies on when it sends a
+``set_battery_charge`` without ``powerLimit``.  Before this, an omitted field
+raised ``KeyError`` and the whole command failed.
 """
 
 from __future__ import annotations
 
 from .register_spec import FieldWrite, WriteCommand
+
+# Fields where 0 means "do not write", not "write 0".  The API sends
+# ``chargeVoltage: 0`` when it cannot work one out from the battery chemistry
+# and cell count (``calculateChargeVoltage``, "0 = skip the voltage write"),
+# and the firmware and the mobile harvester both skip a voltage of 0.  A power
+# limit of 0 W, by contrast, is a real value and is written.
+_ZERO_MEANS_SKIP = frozenset({"chargeVoltage"})
+
+
+def is_set(f: FieldWrite, payload: dict) -> bool:
+    """Return True when *payload* asks for field *f* to be written."""
+    raw = payload.get(f.payload_field)
+    if raw is None:
+        return False
+    zero_skips = f.payload_field in _ZERO_MEANS_SKIP and not isinstance(raw, bool)
+    return not (zero_skips and raw == 0)
 
 
 def _is_on(raw: object, f: FieldWrite) -> bool:
@@ -80,11 +103,14 @@ def compute_register_writes(
     Raises
     ------
     ValueError
-        If a slot command carries an index outside ``0 .. count-1``.
+        If a slot command carries an index outside ``0 .. count-1``, or the
+        payload sets none of the command's fields.
     """
     out: list[tuple[int, int, int]] = []
 
     for f in cmd.fields:
+        if not is_set(f, payload):
+            continue
         out.append((unit_id, f.address, _encode_value(f, payload, prior, f.address)))
 
     if cmd.slot is not None:
@@ -93,8 +119,16 @@ def compute_register_writes(
         if not (0 <= idx < s.count):
             raise ValueError(f"slot index {idx} out of range 0..{s.count - 1}")
         for f in s.fields:
+            if not is_set(f, payload):
+                continue
             slot_idx = ((idx + 1) % s.count) if f.via_next_slot else idx
             addr = f.base + slot_idx * s.stride
             out.append((unit_id, addr, _encode_value(f, payload, prior, addr)))
+
+    if not out:
+        fields = [f.payload_field for f in cmd.fields]
+        if cmd.slot is not None:
+            fields += [f.payload_field for f in cmd.slot.fields]
+        raise ValueError(f"{cmd.command}: payload sets none of {', '.join(fields)}")
 
     return out
