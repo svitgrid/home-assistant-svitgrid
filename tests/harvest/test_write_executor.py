@@ -483,3 +483,25 @@ async def test_legacy_set_battery_charge_alias_resolves_against_vendored_spec():
 
     assert result["verified"] is True
     assert result["written"] == expected_writes
+
+
+@pytest.mark.asyncio
+async def test_dispatch_skips_the_prior_read_of_a_field_the_payload_omits():
+    """An omitted read-modify-write field is not written, so it is not read first.
+
+    A failed read of a register the command never writes must not fail it.
+    """
+    spec = _spec_battery_charge_slot()
+    executor, mock_read, mock_write = _make_executor(spec)
+    mock_read.side_effect = [800]  # verify@148 only
+
+    with (
+        patch(f"{MODULE}.read_word", mock_read),
+        patch(f"{MODULE}.write_registers", mock_write),
+    ):
+        result = await executor.dispatch(
+            "set_battery_charge_slot", {"slotIndex": 0, "slotStart": 800}
+        )
+
+    assert [c.args[-1] for c in mock_read.call_args_list] == [148]
+    assert result == {"written": [[1, 148, 800]], "verified": True}

@@ -356,3 +356,79 @@ class TestAlwaysEmit:
         prior = {142: 3}
         result = compute_register_writes(cmd, {"workMode": 3}, prior)
         assert result == [(1, 142, 3)]
+
+
+# ---------------------------------------------------------------------------
+# Optional fields: absent means "leave the register alone"
+# ---------------------------------------------------------------------------
+
+
+def _charge_cmd() -> WriteCommand:
+    """The SG04LP3 set_battery_charge recipe, field for field."""
+    return WriteCommand(
+        command="set_battery_charge",
+        fields=(),
+        slot=SlotSpec(
+            index_field="slotIndex",
+            count=6,
+            stride=1,
+            end_via_next_slot=True,
+            fields=(
+                _fw(payload_field="slotStart", base=148),
+                _fw(payload_field="slotEnd", base=148, via_next_slot=True),
+                _fw(payload_field="powerLimit", base=154),
+                _fw(payload_field="chargeVoltage", base=160, limits={"min": 0, "max": 6500}),
+                _fw(payload_field="gridChargeSoc", base=166, limits={"min": 0, "max": 100}),
+                _fw(
+                    payload_field="gridChargeEnabled",
+                    base=172,
+                    on_value=1,
+                    off_value=0,
+                    clear_mask=1,
+                ),
+            ),
+        ),
+    )
+
+
+_CHARGE = {
+    "slotIndex": 0,
+    "slotStart": 1000,
+    "slotEnd": 1100,
+    "gridChargeSoc": 100,
+    "gridChargeEnabled": True,
+}
+
+
+class TestOptionalFields:
+    """The firmware and the mobile harvester skip a write the payload does not ask for."""
+
+    def test_absent_power_limit_and_voltage_skip_their_registers(self):
+        writes = compute_register_writes(_charge_cmd(), dict(_CHARGE), {})
+        assert writes == [(1, 148, 1000), (1, 149, 1100), (1, 166, 100), (1, 172, 1)]
+
+    def test_none_is_absent(self):
+        payload = dict(_CHARGE, powerLimit=None, chargeVoltage=None)
+        writes = compute_register_writes(_charge_cmd(), payload, {})
+        assert [a for _, a, _ in writes] == [148, 149, 166, 172]
+
+    def test_charge_voltage_zero_means_skip(self):
+        # The API sends chargeVoltage 0 when it cannot compute one
+        # (calculateChargeVoltage); writing it would set 0 V.
+        payload = dict(_CHARGE, chargeVoltage=0)
+        writes = compute_register_writes(_charge_cmd(), payload, {})
+        assert all(a != 160 for _, a, _ in writes)
+
+    def test_charge_voltage_set_is_written(self):
+        payload = dict(_CHARGE, chargeVoltage=5760)
+        assert (1, 160, 5760) in compute_register_writes(_charge_cmd(), payload, {})
+
+    def test_power_limit_zero_is_written(self):
+        # 0 W is a real limit, unlike 0 V: the firmware writes power_limit >= 0.
+        payload = dict(_CHARGE, powerLimit=0)
+        assert (1, 154, 0) in compute_register_writes(_charge_cmd(), payload, {})
+
+    def test_a_payload_that_sets_nothing_raises(self):
+        cmd = _cmd([_fw(payload_field="workMode", address=142)])
+        with pytest.raises(ValueError, match="workMode"):
+            compute_register_writes(cmd, {}, {})

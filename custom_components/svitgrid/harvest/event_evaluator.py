@@ -448,7 +448,7 @@ def _restore_commands(event: dict, exec_state: dict) -> list:
         prev_timer = exec_state.get("previousTimerEnabled", True)
         return [
             ("set_work_mode", {"workMode": prev_mode}),
-            ("set_grid_charge_toggle", {"enabled": prev_timer}),
+            ("set_grid_charge_toggle", {"gridChargeEnabled": prev_timer}),
         ]
 
     if mode == "gen_force":
@@ -633,6 +633,11 @@ def _eval_battery_charge(
         "slotStart": _time_to_packed_hhmm(schedule.get("startTime", "00:00")),
         "slotEnd": _time_to_packed_hhmm(schedule.get("endTime", "23:59")),
     }
+    # powerLimit only when the event sets one, and no chargeVoltage: the same
+    # payload the API builds (buildBatteryChargePayload). The island knows no
+    # battery chemistry or cell count, which is the API's chargeVoltage-0
+    # case, so both registers keep the user's own values (write_compute skips
+    # an absent field).
     power_limit = config.get("chargePowerLimitW")
     if power_limit is not None:
         payload["powerLimit"] = power_limit
@@ -968,7 +973,7 @@ def _eval_use_battery(
         action="activate",
         commands=[
             ("set_work_mode", {"workMode": 2}),
-            ("set_grid_charge_toggle", {"enabled": False}),
+            ("set_grid_charge_toggle", {"gridChargeEnabled": False}),
         ],
         new_state=new_state,
     )
