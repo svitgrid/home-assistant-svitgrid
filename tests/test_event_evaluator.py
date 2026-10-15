@@ -849,13 +849,13 @@ def test_custom_unknown_condition_type_does_not_activate():
     assert r1.new_state.get("status", "idle") == "idle"
 
 
-def test_battery_maintenance_completed_redispatches_solar_sell():
-    """When completed=True and still in-window, hold is returned and set_solar_sell{0}
-    is re-dispatched every tick to keep solar-sell suppressed.
+def test_battery_maintenance_completed_holds_without_writing():
+    """A completed run in-window holds and writes nothing.
 
-    Matches TS evaluateBatteryMaintenanceCharge lines 1814-1841: step 3
-    ('Always: set_solar_sell {solarSell:0}') runs BEFORE the SOC≥99 completed
-    check, so re-dispatch happens unconditionally in-window even post-completion.
+    The activation wrote set_solar_sell {solarSell: 0} once. This test used to
+    expect it again on every tick, returned with action "hold"; the scheduler
+    never dispatches a hold, so it was never written. A completed run with no
+    grid fallback has nothing more to write until the window ends.
     """
     event = {
         "mode": "battery_maintenance",
@@ -863,17 +863,11 @@ def test_battery_maintenance_completed_redispatches_solar_sell():
         "config": {"gridFallbackHour": 20},  # 20:00 Kyiv, not reached at 15:00
     }
     reading = {"batterySoc": 99}
-    # State already marks completed from a previous tick
     state = _active(completed=True, maintenancePriorSolarSell=False)
     result = evaluate_event(event, reading, state, _NOW, TZ)
     assert result.action == "hold"
     assert result.new_state.get("completed") is True
-    cmd_names = [c[0] for c in result.commands]
-    assert "set_solar_sell" in cmd_names
-    solar_sell_cmd = next(c for c in result.commands if c[0] == "set_solar_sell")
-    assert solar_sell_cmd[1]["solarSell"] == 0
-    # Grid-charge NOT dispatched (SOC >= 99 → early return before fallback logic)
-    assert "set_battery_charge" not in cmd_names
+    assert result.commands == []
 
 
 def test_sell_to_grid_smart_reactivates_after_pv_recovery():

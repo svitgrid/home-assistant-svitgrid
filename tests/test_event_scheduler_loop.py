@@ -145,7 +145,13 @@ async def test_tick2_guard_not_dispatched_when_already_active():
 
     # Start with status=active (as if tick 1 already ran and persisted it)
     event = _make_use_battery_event(
-        exec_state={"status": "active", "lastActivatedAt": "2026-06-29T10:00:00+00:00"}
+        exec_state={
+            "status": "active",
+            "lastActivatedAt": "2026-06-29T10:00:00+00:00",
+            # What the activation's ACKs reported (prevWorkMode, prevGridChargeEnabled).
+            "previousWorkMode": 1,
+            "previousTimerEnabled": True,
+        }
     )
     event_store = FakeEventStore([event])
     store = FakeStore([_reading_at()])
@@ -207,7 +213,13 @@ async def test_tick3_deactivate_when_out_of_window():
 
     # Already active (tick 1 + 2 happened before this tick)
     event = _make_use_battery_event(
-        exec_state={"status": "active", "lastActivatedAt": "2026-06-29T10:00:00+00:00"}
+        exec_state={
+            "status": "active",
+            "lastActivatedAt": "2026-06-29T10:00:00+00:00",
+            # What the activation's ACKs reported (prevWorkMode, prevGridChargeEnabled).
+            "previousWorkMode": 1,
+            "previousTimerEnabled": True,
+        }
     )
     event_store = FakeEventStore([event])
     store = FakeStore([_reading_at()])
@@ -664,7 +676,9 @@ async def test_failed_dispatch_logs_once_per_event(caplog):
 async def test_failed_restore_keeps_the_event_active_so_it_is_retried():
     from custom_components.svitgrid.harvest.event_scheduler_loop import _tick
 
-    event_store = FakeEventStore([_make_use_battery_event(exec_state={"status": "active"})])
+    event_store = FakeEventStore(
+        [_make_use_battery_event(exec_state={"status": "active", "previousWorkMode": 1})]
+    )
     executor = _failing_executor(RuntimeError("write timeout"))
 
     await _tick(

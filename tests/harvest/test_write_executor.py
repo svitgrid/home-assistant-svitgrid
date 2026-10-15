@@ -194,8 +194,8 @@ async def test_dispatch_full_word_happy_path():
     spec = _spec_work_mode()
     executor, mock_read, mock_write = _make_executor(spec)
 
-    # verify read returns the written value (3)
-    mock_read.return_value = 3
+    # prior read returns the owner's mode (2), the verify read the written 3
+    mock_read.side_effect = [2, 3]
 
     with (
         patch(f"{MODULE}.read_word", mock_read),
@@ -204,10 +204,11 @@ async def test_dispatch_full_word_happy_path():
     ):
         result = await executor.dispatch("set_work_mode", {"workMode": 3})
 
-    assert result == {"written": [[1, 142, 3]], "verified": True}
+    # The value read before the write is reported, as the firmware's ACK does.
+    assert result == {"written": [[1, 142, 3]], "verified": True, "prevWorkMode": 2}
     mock_write.assert_awaited_once_with(executor._hass, spec, _CFG, [(1, 142, 3)])
-    # verify read called once (no prior needed for full_word without clear_mask)
-    assert mock_read.await_count == 1
+    # prior read + verify read
+    assert mock_read.await_count == 2
 
 
 # ---------------------------------------------------------------------------
@@ -231,7 +232,7 @@ async def test_dispatch_bit_field_prior_read_and_rmw():
     ):
         result = await executor.dispatch("set_gen_force", {"genForce": 1})
 
-    assert result == {"written": [[1, 326, 0x2000]], "verified": True}
+    assert result == {"written": [[1, 326, 0x2000]], "verified": True, "prevGenForce": 0}
     mock_write.assert_awaited_once()
     # prior read + verify read = 2 total calls
     assert mock_read.await_count == 2
@@ -338,8 +339,8 @@ async def test_dispatch_verify_mismatch_raises():
     """Read-back after write returns wrong value → RuntimeError('verify_failed:...')."""
     executor, mock_read, mock_write = _make_executor(_spec_work_mode())
 
-    # verify read returns a different value than written
-    mock_read.return_value = 99  # written 3, read back 99 → mismatch
+    # prior 2; verify reads back 99 after writing 3 → mismatch
+    mock_read.side_effect = [2, 99]
 
     with (
         patch(f"{MODULE}.read_word", mock_read),
@@ -381,8 +382,8 @@ async def test_set_battery_charge_routes_through_dispatch():
     """set_battery_charge (legacy abstract method) calls dispatch('set_battery_charge', ...)."""
     executor, mock_read, mock_write = _make_executor(_spec_battery_charge())
 
-    # verify read returns written value
-    mock_read.return_value = 80
+    # prior read 50, verify read returns the written 80
+    mock_read.side_effect = [50, 80]
 
     with (
         patch(f"{MODULE}.read_word", mock_read),
@@ -391,7 +392,7 @@ async def test_set_battery_charge_routes_through_dispatch():
     ):
         result = await executor.set_battery_charge({"chargeLimit": 80})
 
-    assert result == {"written": [[1, 340, 80]], "verified": True}
+    assert result == {"written": [[1, 340, 80]], "verified": True, "prevChargeLimit": 50}
 
 
 # ---------------------------------------------------------------------------
@@ -404,8 +405,8 @@ async def test_dispatch_verify_read_none_raises():
     """read_word returns None during verify (not prior) → RuntimeError('verify_read_failed:...')."""
     executor, mock_read, mock_write = _make_executor(_spec_work_mode())
 
-    # full_word has no prior; only verify read → returns None
-    mock_read.return_value = None
+    # the prior read succeeds; the verify read returns None
+    mock_read.side_effect = [2, None]
 
     with (
         patch(f"{MODULE}.read_word", mock_read),
@@ -545,3 +546,62 @@ async def test_dispatch_does_not_write_a_field_the_payload_omits():
     mock_write.assert_awaited_once_with(executor._hass, spec, _CFG, [(1, 148, 800)])
     assert result["written"] == [[1, 148, 800]]
     assert result["verified"] is True
+
+
+# ---------------------------------------------------------------------------
+# 10. Every top-level field is read before it is written, and reported
+#
+#     The island restores a work mode, a TOU master bit and a solar-sell bit
+#     from these values. Without them it restored invented defaults.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("command", "payload", "prior", "written", "key", "reported"),
+    [
+        ("set_work_mode", {"workMode": 0}, {142: 1}, (1, 142, 0), "prevWorkMode", 1),
+        ("set_solar_sell", {"solarSell": 0}, {145: 0b1011}, (1, 145, 0b1010), "prevSolarSell", 1),
+        (
+            "set_grid_charge_toggle",
+            {"gridChargeEnabled": False},
+            {146: 0b1111_1110},
+            (1, 146, 0b1111_1110),
+            "prevGridChargeEnabled",
+            0,
+        ),
+    ],
+)
+async def test_dispatch_reports_the_value_each_field_held(
+    command, payload, prior, written, key, reported
+):
+    vector = _vector_for(command)
+    executor, registers, fake_read, fake_write = _executor_for_vector(vector)
+    registers.clear()
+    registers.update(prior)
+
+    with (
+        patch(f"{MODULE}.read_word", fake_read),
+        patch(f"{MODULE}.read_words", _words_via(fake_read)),
+        patch(f"{MODULE}.write_registers", fake_write),
+    ):
+        result = await executor.dispatch(command, payload)
+
+    assert result["written"] == [list(written)]
+    assert result[key] == reported
+
+
+@pytest.mark.asyncio
+async def test_a_full_word_prior_that_cannot_be_read_writes_nothing():
+    executor, mock_read, mock_write = _make_executor(_spec_work_mode())
+    mock_read.return_value = None
+
+    with (
+        patch(f"{MODULE}.read_word", mock_read),
+        patch(f"{MODULE}.read_words", _words_via(mock_read)),
+        patch(f"{MODULE}.write_registers", mock_write),
+        pytest.raises(RuntimeError, match="prior_read_failed:142"),
+    ):
+        await executor.dispatch("set_work_mode", {"workMode": 0})
+
+    mock_write.assert_not_awaited()

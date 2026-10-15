@@ -78,6 +78,20 @@
   Before, the add-on only dropped the event, so a charge ran until its slot
   ended. If the restore fails, the event leaves the app's list, and the
   add-on retries the restore with the usual backoff.
+- **Local "sell to grid", "use battery" and battery maintenance put your
+  settings back exactly.** When one of these events ended or was cancelled,
+  the add-on wrote fixed values: work mode "Zero export to CT", time-of-use
+  on, and solar sell off. Now each write reads the register first, the
+  event keeps what the inverter held, and the restore writes exactly that.
+  When a value could not be read, nothing is written for it and the app
+  shows "Could not read the inverter's settings" on the event. A write
+  whose register cannot be read first writes nothing.
+- **Battery maintenance's grid fallback reaches the inverter in local mode.**
+  When the fallback hour came after the event started, the add-on decided
+  to charge from the grid and never wrote it. It now writes the charge at
+  that hour, retries it if it fails, and puts your six slots back when the
+  battery reaches 99 % or the window ends. A finished cycle no longer
+  starts a second fallback.
 - **"Use battery" in local mode clears grid charging.** It sent the field as
   `enabled` instead of `gridChargeEnabled`, so the write failed.
 - **A local event whose write fails no longer shows as active.** It stays in
