@@ -113,9 +113,46 @@ def _island_commands() -> list[tuple[str, str, dict]]:
             },
         ),
         ("gen_force", {"mode": "gen_force", "schedule": dict(_SCHEDULE), "config": {}}),
+        (
+            "sell_to_grid/cap_tou",
+            {
+                "mode": "sell_to_grid",
+                "schedule": dict(_SCHEDULE),
+                "config": {"sellPowerCapW": 5000, "disableTouDuringEvent": True},
+            },
+        ),
+        (
+            "custom/app_actions",
+            {
+                "mode": "custom",
+                "schedule": dict(_SCHEDULE),
+                "config": {
+                    "customConditions": [],
+                    "customActions": [
+                        {"type": "work_mode", "value": 0},
+                        {"type": "solar_sell", "value": 1},
+                        {"type": "sell_power_cap", "valueW": 4000},
+                        {"type": "grid_charge_toggle", "enabled": False},
+                        {"type": "gen_force", "on": True},
+                        {"type": "gen_port_mode", "value": 1},
+                        {"type": "energy_pattern", "value": 1},
+                        {
+                            "type": "tou_slots",
+                            "slotIndex": 1,
+                            "startTime": "02:00",
+                            "endTime": "05:00",
+                            "powerW": 3000,
+                            "socTarget": 90,
+                            "gridChargeEnabled": True,
+                        },
+                    ],
+                },
+            },
+        ),
     ]
     for label, event in events:
-        decision = evaluate_event(event, _READING, {}, _NOW, "UTC")
+        start = {"status": "pending_condition"} if event["mode"] == "custom" else {}
+        decision = evaluate_event(event, _READING, start, _NOW, "UTC")
         for name, payload in decision.commands:
             out.append((f"{label}/activate", name, payload))
         # The priors an activation's ACKs report (event_scheduler_loop.capture_priors).
@@ -127,6 +164,10 @@ def _island_commands() -> list[tuple[str, str, dict]]:
             previousWorkMode=1,
             previousTimerEnabled=True,
             maintenancePriorSolarSell=True,
+            previousSellPowerCapW=12000,
+            previousGenForce=False,
+            previousGenPortMode=0,
+            previousEnergyPattern=0,
         )
         for name, payload in _restore_commands(event, active_state):
             out.append((f"{label}/restore", name, payload))
@@ -143,6 +184,19 @@ def test_the_island_emits_commands_to_check():
     assert ("use_battery/restore", "set_grid_charge_toggle") in restores
     assert ("sell_to_grid/restore", "set_work_mode") in restores
     assert ("battery_maintenance/restore", "set_solar_sell") in restores
+    custom = {name for label, name, _ in _COMMANDS if label == "custom/app_actions/activate"}
+    assert custom == {
+        "set_work_mode",
+        "set_solar_sell",
+        "set_sell_power_cap",
+        "set_grid_charge_toggle",
+        "set_gen_force",
+        "set_gen_port_mode",
+        "set_energy_pattern",
+        "set_battery_charge",
+    }
+    assert ("custom/app_actions/restore", "restore_sell_power_cap") in restores
+    assert ("sell_to_grid/cap_tou/restore", "restore_sell_power_cap") in restores
 
 
 @pytest.mark.parametrize(

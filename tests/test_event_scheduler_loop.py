@@ -316,7 +316,7 @@ async def test_tick_per_event_error_isolation():
 
     call_count = 0
 
-    def fake_evaluate(event, reading, exec_state, now_utc, tz):
+    def fake_evaluate(event, reading, exec_state, now_utc, tz, others=()):
         nonlocal call_count
         call_count += 1
         if event["id"] == "evt-bad":
