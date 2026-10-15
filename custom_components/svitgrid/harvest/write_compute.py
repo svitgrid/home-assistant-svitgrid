@@ -34,6 +34,12 @@ _ZERO_MEANS_SKIP = frozenset({"chargeVoltage"})
 # that has a captured table. It carries no ``slotIndex``.
 PROGRAM_FIELD = "prevSlots"
 
+# A single-slot charge that also turns grid charge off on the other five slots,
+# so only the event's window charges from the grid. The API's battery charge
+# and the island's charge and maintenance fallback send it; the firmware
+# honours it only on its single-slot branch, never on a program.
+DISABLE_OTHERS_FIELD = "disableOtherSlots"
+
 # One ``prevSlots`` entry key per slot field, in the order the edge firmware's
 # ``tou_restore_all_slots`` (tou_writer.c) writes them. ``end`` is written only
 # to a dedicated end register: on Deye and Sunsynk a slot ends where the next
@@ -160,6 +166,8 @@ def compute_register_writes(
             slot_idx = ((idx + 1) % s.count) if f.via_next_slot else idx
             addr = f.base + slot_idx * s.stride
             out.append((unit_id, addr, _encode_value(f, payload, prior, addr)))
+        if payload.get(DISABLE_OTHERS_FIELD) is True:
+            out.extend(_disable_other_slots(s, idx, prior, unit_id))
 
     if not out:
         fields = [f.payload_field for f in cmd.fields]
@@ -167,6 +175,28 @@ def compute_register_writes(
             fields += [f.payload_field for f in cmd.slot.fields]
         raise ValueError(f"{cmd.command}: payload sets none of {', '.join(fields)}")
 
+    return out
+
+
+def _disable_other_slots(
+    slot: SlotSpec, target: int, prior: dict[int, int], unit_id: int
+) -> list[tuple[int, int, int]]:
+    """Clear grid charge (bit 0) on every slot but *target*, as the firmware does.
+
+    ``execute_battery_charge`` (zigbee_poller.c, calendar mode) skips a slot
+    whose bit 0 is already clear and keeps every other bit of the word. It
+    reads the words from the slot table it pre-read, which is *prior* here.
+    The bits come back with the restore, from the table the ACK reports.
+    """
+    enable = program_field(slot, "enable")
+    if enable is None:
+        return []
+    out = []
+    for i in range(slot.count):
+        addr = enable.base + i * slot.stride  # type: ignore[operator]
+        word = prior.get(addr, 0)
+        if i != target and word & 0x01:
+            out.append((unit_id, addr, word & ~0x01 & 0xFFFF))
     return out
 
 
