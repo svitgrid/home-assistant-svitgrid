@@ -168,3 +168,69 @@ async def test_a_stale_reason_clears_with_no_reading_too():
 
     [stored] = await event_store.async_list_events()
     assert "skippedReason" not in stored["executionState"]
+
+
+# ── The shared vectors: the app and the integration agree (owner, 2026-10-15) ──
+#
+# The app's list wins: a config-level forecast or price threshold, a
+# requireScheduledOutage in any mode, and forecast_tomorrow all need the cloud.
+# tests/fixtures/needs_cloud_vectors.json is vendored from the app
+# (apps/mobile/test/fixtures/needs_cloud_vectors.json), whose test runs the
+# same vectors through cloud_dependency.dart.
+
+import json
+import os
+from pathlib import Path
+
+_VECTORS = Path(__file__).parent / "fixtures" / "needs_cloud_vectors.json"
+
+
+def _vectors() -> list[dict]:
+    return json.loads(_VECTORS.read_text())["vectors"]
+
+
+@pytest.mark.parametrize("vector", _vectors(), ids=lambda v: v["name"])
+def test_needs_cloud_matches_the_shared_vectors(vector):
+    assert needs_cloud(vector["event"]) is vector["needsCloud"]
+
+
+@pytest.mark.parametrize(
+    "vector", [v for v in _vectors() if v["needsCloud"]], ids=lambda v: v["name"]
+)
+def test_the_evaluator_skips_every_cloud_vector(vector):
+    """Skipped with needs_cloud, never run without the threshold it waits for."""
+    event = {"schedule": _ALL_DAY, **vector["event"]}
+    decision = evaluate_event(
+        event, {"batterySoc": 50, "pvPower": 4000}, {"status": "idle"}, _NOW, TZ
+    )
+    assert decision.action == "skip"
+    assert decision.commands == []
+    assert decision.new_state["skippedReason"] == "needs_cloud"
+
+
+def test_a_sell_gated_on_the_forecast_is_not_run():
+    """It used to activate with the forecast gate stripped: it sold whatever
+    the forecast, while the app said it does not run."""
+    event = {
+        "mode": "sell_to_grid",
+        "schedule": _ALL_DAY,
+        "config": {"sellMode": "simple", "minForecastKwh": 20},
+    }
+    decision = evaluate_event(
+        event, {"batterySoc": 90, "pvPower": 4000}, {"status": "idle"}, _NOW, TZ
+    )
+    assert decision.action == "skip"
+    assert decision.commands == []
+
+
+def test_the_vendored_vectors_match_the_app_copy():
+    """Byte for byte, when an app checkout is at hand (SVITGRID_REPO, or
+    ~/git/svitgrid). Skipped otherwise: the vendored copy is then the truth."""
+    root = Path(os.environ.get("SVITGRID_REPO", Path.home() / "git" / "svitgrid"))
+    app_copy = root / "apps" / "mobile" / "test" / "fixtures" / "needs_cloud_vectors.json"
+    if not app_copy.exists():
+        pytest.skip(f"no app copy at {app_copy}")
+    assert _VECTORS.read_bytes() == app_copy.read_bytes(), (
+        "tests/fixtures/needs_cloud_vectors.json differs from the app's copy; "
+        "copy the app's file here and make both tests pass"
+    )

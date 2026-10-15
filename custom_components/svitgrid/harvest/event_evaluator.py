@@ -180,6 +180,7 @@ _GEN_FORCE_START_SUSTAIN_MIN = 1  # minutes
 _CLOUD_CONDITION_TYPES: frozenset[str] = frozenset(
     {
         "forecast_today",
+        "forecast_tomorrow",
         "dam_price",
         "scheduled_outage",
     }
@@ -872,26 +873,53 @@ def restore_decision(
 SKIPPED_REASON_KEY = "skippedReason"
 NEEDS_CLOUD = "needs_cloud"
 _NEEDS_CLOUD_SKIPS: frozenset[str] = frozenset(
-    {"cloud_only_mode", "requires_scheduled_outage", "cloud_only_condition"}
+    {
+        "cloud_only_mode",
+        "requires_scheduled_outage",
+        "cloud_only_condition",
+        "cloud_only_threshold",
+    }
 )
+
+# Config fields that gate an event on the forecast or the day-ahead price, in
+# any mode: sell_to_grid's minForecastKwh and price floor, battery_charge's
+# forecastThresholdKwh and price ceiling.
+_CLOUD_THRESHOLD_FIELDS = (
+    "minForecastKwh",
+    "forecastThresholdKwh",
+    "damPriceMinUahKwh",
+    "damPriceMaxUahKwh",
+)
+
+
+def _cloud_skip_reason(event: dict) -> str | None:
+    """Why the island cannot run *event* without cloud-only inputs, or None.
+
+    Mirrors the app's cloudInputOf (cloud_dependency.dart), whose stricter
+    list wins (owner, 2026-10-15): an event that waits for a forecast or a
+    price is skipped, never run without its threshold. The shared vectors in
+    tests/fixtures/needs_cloud_vectors.json keep the two in step.
+    """
+    config = event.get("config") or {}
+    if event.get("mode") == "day_planning":
+        return "cloud_only_mode"
+    conditions = config.get("customConditions") or []
+    if any(isinstance(c, dict) and c.get("type") in _CLOUD_CONDITION_TYPES for c in conditions):
+        return "cloud_only_condition"
+    if any(config.get(field) is not None for field in _CLOUD_THRESHOLD_FIELDS):
+        return "cloud_only_threshold"
+    if config.get("requireScheduledOutage") is True:
+        return "requires_scheduled_outage"
+    return None
 
 
 def needs_cloud(event: dict) -> bool:
     """True when the island cannot run *event* without cloud-only inputs.
 
-    The same tests evaluate_event skips on, so the scheduler can say so for an
+    The same test evaluate_event skips on, so the scheduler can say so for an
     event it has no reading to evaluate against yet.
     """
-    mode = event.get("mode", "")
-    config = event.get("config") or {}
-    if mode == "day_planning":
-        return True
-    if mode == "gen_force" and config.get("requireScheduledOutage"):
-        return True
-    if mode == "custom":
-        conditions = config.get("customConditions") or []
-        return any(c.get("type") in _CLOUD_CONDITION_TYPES for c in conditions)
-    return False
+    return _cloud_skip_reason(event) is not None
 
 
 def evaluate_event(
@@ -938,35 +966,16 @@ def _evaluate_event(
     to activate: at window end, or in-window when its condition goes.
     """
     mode = event.get("mode", "")
-    config = event.get("config") or {}
 
-    # ── Cloud-only mode ────────────────────────────────────────────────────────
-    if mode == "day_planning":
+    # ── Cloud-only inputs: day planning, a forecast, a price, an outage ───────
+    cloud_reason = _cloud_skip_reason(event)
+    if cloud_reason is not None:
         return EvaluatorDecision(
             action="skip",
             commands=[],
             new_state=dict(exec_state),
-            skip_reason="cloud_only_mode",
+            skip_reason=cloud_reason,
         )
-
-    # ── Per-mode cloud-only config checks ─────────────────────────────────────
-    if mode == "gen_force" and config.get("requireScheduledOutage"):
-        return EvaluatorDecision(
-            action="skip",
-            commands=[],
-            new_state=dict(exec_state),
-            skip_reason="requires_scheduled_outage",
-        )
-
-    if mode == "custom":
-        conditions = config.get("customConditions") or []
-        if any(c.get("type") in _CLOUD_CONDITION_TYPES for c in conditions):
-            return EvaluatorDecision(
-                action="skip",
-                commands=[],
-                new_state=dict(exec_state),
-                skip_reason="cloud_only_condition",
-            )
 
     # ── Window check ──────────────────────────────────────────────────────────
     schedule = event.get("schedule") or {}
@@ -1073,7 +1082,7 @@ def _eval_battery_charge(
 ) -> EvaluatorDecision:
     """In-window → activate set_battery_charge once; hold when already active.
 
-    Forecast gate from the TS is STRIPPED locally (brief §lower_consumption).
+    An event with a forecast or price gate is skipped as needing the cloud.
     """
     if exec_state.get("status") == "active":
         return EvaluatorDecision(action="hold", commands=[], new_state=new_state)
@@ -1102,7 +1111,8 @@ def _eval_sell_to_grid(
     now_utc: datetime,
     others=(),
 ) -> EvaluatorDecision:
-    """Simple mode: activate once (forecast/price gates STRIPPED).
+    """Simple mode: activate once. An event gated on the forecast or a price
+    never gets here: it is skipped as needing the cloud.
     Smart mode: PV-power-gated with 2-min hysteresis on the OFF edge.
 
     Both stop at the battery floor ``minSocPercent`` and restore, and resume
@@ -1181,7 +1191,7 @@ def _eval_sell_to_grid(
 
         return EvaluatorDecision(action="hold", commands=[], new_state=new_state)
 
-    # ── Simple mode (forecast/price gates stripped) ───────────────────────────
+    # ── Simple mode (a forecast or price gate is skipped as needs_cloud) ──────
     if status == "active":
         return EvaluatorDecision(action="hold", commands=[], new_state=new_state)
     return activate()
