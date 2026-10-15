@@ -2,9 +2,10 @@
 
 Handles signed control commands by:
   1. Looking up the WriteCommand in the spec.
-  2. Reading prior register values for bit:N / clear_mask fields (RMW), and
-     for a slot command the whole slot table, which the ACK reports back as
-     ``prevSlots``.
+  2. Reading the prior value of every top-level field the payload sets (the
+     read-modify-write base of a bit:N / clear_mask field, and the value the
+     ACK reports as ``prev<Field>``), and for a slot command the whole slot
+     table, which the ACK reports back as ``prevSlots``.
   3. Computing the exact (unit, address, value) writes via compute_register_writes.
   4. Writing them via write_registers.
   5. Reading each written address back and verifying the value matches.
@@ -34,30 +35,52 @@ _RECIPE_ALIASES = {"restore_battery_charge": "set_battery_charge"}
 _LOGGER = logging.getLogger(__name__)
 
 
-def _needs_prior(f: FieldWrite) -> bool:
-    """Return True when this FieldWrite requires a prior register read.
-
-    A prior read is needed when:
-    - The encoding is a bit-field (``bit:N``) — we need the current word for RMW.
-    - The field has ``clear_mask`` set — same reason, regardless of encoding.
-    """
-    return f.encoding.startswith("bit:") or f.clear_mask is not None
-
-
 def _collect_prior_addresses(
     cmd: WriteCommand,
     payload: dict[str, Any],
 ) -> set[int]:
-    """Return the top-level register addresses that need a prior read.
+    """Return the top-level register addresses to read before the write.
 
-    A field the payload omits is not written, so it is not read either. Slot
-    fields need none of their own: a slot command reads the whole slot table
-    first (see ``_slot_table_addresses``).
+    Every field the payload sets is read: a bit:N or clear_mask field needs
+    the live word for its read-modify-write, and every field's prior value
+    goes in the ACK (``_prev_field_values``), where the island scheduler and
+    the API take the value a restore puts back. The edge firmware reads its
+    work-mode, solar-sell and TOU-master registers before writing them for the
+    same reason. A field the payload omits is not written, so it is not read
+    either. Slot fields need none of their own: a slot command reads the whole
+    slot table first (see ``_slot_table_addresses``).
     """
+    return {f.address for f in cmd.fields if is_set(f, payload) and f.address is not None}
+
+
+def _prev_key(payload_field: str) -> str:
+    """``workMode`` -> ``prevWorkMode``: the firmware's ACK key for a prior value."""
+    return "prev" + payload_field[:1].upper() + payload_field[1:]
+
+
+def _decode_prior(f: FieldWrite, word: int) -> int | float:
+    """The payload-unit value field *f* held in register word *word*.
+
+    A bit field reports 0 or 1, as the firmware's ``prevSolarSell`` and
+    ``prevGridChargeEnabled`` do; a full word reports the word in payload
+    units, keeping only the clear_mask bits when the field owns a mask.
+    """
+    if f.encoding.startswith("bit:"):
+        return (word >> int(f.encoding.split(":", 1)[1])) & 1
+    if f.clear_mask is not None:
+        word &= f.clear_mask
+    value = word * f.value_scale
+    return int(value) if float(value).is_integer() else value
+
+
+def _prev_field_values(
+    cmd: WriteCommand, payload: dict[str, Any], prior: dict[int, int]
+) -> dict[str, int | float]:
+    """``prev<Field>`` for every top-level field written, from the pre-read."""
     return {
-        f.address
+        _prev_key(f.payload_field): _decode_prior(f, prior[f.address])
         for f in cmd.fields
-        if _needs_prior(f) and is_set(f, payload) and f.address is not None
+        if is_set(f, payload) and f.address in prior
     }
 
 
@@ -161,7 +184,8 @@ class WriteExecutor(BaseExecutor):
         4. Compute the (unit, address, value) writes.
         5. Write them.
         6. Verify each written address reads back the expected value.
-        7. Return ``{"written": [...], "verified": True}``, plus the
+        7. Return ``{"written": [...], "verified": True}``, plus a
+           ``prev<Field>`` for each top-level field written, and the
            firmware's ``prev*`` fields and ``prevSlots`` for a slot command.
         """
         # 1. Spec guard
@@ -174,7 +198,7 @@ class WriteExecutor(BaseExecutor):
         if cmd is None:
             raise NotImplementedError(command_name)
 
-        # 3. Gather prior values for bit/RMW fields, and a slot command's table
+        # 3. Gather the prior value of every field written, and a slot command's table
         unit_id = spec.default_slave_id
         prior: dict[int, int] = {}
         for addr in _collect_prior_addresses(cmd, payload):
@@ -212,6 +236,7 @@ class WriteExecutor(BaseExecutor):
 
         # 7. Return result
         result: dict[str, Any] = {"written": [[u, a, v] for u, a, v in writes], "verified": True}
+        result.update(_prev_field_values(cmd, payload, prior))
         if cmd.slot is not None:
             result.update(_prev_slot_fields(cmd.slot, prior))
         return result

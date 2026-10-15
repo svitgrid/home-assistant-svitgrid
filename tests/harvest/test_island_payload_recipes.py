@@ -115,8 +115,15 @@ def _island_commands() -> list[tuple[str, str, dict]]:
         decision = evaluate_event(event, _READING, {}, _NOW, "UTC")
         for name, payload in decision.commands:
             out.append((f"{label}/activate", name, payload))
+        # The priors an activation's ACKs report (event_scheduler_loop.capture_priors).
         active_state = dict(
-            decision.new_state, status="active", gridFallbackFired=True, prevSlots=_TABLE
+            decision.new_state,
+            status="active",
+            gridFallbackFired=True,
+            prevSlots=_TABLE,
+            previousWorkMode=1,
+            previousTimerEnabled=True,
+            maintenancePriorSolarSell=True,
         )
         for name, payload in _restore_commands(event, active_state):
             out.append((f"{label}/restore", name, payload))
@@ -129,6 +136,10 @@ _COMMANDS = _island_commands()
 def test_the_island_emits_commands_to_check():
     names = {name for _, name, _ in _COMMANDS}
     assert {"set_battery_charge", "set_work_mode", "set_grid_charge_toggle"} <= names
+    restores = {(label, name) for label, name, _ in _COMMANDS if label.endswith("/restore")}
+    assert ("use_battery/restore", "set_grid_charge_toggle") in restores
+    assert ("sell_to_grid/restore", "set_work_mode") in restores
+    assert ("battery_maintenance/restore", "set_solar_sell") in restores
 
 
 @pytest.mark.parametrize(

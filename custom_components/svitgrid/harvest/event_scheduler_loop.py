@@ -5,8 +5,8 @@ Each tick:
   2. Get the latest reading per inverter via ReadingStore.live_snapshot().
   3. For each enabled event: pick its inverter's reading (skip if absent);
      call evaluate_event(event, reading, exec_state, now_utc, tz).
-  4. On action in ('activate', 'deactivate'): dispatch each (cmd_name, payload)
-     via executor_for(inverter_id).dispatch(cmd_name, payload).
+  4. On action in ('activate', 'update', 'deactivate'): dispatch each
+     (cmd_name, payload) via executor_for(inverter_id).dispatch(cmd_name, payload).
   5. Persist the execution state via event_store.async_set_execution_state()
      EVERY tick — regardless of action — so activation guards and hysteresis
      bookkeeping survive across ticks.
@@ -17,9 +17,16 @@ is kept, with ``lastCommandError`` set and a retry scheduled
 again and the app can show why it has not.  The first failure logs at ERROR;
 its retries log at DEBUG.
 
-A battery-charge activation keeps the slot table its set_battery_charge ACK
-reports (``prevSlots``) in the execution state, and the restore writes exactly
-that table back, as the cloud's ``restore_battery_charge`` does.
+An activation keeps the prior values its ACKs report in the execution state,
+and the restore writes exactly those back: the slot table a set_battery_charge
+read (``prevSlots``, which ``restore_battery_charge`` writes back, as the cloud
+does), and the work mode, TOU master bit and solar-sell bit that set_work_mode,
+set_grid_charge_toggle and set_solar_sell read (``prevWorkMode``,
+``prevGridChargeEnabled``, ``prevSolarSell``, the firmware's ACK keys). A value
+already held is never replaced, and an ACK from a command that failed partway
+still counts, so a retry that reads the event's own write back cannot pose as
+the owner's setting. With no captured value the restore writes nothing and
+reports ``prev_read_failed``.
 
 Cancelling an active event from the app (DELETE, or a PUT that disables it)
 must undo it at the inverter: the scheduler only evaluates events it still
@@ -127,19 +134,49 @@ async def _dispatch_all(executor: object, commands: list) -> tuple[_Failure | No
     return failure, results
 
 
-def _keep_prior_table(state: dict, results: list) -> None:
-    """Store the slot table a set_battery_charge ACK reports, for the restore.
+def _valid_work_mode(value: object) -> int | None:
+    # Deye work modes are 0-2. Anything else is a corrupt read, which the API
+    # also refuses to trust; the restore then reports it rather than guess.
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    return int(value) if value in (0, 1, 2) else None
 
-    WriteExecutor pre-reads the whole table before it writes and reports it as
-    ``prevSlots``. A table already held is kept: a second write while active
-    would report the event's own program as the prior one.
+
+def _bit(value: object) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int | float) and value in (0, 1):
+        return bool(value)
+    return None
+
+
+# (command, ACK key, execution-state key, parse): the prior values an
+# activation keeps for its restore. The execution-state keys are the cloud's.
+_PRIOR_CAPTURES = (
+    ("set_battery_charge", "prevSlots", "prevSlots", lambda v: v or None),
+    ("set_work_mode", "prevWorkMode", "previousWorkMode", _valid_work_mode),
+    ("set_grid_charge_toggle", "prevGridChargeEnabled", "previousTimerEnabled", _bit),
+    ("set_solar_sell", "prevSolarSell", "maintenancePriorSolarSell", _bit),
+)
+
+
+def capture_priors(state: dict, results: list) -> None:
+    """Keep the prior values the activation's ACKs report, for the restore.
+
+    WriteExecutor reads each register before it writes it and reports the
+    value (``prevSlots`` for the slot table, ``prev<Field>`` otherwise). A
+    value already held is kept: a later write while active, or a retry after a
+    partial failure, reads the event's own setting back.
     """
-    if state.get("prevSlots"):
-        return
     for name, result in results:
-        if name == "set_battery_charge" and isinstance(result, dict) and result.get("prevSlots"):
-            state["prevSlots"] = result["prevSlots"]
-            return
+        if not isinstance(result, dict):
+            continue
+        for command, ack_key, state_key, parse in _PRIOR_CAPTURES:
+            if name != command or state.get(state_key) is not None:
+                continue
+            value = parse(result.get(ack_key))
+            if value is not None:
+                state[state_key] = value
 
 
 def _failed_state(exec_state: dict, failure: _Failure, now_utc: datetime) -> dict:
@@ -245,7 +282,7 @@ async def _tick(
                 tz,
             )
 
-            if decision.action not in ("activate", "deactivate"):
+            if decision.action not in ("activate", "update", "deactivate"):
                 # Not a transition: a stale retry schedule has nothing left to retry.
                 state = dict(decision.new_state)
                 for key in _RETRY_KEYS:
@@ -262,11 +299,12 @@ async def _tick(
                 state = dict(decision.new_state)
                 for key in _RETRY_KEYS:
                     state.pop(key, None)
-                if decision.action == "activate":
-                    _keep_prior_table(state, results)
             else:
                 state = _failed_state(exec_state, failure, now_utc)
                 _log_failure(event_id, inverter_id, failure, state["dispatchFailures"])
+            if decision.action != "deactivate":
+                # A restore's ACK reads the event's own setting: never a prior.
+                capture_priors(state, results)
 
             # Persist EVERY tick — guard survival + hysteresis bookkeeping
             await event_store.async_set_execution_state(event_id, state)
