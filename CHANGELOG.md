@@ -92,6 +92,11 @@
   that hour, retries it if it fails, and puts your six slots back when the
   battery reaches 99 % or the window ends. A finished cycle no longer
   starts a second fallback.
+- **Reads over a Solarman logger stay quiet when the logger drops the
+  connection.** Reads no longer use pysolarmanv5's own reconnect, which
+  raised uncaught `OSError`s in its reader thread against a logger that
+  closes after each reply. A failed read range is retried once on a new
+  connection, as before.
 - **"Use battery" in local mode clears grid charging.** It sent the field as
   `enabled` instead of `gridChargeEnabled`, so the write failed.
 - **A local event whose write fails no longer shows as active.** It stays in
