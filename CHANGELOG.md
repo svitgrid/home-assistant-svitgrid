@@ -75,6 +75,28 @@
   keep charging from the grid during the event. It now clears the grid-charge
   bit of every other slot that has it, keeping the rest of the word, as the
   edge device does. The restore puts the bits back.
+- **Local custom events write to the inverter.** The app saves a custom
+  action as `{type, value}`, and the add-on read another shape, so a local
+  custom event showed as active and wrote nothing. Work mode, solar sell, sell
+  cap, time-of-use master, generator force, generator port, energy pattern
+  and time-of-use slot actions now write, and the event's end puts back the
+  values the inverter held. Smart-plug, EV-charger, priority-profile,
+  grid-charge-current and peak-shaving actions are skipped locally.
+- **Local "sell to grid" honours the battery floor, the sell cap and
+  "disable time-of-use".** Selling stops at the floor and restores your
+  settings, and starts again only 5 % above it, as in the cloud. The sell cap
+  and time-of-use switch are written and put back. At the end, a work mode of
+  Selling First is not restored when PV is below 500 W: the inverter goes to
+  Zero Export To Load instead, so it does not sell the battery after sunset.
+- **Overlapping local events put back your own settings.** An event that
+  started while another event had changed the same setting stored that
+  event's value as yours. It now takes your value from the other event. An
+  event that ends while another one still holds the setting hands it back to
+  that event instead of to your value; the last one to end restores yours.
+- **A local event that failed partway is undone.** When some of an event's
+  writes landed and one failed, the landed writes stayed on the inverter
+  after the window ended or the event was cancelled. They are now put back
+  when the event ends, is cancelled, or its condition goes.
 - **"Use battery" in local mode clears grid charging.** It sent the field as
   `enabled` instead of `gridChargeEnabled`, so the write failed.
 - **A local event whose write fails no longer shows as active.** It stays in

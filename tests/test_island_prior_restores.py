@@ -217,11 +217,13 @@ def test_window_end_clears_the_run_markers_for_the_next_day():
         assert key not in new_state
 
 
-def test_an_idle_event_drops_priors_left_by_a_failed_activation():
-    state = {"status": "idle", "previousWorkMode": 1, "dispatchFailures": 3}
+def test_an_idle_event_with_no_landed_write_holds_at_window_end():
+    """A partial activation's writes are put back (test_island_events_round4);
+    an event that wrote nothing has nothing to restore."""
+    state = {"status": "idle", "dispatchFailures": 3}
     decision = evaluate_event(_event("sell_to_grid"), _READING, state, _OUT, TZ)
     assert decision.action == "hold"
-    assert "previousWorkMode" not in decision.new_state
+    assert decision.commands == []
 
 
 # ═══════════════════════════ Scheduler ═══════════════════════════════════════
