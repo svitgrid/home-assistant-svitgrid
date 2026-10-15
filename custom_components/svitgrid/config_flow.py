@@ -374,6 +374,10 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
         self._shown_candidate: local_pairing.LanClaim | None = None
         # Why the claim task ended without a claim, for async_step_pair_aborted.
         self._pair_abort_reason: str | None = None
+        # Set when this Home Assistant already has a station: the pairing then
+        # adds a phone to that entry instead of creating one (owner,
+        # 2026-10-14), and never calls the cloud.
+        self._add_to_entry_id: str | None = None
 
     # ── EyBond hooks (see EybondCollectorSteps) ──────────────────────────
     _eybond_model_id: str | None = None
@@ -637,35 +641,39 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
 
             self._private_key, self._public_key_hex = generate_keypair()
             self._signing_key_id = f"ha-{token_hex(4)}"
-            # One install, one owner: with a station already here, the LAN
-            # cannot claim this code (pair-local answers already_configured).
-            configured = bool(self.hass.config_entries.async_entries(DOMAIN))
+            # One install, one station: with a station already here, this
+            # pairing adds a phone to it. That never involves the cloud — a
+            # true island keeps the cloud out of day-to-day operation — so the
+            # code is minted here and only pair-local can claim it.
+            existing = self.hass.config_entries.async_entries(DOMAIN)
 
-            try:
-                start_result = await client.start(
-                    public_key_hex=self._public_key_hex,
-                    signing_key_id=self._signing_key_id,
-                )
-                self._secret = start_result["secret"]
-                self._code = start_result["code"]
-            except Exception:  # noqa: BLE001
-                if configured:
-                    # A local code could only be claimed on the LAN, which a
-                    # configured install refuses.
-                    _LOGGER.exception("Pairing /start failed")
-                    return self.async_abort(reason="cannot_connect")
-                # No cloud: a guest can still pair over the LAN. The code is
-                # minted here from the cloud's alphabet, and only pair-local
-                # can claim it.
-                _LOGGER.warning(
-                    "Pairing /start failed; showing a local code that the "
-                    "Svitgrid app can claim over the LAN only",
-                    exc_info=True,
-                )
+            if existing:
+                self._add_to_entry_id = existing[0].entry_id
                 client = None
                 self._pairing_client = None
                 self._secret = None
                 self._code = local_pairing.mint_code()
+            else:
+                try:
+                    start_result = await client.start(
+                        public_key_hex=self._public_key_hex,
+                        signing_key_id=self._signing_key_id,
+                    )
+                    self._secret = start_result["secret"]
+                    self._code = start_result["code"]
+                except Exception:  # noqa: BLE001
+                    # No cloud: a guest can still pair over the LAN. The code
+                    # is minted here from the cloud's alphabet, and only
+                    # pair-local can claim it.
+                    _LOGGER.warning(
+                        "Pairing /start failed; showing a local code that the "
+                        "Svitgrid app can claim over the LAN only",
+                        exc_info=True,
+                    )
+                    client = None
+                    self._pairing_client = None
+                    self._secret = None
+                    self._code = local_pairing.mint_code()
 
             # Publish the code — and ONLY the code — for /api/svitgrid/hello,
             # so the Svitgrid app can prefill it rather than asking the owner
@@ -673,8 +681,6 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
             # finalizes a cloud pairing; publishing it would let anyone on the
             # LAN complete this pairing themselves.
             self._local_session = local_pairing.PendingPairing(self._code, flow_id=self.flow_id)
-            if configured:
-                self._local_session.close_lan(local_pairing.LAN_CLOSED_CONFIGURED)
             local_pairing.publish(self.hass, self._local_session)
             self._pair_deadline = self.hass.loop.time() + PAIRING_MAX_POLL_DURATION_S
             self._local_session.expires_at = self._pair_deadline
@@ -692,7 +698,9 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
             return self.async_show_progress(
                 step_id="pair",
                 progress_action=(
-                    "waiting_for_mobile_after_refusal"
+                    "waiting_for_phone"
+                    if self._add_to_entry_id
+                    else "waiting_for_mobile_after_refusal"
                     if self._restarted_after_refusal
                     else "waiting_for_mobile"
                 ),
@@ -752,14 +760,27 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
             return await self.async_step_pair()
         # Approve grants exactly this claim, the one named on screen.
         self._shown_candidate = candidate
+        device = candidate.device_label or candidate.device_id
+        if self._add_to_entry_id:
+            # A phone joining an existing station: the owner picks its rights.
+            return self.async_show_menu(
+                step_id="pair_approval_add",
+                menu_options=["pair_approve", "pair_approve_view", "pair_reject"],
+                description_placeholders={"device": device},
+            )
         return self.async_show_menu(
             step_id="pair_approval",
             menu_options=["pair_approve", "pair_reject"],
-            description_placeholders={"device": candidate.device_label or candidate.device_id},
+            description_placeholders={"device": device},
         )
 
     async def async_step_pair_approve(self, user_input: dict[str, Any] | None = None) -> FlowResult:
-        """The owner approved the phone. Only now is anything granted."""
+        """The owner approved the phone. Only now is anything granted.
+
+        For a phone joining an existing station, this is **Approve with
+        control**: island key and a trusted signing key."""
+        if self._add_to_entry_id:
+            return await self._approve_added_phone(local_pairing.ROLE_CONTROL)
         session = self._local_session
         shown, self._shown_candidate = self._shown_candidate, None
         if session is None or not session.approve(shown):
@@ -773,6 +794,54 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
         self._stop_cloud_poll()
         local_pairing.close(self.hass, session)
         return self._create_local_entry(self._lan_claim)
+
+    async def async_step_pair_approval_add(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """The approval question for a phone joining an existing station.
+
+        The menu is shown by async_step_pair_approval; Home Assistant
+        requires a handler for every step id it shows.
+        """
+        return await self.async_step_pair_approval(user_input)
+
+    async def async_step_pair_approve_view(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """**Approve view only**: the phone gets an island key and no trusted
+        signing key, so it reads the station and every write it signs is
+        refused with 403. Offered only to a phone joining an existing station:
+        the first phone of a new one always controls it."""
+        if not self._add_to_entry_id:
+            return await self.async_step_pair_approve()
+        return await self._approve_added_phone(local_pairing.ROLE_VIEW)
+
+    async def _approve_added_phone(self, role: str) -> FlowResult:
+        """Add the phone named on screen to the existing station as `role`."""
+        session = self._local_session
+        shown, self._shown_candidate = self._shown_candidate, None
+        if session is None or not session.approve(shown):
+            # Too late, as in async_step_pair_approve.
+            if session is not None and session.candidate is not None:
+                return await self.async_step_pair_approval()
+            return await self.async_step_pair()
+        claim = session.lan_claim
+        self._stop_cloud_poll()
+        local_pairing.close(self.hass, session)
+        entry = self.hass.config_entries.async_get_entry(self._add_to_entry_id)
+        try:
+            if entry is None:
+                raise RuntimeError("the station was removed while the phone waited")
+            effective = await local_pairing.add_phone(self.hass, entry, claim, role)
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception("Could not add phone %s to the station", claim.device_id)
+            session.fail_add()
+            return self.async_abort(reason="pairing_failed")
+        session.finish_add(entry.entry_id, effective)
+        return self.async_abort(
+            reason="phone_added",
+            description_placeholders={"device": claim.device_label or claim.device_id},
+        )
 
     async def async_step_pair_reject(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """The owner rejected the phone. The pairing stays pending."""

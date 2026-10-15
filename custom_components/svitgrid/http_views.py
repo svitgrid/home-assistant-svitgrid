@@ -52,6 +52,7 @@ from .harvest.event_scheduler_loop import (
 from .harvest.read_now import find_triggers
 from .hourly_energy import per_hour_deltas, to_local_hour_rows
 from .island_auth import island_key_present_and_valid, island_request_authorized
+from .island_lan import ISLAND_LAN_VIEWS
 from .local_time import local_day_of, local_hour_index
 from .signing import compute_key_id, public_key_from_hex, verify_payload
 
@@ -420,11 +421,15 @@ class SvitgridPairLocalView(HomeAssistantView):
     approved claim creates the local-only entry, adds the island key under
     `deviceId` and trusts the signing key.
 
-    One install, one owner: refused with `already_configured` while any
-    Svitgrid entry exists, so a guest can never put keys into the keystore
-    beside a cloud station. The contract (paths, fields, status and error
+    On a Home Assistant that already has a station, guest or cloud-paired,
+    an approved claim adds the phone to it instead of creating an entry
+    (owner, 2026-10-14): the owner approves it with control or for viewing
+    only, and the answer's `role` says which. The body's `inverters`,
+    `stationName` and `presetId` describe a new station, so they are ignored
+    there and may be omitted. The contract (paths, fields, status and error
     codes) is shared with the Svitgrid app: see the spec "LAN pairing
-    contract" and "Approval in Home Assistant" before changing anything here.
+    contract", "Approval in Home Assistant" and true-island-contract.md item 5
+    before changing anything here.
     """
 
     url = "/api/svitgrid/pair-local"
@@ -433,8 +438,6 @@ class SvitgridPairLocalView(HomeAssistantView):
 
     async def post(self, request) -> web.Response:  # noqa: D102
         hass = request.app["hass"]
-        if hass.config_entries.async_entries(DOMAIN):
-            return _json_error(409, "already_configured")
         session = local_pairing.get_session(hass)
         if session is None or session.lan_closed or session.window_closed():
             return _json_error(404, "no_pending_pairing")
@@ -481,15 +484,19 @@ class SvitgridPairLocalView(HomeAssistantView):
         ):
             return _json_error(403, "signature_invalid")
 
-        raw_inverters = body.get("inverters")
-        if isinstance(raw_inverters, list) and len(raw_inverters) > MAX_INVERTERS:
-            return _json_error(422, "too_many_inverters", maxInverters=MAX_INVERTERS)
-        try:
-            inverters = await hass.async_add_executor_job(
-                local_pairing.build_local_inverters, raw_inverters
-            )
-        except local_pairing.InvalidClaim as err:
-            return _json_error(400, "bad_request", detail=str(err))
+        # A phone joining an existing station brings no station with it.
+        joining = bool(hass.config_entries.async_entries(DOMAIN))
+        inverters: list = []
+        if not joining:
+            raw_inverters = body.get("inverters")
+            if isinstance(raw_inverters, list) and len(raw_inverters) > MAX_INVERTERS:
+                return _json_error(422, "too_many_inverters", maxInverters=MAX_INVERTERS)
+            try:
+                inverters = await hass.async_add_executor_job(
+                    local_pairing.build_local_inverters, raw_inverters
+                )
+            except local_pairing.InvalidClaim as err:
+                return _json_error(400, "bad_request", detail=str(err))
 
         claim = local_pairing.LanClaim(
             island_key=identity["island_key"],
@@ -502,10 +509,8 @@ class SvitgridPairLocalView(HomeAssistantView):
             inverters=inverters,
             paired_at=_utc_now_iso(),
         )
-        # The awaits above gave an entry, a cloud claim, a closed LAN half or
-        # another candidate a chance to land; request_approval settles it.
-        if hass.config_entries.async_entries(DOMAIN):
-            return _json_error(409, "already_configured")
+        # The awaits above gave a cloud claim, a closed LAN half or another
+        # candidate a chance to land; request_approval settles it.
         decision = session.request_approval(claim)
         if decision is None:
             if session.lan_closed or local_pairing.get_session(hass) is not session:
@@ -531,8 +536,9 @@ class SvitgridPairLocalView(HomeAssistantView):
 
         entry_id = await local_pairing.wait_for_entry(hass, session)
         if entry_id is None:
-            # Approved, but no entry appeared. Nothing the app sends causes it.
-            _LOGGER.error("LAN pairing was approved but the config flow created no entry")
+            # Approved, but no entry appeared, or the phone could not be added
+            # to the existing one. Nothing the app sends causes it.
+            _LOGGER.error("LAN pairing was approved but no station took the phone")
             return _json_error(500, "pairing_failed")
         _LOGGER.info(
             "Paired over the LAN with device %s (entry %s)", identity["device_id"], entry_id
@@ -543,6 +549,8 @@ class SvitgridPairLocalView(HomeAssistantView):
                 "stationId": entry_id,
                 "version": _integration_version(),
                 "maxInverters": MAX_INVERTERS,
+                # "control" | "view": what the owner approved this phone for.
+                "role": session.role,
             }
         )
 
@@ -1341,6 +1349,7 @@ def register_views(hass: HomeAssistant, store) -> None:
         SvitgridIslandDeviceRevokeView(store),
         SvitgridLocalPresetsView(),
         SvitgridPairLocalView(),
+        *(view_cls() for view_cls in ISLAND_LAN_VIEWS),
     ):
         # View routes are GLOBAL to hass.http and PERSIST across config-entry
         # reloads, but the _views_registered guard in hass.data[DOMAIN] is

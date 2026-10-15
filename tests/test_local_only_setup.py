@@ -1,10 +1,11 @@
 """A local-only entry: paired over the LAN by a guest, with no cloud account.
 
 It carries `local_only: true` and no `api_key`, `api_base`, `edge_device_id`
-or `household_id`. Setup must not touch any of them, and must start nothing
+or `household_id`. Setup must not touch any of them, and must start no loop
 that calls the cloud: no reading sender, no command poller, no MQTT wake, no
-settings sync, no preset refresh, no register-spec download. A loop that runs
-anyway logs a 401 every few seconds, forever.
+settings sync. A loop that runs anyway logs a 401 every few seconds, forever.
+Presets and register specs are read once at startup from the public endpoint,
+which needs no key (true island, 2026-10-15; see test_true_island_setup.py).
 
 What must run: harvest, the local store with its rollup, the island HTTP API,
 and the local event scheduler.
@@ -156,8 +157,8 @@ async def test_no_loop_that_calls_the_cloud_starts(hass, enable_custom_integrati
     m["mqtt_wake"].assert_not_called()
     m["sender"].assert_not_called()
     m["settings_sync"].assert_not_called()
-    # No client means no preset refresh and no register-spec download.
-    m["api_client_cls"].assert_not_called()
+    # The only client is the public one; no keyed client is kept for loops.
+    assert hass.data[DOMAIN][entry.entry_id]["api_client"] is None
 
 
 @pytest.mark.asyncio
@@ -167,7 +168,7 @@ async def test_harvest_store_views_and_scheduler_run(hass, enable_custom_integra
     entry, _, _ = _local_entry()
     _, m = await _setup(hass, entry)
 
-    # Direct harvest runs, on the bundled spec (no cloud to fetch it from).
+    # Direct harvest runs, on the bundled spec when the public endpoint fails.
     assert m["harvest"].call_count == 1
     spec = m["harvest"].call_args.kwargs["spec_holder"].spec
     assert isinstance(spec, RegisterSpec)
@@ -282,3 +283,34 @@ async def test_a_local_entry_never_overwrites_an_existing_identity(
     assert state.api_key == "cloud-api-key"
     assert state.private_key_pem == "cloud-pem"
     assert state.signing_key_id == "ha-cloud"
+
+
+@pytest.mark.asyncio
+async def test_the_grant_links_the_signing_key_to_its_phone(hass, enable_custom_integrations):
+    """`POST /api/svitgrid/keys/revoke` names a signing key and must take the
+    phone's island key with it, so the link is recorded at adoption."""
+    entry, app_key_id, _ = _local_entry()
+    await _setup(hass, entry)
+
+    state = await SvitgridKeystore(hass).load()
+    assert state.key_devices == {app_key_id: DEVICE_ID}
+
+
+@pytest.mark.asyncio
+async def test_setup_keeps_the_phone_key_links(hass, enable_custom_integrations):
+    """Setup re-saves the identity on every start; the links must survive it."""
+    entry, app_key_id, _ = _local_entry()
+    await _setup(hass, entry)
+    ks = hass.data[DOMAIN]["keystore"]
+    await ks.async_link_signing_key("other-key", "phone-2")
+
+    await ks.save(
+        api_key="",
+        public_key_hex="04",
+        private_key_pem="pem",
+        signing_key_id="ha-local01",
+        trusted_key_ids=[],
+    )
+
+    state = await ks.load()
+    assert state.key_devices == {app_key_id: DEVICE_ID, "other-key": "phone-2"}

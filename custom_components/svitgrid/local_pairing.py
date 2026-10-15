@@ -15,6 +15,11 @@ wins if the owner rejects, and loses (with a warning) if the owner approves.
 
 When the cloud cannot be reached, the flow mints the code here instead, from
 the cloud's alphabet, and only the LAN can claim it.
+
+On a Home Assistant that already has a station, the same pairing adds a phone
+to it instead (owner, 2026-10-14). The code is minted here and only the LAN can
+claim it, and the owner approves the phone with control or for viewing only
+(`add_phone`).
 """
 
 from __future__ import annotations
@@ -37,7 +42,9 @@ from .const import (
     PAIRING_CODE_ALPHABET,
     PAIRING_CODE_LENGTH,
 )
+from .entry_reload import update_entry_skipping_listener_reload
 from .inverter_entry import harvest_config_from_api
+from .keystore import ENTRY_ISLAND_DEVICE_IDS, ENTRY_TRUSTED_KEY_IDS, SvitgridKeystore
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -62,7 +69,12 @@ _EYBOND_PROTOCOL = "eybond_at"
 
 # Why the LAN half closed.
 LAN_CLOSED_WRONG_CODES = "wrong_codes"
-LAN_CLOSED_CONFIGURED = "already_configured"
+
+# What an approved phone may do, as pair-local reports it in `role`. A
+# control phone's signing key is trusted; a view-only phone gets an island key
+# and no trusted signing key, so its writes fail the signature check.
+ROLE_CONTROL = "control"
+ROLE_VIEW = "view"
 
 # The owner's answer, as pair-local receives it.
 APPROVED = "approved"
@@ -118,6 +130,11 @@ class PendingPairing:
     cloud_claim: Any = None
     # Loop time the pairing window closes; pair-local refuses after it.
     expires_at: float | None = None
+    # A phone added to an existing station: the entry it joined, the role it
+    # ended up with, and whether adding it failed. pair-local reads these.
+    added_entry_id: str | None = None
+    role: str = ROLE_CONTROL
+    add_failed: bool = False
 
     def __post_init__(self) -> None:
         self._changed = asyncio.Event()
@@ -238,6 +255,17 @@ class PendingPairing:
         if self.cloud_claim is not None and self.claimed_by is None and self.candidate is None:
             self.claimed_by = "cloud"
 
+    def finish_add(self, entry_id: str, role: str) -> None:
+        """The approved phone joined `entry_id` as `role`."""
+        self.added_entry_id = entry_id
+        self.role = role
+        self._notify()
+
+    def fail_add(self) -> None:
+        """The phone was approved, but adding it to the station failed."""
+        self.add_failed = True
+        self._notify()
+
     def end(self) -> None:
         """The pairing is over. A candidate still waiting hears GONE."""
         if self.candidate is not None:
@@ -356,10 +384,62 @@ async def wait_for_entry(hass: HomeAssistant, session: PendingPairing) -> str | 
     loop = asyncio.get_running_loop()
     deadline = loop.time() + _ENTRY_TIMEOUT_S
     while True:
-        entry_id = _entry_for(hass, session)
+        if session.add_failed:
+            return None
+        entry_id = session.added_entry_id or _entry_for(hass, session)
         if entry_id is not None or loop.time() >= deadline:
             return entry_id
         await asyncio.sleep(_ENTRY_RETRY_S)
+
+
+async def add_phone(hass: HomeAssistant, entry: Any, claim: LanClaim, role: str) -> str:
+    """Add an approved phone to the existing station `entry`. Returns its role.
+
+    The phone's island key joins the roster under its device id, beside every
+    other phone's. With `ROLE_CONTROL` its signing key is trusted too. Either
+    way the key is linked to the phone, so revoking the key over the LAN
+    removes the phone. Both ids are recorded on the entry, so removing the
+    station revokes the phone as well.
+
+    The returned role is what the phone can actually do. A view-only approval
+    never removes trust a key already had, so a phone whose key was trusted
+    before (re-pairing the owner's own phone, or a key the cloud trusted)
+    reports `control`.
+
+    Writes the shared keystore instance: LAN auth reads it, and a second Store
+    instance can serve it stale data. Does not reload the entry.
+    """
+    keystore = (hass.data.get(DOMAIN) or {}).get("keystore") or SvitgridKeystore(hass)
+    state = await keystore.load()
+    if state is None:
+        raise RuntimeError("the keystore is empty; the station has not finished setting up")
+    await keystore.async_add_island_key(
+        claim.device_id,
+        claim.island_key,
+        label=claim.device_label,
+        paired_at=claim.paired_at,
+    )
+    trusted = dict(state.trusted_public_keys_hex)
+    if role == ROLE_CONTROL:
+        trusted[claim.signing_key_id] = claim.public_key_hex
+        await keystore.update_trusted_keys_hex(trusted)
+    await keystore.async_link_signing_key(claim.signing_key_id, claim.device_id)
+
+    new_data = {
+        **entry.data,
+        ENTRY_ISLAND_DEVICE_IDS: sorted(
+            {*(entry.data.get(ENTRY_ISLAND_DEVICE_IDS) or []), claim.device_id}
+        ),
+    }
+    if role == ROLE_CONTROL:
+        new_data[ENTRY_TRUSTED_KEY_IDS] = sorted(
+            {*(entry.data.get(ENTRY_TRUSTED_KEY_IDS) or []), claim.signing_key_id}
+        )
+    # Nothing here needs a reload: LAN auth reads the keystore on every
+    # request. Without the skip, the update listener would restart harvest.
+    update_entry_skipping_listener_reload(hass, entry, new_data)
+    _LOGGER.info("Added phone %s to station %s as %s", claim.device_id, entry.entry_id, role)
+    return ROLE_CONTROL if claim.signing_key_id in trusted else ROLE_VIEW
 
 
 _ISLAND_KEY = re.compile(r"^[A-Za-z0-9_-]{43,512}$")

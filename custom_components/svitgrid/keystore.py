@@ -85,6 +85,12 @@ class KeystoreState:
     # the value (see `_normalise_island_entry` / `load()`), so entries loaded
     # from a real box may still arrive in that shape and are migrated on read.
     island_keys: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # signingKeyId -> island roster deviceId, for a phone that paired over the
+    # LAN: which roster row a signing key belongs to. `POST
+    # /api/svitgrid/keys/revoke` names a signing key and must take the phone's
+    # island key with it. A view-only phone's key is recorded here too, though
+    # it is never trusted. Keys trusted through the cloud have no row.
+    key_devices: dict[str, str] = field(default_factory=dict)
 
     def all_island_keys(self) -> list[str]:
         """Every currently-valid island key: the per-device map plus the
@@ -148,6 +154,11 @@ class SvitgridKeystore:
                 )
                 if entry is not None
             },
+            key_devices={
+                str(k): v
+                for k, v in dict(data.get("key_devices") or {}).items()
+                if isinstance(v, str) and v
+            },
         )
 
     async def save(
@@ -178,6 +189,10 @@ class SvitgridKeystore:
             current = await self.load()
             if current is not None:
                 resolved_island_keys = current.island_keys
+        # Never passed by a caller: setup re-saves the identity on every start,
+        # and the phone-to-key links must survive that.
+        current = await self.load()
+        resolved_key_devices = current.key_devices if current is not None else {}
         await self._store.async_save(
             asdict(
                 KeystoreState(
@@ -189,6 +204,7 @@ class SvitgridKeystore:
                     trusted_public_keys_hex=trusted_public_keys_hex or {},
                     island_key=resolved_island_key,
                     island_keys=resolved_island_keys or {},
+                    key_devices=resolved_key_devices,
                 )
             )
         )
@@ -381,3 +397,50 @@ class SvitgridKeystore:
         if current is None:
             return []
         return current.all_island_keys()
+
+    async def async_link_signing_key(self, key_id: str, device_id: str) -> None:
+        """Record that the phone holding roster row `device_id` signs with
+        `key_id`, so revoking the key can take the phone's island key too."""
+        current = await self.load()
+        if current is None:
+            return
+        if current.key_devices.get(key_id) == device_id:
+            return
+        current.key_devices = {**current.key_devices, key_id: device_id}
+        await self._store.async_save(asdict(current))
+
+    async def async_revoke_signing_key(self, key_id: str) -> dict[str, Any]:
+        """Untrust `key_id` and remove the island key of the phone it belongs to.
+
+        One write, so a crash cannot leave the phone half-revoked. Raises
+        LastAdminKey, and changes nothing, when `key_id` is the only trusted
+        key: nothing could sign a command or a calendar write afterwards.
+        Idempotent: an unknown key id changes nothing and is not an error.
+
+        Returns `{"untrusted": bool, "deviceId": str | None}`; `deviceId` is
+        the roster row removed with it.
+        """
+        current = await self.load()
+        if current is None:
+            return {"untrusted": False, "deviceId": None}
+        trusted = dict(current.trusted_public_keys_hex)
+        if key_id in trusted and len(trusted) == 1:
+            raise LastAdminKey(key_id)
+        untrusted = trusted.pop(key_id, None) is not None
+        device_id = current.key_devices.get(key_id)
+        removed_device = device_id if device_id in current.island_keys else None
+        if not untrusted and device_id is None:
+            return {"untrusted": False, "deviceId": None}
+        current.trusted_public_keys_hex = trusted
+        current.trusted_key_ids = sorted(trusted)
+        if removed_device is not None:
+            current.island_keys = {
+                k: v for k, v in current.island_keys.items() if k != removed_device
+            }
+        current.key_devices = {k: v for k, v in current.key_devices.items() if k != key_id}
+        await self._store.async_save(asdict(current))
+        return {"untrusted": untrusted, "deviceId": removed_device}
+
+
+class LastAdminKey(Exception):
+    """Revoking this signing key would leave no trusted admin key."""

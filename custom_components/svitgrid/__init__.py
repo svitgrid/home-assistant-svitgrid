@@ -61,6 +61,7 @@ from .harvest.write_executor import WriteExecutor
 from .http_views import ensure_hello_view, register_views
 from .inverter_entry import harvest_config_from_api
 from .island_event_store import IslandEventStore
+from .island_lan import is_true_island
 from .keystore import (
     ENTRY_ISLAND_DEVICE_IDS,
     ENTRY_TRUSTED_KEY_IDS,
@@ -184,8 +185,8 @@ async def _start_local_store(
 
     # Gate the cloud sender on the per-entry flag. The harvest engine, local-store
     # writes, and rollup timer all run regardless — only cloud upload is skipped.
-    # (The command poller stays spawned even in pure island — harmless; SP3 may
-    # gate it if needed.)
+    # The command poller and the other cloud loops are gated by the caller
+    # (`true_island` in async_setup_entry).
     sender_task = None
     if cloud_ingest_enabled:
         sender_task = hass.async_create_background_task(
@@ -615,14 +616,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     session = aiohttp_client.async_get_clientsession(hass)
     # A local-only entry was paired over the LAN by a guest with no cloud
     # account: it has no api_key, api_base, edge_device_id or household_id.
-    # It gets no API client at all, so nothing below can call the cloud and
+    # It gets no keyed API client, so no loop below can call the cloud and
     # log a 401 every few seconds.
     local_only = bool(data.get(CONF_LOCAL_ONLY))
-    api_client = (
-        None
-        if local_only
-        else SvitgridApiClient(session, api_base=data.get("api_base") or DEFAULT_API_BASE)
-    )
+    # One client for the public, read-only endpoints (presets and register
+    # specs), which need no API key. Every entry may read them, local-only and
+    # true island included: they are how a map fixed in the cloud reaches an
+    # install. The keyed cloud loops are gated on `true_island` further down.
+    public_client = SvitgridApiClient(session, api_base=data.get("api_base") or DEFAULT_API_BASE)
+    api_client = None if local_only else public_client
     api_key = data.get("api_key") or ""
     activity = ActivityTracker()
     # Surface a still-unapproved signing key on the Diagnostics sensor. Absent
@@ -727,6 +729,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN]["keystore"] = keystore
 
+    # True island: island mode on and the cloud copy off. The cloud then takes
+    # no part in day-to-day operation (owner, 2026-10-15): no command poller,
+    # no MQTT wake, no settings sync, no reading upload, no version report.
+    # The app reaches this install over the LAN (island_lan.py).
+    true_island = is_true_island(
+        data,
+        options=entry.options,
+        has_island_key=bool(await keystore.async_get_island_keys()),
+    )
+    if (
+        not true_island
+        and not local_only
+        and not data.get("cloud_ingest_enabled", entry.options.get("cloud_ingest_enabled", True))
+    ):
+        _LOGGER.warning(
+            "Cloud copy is off for entry %s, but no phone holds an island key, so "
+            "nothing could reach it over the LAN. The cloud command channel stays on",
+            entry.entry_id,
+        )
+
     if not inverters:
         _LOGGER.warning(
             "Config entry %s has no inverters configured; nothing to publish.",
@@ -816,12 +838,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Refresh entity_map from preset before starting the publisher so the
     # publisher always uses the most up-to-date field mappings. Skip when
     # deprovisioned (no loops will start anyway). Fail-open: never blocks setup.
-    # A local-only entry has no cloud to refresh from; its entity_map came
-    # from the bundled preset at pairing.
-    if loops_active and not local_only:
+    # The presets endpoint is public and needs no key, so a local-only entry
+    # and a true island read it too; the bundled preset is what they paired on.
+    if loops_active:
 
         async def _fetch_preset(pid):
-            return await api_client.get_preset(pid)
+            return await public_client.get_preset(pid)
 
         try:
             _inv_list = list(entry.data.get("inverters") or [])
@@ -872,7 +894,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     spec_dict = await resolve_register_spec(
                         hass,
                         harvest_config["model_id"],
-                        fetch=None if local_only else api_client.get_register_spec,
+                        # Public, read-only, no key: every entry may fetch.
+                        fetch=public_client.get_register_spec,
                         store=spec_store,
                     )
                     # build_spec parses AND validates, and surfaces any problem
@@ -943,11 +966,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         config=dict(inv.get("command_config") or {}),
                     )
 
-    if loops_active and not local_only:
-        # The cloud loops. A local-only entry has no API key to poll with, no
-        # MQTT broker credentials and no cloud settings mirror, so it starts
-        # none of them; signed commands reach it over the LAN instead
-        # (POST /api/svitgrid/commands).
+    if loops_active and not true_island:
+        # The cloud loops. A true island starts none of them: a local-only
+        # entry has no API key to poll with, and a cloud-paired island with the
+        # cloud copy off keeps the cloud out of day-to-day operation by the
+        # owner's rule. Signed commands and calendar writes reach it over the
+        # LAN (POST /api/svitgrid/commands, /events), and so do the poller's
+        # own jobs: cloud copy, leaving island mode and key revocation
+        # (island_lan.py). Turning the cloud copy back on reloads the entry,
+        # and the reload starts these loops again.
         wake_event = asyncio.Event()
         command_task = hass.async_create_background_task(
             run_command_loop(
@@ -1126,6 +1153,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "mqtt_control": control,
         "update_coordinator": update_coordinator,
         "read_now": read_now_triggers,
+        "true_island": true_island,
     }
     await hass.config_entries.async_forward_entry_setups(
         entry, ["sensor", "binary_sensor", "update", "button"]
@@ -1211,6 +1239,10 @@ async def _adopt_local_pairing_grant(
         trusted = dict(state.trusted_public_keys_hex) if state is not None else {}
         trusted[key_id] = public_key_hex
         await keystore.update_trusted_keys_hex(trusted)
+    if key_id and device_id and island_key:
+        # So revoking the signing key over the LAN takes this phone's island
+        # key with it (island_lan.SvitgridKeysRevokeView).
+        await keystore.async_link_signing_key(key_id, device_id)
     new_data = {k: v for k, v in entry.data.items() if k != LOCAL_PAIRING_GRANT}
     if key_id and public_key_hex:
         # Recorded so removing the entry untrusts it again.

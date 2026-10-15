@@ -14,8 +14,42 @@
   pairing creates a local-only entry: nothing is sent to the cloud, and the
   app reads and controls the inverter over the LAN with its island key. Five
   wrong codes close pairing over the LAN; the signed-in app can still use the
-  same code. LAN pairing is offered only on a Home Assistant with no Svitgrid
-  station yet. Removing the entry also revokes the phone's keys.
+  same code. Removing the entry also revokes the phone's keys.
+- **True island: with island mode on and the cloud copy off, the cloud takes
+  no part in day-to-day operation.** Home Assistant starts no command poller,
+  no MQTT wake channel, no settings sync and no reading upload, so it reports
+  nothing to the cloud, its version included. The app works with Home
+  Assistant directly over your network. Presets and register maps are still
+  read once at startup from the public endpoint, which needs no account, with
+  the saved and bundled copies as the fallback. An island station paired
+  through the cloud with the cloud copy off becomes a true island when you
+  update; its phones, keys and calendar stay as they were. If the cloud copy
+  is off but no phone holds an island key, the cloud command channel stays
+  on, because nothing could reach the station otherwise.
+- **The app manages a true island over your network.** Four endpoints, each
+  signed by a trusted admin key on top of the phone's island key, with a
+  nonce and a timestamp so a request cannot be replayed:
+  `POST /api/svitgrid/island/cloud-copy` turns the cloud copy on or off,
+  `POST /api/svitgrid/island/leave` leaves island mode, and
+  `POST /api/svitgrid/keys/revoke` revokes a signing key and the island key
+  of the phone it belongs to. `GET /api/svitgrid/island/status` (island key
+  only) tells the app which of these this version serves. Turning the cloud
+  copy on, or leaving island mode, restarts the cloud loops.
+- **A second phone joins a station over your network.** On a Home Assistant
+  that already has a station, guest or cloud-paired, the pairing screen adds
+  a phone to it. The code is made on this Home Assistant and the Svitgrid
+  cloud is not asked. When the phone claims the code, you choose
+  **Approve with control** (it can change settings and the schedule) or
+  **Approve view only** (it sees readings and history, and every change it
+  sends is refused). Five wrong codes still close the pairing, and the code
+  still expires after five minutes. Before, Home Assistant refused with
+  `already_configured`, and without the cloud it could not show a code at
+  all.
+- **The app learns why an event does not run.** An event that needs cloud
+  data (day planning, or a forecast, day-ahead price or scheduled-outage
+  condition) records `skippedReason: "needs_cloud"` in its execution state,
+  and the app says it does not work without the cloud copy. The reason
+  clears when the event no longer needs the cloud.
 - **Pairing works without the cloud.** When the Svitgrid cloud cannot be
   reached, the pairing screen shows a code made on this Home Assistant instead
   of failing with "Could not reach the Svitgrid cloud". Only a guest pairing
@@ -35,11 +69,15 @@
   map the cloud returns is saved, and the integration bundles a copy of every
   map. Without the cloud, harvest starts on the saved map, or on the bundled
   one, instead of idling. When the cloud answers, its map is always used.
-- **A local-only entry starts nothing that calls the cloud**: no reading
-  upload, command polling, MQTT wake, settings sync or preset refresh, so the
-  log shows no 401s. Harvest, local history, the island API and the local
-  calendar scheduler run as usual. Its options menu does not offer "Add
-  another inverter", which registers the inverter with the cloud.
+- **A local-only entry starts nothing that calls the cloud with a key**: no
+  reading upload, command polling, MQTT wake or settings sync, so the log
+  shows no 401s. It reads presets and register maps from the public endpoint
+  at startup, as a true island does. Harvest, local history, the island API
+  and the local calendar scheduler run as usual. Its options menu does not
+  offer "Add another inverter", which registers the inverter with the cloud.
+- **On a Home Assistant that already has a station, the pairing screen adds a
+  phone** instead of starting a second cloud pairing. To pair the station
+  with another account, remove the entry first.
 
 ### Fixed
 - **A battery-charge event reaches the inverter in local mode.** With direct

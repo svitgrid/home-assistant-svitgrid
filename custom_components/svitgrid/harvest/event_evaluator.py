@@ -829,7 +829,58 @@ def restore_decision(
 # ─────────────────── Main entry point ────────────────────────────────────────
 
 
+# The island cannot run an event that needs cloud data: day planning, and any
+# event that waits on a forecast, a day-ahead price or a scheduled outage. Such
+# a skip is recorded on the event as `executionState.skippedReason`, which
+# `GET /api/svitgrid/events` returns and the app shows as «Не працює без
+# хмарної копії» (true-island contract, 2026-10-15).
+SKIPPED_REASON_KEY = "skippedReason"
+NEEDS_CLOUD = "needs_cloud"
+_NEEDS_CLOUD_SKIPS: frozenset[str] = frozenset(
+    {"cloud_only_mode", "requires_scheduled_outage", "cloud_only_condition"}
+)
+
+
+def needs_cloud(event: dict) -> bool:
+    """True when the island cannot run *event* without cloud-only inputs.
+
+    The same tests evaluate_event skips on, so the scheduler can say so for an
+    event it has no reading to evaluate against yet.
+    """
+    mode = event.get("mode", "")
+    config = event.get("config") or {}
+    if mode == "day_planning":
+        return True
+    if mode == "gen_force" and config.get("requireScheduledOutage"):
+        return True
+    if mode == "custom":
+        conditions = config.get("customConditions") or []
+        return any(c.get("type") in _CLOUD_CONDITION_TYPES for c in conditions)
+    return False
+
+
 def evaluate_event(
+    event: dict,
+    reading: dict,
+    exec_state: dict,
+    now_utc: datetime,
+    tz: str,
+    others=(),
+) -> EvaluatorDecision:
+    """Evaluate a calendar event; see `_evaluate_event`.
+
+    Records `skippedReason: "needs_cloud"` on the new state of an event
+    skipped for cloud-only inputs, and clears it from any other.
+    """
+    decision = _evaluate_event(event, reading, exec_state, now_utc, tz, others)
+    state = {k: v for k, v in decision.new_state.items() if k != SKIPPED_REASON_KEY}
+    if decision.action == "skip" and decision.skip_reason in _NEEDS_CLOUD_SKIPS:
+        state[SKIPPED_REASON_KEY] = NEEDS_CLOUD
+    decision.new_state = state
+    return decision
+
+
+def _evaluate_event(
     event: dict,
     reading: dict,
     exec_state: dict,

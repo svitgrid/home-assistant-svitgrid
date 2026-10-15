@@ -63,7 +63,14 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from .event_evaluator import evaluate_event, has_landed_writes, restore_decision
+from .event_evaluator import (
+    NEEDS_CLOUD,
+    SKIPPED_REASON_KEY,
+    evaluate_event,
+    has_landed_writes,
+    needs_cloud,
+    restore_decision,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -320,6 +327,9 @@ async def _tick(
                 event_id,
                 inverter_id,
             )
+            # Whether the event needs the cloud does not depend on a reading,
+            # so the app learns it before the first one arrives.
+            await _sync_skip_reason(event_store, latest, event, exec_state)
             continue
 
         others = _others(latest, event)
@@ -374,6 +384,17 @@ def _others(events: dict, event: dict) -> list:
         for e in events.values()
         if e.get("id") != event.get("id") and e.get("inverterId") == event.get("inverterId")
     ]
+
+
+async def _sync_skip_reason(event_store: object, latest: dict, event: dict, state: dict) -> None:
+    """Set or clear `skippedReason` without evaluating; write only on a change."""
+    want = NEEDS_CLOUD if needs_cloud(event) else None
+    if state.get(SKIPPED_REASON_KEY) == want:
+        return
+    new_state = {k: v for k, v in state.items() if k != SKIPPED_REASON_KEY}
+    if want is not None:
+        new_state[SKIPPED_REASON_KEY] = want
+    await _persist(event_store, latest, event, new_state)
 
 
 async def _persist(event_store: object, latest: dict, event: dict, state: dict) -> None:

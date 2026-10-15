@@ -12,8 +12,8 @@ approved claim creates the entry, adds the island key and trusts the signing
 key.
 
 When the cloud cannot be reached, the flow mints the code itself, from the
-cloud's alphabet, and only the LAN can claim it. One install has one owner:
-pair-local refuses while any Svitgrid entry exists.
+cloud's alphabet, and only the LAN can claim it. On an install that already
+has a station, pair-local adds the phone to it (test_extra_phone_pairing.py).
 
 The request and response shapes here are the contract the Svitgrid app is
 built against (spec "LAN pairing contract" and "Approval in Home Assistant",
@@ -294,6 +294,8 @@ async def test_an_approved_claim_creates_a_local_only_entry(
         "stationId": entry.entry_id,
         "version": answer["version"],
         "maxInverters": MAX_INVERTERS,
+        # The first phone of a new station always controls it.
+        "role": "control",
     }
     assert answer["version"][0].isdigit()
 
@@ -692,44 +694,38 @@ async def test_a_wrong_code_does_not_leak_the_right_one(
     assert _code(hass) not in resp.body.decode()
 
 
-# ── one install, one owner ──────────────────────────────────────────────────
+# ── a station already here: the pairing adds a phone ────────────────────────
+# (test_extra_phone_pairing.py covers adding the phone itself.)
 
 
 def _existing_entry(hass) -> None:
     MockConfigEntry(domain=DOMAIN, version=2, data={"api_key": "k"}).add_to_hass(hass)
 
 
-async def test_pair_local_refuses_when_a_station_exists(
-    hass: HomeAssistant, enable_custom_integrations
-) -> None:
-    _existing_entry(hass)
-    with _cloud(reachable=True):
-        await _start_flow(hass)
-        resp = await _post(hass, _pair_body("CL0UD7"))
-    assert resp.status == 409
-    assert _body(resp)["error"] == "already_configured"
-
-
-async def test_pair_local_refuses_when_a_station_exists_and_nothing_is_pending(
+async def test_with_a_station_and_nothing_pending_pair_local_is_404(
     hass: HomeAssistant,
 ) -> None:
+    """`already_configured` is gone (2026-10-15): a second phone joins the
+    station instead, but only while the owner has a pairing open."""
     _existing_entry(hass)
     resp = await _post(hass, _pair_body("ABCDEF"))
-    assert resp.status == 409
-    assert _body(resp)["error"] == "already_configured"
+    assert resp.status == 404
+    assert _body(resp)["error"] == "no_pending_pairing"
 
 
-async def test_no_local_code_is_minted_when_a_station_exists(
+async def test_with_a_station_the_code_is_local_even_without_the_cloud(
     hass: HomeAssistant, enable_custom_integrations
 ) -> None:
-    """Without the cloud, a local code could only ever be claimed on the LAN,
-    which a configured install refuses. So the flow says the cloud is down."""
+    """Adding a phone never needs the cloud, so a cloud outage no longer
+    aborts the pairing with `cannot_connect`."""
     _existing_entry(hass)
     with _cloud(reachable=False):
         result = await _start_flow(hass)
-    assert result["type"] == "abort"
-    assert result["reason"] == "cannot_connect"
-    assert _code(hass) is None
+        code = _code(hass)
+        hass.config_entries.flow.async_abort(result["flow_id"])
+    assert result["type"] == "progress"
+    assert code is not None
+    assert set(code) <= set(PAIRING_CODE_ALPHABET)
 
 
 # ── no pending pairing ──────────────────────────────────────────────────────
