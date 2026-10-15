@@ -357,3 +357,61 @@ def test_both_date_bounds_out_of_range():
         "endTime": "15:00",
     }
     assert is_event_in_window(schedule, now_utc, TZ) is False
+
+
+# ── recurrence 'always': a rule (evaluator.ts isEventInWindow) ────────────────
+
+
+def test_a_rule_is_always_in_window():
+    """A rule carries no startTime/endTime: the app's «Постійно» saves
+    `{recurrence: 'always'}` and nothing else. The API returns True before any
+    other check; the port read schedule["startTime"] and raised KeyError."""
+    for hour in (0, 6, 13, 21):
+        now_utc = datetime(2026, 6, 25, hour, 0, 0, tzinfo=UTC)
+        assert is_event_in_window({"recurrence": "always"}, now_utc, TZ) is True
+
+
+def test_a_rule_ignores_date_fields():
+    """The API returns True before the date-range checks: a rule has no dates."""
+    now_utc = datetime(2026, 6, 25, 9, 0, 0, tzinfo=UTC)
+    schedule = {"recurrence": "always", "startDate": "2027-01-01", "endDate": "2026-01-01"}
+    assert is_event_in_window(schedule, now_utc, TZ) is True
+
+
+# ── one-time overnight window (evaluator.ts case 'none') ──────────────────────
+
+
+def test_one_time_overnight_is_not_live_the_morning_before():
+    """23:00→04:00 on 2026-06-25: at 01:00 local on 06-25 it has not started."""
+    now_utc = datetime(2026, 6, 24, 22, 0, 0, tzinfo=UTC)  # 01:00 Kyiv on 06-25
+    schedule = {
+        "recurrence": "none",
+        "startDate": "2026-06-25",
+        "startTime": "23:00",
+        "endTime": "04:00",
+    }
+    assert is_event_in_window(schedule, now_utc, TZ) is False
+
+
+def test_one_time_overnight_runs_into_the_next_morning():
+    """The continuation day carries the morning half [00:00, endTime)."""
+    now_utc = datetime(2026, 6, 25, 22, 0, 0, tzinfo=UTC)  # 01:00 Kyiv on 06-26
+    schedule = {
+        "recurrence": "none",
+        "startDate": "2026-06-25",
+        "startTime": "23:00",
+        "endTime": "04:00",
+    }
+    assert is_event_in_window(schedule, now_utc, TZ) is True
+
+
+def test_one_time_overnight_does_not_return_the_second_evening():
+    """On the continuation day the evening half must not match again."""
+    now_utc = datetime(2026, 6, 26, 20, 30, 0, tzinfo=UTC)  # 23:30 Kyiv on 06-26
+    schedule = {
+        "recurrence": "none",
+        "startDate": "2026-06-25",
+        "startTime": "23:00",
+        "endTime": "04:00",
+    }
+    assert is_event_in_window(schedule, now_utc, TZ) is False

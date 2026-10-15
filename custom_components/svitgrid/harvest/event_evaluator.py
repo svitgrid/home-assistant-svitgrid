@@ -21,7 +21,7 @@ import copy
 import logging
 import math
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 _LOGGER = logging.getLogger(__name__)
@@ -36,6 +36,20 @@ def parse_time_to_minutes(hhmm: str) -> int:
     """
     h, m = hhmm.split(":")
     return int(h) * 60 + int(m)
+
+
+def _is_one_time_event_date(schedule: dict, date_str: str) -> bool:
+    """Port of isOneTimeEventDate: the start date, or the day after it when
+    the window wraps midnight."""
+    start_date = schedule.get("startDate")
+    if not start_date or start_date == date_str:
+        return True
+    start = parse_time_to_minutes(schedule["startTime"])
+    end = parse_time_to_minutes(schedule["endTime"])
+    if end > start:
+        return False
+    next_day = (datetime.fromisoformat(start_date) + timedelta(days=1)).strftime("%Y-%m-%d")
+    return next_day == date_str
 
 
 def is_event_in_window(schedule: dict, now_utc: datetime, tz: str) -> bool:
@@ -54,7 +68,9 @@ def is_event_in_window(schedule: dict, now_utc: datetime, tz: str) -> bool:
       - endDate   present → localDate <= endDate
 
     Recurrence (TS lines 394-412):
-      - 'none'          → only on startDate
+      - 'always'        → a rule: in window, before any date check
+      - 'none'          → on startDate; an overnight window also on the next
+                           morning, until endTime
       - 'daily'         → always active within date range
       - 'weekly'/'custom' → only when local weekday is in weekdays[];
                            d % 7 collapses both 0=Sun (legacy) and 1=Mon Dart
@@ -66,6 +82,12 @@ def is_event_in_window(schedule: dict, now_utc: datetime, tz: str) -> bool:
       - Overnight wrap (endMinutes <= startMinutes, e.g. 23:00-07:00):
         nowMinutes >= startMinutes OR nowMinutes < endMinutes
     """
+    # A rule (recurrence 'always', the app's «Постійно») has no window and no
+    # dates: it is in window whenever it is enabled. The API returns before the
+    # date checks too (evaluator.ts isEventInWindow).
+    if schedule.get("recurrence") == "always":
+        return True
+
     # ── Resolve local parts ────────────────────────────────────────────────────
     local = now_utc.astimezone(ZoneInfo(tz))
     local_date_str = local.strftime("%Y-%m-%d")
@@ -83,11 +105,25 @@ def is_event_in_window(schedule: dict, now_utc: datetime, tz: str) -> bool:
         return False
 
     # ── Recurrence ────────────────────────────────────────────────────────────
+    now_minutes = local_hours * 60 + local_minutes
     recurrence = schedule.get("recurrence", "daily")
     if recurrence == "none":
-        # Only fires on its startDate
-        if start_date and start_date != local_date_str:
+        # Only fires on its startDate, or on the next day for the morning half
+        # of an overnight window (isOneTimeEventDate).
+        if not _is_one_time_event_date(schedule, local_date_str):
             return False
+        if start_date:
+            # A one-time overnight window is [startTime@startDate,
+            # endTime@startDate+1): on startDate only the evening half matches,
+            # on the next day only the morning half (evaluator.ts case 'none').
+            s_min = parse_time_to_minutes(schedule["startTime"])
+            e_min = parse_time_to_minutes(schedule["endTime"])
+            if e_min <= s_min:
+                if start_date == local_date_str:
+                    if now_minutes < s_min:
+                        return False
+                elif now_minutes >= e_min:
+                    return False
     elif recurrence == "daily":
         pass  # Always active within date range
     elif recurrence in ("weekly", "custom"):
@@ -96,7 +132,6 @@ def is_event_in_window(schedule: dict, now_utc: datetime, tz: str) -> bool:
             return False
 
     # ── Time window ───────────────────────────────────────────────────────────
-    now_minutes = local_hours * 60 + local_minutes
     start_minutes = parse_time_to_minutes(schedule["startTime"])
     end_minutes = parse_time_to_minutes(schedule["endTime"])
 
