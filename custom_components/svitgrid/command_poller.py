@@ -108,6 +108,12 @@ def _now_iso() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
+def _revoked_ids(state: Any) -> set[str]:
+    """The signing key ids revoked over the LAN, from a keystore state."""
+    ids = getattr(state, "revoked_key_ids", None)
+    return set(ids) if isinstance(ids, list | tuple | set) else set()
+
+
 async def process_command(
     *,
     command: dict[str, Any],
@@ -147,6 +153,27 @@ async def process_command(
         public_key_hex = payload.get("publicKeyHex")
         if not key_id or not public_key_hex:
             _LOGGER.warning("Skipping malformed add_trusted_key %s: %s", cmd_id, payload)
+            return
+        # A key revoked over the LAN stays revoked. The cloud cannot tell an
+        # owner's approval from the app re-pushing a key it still lists as
+        # approved, so only a LAN pairing the owner approves trusts it again.
+        if keystore is not None and key_id in _revoked_ids(await keystore.load()):
+            _LOGGER.warning(
+                "Refusing add_trusted_key %s: key %s was revoked on this Home Assistant",
+                cmd_id,
+                key_id,
+            )
+            await _send_signed_ack(
+                api_client=api_client,
+                api_key=api_key,
+                command_id=cmd_id,
+                success=False,
+                rejected=True,
+                reason="key_revoked_locally",
+                our_private_key=our_private_key,
+                our_signing_key_id=our_signing_key_id,
+                executor_version=executor_version,
+            )
             return
         trusted_public_keys_hex[key_id] = public_key_hex
         if keystore is not None:
@@ -1147,6 +1174,59 @@ async def run_loop(
                         trusted_public_keys_hex[kid] = pub
     _LOGGER.info("Trusted admin keys loaded from local state: %d", len(trusted_public_keys_hex))
 
+    # Follow the keystore from here on. A key revoked or trusted over the LAN
+    # (island_lan.py, local pairing) changes only the keystore, and the copy
+    # above would otherwise keep the old set until the entry reloads.
+    _unsubscribe_trust = None
+    if isinstance(keystore, SvitgridKeystore):
+        _cache = trusted_public_keys_hex
+
+        def _on_trust_change(keys: dict[str, str]) -> None:
+            _cache.clear()
+            _cache.update(keys)
+
+        _unsubscribe_trust = keystore.subscribe_trust(_on_trust_change)
+    try:
+        await _run_loop_body(
+            hass=hass,
+            api_client=api_client,
+            keystore=keystore,
+            trusted_public_keys_hex=trusted_public_keys_hex,
+            executor_version=executor_version,
+            integration_version=integration_version,
+            executors_by_inverter=executors_by_inverter,
+            interval_s=interval_s,
+            entry_data=entry_data,
+            wake_event=wake_event,
+            activity=activity,
+            lifecycle=lifecycle,
+            store=store,
+            entry=entry,
+        )
+    finally:
+        if _unsubscribe_trust is not None:
+            _unsubscribe_trust()
+
+
+async def _run_loop_body(
+    *,
+    hass: HomeAssistant,
+    api_client: SvitgridApiClient,
+    keystore: SvitgridKeystore | None,
+    trusted_public_keys_hex: dict[str, str],
+    executor_version: str,
+    integration_version: str | None,
+    executors_by_inverter: dict[str, BaseExecutor] | None,
+    interval_s: int,
+    entry_data: dict | None,
+    wake_event: asyncio.Event | None,
+    activity: Any,
+    lifecycle: Any,
+    store: Any,
+    entry: ConfigEntry | None,
+) -> None:
+    """`run_loop` after the trusted keys are seeded: resync, then poll."""
+
     # Then repair from the server, which holds the authoritative set. Trusted
     # keys otherwise only ever arrive as pushed `add_trusted_key` commands with
     # no replay, so an install that lost its cache was deaf to every signed
@@ -1162,10 +1242,12 @@ async def run_loop(
         install."""
         _resync_state["at"] = asyncio.get_running_loop().time()
         api_key = (entry_data or {}).get("api_key")
+        revoked: set[str] = set()
         if keystore is not None:
             ks_state = await keystore.load()
             if ks_state is not None:
                 api_key = ks_state.api_key
+                revoked = _revoked_ids(ks_state)
         if not api_key:
             return
         try:
@@ -1178,10 +1260,15 @@ async def run_loop(
                 err,
             )
             return
+        # The server never hears of a revoke made over the LAN, so its list
+        # can still name a revoked key. Drop those, or a restart trusts it again.
         fetched = {
             k["keyId"]: k["publicKeyHex"]
             for k in keys
-            if isinstance(k, dict) and k.get("keyId") and k.get("publicKeyHex")
+            if isinstance(k, dict)
+            and k.get("keyId")
+            and k.get("publicKeyHex")
+            and k["keyId"] not in revoked
         }
         if fetched == trusted_public_keys_hex:
             return

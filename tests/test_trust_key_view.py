@@ -86,8 +86,15 @@ def _hass_with(island_key, trusted):
     ks.async_get_island_keys = AsyncMock(return_value=[island_key] if island_key else [])
     state = MagicMock()
     state.trusted_public_keys_hex = dict(trusted)
+    state.revoked_key_ids = []
     ks.load = AsyncMock(return_value=state)
     ks.update_trusted_keys_hex = AsyncMock()
+
+    async def _untrust(key_id):
+        state.revoked_key_ids.append(key_id)
+        return state.trusted_public_keys_hex.pop(key_id, None) is not None
+
+    ks.async_untrust_key = AsyncMock(side_effect=_untrust)
     hass = MagicMock()
     hass.data = {"svitgrid": {"keystore": ks}}
     return hass, ks
@@ -204,12 +211,12 @@ async def test_delete_revokes_key():
     req = _Req({"X-Island-Key": "island-abc"}, {}, hass)
     resp = await view.delete(req, key_id)
     assert resp.status == 200
-    ks.update_trusted_keys_hex.assert_awaited_once()
-    saved = ks.update_trusted_keys_hex.await_args.args[0]
-    assert key_id not in saved
+    # One write untrusts the key and records it as revoked.
+    ks.async_untrust_key.assert_awaited_once_with(key_id)
     body = json.loads(resp.text)
     assert body["ok"] is True
     assert body["revoked"] is True
+    assert key_id not in body["trustedKeyIds"]
 
 
 @pytest.mark.asyncio
@@ -220,7 +227,6 @@ async def test_delete_unknown_id_is_ok_false():
     req = _Req({"X-Island-Key": "island-abc"}, {}, hass)
     resp = await view.delete(req, "nope")
     assert resp.status == 200
-    ks.update_trusted_keys_hex.assert_not_awaited()
     body = json.loads(resp.text)
     assert body["ok"] is True
     assert body["revoked"] is False
@@ -237,3 +243,4 @@ async def test_delete_rejects_without_island_key():
     resp = await view.delete(req, key_id)
     assert resp.status == 401
     ks.update_trusted_keys_hex.assert_not_awaited()
+    ks.async_untrust_key.assert_not_awaited()

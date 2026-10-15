@@ -92,6 +92,18 @@
   with another account, remove the entry first.
 
 ### Fixed
+- **A signing key revoked over your network stays revoked.** With the cloud
+  copy on, the command poller kept its own copy of the trusted keys, so it
+  ran cloud commands signed with a revoked key until Home Assistant
+  restarted. A restart then trusted the key again, because the cloud never
+  heard of the revoke. The poller now follows every change to the trusted
+  keys at once, and Home Assistant records each key revoked over the LAN in
+  `.storage/svitgrid`; no resync from the cloud trusts it again. To trust it
+  again, pair the phone over the LAN and approve it with control. A cloud
+  `add_trusted_key` for that key is refused with `key_revoked_locally`, and
+  `POST /api/svitgrid/trust-key` answers 409 `key_revoked`. Removing an
+  entry also untrusts the signing keys linked to its phones, but never the
+  last trusted key while another entry remains.
 - **A battery-charge event reaches the inverter in local mode.** With direct
   Modbus harvest, a charge event or a quick charge from the app that set no
   power limit failed with `KeyError: 'powerLimit'` and never wrote a

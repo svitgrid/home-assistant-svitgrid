@@ -4,7 +4,9 @@ signingKeyId, the cached trustedKeyIds list, and the island API key."""
 from __future__ import annotations
 
 import hashlib
+import logging
 import secrets
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
@@ -14,6 +16,11 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
 from .const import LEGACY_ISLAND_DEVICE_ID, STORAGE_KEY, STORAGE_VERSION
+
+_LOGGER = logging.getLogger(__name__)
+
+# Called with the trusted keys (signingKeyId -> publicKeyHex) after every write.
+TrustListener = Callable[[dict[str, str]], None]
 
 # The roster label for the phone that paired this add-on. The pairing claim
 # carries the phone's island key but no device id or label, so the add-on names
@@ -91,6 +98,11 @@ class KeystoreState:
     # island key with it. A view-only phone's key is recorded here too, though
     # it is never trusted. Keys trusted through the cloud have no row.
     key_devices: dict[str, str] = field(default_factory=dict)
+    # Signing key ids revoked over the LAN. The cloud never hears of such a
+    # revoke, so its approved list still names the key; every write drops
+    # these ids from the trusted keys, so no resync can trust one again. Only
+    # a LAN pairing that the owner approves clears an id (`async_trust_key`).
+    revoked_key_ids: list[str] = field(default_factory=list)
 
     def all_island_keys(self) -> list[str]:
         """Every currently-valid island key: the per-device map plus the
@@ -133,6 +145,45 @@ class SvitgridKeystore:
 
     def __init__(self, hass: HomeAssistant) -> None:
         self._store: Store[dict[str, Any]] = Store(hass, STORAGE_VERSION, STORAGE_KEY)
+        self._trust_listeners: list[TrustListener] = []
+
+    def subscribe_trust(self, listener: TrustListener) -> Callable[[], None]:
+        """Call `listener` with the trusted keys after every write.
+
+        The command poller keeps the trusted keys in memory. Without this, a
+        key revoked over the LAN stayed trusted there until the entry reloaded.
+        Only writes through this instance notify, so code that changes the
+        trusted keys uses the shared instance in `hass.data[DOMAIN]["keystore"]`.
+        Returns the function that unsubscribes.
+        """
+        self._trust_listeners.append(listener)
+
+        def _unsubscribe() -> None:
+            if listener in self._trust_listeners:
+                self._trust_listeners.remove(listener)
+
+        return _unsubscribe
+
+    async def _write(self, state: KeystoreState) -> None:
+        """Persist `state` and tell the trust listeners.
+
+        The one place a keystore write happens. It drops every revoked id from
+        the trusted keys first, so a revoked key is never stored as trusted,
+        whichever caller wrote it.
+        """
+        revoked = set(state.revoked_key_ids)
+        if revoked & set(state.trusted_public_keys_hex):
+            state.trusted_public_keys_hex = {
+                k: v for k, v in state.trusted_public_keys_hex.items() if k not in revoked
+            }
+        state.trusted_key_ids = [k for k in state.trusted_key_ids if k not in revoked]
+        await self._store.async_save(asdict(state))
+        # getattr: tests build an instance with __new__ and a fake store.
+        for listener in list(getattr(self, "_trust_listeners", ())):
+            try:
+                listener(dict(state.trusted_public_keys_hex))
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception("A trusted-key listener failed")
 
     async def load(self) -> KeystoreState | None:
         data = await self._store.async_load()
@@ -159,6 +210,9 @@ class SvitgridKeystore:
                 for k, v in dict(data.get("key_devices") or {}).items()
                 if isinstance(v, str) and v
             },
+            revoked_key_ids=[
+                k for k in list(data.get("revoked_key_ids") or []) if isinstance(k, str) and k
+            ],
         )
 
     async def save(
@@ -191,21 +245,22 @@ class SvitgridKeystore:
                 resolved_island_keys = current.island_keys
         # Never passed by a caller: setup re-saves the identity on every start,
         # and the phone-to-key links must survive that.
+        # The revoked ids likewise: a restart must not forget a revoke.
         current = await self.load()
         resolved_key_devices = current.key_devices if current is not None else {}
-        await self._store.async_save(
-            asdict(
-                KeystoreState(
-                    api_key=api_key,
-                    public_key_hex=public_key_hex,
-                    private_key_pem=private_key_pem,
-                    signing_key_id=signing_key_id,
-                    trusted_key_ids=trusted_key_ids,
-                    trusted_public_keys_hex=trusted_public_keys_hex or {},
-                    island_key=resolved_island_key,
-                    island_keys=resolved_island_keys or {},
-                    key_devices=resolved_key_devices,
-                )
+        resolved_revoked = current.revoked_key_ids if current is not None else []
+        await self._write(
+            KeystoreState(
+                api_key=api_key,
+                public_key_hex=public_key_hex,
+                private_key_pem=private_key_pem,
+                signing_key_id=signing_key_id,
+                trusted_key_ids=trusted_key_ids,
+                trusted_public_keys_hex=trusted_public_keys_hex or {},
+                island_key=resolved_island_key,
+                island_keys=resolved_island_keys or {},
+                key_devices=resolved_key_devices,
+                revoked_key_ids=resolved_revoked,
             )
         )
 
@@ -215,7 +270,7 @@ class SvitgridKeystore:
         if current is None:
             return
         current.trusted_key_ids = trusted_key_ids
-        await self._store.async_save(asdict(current))
+        await self._write(current)
 
     async def update_trusted_keys_hex(self, trusted_public_keys_hex: dict[str, str]) -> None:
         """Replace the trusted-keys cache atomically. Keeps trusted_key_ids in
@@ -225,7 +280,7 @@ class SvitgridKeystore:
             return
         current.trusted_public_keys_hex = dict(trusted_public_keys_hex)
         current.trusted_key_ids = sorted(trusted_public_keys_hex.keys())
-        await self._store.async_save(asdict(current))
+        await self._write(current)
 
     async def async_get_island_key(self) -> str | None:
         """Return the stored island API key, or None if not yet set."""
@@ -240,7 +295,7 @@ class SvitgridKeystore:
         if current is None:
             return
         current.island_key = key
-        await self._store.async_save(asdict(current))
+        await self._write(current)
 
     async def async_add_island_key(
         self,
@@ -267,7 +322,7 @@ class SvitgridKeystore:
             **current.island_keys,
             device_id: {"key": key, "label": label, "pairedAt": paired_at},
         }
-        await self._store.async_save(asdict(current))
+        await self._write(current)
 
     async def async_adopt_pairing_island_key(
         self,
@@ -314,7 +369,7 @@ class SvitgridKeystore:
             current.island_key = None
             changed = True
         if changed:
-            await self._store.async_save(asdict(current))
+            await self._write(current)
         return holder
 
     async def async_revoke_island_keys(
@@ -338,7 +393,7 @@ class SvitgridKeystore:
         if clear_scalar:
             current.island_key = None
         if removed or clear_scalar:
-            await self._store.async_save(asdict(current))
+            await self._write(current)
         return removed
 
     async def async_revoke_island_key(self, device_id: str) -> bool:
@@ -356,13 +411,13 @@ class SvitgridKeystore:
             if not current.island_key:
                 return False
             current.island_key = None
-            await self._store.async_save(asdict(current))
+            await self._write(current)
             return True
         if device_id not in current.island_keys:
             return False
         remaining = {k: v for k, v in current.island_keys.items() if k != device_id}
         current.island_keys = remaining
-        await self._store.async_save(asdict(current))
+        await self._write(current)
         return True
 
     async def async_list_island_devices(self) -> list[dict[str, Any]]:
@@ -407,7 +462,7 @@ class SvitgridKeystore:
         if current.key_devices.get(key_id) == device_id:
             return
         current.key_devices = {**current.key_devices, key_id: device_id}
-        await self._store.async_save(asdict(current))
+        await self._write(current)
 
     async def async_revoke_signing_key(self, key_id: str) -> dict[str, Any]:
         """Untrust `key_id` and remove the island key of the phone it belongs to.
@@ -429,8 +484,13 @@ class SvitgridKeystore:
         untrusted = trusted.pop(key_id, None) is not None
         device_id = current.key_devices.get(key_id)
         removed_device = device_id if device_id in current.island_keys else None
-        if not untrusted and device_id is None:
+        newly_revoked = key_id not in current.revoked_key_ids
+        if not untrusted and device_id is None and not newly_revoked:
             return {"untrusted": False, "deviceId": None}
+        # Recorded even for a key not trusted here: the cloud may still list
+        # it, and the next resync would otherwise trust it.
+        if newly_revoked:
+            current.revoked_key_ids = [*current.revoked_key_ids, key_id]
         current.trusted_public_keys_hex = trusted
         current.trusted_key_ids = sorted(trusted)
         if removed_device is not None:
@@ -438,8 +498,78 @@ class SvitgridKeystore:
                 k: v for k, v in current.island_keys.items() if k != removed_device
             }
         current.key_devices = {k: v for k, v in current.key_devices.items() if k != key_id}
-        await self._store.async_save(asdict(current))
+        await self._write(current)
         return {"untrusted": untrusted, "deviceId": removed_device}
+
+    async def async_untrust_key(self, key_id: str) -> bool:
+        """Untrust `key_id` and record it as revoked, in one write.
+
+        For `DELETE /api/svitgrid/trust-key/{id}`, which removes a key without
+        the last-admin check or the phone's island key. Returns True iff the
+        key was trusted. A no-op on an empty keystore.
+        """
+        current = await self.load()
+        if current is None:
+            return False
+        untrusted = key_id in current.trusted_public_keys_hex
+        if not untrusted and key_id in current.revoked_key_ids:
+            return False
+        current.trusted_public_keys_hex = {
+            k: v for k, v in current.trusted_public_keys_hex.items() if k != key_id
+        }
+        current.trusted_key_ids = sorted(current.trusted_public_keys_hex)
+        if key_id not in current.revoked_key_ids:
+            current.revoked_key_ids = [*current.revoked_key_ids, key_id]
+        await self._write(current)
+        return untrusted
+
+    async def async_trust_key(self, key_id: str, public_key_hex: str) -> None:
+        """Trust `key_id`, and clear it from the revoked ids, in one write.
+
+        The deliberate step that trusts a revoked key again: the owner
+        approving a LAN pairing in Home Assistant. A no-op on an empty
+        keystore.
+        """
+        current = await self.load()
+        if current is None:
+            return
+        current.revoked_key_ids = [k for k in current.revoked_key_ids if k != key_id]
+        current.trusted_public_keys_hex = {
+            **current.trusted_public_keys_hex,
+            key_id: public_key_hex,
+        }
+        current.trusted_key_ids = sorted(current.trusted_public_keys_hex)
+        await self._write(current)
+
+    async def async_untrust_entry_keys(self, key_ids: set[str], *, keep_last: bool) -> list[str]:
+        """Untrust `key_ids` and drop their phone links, in one write.
+
+        For a config entry being removed. The ids are not recorded as revoked:
+        nobody revoked them, and the cloud may rightly trust them for another
+        entry. With `keep_last`, nothing changes when the removal would leave no
+        trusted key, because another entry still needs one to sign anything.
+        Returns the ids that were untrusted.
+        """
+        current = await self.load()
+        if current is None:
+            return []
+        trusted = {k: v for k, v in current.trusted_public_keys_hex.items() if k not in key_ids}
+        removed = sorted(set(current.trusted_public_keys_hex) - set(trusted))
+        if keep_last and not trusted and current.trusted_public_keys_hex:
+            _LOGGER.warning(
+                "Keeping %d trusted key(s) of a removed entry: another entry needs a "
+                "trusted admin key",
+                len(removed),
+            )
+            return []
+        links = {k: v for k, v in current.key_devices.items() if k not in key_ids}
+        if not removed and links == current.key_devices:
+            return []
+        current.trusted_public_keys_hex = trusted
+        current.trusted_key_ids = sorted(trusted)
+        current.key_devices = links
+        await self._write(current)
+        return removed
 
 
 class LastAdminKey(Exception):

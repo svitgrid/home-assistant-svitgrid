@@ -421,8 +421,10 @@ async def add_phone(hass: HomeAssistant, entry: Any, claim: LanClaim, role: str)
     )
     trusted = dict(state.trusted_public_keys_hex)
     if role == ROLE_CONTROL:
+        # The owner approved this phone with control, so a key revoked earlier
+        # is trusted again: this is the deliberate step that does it.
         trusted[claim.signing_key_id] = claim.public_key_hex
-        await keystore.update_trusted_keys_hex(trusted)
+        await keystore.async_trust_key(claim.signing_key_id, claim.public_key_hex)
     await keystore.async_link_signing_key(claim.signing_key_id, claim.device_id)
 
     new_data = {

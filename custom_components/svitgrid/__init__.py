@@ -1235,10 +1235,8 @@ async def _adopt_local_pairing_grant(
     key_id = grant.get("signingKeyId")
     public_key_hex = grant.get("publicKeyHex")
     if key_id and public_key_hex:
-        state = await keystore.load()
-        trusted = dict(state.trusted_public_keys_hex) if state is not None else {}
-        trusted[key_id] = public_key_hex
-        await keystore.update_trusted_keys_hex(trusted)
+        # The owner approved this pairing, so it trusts a key revoked earlier.
+        await keystore.async_trust_key(key_id, public_key_hex)
     if key_id and device_id and island_key:
         # So revoking the signing key over the LAN takes this phone's island
         # key with it (island_lan.SvitgridKeysRevokeView).
@@ -1308,20 +1306,27 @@ async def _untrust_entry_signing_keys(hass: HomeAssistant, entry: ConfigEntry) -
     """Untrust the signing keys a LAN pairing trusted for this entry.
 
     The trusted keys belong to the install, not the entry, so a key left
-    behind could still sign commands for whatever is paired here next. Only
-    the ids this entry recorded are removed. Never raises.
+    behind could still sign commands for whatever is paired here next. Two
+    sets go: the ids this entry recorded, and the keys linked to its phones'
+    roster rows (a phone approved view-only whose key was already trusted is
+    linked but not recorded). While another Svitgrid entry remains, its last
+    trusted key stays. Never raises.
     """
     key_ids = set(entry.data.get(ENTRY_TRUSTED_KEY_IDS) or [])
-    if not key_ids:
-        return
+    device_ids = set(entry.data.get(ENTRY_ISLAND_DEVICE_IDS) or [])
     try:
         keystore = hass.data.get(DOMAIN, {}).get("keystore") or SvitgridKeystore(hass)
         state = await keystore.load()
         if state is None:
             return
-        trusted = {k: v for k, v in state.trusted_public_keys_hex.items() if k not in key_ids}
-        if trusted != state.trusted_public_keys_hex:
-            await keystore.update_trusted_keys_hex(trusted)
+        key_ids |= {k for k, did in state.key_devices.items() if did in device_ids}
+        if not key_ids:
+            return
+        others = [
+            e for e in hass.config_entries.async_entries(DOMAIN) if e.entry_id != entry.entry_id
+        ]
+        removed = await keystore.async_untrust_entry_keys(key_ids, keep_last=bool(others))
+        if removed:
             _LOGGER.info("Untrusted the signing key(s) of config entry %s", entry.entry_id)
     except Exception:  # noqa: BLE001
         _LOGGER.exception("Could not untrust the signing keys of config entry %s", entry.entry_id)

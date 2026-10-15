@@ -815,6 +815,11 @@ class SvitgridTrustKeyView(HomeAssistantView):
             return self._json_error(403, "signature_invalid")
 
         state = await keystore.load()
+        # The island key alone authorizes this, and a phone whose key was
+        # revoked can still hold one. Trusting a revoked key again takes the
+        # owner approving a LAN pairing.
+        if state is not None and signing_key_id in state.revoked_key_ids:
+            return self._json_error(409, "key_revoked")
         trusted = dict(state.trusted_public_keys_hex) if state is not None else {}
         trusted[signing_key_id] = public_key_hex
         await keystore.update_trusted_keys_hex(trusted)
@@ -848,11 +853,11 @@ class SvitgridTrustKeyDetailView(HomeAssistantView):
         if not island_key_present_and_valid(request, island_keys):
             return self._json_error(401, "unauthorized")
 
+        # Recorded as revoked as well, so a resync from the cloud cannot trust
+        # the key again.
+        revoked = await keystore.async_untrust_key(signing_key_id)
         state = await keystore.load()
-        trusted = dict(state.trusted_public_keys_hex) if state is not None else {}
-        revoked = trusted.pop(signing_key_id, None) is not None
-        if revoked:
-            await keystore.update_trusted_keys_hex(trusted)
+        trusted = state.trusted_public_keys_hex if state is not None else {}
         return self.json({"ok": True, "revoked": revoked, "trustedKeyIds": sorted(trusted.keys())})
 
 
