@@ -119,14 +119,17 @@ def test_read_solarman_assembles_raw_registers(monkeypatch):
         ranges = [(1, 100, 2, "FC03")]
         result = _read_solarman(cfg, ranges)
 
-    # Constructor called with ip + serial as positionals; auto_reconnect=True since 2026-07-01
+    # Constructor called with ip + serial as positionals. auto_reconnect is
+    # off, as for writes: the per-range retry on a fresh client does the
+    # reconnect, and pysolarmanv5's own reconnect thread raised uncaught
+    # OSErrors against a logger that closes after each reply.
     FakeClass.assert_called_once_with(
         "192.168.1.1",
         123456789,
         port=8899,
         mb_slave_id=1,
         socket_timeout=3,
-        auto_reconnect=True,
+        auto_reconnect=False,
     )
     # read called with positional-style kwargs
     fake_instance.read_holding_registers.assert_called_once_with(register_addr=100, quantity=2)

@@ -111,6 +111,10 @@ def _read_solarman(cfg: dict, ranges: list[tuple[int, int, int, str]]) -> RawReg
       BrokenPipeError, pysolarmanv5.NoSocketAvailableError when available).
     - Each range read is retried once (with a fresh client) on any exception.
       If the retry also fails, the range is skipped; partial results accumulate.
+    - ``auto_reconnect`` is off, as in ``_write_solarman``. The retry above
+      does the reconnect. With it on, against a logger that closes after each
+      reply, pysolarmanv5's reader thread reconnected and re-sent frames by
+      itself and died with uncaught OSErrors (2026-10-15, mock logger).
     - Raises RuntimeError when zero registers were read across all ranges so
       the calling loop can still back off for a truly dead logger.
     """
@@ -133,7 +137,7 @@ def _read_solarman(cfg: dict, ranges: list[tuple[int, int, int, str]]) -> RawReg
             port=int(cfg.get("port", 8899)),
             mb_slave_id=int(cfg.get("slave_id", 1)),
             socket_timeout=_SOLARMAN_SOCKET_TIMEOUT_S,
-            auto_reconnect=True,
+            auto_reconnect=False,
         )
 
     # --- Connection-setup retry ---
