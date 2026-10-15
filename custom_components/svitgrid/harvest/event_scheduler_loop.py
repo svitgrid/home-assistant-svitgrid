@@ -5,11 +5,47 @@ Each tick:
   2. Get the latest reading per inverter via ReadingStore.live_snapshot().
   3. For each enabled event: pick its inverter's reading (skip if absent);
      call evaluate_event(event, reading, exec_state, now_utc, tz).
-  4. On action in ('activate', 'deactivate'): dispatch each (cmd_name, payload)
-     via executor_for(inverter_id).dispatch(cmd_name, payload).
-  5. Persist decision.new_state via event_store.async_set_execution_state()
+  4. On action in ('activate', 'update', 'deactivate'): dispatch each
+     (cmd_name, payload) via executor_for(inverter_id).dispatch(cmd_name, payload).
+  5. Persist the execution state via event_store.async_set_execution_state()
      EVERY tick — regardless of action — so activation guards and hysteresis
      bookkeeping survive across ticks.
+
+A failed dispatch does NOT persist the decision's new state.  The prior state
+is kept, with ``lastCommandError`` set and a retry scheduled
+(``dispatchRetryAt``, backing off from 1 to 15 min), so the transition runs
+again and the app can show why it has not.  The first failure logs at ERROR;
+its retries log at DEBUG.
+
+An activation keeps the prior values its ACKs report in the execution state,
+and the restore writes exactly those back: the slot table a set_battery_charge
+read (``prevSlots``, which ``restore_battery_charge`` writes back, as the cloud
+does), and the work mode, TOU master bit and solar-sell bit that set_work_mode,
+set_grid_charge_toggle and set_solar_sell read (``prevWorkMode``,
+``prevGridChargeEnabled``, ``prevSolarSell``, the firmware's ACK keys). A value
+already held is never replaced, and an ACK from a command that failed partway
+still counts, so a retry that reads the event's own write back cannot pose as
+the owner's setting. With no captured value the restore writes nothing and
+reports ``prev_read_failed``.
+
+Events of one inverter can overlap on a register. An event that starts while
+another one holds the register takes that event's captured value as the
+owner's, since its own read sees the other event's write. An event that ends
+while another one still holds the register writes that event's value back, not
+the owner's (event_evaluator._holder).
+
+An activation that fails partway leaves the writes that landed, with their
+priors kept. When the event stops trying to activate (window end, condition
+gone, a cancel), the evaluator puts back exactly those writes.
+
+Cancelling an active event from the app (DELETE, or a PUT that disables it)
+must undo it at the inverter: the scheduler only evaluates events it still
+has, so a plain delete left the charge running to its slot's end.
+``request_removal`` marks the event ``pendingRemoval`` (``delete`` or
+``disable``) and ``settle_removal`` runs the event's restore, the same one the
+window end runs, then deletes or idles it. A failed restore keeps the mark,
+with ``lastCommandError`` and the usual backoff, and every tick retries it. The
+events list the app reads hides an event pending deletion.
 
 Per-event try/except: a failure in one event's evaluation or dispatch is logged
 and skipped; the remaining events in the same tick are still processed.
@@ -22,14 +58,212 @@ double-fire must not occur.
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
-from datetime import UTC, datetime
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 
-from .event_evaluator import evaluate_event
+from .event_evaluator import evaluate_event, has_landed_writes, restore_decision
 
 _LOGGER = logging.getLogger(__name__)
 
 _DEFAULT_INTERVAL_S = 15
+
+# Retry a failed dispatch after 1 min, doubling up to 15 min. The tick is 15 s,
+# and a write that failed once (a payload the recipe refuses, a busy bus) is
+# not worth hammering the inverter with four times a minute.
+_RETRY_FIRST_S = 60
+_RETRY_MAX_S = 900
+_RETRY_KEYS = ("dispatchFailures", "dispatchRetryAt")
+
+# Execution-state key marking an event the app cancelled while it was active:
+# "delete" or "disable". Set by request_removal, cleared by settle_removal.
+REMOVAL_KEY = "pendingRemoval"
+REMOVAL_DELETE = "delete"
+REMOVAL_DISABLE = "disable"
+
+# Event ids whose restore is running, so the view's immediate attempt and a
+# tick never write the same restore at once.
+_settling: set[str] = set()
+
+
+@dataclass(frozen=True)
+class _Failure:
+    command: str
+    reason: str
+    error: BaseException | None
+
+
+def _parse_iso(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _reason_for(exc: BaseException) -> str:
+    """Map an executor exception to a reason code the app already words.
+
+    The codes are the board failure reasons the app translates
+    (priority_profile_copy.dart); an unknown one reads as the generic text.
+    """
+    if isinstance(exc, (KeyError, ValueError, TypeError)):
+        return "bad_payload"
+    if isinstance(exc, NotImplementedError):
+        return "unsupported_field"
+    text = str(exc)
+    if text.startswith("prior_read_failed"):
+        return "prev_read_failed"
+    if text.startswith(("verify_failed", "verify_read_failed")):
+        return "readback_mismatch"
+    return "write_failed"
+
+
+async def _dispatch_all(executor: object, commands: list) -> tuple[_Failure | None, list]:
+    """Dispatch every command.
+
+    Returns ``(first failure or None, [(command, result), ...])`` for the
+    commands that landed. A failed command does not stop the rest: they are
+    independent writes, and a retry re-sends the whole list, which is
+    idempotent. An empty list has nothing to fail.
+    """
+    if not commands:
+        return None, []
+    if executor is None:
+        return _Failure(commands[0][0], "inverter_not_found", None), []
+    failure: _Failure | None = None
+    results: list = []
+    for cmd_name, payload in commands:
+        try:
+            results.append((cmd_name, await executor.dispatch(cmd_name, payload)))
+        except Exception as exc:  # noqa: BLE001
+            if failure is None:
+                failure = _Failure(cmd_name, _reason_for(exc), exc)
+    return failure, results
+
+
+def _valid_work_mode(value: object) -> int | None:
+    # Deye work modes are 0-2. Anything else is a corrupt read, which the API
+    # also refuses to trust; the restore then reports it rather than guess.
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    return int(value) if value in (0, 1, 2) else None
+
+
+def _bit(value: object) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int | float) and value in (0, 1):
+        return bool(value)
+    return None
+
+
+def _word(lo: int, hi: int):
+    def parse(value: object) -> int | None:
+        if isinstance(value, bool) or not isinstance(value, int | float):
+            return None
+        return int(value) if value == int(value) and lo <= value <= hi else None
+
+    return parse
+
+
+# (ACK key, execution-state key, parse): the prior values an activation keeps
+# for its restore. WriteExecutor names each ``prev<Field>`` after the payload
+# field it wrote, so a key means the same register whichever command reported
+# it: set_solar_sell with a work mode also reports ``prevWorkMode``. The
+# execution-state keys are the cloud's (event_evaluator.COMMAND_PRIOR_KEYS).
+_PRIOR_CAPTURES = (
+    ("prevSlots", "prevSlots", lambda v: v or None),
+    ("prevWorkMode", "previousWorkMode", _valid_work_mode),
+    ("prevGridChargeEnabled", "previousTimerEnabled", _bit),
+    ("prevSolarSell", "maintenancePriorSolarSell", _bit),
+    ("prevSellPowerCapW", "previousSellPowerCapW", _word(0, 0xFFFF)),
+    ("prevOn", "previousGenForce", _bit),
+    ("prevGenForce", "previousGenForce", _bit),
+    ("prevGenPortMode", "previousGenPortMode", _word(0, 2)),
+    ("prevEnergyPattern", "previousEnergyPattern", _word(0, 1)),
+)
+
+
+def _handed_over(state_key: str, others) -> object | None:
+    """The owner's value another event of the inverter already holds.
+
+    An event that starts while another one has written the same register
+    reads that event's write, not the owner's setting. The other event's
+    prior is the owner's value, so it is taken instead, as the API's
+    activateSellToGrid takes previousWorkMode from an active sell event.
+    """
+    for other in others or ():
+        value = (other.get("executionState") or {}).get(state_key)
+        if value is not None:
+            return copy.deepcopy(value)
+    return None
+
+
+def capture_priors(state: dict, results: list, others=()) -> None:
+    """Keep the prior values the activation's ACKs report, for the restore.
+
+    WriteExecutor reads each register before it writes it and reports the
+    value (``prevSlots`` for the slot table, ``prev<Field>`` otherwise). A
+    value already held is kept: a later write while active, or a retry after a
+    partial failure, reads the event's own setting back. A value another event
+    in *others* holds is the owner's and wins over the read.
+    """
+    for _name, result in results:
+        if not isinstance(result, dict):
+            continue
+        for ack_key, state_key, parse in _PRIOR_CAPTURES:
+            if state.get(state_key) is not None:
+                continue
+            value = parse(result.get(ack_key))
+            if value is None:
+                continue
+            handed = _handed_over(state_key, others)
+            state[state_key] = value if handed is None else handed
+
+
+def _failed_state(exec_state: dict, failure: _Failure, now_utc: datetime) -> dict:
+    """The PRIOR state plus the failure, so the transition is retried.
+
+    The decision's new state is dropped: an activation that never reached the
+    inverter must not read as ``active``, and a restore that failed must keep
+    the event ``active`` so the next tick tries it again.  ``lastCommandError``
+    has the shape the cloud writes and the app already shows on the event.
+    """
+    failures = int(exec_state.get("dispatchFailures") or 0) + 1
+    delay_s = min(_RETRY_FIRST_S * 2 ** (failures - 1), _RETRY_MAX_S)
+    state = copy.deepcopy(exec_state)
+    state["lastCommandError"] = {
+        "command": failure.command,
+        "reason": failure.reason,
+        "at": now_utc.isoformat(),
+    }
+    state["dispatchFailures"] = failures
+    state["dispatchRetryAt"] = (now_utc + timedelta(seconds=delay_s)).isoformat()
+    return state
+
+
+def _log_failure(event_id: object, inverter_id: object, failure: _Failure, failures: int) -> None:
+    """Log the first failure of a run at ERROR with its traceback; retries at DEBUG."""
+    if failures == 1:
+        _LOGGER.error(
+            "Event %s: %s for inverter %s failed (%s); retrying with backoff",
+            event_id,
+            failure.command,
+            inverter_id,
+            failure.reason,
+            exc_info=failure.error,
+        )
+    else:
+        _LOGGER.debug(
+            "Event %s: %s retry %d failed (%s)",
+            event_id,
+            failure.command,
+            failures,
+            failure.reason,
+        )
 
 
 async def _tick(
@@ -49,15 +283,29 @@ async def _tick(
     tz           : IANA timezone string.
     now_utc      : Current UTC time (injectable for testing).
     """
-    # 1. List and filter events
+    # 1. List events; finish any cancel the app asked for first
     all_events = await event_store.async_list_events()
-    enabled_events = [e for e in all_events if e.get("enabled", True)]
+    for event in all_events:
+        if (event.get("executionState") or {}).get(REMOVAL_KEY):
+            try:
+                await _settle(event_store, executor_for, event, now_utc, all_events)
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception("Event %s: cancel restore failed", event.get("id"))
+    enabled_events = [
+        e
+        for e in all_events
+        if e.get("enabled", True) and not (e.get("executionState") or {}).get(REMOVAL_KEY)
+    ]
     if not enabled_events:
         return
 
     # 2. Live reading per inverter
     snapshot = await store.live_snapshot()
     reading_by_inverter = {r["inverterId"]: r for r in snapshot}
+
+    # Every event's latest state, so an event sees what the ones before it in
+    # this tick wrote (overlap handoff and hand-back, see event_evaluator).
+    latest = {e.get("id"): e for e in all_events}
 
     # 3+4+5. Evaluate → dispatch → persist, one event at a time
     for event in enabled_events:
@@ -74,6 +322,7 @@ async def _tick(
             )
             continue
 
+        others = _others(latest, event)
         try:
             decision = evaluate_event(
                 event,
@@ -81,36 +330,128 @@ async def _tick(
                 exec_state,
                 now_utc,
                 tz,
+                others,
             )
 
-            # Dispatch commands only on activate / deactivate transitions
-            if decision.action in ("activate", "deactivate"):
-                executor = executor_for(inverter_id)
-                if executor is not None:
-                    for cmd_name, payload in decision.commands:
-                        try:
-                            await executor.dispatch(cmd_name, payload)
-                        except Exception:  # noqa: BLE001
-                            _LOGGER.exception(
-                                "executor.dispatch(%s) failed for event %s; skipping command",
-                                cmd_name,
-                                event_id,
-                            )
-                else:
-                    _LOGGER.warning(
-                        "No executor for inverter %s (event %s); commands not dispatched",
-                        inverter_id,
-                        event_id,
-                    )
+            if decision.action not in ("activate", "update", "deactivate"):
+                # Not a transition: a stale retry schedule has nothing left to retry.
+                state = dict(decision.new_state)
+                for key in _RETRY_KEYS:
+                    state.pop(key, None)
+                await _persist(event_store, latest, event, state)
+                continue
 
-            # Persist new_state EVERY tick — guard survival + hysteresis bookkeeping
-            await event_store.async_set_execution_state(event_id, decision.new_state)
+            retry_at = _parse_iso(exec_state.get("dispatchRetryAt"))
+            if retry_at is not None and now_utc < retry_at:
+                continue  # backing off after a failed dispatch; state unchanged
+
+            failure, results = await _dispatch_all(executor_for(inverter_id), decision.commands)
+            if failure is None:
+                state = dict(decision.new_state)
+                for key in _RETRY_KEYS:
+                    state.pop(key, None)
+            else:
+                state = _failed_state(exec_state, failure, now_utc)
+                _log_failure(event_id, inverter_id, failure, state["dispatchFailures"])
+            if decision.action != "deactivate":
+                # A restore's ACK reads the event's own setting: never a prior.
+                capture_priors(state, results, others)
+
+            # Persist EVERY tick — guard survival + hysteresis bookkeeping
+            await _persist(event_store, latest, event, state)
 
         except Exception:  # noqa: BLE001
             _LOGGER.exception(
                 "Event %s evaluation/dispatch failed; skipping to next event",
                 event_id,
             )
+
+
+def _others(events: dict, event: dict) -> list:
+    """The other events of *event*'s inverter."""
+    return [
+        e
+        for e in events.values()
+        if e.get("id") != event.get("id") and e.get("inverterId") == event.get("inverterId")
+    ]
+
+
+async def _persist(event_store: object, latest: dict, event: dict, state: dict) -> None:
+    await event_store.async_set_execution_state(event.get("id"), state)
+    latest[event.get("id")] = {**event, "executionState": state}
+
+
+async def request_removal(event_store: object, event_id: str, removal: str) -> str:
+    """Record that the app deleted or disabled *event_id*.
+
+    Returns ``"missing"`` for an unknown event, ``"done"`` when nothing of the
+    event is on the inverter (it is deleted at once, and a disable needs no
+    restore), and ``"pending"`` when something is: the event is active, or its
+    activation failed partway and left writes. It is then marked
+    ``pendingRemoval`` and ``settle_removal`` must run its restore. The mark
+    resets any backoff, so the restore is tried at once.
+    """
+    event = await event_store.async_get_event(event_id)
+    if event is None:
+        return "missing"
+    state = dict(event.get("executionState") or {})
+    if not has_landed_writes(state):
+        if removal == REMOVAL_DELETE:
+            await event_store.async_delete_event(event_id)
+        return "done"
+    state[REMOVAL_KEY] = removal
+    for key in _RETRY_KEYS:
+        state.pop(key, None)
+    await event_store.async_set_execution_state(event_id, state)
+    return "pending"
+
+
+async def settle_removal(
+    event_store: object,
+    executor_for: object,
+    event_id: str,
+    now_utc: datetime | None = None,
+) -> None:
+    """Run the restore of a cancelled event, then delete or idle it."""
+    event = await event_store.async_get_event(event_id)
+    if event is None:
+        return
+    events = await event_store.async_list_events()
+    await _settle(event_store, executor_for, event, now_utc or datetime.now(UTC), events)
+
+
+async def _settle(
+    event_store: object, executor_for: object, event: dict, now_utc: datetime, events=()
+) -> None:
+    event_id = event.get("id")
+    exec_state = event.get("executionState") or {}
+    removal = exec_state.get(REMOVAL_KEY)
+    if not removal or event_id in _settling:
+        return
+    retry_at = _parse_iso(exec_state.get("dispatchRetryAt"))
+    if retry_at is not None and now_utc < retry_at:
+        return
+    _settling.add(event_id)
+    try:
+        others = _others({e.get("id"): e for e in events}, event)
+        commands, done_state = restore_decision(event, exec_state, now_utc, others=others)
+        inverter_id = event.get("inverterId")
+        failure, _ = await _dispatch_all(executor_for(inverter_id), commands)
+        if failure is not None:
+            state = _failed_state(exec_state, failure, now_utc)
+            _log_failure(event_id, inverter_id, failure, state["dispatchFailures"])
+            await event_store.async_set_execution_state(event_id, state)
+            return
+        if removal == REMOVAL_DELETE:
+            await event_store.async_delete_event(event_id)
+            _LOGGER.info("Event %s: cancelled, restored and deleted", event_id)
+            return
+        for key in (REMOVAL_KEY, *_RETRY_KEYS):
+            done_state.pop(key, None)
+        await event_store.async_set_execution_state(event_id, done_state)
+        _LOGGER.info("Event %s: disabled and restored", event_id)
+    finally:
+        _settling.discard(event_id)
 
 
 async def run_event_scheduler_loop(

@@ -18,10 +18,13 @@ TS mapping:
 from __future__ import annotations
 
 import copy
+import logging
 import math
 from dataclasses import dataclass
 from datetime import datetime
 from zoneinfo import ZoneInfo
+
+_LOGGER = logging.getLogger(__name__)
 
 # ─────────────────────────────── Window helpers ───────────────────────────────
 
@@ -112,7 +115,10 @@ def is_event_in_window(schedule: dict, now_utc: datetime, tz: str) -> bool:
 class EvaluatorDecision:
     """Result of evaluate_event.
 
-    action     : 'activate' | 'deactivate' | 'hold' | 'skip'
+    action     : 'activate' | 'update' | 'deactivate' | 'hold' | 'skip'
+                 'update' is a write while the event stays active (battery
+                 maintenance's grid fallback, and its hand-back at SOC 99);
+                 the scheduler dispatches it like a transition.
     commands   : list[tuple[str, dict]] — (command_name, payload) to dispatch
     new_state  : updated executionState dict (always a deep copy)
     skip_reason: non-None only when action == 'skip'
@@ -430,74 +436,394 @@ def _decide_custom_event(
     return {"action": "none", "reason": "release_sustaining"}
 
 
-# ─────────────────── Restore-command builders ────────────────────────────────
+# ─────────────────── What an event writes, and its restore ───────────────────
+
+
+# The restore of a battery charge, as the cloud sends it: the six-slot table the
+# activation's set_battery_charge pre-read (the ACK's ``prevSlots``), which
+# WriteExecutor writes back slot by slot on the set_battery_charge recipe.
+RESTORE_CHARGE = "restore_battery_charge"
+
+# ``lastCommandError.reason`` for a restore with no captured prior value. The
+# app words it as "could not read the inverter's settings".
+_NO_PRIOR_REASON = "prev_read_failed"
+
+# The execution-state key that keeps a register's prior value, by the command
+# that writes the register. The scheduler fills them from the activation's
+# ACKs (event_scheduler_loop.capture_priors): every one is read from the
+# inverter by the write itself, never defaulted. The keys are the cloud's
+# (CalendarEventDoc.executionState); the solar-sell bit keeps the key it had
+# for battery maintenance in every mode.
+COMMAND_PRIOR_KEYS = {
+    "set_work_mode": "previousWorkMode",
+    "set_grid_charge_toggle": "previousTimerEnabled",
+    "set_solar_sell": "maintenancePriorSolarSell",
+    "set_sell_power_cap": "previousSellPowerCapW",
+    "set_gen_force": "previousGenForce",
+    "set_gen_port_mode": "previousGenPortMode",
+    "set_energy_pattern": "previousEnergyPattern",
+    "set_battery_charge": "prevSlots",
+}
+PRIOR_KEYS = tuple(dict.fromkeys(COMMAND_PRIOR_KEYS.values()))
+
+# The restore of each prior value. The sell cap uses the API's restore command,
+# which WriteExecutor does not clamp to the set limit (#52); the slot table is
+# written back whole.
+_RESTORES = {
+    "previousWorkMode": lambda v: ("set_work_mode", {"workMode": v}),
+    "previousTimerEnabled": lambda v: ("set_grid_charge_toggle", {"gridChargeEnabled": bool(v)}),
+    "maintenancePriorSolarSell": lambda v: ("set_solar_sell", {"solarSell": 1 if v else 0}),
+    "previousSellPowerCapW": lambda v: ("restore_sell_power_cap", {"sellPowerCapW": v}),
+    "previousGenForce": lambda v: ("set_gen_force", {"on": bool(v)}),
+    "previousGenPortMode": lambda v: ("set_gen_port_mode", {"genPortMode": v}),
+    "previousEnergyPattern": lambda v: ("set_energy_pattern", {"energyPattern": v}),
+    "prevSlots": lambda v: (RESTORE_CHARGE, {"prevSlots": v}),
+}
+
+# Marks an event whose restore already ran inside its window: smart sell's PV
+# release and the sell floor. Its priors stay for a re-activation in the same
+# window, as the cloud keeps its snapshot, but nothing of it is on the inverter.
+RELEASED_KEY = "restoredInWindow"
+
+# Per-run markers a window end clears, so the next run starts fresh. The API's
+# window-end reset clears the same maintenance markers.
+_RUN_KEYS = ("completed", "gridFallbackFired", "belowMinSoc", RELEASED_KEY)
+
+# Execution-state key of an event the app cancelled while it held a register
+# (event_scheduler_loop.REMOVAL_KEY). Its restore is pending: it hands nothing
+# back to another event.
+_REMOVAL_KEY = "pendingRemoval"
+
+# sunset-restore-guard.ts (#576): restoring Selling First (work mode 0) with
+# less PV than this sells the battery at full power. The guard writes Zero
+# Export To Load (1) instead, which works with or without a CT.
+_SELLING_FIRST = 0
+_ZERO_EXPORT_TO_LOAD = 1
+_SELLING_FIRST_PV_FLOOR_W = 500
+
+
+@dataclass(frozen=True)
+class _Write:
+    """One register an active event holds.
+
+    ``key`` is the execution-state key of the register's prior value (None
+    for a legacy custom command the island does not know). ``restore`` is a
+    fixed restore that needs no prior: generator force ends with the port
+    off, as in the API, and a legacy custom action may carry its own.
+    """
+
+    key: str | None
+    command: str
+    payload: dict
+    restore: tuple[str, dict] | None = None
+    sunset_guard: bool = False
+
+
+def _charge_payload(config: dict, schedule: dict, target_soc, grid: bool) -> dict:
+    payload: dict = {
+        "gridChargeEnabled": grid,
+        "gridChargeSoc": target_soc,
+        "slotIndex": 0,
+        "disableOtherSlots": True,
+        "slotStart": _time_to_packed_hhmm(schedule.get("startTime", "00:00")),
+        "slotEnd": _time_to_packed_hhmm(schedule.get("endTime", "23:59")),
+    }
+    # powerLimit only when the event sets one, and no chargeVoltage: the same
+    # payload the API builds (buildBatteryChargePayload). The island knows no
+    # battery chemistry or cell count, which is the API's chargeVoltage-0
+    # case, so both registers keep the user's own values (write_compute skips
+    # an absent field).
+    power_limit = config.get("chargePowerLimitW")
+    if power_limit is not None:
+        payload["powerLimit"] = power_limit
+    return payload
+
+
+def _sell_writes(config: dict) -> list[_Write]:
+    """sell_to_grid's writes, as activateSellToGrid sends them: Selling First,
+    then the sell cap when the event sets one, then the TOU master off when
+    ``disableTouDuringEvent`` is set."""
+    writes = [_Write("previousWorkMode", "set_work_mode", {"workMode": 0}, sunset_guard=True)]
+    cap = config.get("sellPowerCapW")
+    if isinstance(cap, int | float) and not isinstance(cap, bool) and cap >= 0:
+        writes.append(_Write("previousSellPowerCapW", "set_sell_power_cap", {"sellPowerCapW": cap}))
+    if config.get("disableTouDuringEvent") is True:
+        writes.append(
+            _Write("previousTimerEnabled", "set_grid_charge_toggle", {"gridChargeEnabled": False})
+        )
+    return writes
+
+
+# The app's custom action types (custom_action.dart, the API's
+# CustomActionSchema) the island can write, and their payloads, as the API's
+# buildActivatePayload builds them.
+_CUSTOM_ACTIONS = {
+    "work_mode": ("set_work_mode", lambda a: {"workMode": a["value"]}),
+    "solar_sell": ("set_solar_sell", lambda a: {"solarSell": a["value"]}),
+    "sell_power_cap": ("set_sell_power_cap", lambda a: {"sellPowerCapW": a["valueW"]}),
+    "grid_charge_toggle": ("set_grid_charge_toggle", lambda a: {"gridChargeEnabled": a["enabled"]}),
+    "gen_force": ("set_gen_force", lambda a: {"on": a["on"]}),
+    "gen_port_mode": ("set_gen_port_mode", lambda a: {"genPortMode": a["value"]}),
+    "energy_pattern": ("set_energy_pattern", lambda a: {"energyPattern": a["value"]}),
+}
+
+
+def _tou_slot_payload(action: dict) -> dict:
+    """The API's single-slot ``tou_slots`` payload. Its whole-program form needs
+    the cloud's settings mirror; the restore writes the six slots the write
+    read, so the next slot's start this form moves is put back too."""
+    payload: dict = {
+        "slotIndex": action.get("slotIndex", 0),
+        "gridChargeEnabled": action["gridChargeEnabled"],
+        "gridChargeSoc": action["socTarget"],
+        "powerLimit": action["powerW"],
+    }
+    if action.get("chargeVoltage") is not None:
+        payload["chargeVoltage"] = action["chargeVoltage"]
+    payload["slotStart"] = _time_to_packed_hhmm(action["startTime"])
+    payload["slotEnd"] = _time_to_packed_hhmm(action["endTime"])
+    payload["disableOtherSlots"] = False
+    return payload
+
+
+def _custom_write(action: dict) -> _Write | None:
+    """One custom action as a write, in the app's shape or the legacy one.
+
+    The legacy shape, ``{command, payload, restorePayload}``, keeps its own
+    restore when it carries one. An action the island cannot write (a smart
+    plug, an EV charger, a priority profile, or a register no recipe has) is
+    skipped and logged.
+    """
+    command = action.get("command")
+    if command:
+        restore = action.get("restorePayload")
+        return _Write(
+            COMMAND_PRIOR_KEYS.get(command),
+            command,
+            dict(action.get("payload") or {}),
+            (command, dict(restore)) if restore else None,
+        )
+    kind = action.get("type")
+    try:
+        if kind == "tou_slots":
+            return _Write("prevSlots", "set_battery_charge", _tou_slot_payload(action))
+        if kind in _CUSTOM_ACTIONS:
+            name, build = _CUSTOM_ACTIONS[kind]
+            return _Write(COMMAND_PRIOR_KEYS[name], name, build(action))
+    except KeyError:
+        _LOGGER.warning("Custom action %s is missing a field; skipped", action)
+        return None
+    _LOGGER.warning("Custom action type %r cannot be written by the island; skipped", kind)
+    return None
+
+
+def _event_writes(event: dict, exec_state: dict) -> list[_Write]:
+    """The registers *event* writes while active, in activation order."""
+    mode = event.get("mode", "")
+    config = event.get("config") or {}
+    schedule = event.get("schedule") or {}
+    if mode == "battery_charge":
+        source = config.get("chargeSource", "solar")
+        grid = source in ("grid", "both", "solar_surplus_grid")
+        payload = _charge_payload(config, schedule, config.get("targetSoc", 100), grid)
+        return [_Write("prevSlots", "set_battery_charge", payload)]
+    if mode == "sell_to_grid":
+        return _sell_writes(config)
+    if mode == "use_battery":
+        return [
+            _Write("previousWorkMode", "set_work_mode", {"workMode": 2}),
+            _Write("previousTimerEnabled", "set_grid_charge_toggle", {"gridChargeEnabled": False}),
+        ]
+    if mode == "gen_force":
+        # The API ends a generator force with the port off, not a prior value.
+        return [
+            _Write(
+                "previousGenForce", "set_gen_force", {"on": True}, ("set_gen_force", {"on": False})
+            )
+        ]
+    if mode == "battery_maintenance":
+        writes = [_Write("maintenancePriorSolarSell", "set_solar_sell", {"solarSell": 0})]
+        if exec_state.get("gridFallbackFired"):
+            payload = _charge_payload(config, schedule, 100, True)
+            writes.append(_Write("prevSlots", "set_battery_charge", payload))
+        return writes
+    if mode == "custom":
+        writes = (_custom_write(a) for a in config.get("customActions") or [])
+        return [w for w in writes if w is not None]
+    return []
+
+
+def has_landed_writes(exec_state: dict) -> bool:
+    """Return True when a write of this event's run is still on the inverter.
+
+    True for an active event, and for one whose activation failed partway:
+    the scheduler keeps the prior value of every write that landed. False
+    once the restore ran inside the window (``restoredInWindow``).
+    """
+    if exec_state.get(RELEASED_KEY):
+        return False
+    return exec_state.get("status") == "active" or any(
+        exec_state.get(k) is not None for k in PRIOR_KEYS
+    )
+
+
+def _holder(key: str | None, others) -> _Write | None:
+    """Another event's write of the register *key* names, while it holds it.
+
+    Two events overlap on one register: the one that ends hands the register
+    back to the one still running, rather than to the owner's value. The API
+    skips the restore when another sell_to_grid event is active
+    (deactivateSellToGrid); writing the other event's value also covers two
+    modes that write different values to one register.
+    """
+    if key is None:
+        return None
+    for other in others or ():
+        state = other.get("executionState") or {}
+        if state.get(key) is None or state.get(RELEASED_KEY) or state.get(_REMOVAL_KEY):
+            continue
+        for write in _event_writes(other, state):
+            if write.key == key:
+                return write
+    return None
+
+
+def _guard_sunset(work_mode, reading: dict | None):
+    """resolveRestoreWorkMode: never restore Selling First with no sun."""
+    pv = (reading or {}).get("pvPower")
+    if (
+        work_mode == _SELLING_FIRST
+        and isinstance(pv, int | float)
+        and not isinstance(pv, bool)
+        and pv < _SELLING_FIRST_PV_FLOOR_W
+    ):
+        _LOGGER.warning(
+            "Not restoring Selling First with %s W of PV: it would sell the battery; "
+            "restoring Zero Export To Load",
+            pv,
+        )
+        return _ZERO_EXPORT_TO_LOAD
+    return work_mode
+
+
+def _restore_plan(
+    event: dict,
+    exec_state: dict,
+    reading: dict | None = None,
+    others=(),
+    landed_only: bool = False,
+) -> tuple[list, list]:
+    """Return ``(restore commands, restores that cannot run)`` for an event.
+
+    Each restore writes back the value the activation read from the inverter.
+    A restore whose value was never read cannot run, and is named in the
+    second list instead: there is nothing true to write. The old defaults
+    (work mode 2, TOU master on, solar sell off, SOC 0 over the event's window
+    in slot 1) overwrote whatever the owner had set.
+
+    *landed_only* is the restore of an activation that failed partway: only
+    the writes that landed (their prior is held) are put back, and a write
+    that never landed is not reported. A register another event in *others*
+    still holds is handed back to that event's value instead.
+    """
+    if landed_only and exec_state.get(RELEASED_KEY):
+        return [], []
+    commands: list = []
+    missing: list = []
+    writes = _event_writes(event, exec_state)
+    # A prior held for a register the event's config no longer writes (the
+    # owner edited the event while it ran) is still our write on the inverter.
+    covered = {w.key for w in writes}
+    writes += [
+        _Write(key, _RESTORES[key](None)[0], {})
+        for key in PRIOR_KEYS
+        if key not in covered and exec_state.get(key) is not None
+    ]
+    for write in writes:
+        holder = _holder(write.key, others)
+        if holder is not None:
+            commands.append((holder.command, dict(holder.payload)))
+            continue
+        prior = exec_state.get(write.key) if write.key else None
+        if write.restore is not None:
+            if not landed_only or prior is not None:
+                commands.append((write.restore[0], dict(write.restore[1])))
+            continue
+        if write.key is None:
+            continue
+        if prior is None or (write.key == "prevSlots" and not prior):
+            if not landed_only:
+                missing.append(_RESTORES[write.key](None)[0])
+            continue
+        if write.sunset_guard:
+            prior = _guard_sunset(prior, reading)
+        commands.append(_RESTORES[write.key](prior))
+    return commands, missing
 
 
 def _restore_commands(event: dict, exec_state: dict) -> list:
     """Return the restore (de-activation) command list for the given mode."""
-    mode = event.get("mode", "")
-    config = event.get("config") or {}
-    schedule = event.get("schedule") or {}
+    return _restore_plan(event, exec_state)[0]
 
-    if mode == "sell_to_grid":
-        prev = exec_state.get("previousWorkMode", 2)
-        return [("set_work_mode", {"workMode": prev})]
 
-    if mode == "use_battery":
-        prev_mode = exec_state.get("previousWorkMode", 2)
-        prev_timer = exec_state.get("previousTimerEnabled", True)
-        return [
-            ("set_work_mode", {"workMode": prev_mode}),
-            ("set_grid_charge_toggle", {"enabled": prev_timer}),
-        ]
+def unrestorable_command(event: dict, exec_state: dict) -> str | None:
+    """Return the first restore that cannot run for want of a prior value, or None."""
+    missing = _restore_plan(event, exec_state)[1]
+    return missing[0] if missing else None
 
-    if mode == "gen_force":
-        return [("set_gen_force", {"on": False})]
 
-    if mode == "battery_maintenance":
-        cmds: list = []
-        prev_sell = exec_state.get("maintenancePriorSolarSell", False)
-        cmds.append(("set_solar_sell", {"solarSell": 1 if prev_sell else 0}))
-        if exec_state.get("gridFallbackFired"):
-            cmds.append(
-                (
-                    "set_battery_charge",
-                    {
-                        "gridChargeEnabled": False,
-                        "gridChargeSoc": 0,
-                        "slotIndex": 0,
-                        "disableOtherSlots": False,
-                        "slotStart": _time_to_packed_hhmm(schedule.get("startTime", "00:00")),
-                        "slotEnd": _time_to_packed_hhmm(schedule.get("endTime", "23:59")),
-                    },
-                )
-            )
-        return cmds
+def _report_missing(event: dict, state: dict, missing: list, now_utc: datetime) -> None:
+    """Record restores with no prior value in ``lastCommandError``, the field the
+    app shows on the event. Retrying could not make a value up, so none is set."""
+    if not missing:
+        return
+    _LOGGER.warning(
+        "Event %s: %s not written back — the inverter's prior value was never read, "
+        "so the inverter keeps the event's setting",
+        event.get("id"),
+        ", ".join(missing),
+    )
+    state["lastCommandError"] = {
+        "command": missing[0],
+        "reason": _NO_PRIOR_REASON,
+        "at": now_utc.isoformat(),
+    }
 
-    if mode == "battery_charge":
-        return [
-            (
-                "set_battery_charge",
-                {
-                    "gridChargeEnabled": False,
-                    "gridChargeSoc": 0,
-                    "slotIndex": 0,
-                    "disableOtherSlots": False,
-                    "slotStart": _time_to_packed_hhmm(schedule.get("startTime", "00:00")),
-                    "slotEnd": _time_to_packed_hhmm(schedule.get("endTime", "23:59")),
-                },
-            )
-        ]
 
-    if mode == "custom":
-        actions = config.get("customActions") or []
-        return [
-            (a["command"], dict(a["restorePayload"]))
-            for a in actions
-            if a.get("command") and a.get("restorePayload")
-        ]
+def _drop_run_state(state: dict) -> None:
+    for key in (
+        "lastActivatedAt",
+        "conditionMetSince",
+        "conditionLostSince",
+        *PRIOR_KEYS,
+        *_RUN_KEYS,
+    ):
+        state.pop(key, None)
 
-    return []
+
+def restore_decision(
+    event: dict,
+    exec_state: dict,
+    now_utc: datetime,
+    reading: dict | None = None,
+    others=(),
+) -> tuple[list, dict]:
+    """Return ``(restore commands, idle state)`` for ending an event.
+
+    Used by the window end and by a cancel (delete or disable) from the app,
+    so both put back the same values. An active event restores every write
+    and reports, in ``lastCommandError``, a restore with no captured prior
+    value. An event whose activation failed partway restores the writes that
+    landed. *reading* feeds the sunset guard; *others* are the inverter's
+    other events, whose held registers are handed back to them.
+    """
+    landed_only = exec_state.get("status") != "active"
+    commands, missing = _restore_plan(event, exec_state, reading, others, landed_only)
+    new_state = copy.deepcopy(exec_state)
+    new_state["status"] = "idle"
+    _drop_run_state(new_state)
+    _report_missing(event, new_state, missing, now_utc)
+    return commands, new_state
 
 
 # ─────────────────── Main entry point ────────────────────────────────────────
@@ -509,6 +835,7 @@ def evaluate_event(
     exec_state: dict,
     now_utc: datetime,
     tz: str,
+    others=(),
 ) -> EvaluatorDecision:
     """Evaluate a calendar event against a live reading.
 
@@ -516,6 +843,13 @@ def evaluate_event(
 
     Cloud-only modes / conditions are NEVER evaluated — they return skip with
     an explicit reason so the scheduler can surface the reason to the user.
+
+    *others* are the inverter's other events. A restore hands a register one
+    of them still holds back to that event (see ``_holder``).
+
+    An event that is not active but still has writes on the inverter (an
+    activation that failed partway) puts them back as soon as it stops trying
+    to activate: at window end, or in-window when its condition goes.
     """
     mode = event.get("mode", "")
     config = event.get("config") or {}
@@ -555,22 +889,60 @@ def evaluate_event(
 
     if not in_window:
         current_status = exec_state.get("status", "idle")
-        if current_status == "active":
-            restore_cmds = _restore_commands(event, exec_state)
-            new_state["status"] = "idle"
-            new_state.pop("lastActivatedAt", None)
-            new_state.pop("conditionMetSince", None)
-            new_state.pop("conditionLostSince", None)
+        if has_landed_writes(exec_state):
+            restore_cmds, new_state = restore_decision(event, exec_state, now_utc, reading, others)
             return EvaluatorDecision(
                 action="deactivate", commands=restore_cmds, new_state=new_state
             )
         if current_status == "pending_condition":
             new_state["status"] = "idle"
             new_state.pop("conditionMetSince", None)
+        # Nothing of this run is at the inverter to restore. Priors kept for a
+        # re-activation would otherwise outlive the window and stand in for
+        # the next run's own reading.
+        for key in (*PRIOR_KEYS, *_RUN_KEYS):
+            new_state.pop(key, None)
         return EvaluatorDecision(action="hold", commands=[], new_state=new_state)
 
     # ── In-window: per-mode evaluation ────────────────────────────────────────
-    return _eval_mode(mode, event, reading, exec_state, new_state, now_utc, tz)
+    decision = _eval_mode(mode, event, reading, exec_state, new_state, now_utc, tz, others)
+    if decision.action == "activate":
+        decision.new_state.pop(RELEASED_KEY, None)
+        return decision
+    if decision.action == "deactivate" and not decision.new_state.get(RELEASED_KEY):
+        # The run's writes are restored: its priors must not pose as writes
+        # still on the inverter, nor as the next run's own reading.
+        for key in PRIOR_KEYS:
+            decision.new_state.pop(key, None)
+        return decision
+    if (
+        decision.action in ("hold", "skip")
+        and exec_state.get("status") != "active"
+        and decision.new_state.get("status") != "active"
+        and has_landed_writes(exec_state)
+    ):
+        return _undo_partial(event, reading, exec_state, decision.new_state, others)
+    return decision
+
+
+def _undo_partial(
+    event: dict, reading: dict, exec_state: dict, new_state: dict, others
+) -> EvaluatorDecision:
+    """Put back the writes of an activation that failed partway.
+
+    The event no longer wants to activate (its condition went, or the sell
+    floor holds it off), so the writes that landed would otherwise stay on the
+    inverter with nothing left to restore them.
+    """
+    commands, _missing = _restore_plan(event, exec_state, reading, others, landed_only=True)
+    for key in PRIOR_KEYS:
+        new_state.pop(key, None)
+    _LOGGER.info(
+        "Event %s: activation failed partway; putting back what landed (%s)",
+        event.get("id"),
+        ", ".join(c[0] for c in commands) or "nothing",
+    )
+    return EvaluatorDecision(action="deactivate", commands=commands, new_state=new_state)
 
 
 def _eval_mode(
@@ -581,23 +953,24 @@ def _eval_mode(
     new_state: dict,
     now_utc: datetime,
     tz: str,
+    others=(),
 ) -> EvaluatorDecision:
     if mode == "battery_charge":
         return _eval_battery_charge(event, reading, exec_state, new_state, now_utc)
     if mode == "sell_to_grid":
-        return _eval_sell_to_grid(event, reading, exec_state, new_state, now_utc)
+        return _eval_sell_to_grid(event, reading, exec_state, new_state, now_utc, others)
     if mode == "lower_consumption":
         return _eval_lower_consumption(event, reading, exec_state, new_state, now_utc)
     if mode == "consume_from_sun":
         return _eval_consume_from_sun(event, reading, exec_state, new_state, now_utc)
     if mode == "battery_maintenance":
-        return _eval_battery_maintenance(event, reading, exec_state, new_state, now_utc, tz)
+        return _eval_battery_maintenance(event, reading, exec_state, new_state, now_utc, tz, others)
     if mode == "use_battery":
         return _eval_use_battery(event, exec_state, new_state, now_utc)
     if mode == "gen_force":
         return _eval_gen_force(event, reading, exec_state, new_state, now_utc, tz)
     if mode == "custom":
-        return _eval_custom(event, reading, exec_state, new_state, now_utc)
+        return _eval_custom(event, reading, exec_state, new_state, now_utc, others)
     # Unknown mode → hold
     return EvaluatorDecision(action="hold", commands=[], new_state=new_state)
 
@@ -619,31 +992,17 @@ def _eval_battery_charge(
     if exec_state.get("status") == "active":
         return EvaluatorDecision(action="hold", commands=[], new_state=new_state)
 
-    config = event.get("config") or {}
-    schedule = event.get("schedule") or {}
-    charge_source = config.get("chargeSource", "solar")
-    grid_charge_enabled = charge_source in ("grid", "both", "solar_surplus_grid")
-    target_soc = config.get("targetSoc", 100)
-
-    payload: dict = {
-        "gridChargeEnabled": grid_charge_enabled,
-        "gridChargeSoc": target_soc,
-        "slotIndex": 0,
-        "disableOtherSlots": True,
-        "slotStart": _time_to_packed_hhmm(schedule.get("startTime", "00:00")),
-        "slotEnd": _time_to_packed_hhmm(schedule.get("endTime", "23:59")),
-    }
-    power_limit = config.get("chargePowerLimitW")
-    if power_limit is not None:
-        payload["powerLimit"] = power_limit
-
     new_state["status"] = "active"
     new_state["lastActivatedAt"] = now_utc.isoformat()
     return EvaluatorDecision(
         action="activate",
-        commands=[("set_battery_charge", payload)],
+        commands=_activation_commands(event, exec_state),
         new_state=new_state,
     )
+
+
+def _activation_commands(event: dict, exec_state: dict) -> list:
+    return [(w.command, dict(w.payload)) for w in _event_writes(event, exec_state)]
 
 
 # ─────────────────── sell_to_grid ────────────────────────────────────────────
@@ -655,9 +1014,15 @@ def _eval_sell_to_grid(
     exec_state: dict,
     new_state: dict,
     now_utc: datetime,
+    others=(),
 ) -> EvaluatorDecision:
     """Simple mode: activate once (forecast/price gates STRIPPED).
     Smart mode: PV-power-gated with 2-min hysteresis on the OFF edge.
+
+    Both stop at the battery floor ``minSocPercent`` and restore, and resume
+    only when SOC is 5 points above it (evaluateSellToGrid, issue #717). The
+    API's preferred floor behaviour, holding the battery with solar sell in a
+    zero-export mode, is not ported: see ``_floor_check``.
 
     TS lines 2043-2348.
     """
@@ -665,6 +1030,21 @@ def _eval_sell_to_grid(
     sell_mode = config.get("sellMode", "simple")
     status = exec_state.get("status", "idle")
     now_ms = _now_ms(now_utc)
+
+    floor = _floor_check(event, reading, exec_state, new_state, now_utc, others)
+    if floor is not None:
+        return floor
+
+    def activate() -> EvaluatorDecision:
+        # The prior values come from these writes' ACKs, which the scheduler
+        # keeps; none is defaulted here.
+        new_state["status"] = "active"
+        new_state["lastActivatedAt"] = now_utc.isoformat()
+        return EvaluatorDecision(
+            action="activate",
+            commands=_activation_commands(event, exec_state),
+            new_state=new_state,
+        )
 
     # ── Smart mode ────────────────────────────────────────────────────────────
     if sell_mode == "smart":
@@ -675,17 +1055,9 @@ def _eval_sell_to_grid(
         if status == "idle":
             if not pv_above:
                 return EvaluatorDecision(action="hold", commands=[], new_state=new_state)
-            # Snapshot prior work mode for restore
-            new_state["previousWorkMode"] = exec_state.get("previousWorkMode", 2)
-            new_state["status"] = "active"
-            new_state["lastActivatedAt"] = now_utc.isoformat()
             new_state.pop("conditionMetSince", None)
             new_state.pop("conditionLostSince", None)
-            return EvaluatorDecision(
-                action="activate",
-                commands=[("set_work_mode", {"workMode": 0})],
-                new_state=new_state,
-            )
+            return activate()
 
         if status == "active":
             if pv_above:
@@ -700,16 +1072,10 @@ def _eval_sell_to_grid(
             lost_ms = _iso_to_ms(lost_str)
             if lost_ms is None or (now_ms - lost_ms) < 2 * 60_000.0:
                 return EvaluatorDecision(action="hold", commands=[], new_state=new_state)
-            # Hysteresis elapsed → deactivate + restore work mode
-            prev_mode = exec_state.get("previousWorkMode", 2)
-            new_state["status"] = "pending_condition"
+            # Hysteresis elapsed → deactivate + restore the captured values.
             new_state.pop("conditionLostSince", None)
             new_state["conditionMetSince"] = None
-            return EvaluatorDecision(
-                action="deactivate",
-                commands=[("set_work_mode", {"workMode": prev_mode})],
-                new_state=new_state,
-            )
+            return _release_in_window(event, reading, exec_state, new_state, now_utc, others)
 
         # pending_condition: waiting for PV recovery + 2-min confirmation
         if status == "pending_condition":
@@ -724,29 +1090,85 @@ def _eval_sell_to_grid(
             if cms_ms is None or (now_ms - cms_ms) < 2 * 60_000.0:
                 return EvaluatorDecision(action="hold", commands=[], new_state=new_state)
             # Hysteresis met → re-activate
-            new_state["status"] = "active"
-            new_state["lastActivatedAt"] = now_utc.isoformat()
             new_state.pop("conditionMetSince", None)
-            return EvaluatorDecision(
-                action="activate",
-                commands=[("set_work_mode", {"workMode": 0})],
-                new_state=new_state,
-            )
+            return activate()
 
         return EvaluatorDecision(action="hold", commands=[], new_state=new_state)
 
     # ── Simple mode (forecast/price gates stripped) ───────────────────────────
     if status == "active":
         return EvaluatorDecision(action="hold", commands=[], new_state=new_state)
+    return activate()
 
-    new_state["previousWorkMode"] = exec_state.get("previousWorkMode", 2)
-    new_state["status"] = "active"
-    new_state["lastActivatedAt"] = now_utc.isoformat()
-    return EvaluatorDecision(
-        action="activate",
-        commands=[("set_work_mode", {"workMode": 0})],
-        new_state=new_state,
+
+def _release_in_window(
+    event: dict,
+    reading: dict,
+    exec_state: dict,
+    new_state: dict,
+    now_utc: datetime,
+    others,
+) -> EvaluatorDecision:
+    """Restore an active sale inside its window and wait in pending_condition.
+
+    The captured values stay for a re-activation in this window, as the cloud
+    keeps its snapshot; ``restoredInWindow`` records that none of the event's
+    writes is on the inverter any more.
+    """
+    commands, missing = _restore_plan(event, exec_state, reading, others)
+    new_state["status"] = "pending_condition"
+    new_state[RELEASED_KEY] = True
+    _report_missing(event, new_state, missing, now_utc)
+    return EvaluatorDecision(action="deactivate", commands=commands, new_state=new_state)
+
+
+# evaluator.ts SELL_MIN_SOC_RESUME_HYSTERESIS_PERCENT: once selling stopped at
+# the floor, SOC must climb this far above it before selling resumes.
+_SELL_RESUME_HYSTERESIS = 5
+
+
+def _floor_check(
+    event: dict,
+    reading: dict,
+    exec_state: dict,
+    new_state: dict,
+    now_utc: datetime,
+    others,
+) -> EvaluatorDecision | None:
+    """The sell floor ``minSocPercent`` (issue #717), or None to sell on.
+
+    At or below the floor an active sale is restored; below floor + 5 after
+    that, no sale starts. This is the API's fallback, which it takes for a
+    model it cannot tell to sell only the surplus. Its preferred hold (solar
+    sell on, work mode zero-export, battery held at the floor) is not ported:
+    the island cannot tell whether the executor writes the work mode with the
+    solar-sell bit, and a hold that half-lands keeps selling the battery.
+    """
+    floor = (event.get("config") or {}).get("minSocPercent")
+    soc = reading.get("batterySoc")
+    if not isinstance(floor, int | float) or not isinstance(soc, int | float):
+        return None
+    was_held = exec_state.get("belowMinSoc") is True
+    below = soc < floor + _SELL_RESUME_HYSTERESIS if was_held else soc <= floor
+    if not below:
+        if was_held:
+            _LOGGER.info(
+                "Event %s: battery back above the floor; selling may resume", event.get("id")
+            )
+            new_state["belowMinSoc"] = False
+        return None
+    new_state["belowMinSoc"] = True
+    if exec_state.get("status") != "active":
+        return EvaluatorDecision(action="hold", commands=[], new_state=new_state)
+    _LOGGER.info(
+        "Event %s: battery at %s %% reached the floor of %s %%; stopping the sale",
+        event.get("id"),
+        soc,
+        floor,
     )
+    new_state["conditionMetSince"] = None
+    new_state.pop("conditionLostSince", None)
+    return _release_in_window(event, reading, exec_state, new_state, now_utc, others)
 
 
 # ─────────────────── lower_consumption ───────────────────────────────────────
@@ -893,55 +1315,60 @@ def _eval_battery_maintenance(
     new_state: dict,
     now_utc: datetime,
     tz: str,
+    others=(),
 ) -> EvaluatorDecision:
-    """Periodic full-charge cycle.
+    """Periodic full-charge cycle: the legacy body of the API's
+    evaluateBatteryMaintenanceCharge (no fill/drain windows, no due-gate).
 
-    Always dispatches set_solar_sell{solarSell:0} in-window.
-    SOC ≥ 99 → mark completed.
-    After gridFallbackHour (local) → dispatch set_battery_charge to 100%.
-    TS lines 1756-2042.
+    - Activation writes set_solar_sell {solarSell: 0}. Its ACK reports the
+      prior bit, which the scheduler keeps as ``maintenancePriorSolarSell``.
+    - SOC >= 99 marks the run completed. A grid fallback already written is
+      handed back at once (restore_battery_charge from the table its
+      set_battery_charge read), as the API's endMaintenanceSlotHold does, and
+      a completed run never re-arms it.
+    - From gridFallbackHour (local) with SOC < 100, set_battery_charge to 100 %
+      once per run. When that hour comes after activation, the write is an
+      ``update``: the scheduler dispatches it while the event stays active.
+      Before, it rode on a ``hold``, which the scheduler never dispatches.
     """
     config = event.get("config") or {}
     schedule = event.get("schedule") or {}
     fallback_hour = int(config.get("gridFallbackHour", 17))
     now_hour = _local_hour(now_utc, tz)
     soc = float(reading.get("batterySoc", 0) or 0)
-    status = exec_state.get("status", "idle")
+    activating = exec_state.get("status", "idle") != "active"
 
-    cmds: list = [("set_solar_sell", {"solarSell": 0})]
-
-    new_state["status"] = "active"
-    if not exec_state.get("lastActivatedAt"):
+    cmds: list = []
+    if activating:
+        cmds.append(("set_solar_sell", {"solarSell": 0}))
+        new_state["status"] = "active"
         new_state["lastActivatedAt"] = now_utc.isoformat()
 
-    # Cache prior solar sell on first invocation (we default False without inverter doc)
-    if exec_state.get("maintenancePriorSolarSell") is None:
-        new_state["maintenancePriorSolarSell"] = False
-
-    # SOC ≥ 99 → cycle complete
     if soc >= 99:
         new_state["completed"] = True
-        return EvaluatorDecision(action="hold", commands=cmds, new_state=new_state)
-
-    # Grid fallback: after the configured local hour, enable grid charge to 100%
-    if now_hour >= fallback_hour:
-        charge_payload: dict = {
-            "gridChargeEnabled": True,
-            "gridChargeSoc": 100,
-            "slotIndex": 0,
-            "disableOtherSlots": True,
-            "slotStart": _time_to_packed_hhmm(schedule.get("startTime", "00:00")),
-            "slotEnd": _time_to_packed_hhmm(schedule.get("endTime", "23:59")),
-        }
-        power_limit = config.get("chargePowerLimitW")
-        if power_limit is not None:
-            charge_payload["powerLimit"] = power_limit
-        cmds.append(("set_battery_charge", charge_payload))
+        if exec_state.get("gridFallbackFired"):
+            holder = _holder("prevSlots", others)
+            if holder is not None:
+                cmds.append((holder.command, dict(holder.payload)))
+            elif exec_state.get("prevSlots"):
+                cmds.append((RESTORE_CHARGE, {"prevSlots": exec_state["prevSlots"]}))
+            else:
+                _report_missing(event, new_state, [RESTORE_CHARGE], now_utc)
+            new_state.pop("gridFallbackFired", None)
+            new_state.pop("prevSlots", None)
+    elif (
+        now_hour >= fallback_hour
+        and not exec_state.get("completed")
+        and not exec_state.get("gridFallbackFired")
+    ):
+        cmds.append(("set_battery_charge", _charge_payload(config, schedule, 100, True)))
         new_state["gridFallbackFired"] = True
 
-    if status == "idle":
+    if activating:
         return EvaluatorDecision(action="activate", commands=cmds, new_state=new_state)
-    return EvaluatorDecision(action="hold", commands=cmds, new_state=new_state)
+    if cmds:
+        return EvaluatorDecision(action="update", commands=cmds, new_state=new_state)
+    return EvaluatorDecision(action="hold", commands=[], new_state=new_state)
 
 
 # ─────────────────── use_battery ─────────────────────────────────────────────
@@ -960,16 +1387,13 @@ def _eval_use_battery(
     if exec_state.get("status") == "active":
         return EvaluatorDecision(action="hold", commands=[], new_state=new_state)
 
-    new_state["previousWorkMode"] = exec_state.get("previousWorkMode", 2)
-    new_state["previousTimerEnabled"] = exec_state.get("previousTimerEnabled", True)
+    # previousWorkMode and previousTimerEnabled come from the two ACKs
+    # (prevWorkMode, prevGridChargeEnabled), kept by the scheduler.
     new_state["status"] = "active"
     new_state["lastActivatedAt"] = now_utc.isoformat()
     return EvaluatorDecision(
         action="activate",
-        commands=[
-            ("set_work_mode", {"workMode": 2}),
-            ("set_grid_charge_toggle", {"enabled": False}),
-        ],
+        commands=_activation_commands(event, exec_state),
         new_state=new_state,
     )
 
@@ -1053,15 +1477,19 @@ def _eval_custom(
     exec_state: dict,
     new_state: dict,
     now_utc: datetime,
+    others=(),
 ) -> EvaluatorDecision:
     """Evaluate custom event local conditions (battery_soc, pv_power, load_power, grid).
 
     forecast_today / dam_price / scheduled_outage conditions are blocked
     before this function is called — they return skip at the top level.
     TS evaluator.ts lines 3043+; custom-event-decision.ts.
+
+    The actions are the app's ``{type, ...}`` objects (see ``_custom_write``);
+    each restore writes back the value its write read from the inverter, as
+    the API's buildRestorePayload does from its snapshot.
     """
     config = event.get("config") or {}
-    actions = config.get("customActions") or []
     conditions = config.get("customConditions") or []
     sustain_minutes = float(config.get("sustainMinutes") or 0)
 
@@ -1099,21 +1527,21 @@ def _eval_custom(
         return EvaluatorDecision(action="hold", commands=[], new_state=new_state)
 
     if d_action == "activate":
-        cmds = [(a["command"], dict(a.get("payload") or {})) for a in actions if a.get("command")]
         new_state["status"] = "active"
         new_state["lastActivatedAt"] = now_utc.isoformat()
         new_state["conditionLostSince"] = None
-        return EvaluatorDecision(action="activate", commands=cmds, new_state=new_state)
+        return EvaluatorDecision(
+            action="activate",
+            commands=_activation_commands(event, exec_state),
+            new_state=new_state,
+        )
 
     if d_action == "deactivate":
-        cmds = [
-            (a["command"], dict(a["restorePayload"]))
-            for a in actions
-            if a.get("command") and a.get("restorePayload")
-        ]
+        commands, missing = _restore_plan(event, exec_state, reading, others)
         new_state["status"] = "idle"
         new_state["conditionLostSince"] = None
-        return EvaluatorDecision(action="deactivate", commands=cmds, new_state=new_state)
+        _report_missing(event, new_state, missing, now_utc)
+        return EvaluatorDecision(action="deactivate", commands=commands, new_state=new_state)
 
     # none — active + conditions still met, or idle + not met
     # Track release-side hysteresis onset when active + conditions just dropped

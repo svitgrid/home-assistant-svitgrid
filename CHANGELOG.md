@@ -1,5 +1,109 @@
 # Changelog
 
+## 0.22.6 — 2026-10-14
+
+### Fixed
+- **A battery-charge event reaches the inverter in local mode.** With direct
+  Modbus harvest, a charge event or a quick charge from the app that set no
+  power limit failed with `KeyError: 'powerLimit'` and never wrote a
+  register. A command now writes only the fields it carries, as the edge
+  device and the app do, so the slot's power limit and charge voltage keep
+  the values set on the inverter. A `chargeVoltage` of 0 is not written.
+- **A charge event from the cloud reaches the inverter as a whole program.**
+  When the inverter's settings were synced in the last 48 hours, the cloud
+  sends the six time-of-use slots as one program (`prevSlots`, no
+  `slotIndex`), and the add-on failed with `KeyError: 'slotIndex'`. It now
+  writes the program as the edge device does: each slot's start, power,
+  voltage (not 0), SOC and charge-enable word. Bits 0 and 1 of the enable
+  word come from the program; the other bits keep the inverter's own value.
+- **The cloud puts your schedule back when a charge window ends.** The add-on
+  reads all six slots before a battery-charge write and reports them, as the
+  edge device does, and runs `restore_battery_charge`, which writes them
+  back. Before, the restore was refused as unsupported, so the slots the
+  window changed stayed changed. A restore that carries neither a slot table
+  nor a slot index is refused rather than guessed. A battery-charge write
+  that cannot read the six slots first writes nothing.
+- **Writes over a Solarman logger land.** Every direct-Modbus write over
+  Solarman V5 failed with `AttributeError`, because the add-on called a
+  pysolarmanv5 method that does not exist. Each register is now written with
+  FC16, as the edge device and the app write a Deye. A logger that closes
+  the connection after each reply gets every register, not only the first.
+- **A local charge event puts your schedule back exactly.** When a local
+  battery-charge event ends, the add-on writes back the six slots it read
+  before the charge, as the cloud does. Before, it wrote SOC 0 and left the
+  event's own times in slot 1. When the slots were never read, it writes
+  nothing and the app shows "Could not read the inverter's settings" on the
+  event. Battery maintenance's grid fallback is restored the same way.
+- **Cancelling a running local event stops it at the inverter.** Deleting or
+  disabling an active event in the app now runs the event's restore first.
+  Before, the add-on only dropped the event, so a charge ran until its slot
+  ended. If the restore fails, the event leaves the app's list, and the
+  add-on retries the restore with the usual backoff.
+- **Local "sell to grid", "use battery" and battery maintenance put your
+  settings back exactly.** When one of these events ended or was cancelled,
+  the add-on wrote fixed values: work mode "Zero export to CT", time-of-use
+  on, and solar sell off. Now each write reads the register first, the
+  event keeps what the inverter held, and the restore writes exactly that.
+  When a value could not be read, nothing is written for it and the app
+  shows "Could not read the inverter's settings" on the event. A write
+  whose register cannot be read first writes nothing.
+- **Battery maintenance's grid fallback reaches the inverter in local mode.**
+  When the fallback hour came after the event started, the add-on decided
+  to charge from the grid and never wrote it. It now writes the charge at
+  that hour, retries it if it fails, and puts your six slots back when the
+  battery reaches 99 % or the window ends. A finished cycle no longer
+  starts a second fallback.
+- **Reads over a Solarman logger stay quiet when the logger drops the
+  connection.** Reads no longer use pysolarmanv5's own reconnect, which
+  raised uncaught `OSError`s in its reader thread against a logger that
+  closes after each reply. A failed read range is retried once on a new
+  connection, as before.
+- **The cloud puts your settings back on an inverter that Home Assistant
+  runs.** When a "sell to grid", "use battery" or custom event ended, the
+  cloud's restores (`restore_work_mode`, `restore_solar_sell`,
+  `restore_grid_charge_toggle`, `restore_sell_power_cap`, `restore_gen_force`,
+  `restore_gen_port_mode`, `restore_energy_pattern`) were refused as
+  unsupported, so the inverter stayed in Selling First or with time-of-use
+  off. Each now runs on the matching write, and `set_energy_pattern` is
+  accepted too. A sell-cap restore writes back the cap the inverter held,
+  even above the 15000 W limit a new cap is held to. A solar-sell command that
+  carries a work mode writes the work mode first, as the edge device does;
+  when the preset cannot write the work mode, nothing is written.
+- **A charge event turns off grid charge in your other time-of-use slots.**
+  A battery-charge event asks for grid charge in its own slot only
+  (`disableOtherSlots`), and the add-on ignored that, so another slot could
+  keep charging from the grid during the event. It now clears the grid-charge
+  bit of every other slot that has it, keeping the rest of the word, as the
+  edge device does. The restore puts the bits back.
+- **Local custom events write to the inverter.** The app saves a custom
+  action as `{type, value}`, and the add-on read another shape, so a local
+  custom event showed as active and wrote nothing. Work mode, solar sell, sell
+  cap, time-of-use master, generator force, generator port, energy pattern
+  and time-of-use slot actions now write, and the event's end puts back the
+  values the inverter held. Smart-plug, EV-charger, priority-profile,
+  grid-charge-current and peak-shaving actions are skipped locally.
+- **Local "sell to grid" honours the battery floor, the sell cap and
+  "disable time-of-use".** Selling stops at the floor and restores your
+  settings, and starts again only 5 % above it, as in the cloud. The sell cap
+  and time-of-use switch are written and put back. At the end, a work mode of
+  Selling First is not restored when PV is below 500 W: the inverter goes to
+  Zero Export To Load instead, so it does not sell the battery after sunset.
+- **Overlapping local events put back your own settings.** An event that
+  started while another event had changed the same setting stored that
+  event's value as yours. It now takes your value from the other event. An
+  event that ends while another one still holds the setting hands it back to
+  that event instead of to your value; the last one to end restores yours.
+- **A local event that failed partway is undone.** When some of an event's
+  writes landed and one failed, the landed writes stayed on the inverter
+  after the window ended or the event was cancelled. They are now put back
+  when the event ends, is cancelled, or its condition goes.
+- **"Use battery" in local mode clears grid charging.** It sent the field as
+  `enabled` instead of `gridChargeEnabled`, so the write failed.
+- **A local event whose write fails no longer shows as active.** It stays in
+  its previous state, the app shows why on the event, and the add-on retries
+  after 1 minute, backing off to 15 minutes. The log gets one error per
+  failure, not one per retry.
+
 ## 0.22.5 — 2026-10-05
 
 ### Added

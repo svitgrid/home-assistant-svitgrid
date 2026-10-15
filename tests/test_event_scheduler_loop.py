@@ -42,6 +42,13 @@ class FakeEventStore:
         if event_id in self._events:
             self._events[event_id]["executionState"] = dict(state)
 
+    async def async_get_event(self, event_id: str) -> dict | None:
+        event = self._events.get(event_id)
+        return dict(event) if event is not None else None
+
+    async def async_delete_event(self, event_id: str) -> bool:
+        return self._events.pop(event_id, None) is not None
+
 
 class FakeStore:
     """Minimal ReadingStore stand-in that returns a fixed live snapshot."""
@@ -138,7 +145,13 @@ async def test_tick2_guard_not_dispatched_when_already_active():
 
     # Start with status=active (as if tick 1 already ran and persisted it)
     event = _make_use_battery_event(
-        exec_state={"status": "active", "lastActivatedAt": "2026-06-29T10:00:00+00:00"}
+        exec_state={
+            "status": "active",
+            "lastActivatedAt": "2026-06-29T10:00:00+00:00",
+            # What the activation's ACKs reported (prevWorkMode, prevGridChargeEnabled).
+            "previousWorkMode": 1,
+            "previousTimerEnabled": True,
+        }
     )
     event_store = FakeEventStore([event])
     store = FakeStore([_reading_at()])
@@ -200,7 +213,13 @@ async def test_tick3_deactivate_when_out_of_window():
 
     # Already active (tick 1 + 2 happened before this tick)
     event = _make_use_battery_event(
-        exec_state={"status": "active", "lastActivatedAt": "2026-06-29T10:00:00+00:00"}
+        exec_state={
+            "status": "active",
+            "lastActivatedAt": "2026-06-29T10:00:00+00:00",
+            # What the activation's ACKs reported (prevWorkMode, prevGridChargeEnabled).
+            "previousWorkMode": 1,
+            "previousTimerEnabled": True,
+        }
     )
     event_store = FakeEventStore([event])
     store = FakeStore([_reading_at()])
@@ -297,7 +316,7 @@ async def test_tick_per_event_error_isolation():
 
     call_count = 0
 
-    def fake_evaluate(event, reading, exec_state, now_utc, tz):
+    def fake_evaluate(event, reading, exec_state, now_utc, tz, others=()):
         nonlocal call_count
         call_count += 1
         if event["id"] == "evt-bad":
@@ -547,3 +566,314 @@ async def test_unload_entry_removes_event_store_from_hass_data(hass, enable_cust
     assert hass.data.get(DOMAIN, {}).get("event_store") is None, (
         "event_store must be removed from hass.data[DOMAIN] after async_unload_entry"
     )
+
+
+# ─────────────────── Dispatch failure handling ──────────────────────────────
+
+
+def _failing_executor(exc: Exception) -> AsyncMock:
+    executor = AsyncMock()
+    executor.dispatch = AsyncMock(side_effect=exc)
+    return executor
+
+
+@pytest.mark.asyncio
+async def test_failed_dispatch_does_not_mark_the_event_active():
+    """A charge that never reached the inverter must not read as applied."""
+    from custom_components.svitgrid.harvest.event_scheduler_loop import _tick
+
+    event_store = FakeEventStore([_make_use_battery_event()])
+    executor = _failing_executor(KeyError("powerLimit"))
+
+    await _tick(FakeStore([_reading_at()]), event_store, lambda _i: executor, "UTC", _NOW_IN_WINDOW)
+
+    [(_id, state)] = event_store.state_calls
+    assert state.get("status", "idle") != "active"
+    # The shape the app already renders (CalendarEvent.lastCommandError).
+    assert state["lastCommandError"] == {
+        "command": "set_work_mode",
+        "reason": "bad_payload",
+        "at": _NOW_IN_WINDOW.isoformat(),
+    }
+    assert state["dispatchFailures"] == 1
+    assert "dispatchRetryAt" in state
+
+
+@pytest.mark.asyncio
+async def test_failed_dispatch_retries_after_the_backoff_not_every_tick():
+    from datetime import timedelta
+
+    from custom_components.svitgrid.harvest.event_scheduler_loop import _tick
+
+    event_store = FakeEventStore([_make_use_battery_event()])
+    executor = _failing_executor(RuntimeError("verify_failed:142"))
+    store = FakeStore([_reading_at()])
+
+    def executor_for(_inv):
+        return executor
+
+    await _tick(store, event_store, executor_for, "UTC", _NOW_IN_WINDOW)
+    calls_after_first = executor.dispatch.await_count
+
+    # One tick later: still backing off — nothing dispatched.
+    await _tick(store, event_store, executor_for, "UTC", _NOW_IN_WINDOW + timedelta(seconds=15))
+    assert executor.dispatch.await_count == calls_after_first
+
+    # After the backoff: retried, and the backoff grows.
+    await _tick(store, event_store, executor_for, "UTC", _NOW_IN_WINDOW + timedelta(minutes=2))
+    assert executor.dispatch.await_count > calls_after_first
+    state = event_store._events["evt-1"]["executionState"]
+    assert state["dispatchFailures"] == 2
+    assert state["lastCommandError"]["reason"] == "readback_mismatch"
+
+
+@pytest.mark.asyncio
+async def test_retry_that_succeeds_activates_and_clears_the_backoff():
+    from datetime import timedelta
+
+    from custom_components.svitgrid.harvest.event_scheduler_loop import _tick
+
+    event_store = FakeEventStore([_make_use_battery_event()])
+    store = FakeStore([_reading_at()])
+    executor = _failing_executor(RuntimeError("write timeout"))
+
+    await _tick(store, event_store, lambda _i: executor, "UTC", _NOW_IN_WINDOW)
+    executor.dispatch = AsyncMock(return_value={"written": [], "verified": True})
+    await _tick(
+        store, event_store, lambda _i: executor, "UTC", _NOW_IN_WINDOW + timedelta(minutes=2)
+    )
+
+    state = event_store._events["evt-1"]["executionState"]
+    assert state["status"] == "active"
+    assert "dispatchFailures" not in state
+    assert "dispatchRetryAt" not in state
+    # Kept, as the cloud keeps it: its timestamp tells an old failure apart.
+    assert state["lastCommandError"]["reason"] == "write_failed"
+
+
+@pytest.mark.asyncio
+async def test_failed_dispatch_logs_once_per_event(caplog):
+    from datetime import timedelta
+
+    from custom_components.svitgrid.harvest.event_scheduler_loop import _tick
+
+    event_store = FakeEventStore([_make_use_battery_event()])
+    store = FakeStore([_reading_at()])
+    executor = _failing_executor(KeyError("powerLimit"))
+
+    with caplog.at_level("ERROR"):
+        # Every tick inside the 10:00-11:00 window, several past the backoff.
+        for minutes in (0, 0.25, 2, 5, 10, 20):
+            now = _NOW_IN_WINDOW + timedelta(minutes=minutes)
+            await _tick(store, event_store, lambda _i: executor, "UTC", now)
+
+    errors = [r for r in caplog.records if r.levelname == "ERROR"]
+    assert len(errors) == 1
+    assert "evt-1" in errors[0].getMessage()
+
+
+@pytest.mark.asyncio
+async def test_failed_restore_keeps_the_event_active_so_it_is_retried():
+    from custom_components.svitgrid.harvest.event_scheduler_loop import _tick
+
+    event_store = FakeEventStore(
+        [_make_use_battery_event(exec_state={"status": "active", "previousWorkMode": 1})]
+    )
+    executor = _failing_executor(RuntimeError("write timeout"))
+
+    await _tick(
+        FakeStore([_reading_at()]), event_store, lambda _i: executor, "UTC", _NOW_OUT_WINDOW
+    )
+
+    state = event_store._events["evt-1"]["executionState"]
+    assert state["status"] == "active"
+    assert state["lastCommandError"]["command"] == "set_work_mode"
+
+
+@pytest.mark.asyncio
+async def test_no_executor_is_a_dispatch_failure():
+    from custom_components.svitgrid.harvest.event_scheduler_loop import _tick
+
+    event_store = FakeEventStore([_make_use_battery_event()])
+
+    await _tick(FakeStore([_reading_at()]), event_store, lambda _i: None, "UTC", _NOW_IN_WINDOW)
+
+    state = event_store._events["evt-1"]["executionState"]
+    assert state.get("status", "idle") != "active"
+    assert state["lastCommandError"]["reason"] == "inverter_not_found"
+
+
+# ─────────────────── Prior slot table: capture and restore ────────────────────
+
+_TABLE = [
+    {"start": 0, "end": 400, "power": 5000, "voltage": 5300, "soc": 20, "enable": 1},
+    *[
+        {
+            "start": h * 400,
+            "end": (h + 1) * 400 % 2400,
+            "power": 5000,
+            "voltage": 5300,
+            "soc": 30,
+            "enable": 0,
+        }
+        for h in range(1, 6)
+    ],
+]
+
+
+def _charge_event(exec_state: dict | None = None) -> dict:
+    event = _make_use_battery_event(exec_state=exec_state)
+    event["mode"] = "battery_charge"
+    event["config"] = {"chargeSource": "grid", "targetSoc": 100}
+    return event
+
+
+def _acking_executor(table: list) -> AsyncMock:
+    """A WriteExecutor stand-in whose set_battery_charge ACK reports *table*."""
+    executor = AsyncMock()
+
+    async def _dispatch(name, payload):
+        if name == "set_battery_charge":
+            return {"written": [], "verified": True, "prevSlots": table}
+        return {"written": [], "verified": True}
+
+    executor.dispatch = AsyncMock(side_effect=_dispatch)
+    return executor
+
+
+@pytest.mark.asyncio
+async def test_activation_keeps_the_prior_table_the_ack_reports():
+    from custom_components.svitgrid.harvest.event_scheduler_loop import _tick
+
+    event_store = FakeEventStore([_charge_event()])
+    executor = _acking_executor(_TABLE)
+
+    await _tick(FakeStore([_reading_at()]), event_store, lambda _i: executor, "UTC", _NOW_IN_WINDOW)
+
+    state = event_store._events["evt-1"]["executionState"]
+    assert state["status"] == "active"
+    assert state["prevSlots"] == _TABLE
+
+
+@pytest.mark.asyncio
+async def test_window_end_writes_the_captured_table_back():
+    from custom_components.svitgrid.harvest.event_scheduler_loop import _tick
+
+    event_store = FakeEventStore([_charge_event()])
+    executor = _acking_executor(_TABLE)
+    store = FakeStore([_reading_at()])
+
+    await _tick(store, event_store, lambda _i: executor, "UTC", _NOW_IN_WINDOW)
+    await _tick(store, event_store, lambda _i: executor, "UTC", _NOW_OUT_WINDOW)
+
+    assert executor.dispatch.await_args_list[-1].args == (
+        "restore_battery_charge",
+        {"prevSlots": _TABLE},
+    )
+    state = event_store._events["evt-1"]["executionState"]
+    assert state["status"] == "idle"
+    assert "prevSlots" not in state
+
+
+@pytest.mark.asyncio
+async def test_a_restore_with_no_table_and_no_executor_still_ends_the_event():
+    """Nothing to write is not a dispatch failure, even with no executor."""
+    from custom_components.svitgrid.harvest.event_scheduler_loop import _tick
+
+    event_store = FakeEventStore([_charge_event(exec_state={"status": "active"})])
+
+    await _tick(FakeStore([_reading_at()]), event_store, lambda _i: None, "UTC", _NOW_OUT_WINDOW)
+
+    state = event_store._events["evt-1"]["executionState"]
+    assert state["status"] == "idle"
+    assert state["lastCommandError"]["reason"] == "prev_read_failed"
+    assert "dispatchRetryAt" not in state
+
+
+# ─────────────────── Cancel from the app: restore, then remove ────────────────
+
+
+@pytest.mark.asyncio
+async def test_deleting_an_active_charge_restores_the_table_then_deletes():
+    from custom_components.svitgrid.harvest.event_scheduler_loop import (
+        request_removal,
+        settle_removal,
+    )
+
+    event_store = FakeEventStore([_charge_event({"status": "active", "prevSlots": _TABLE})])
+    executor = _acking_executor(_TABLE)
+
+    assert await request_removal(event_store, "evt-1", "delete") == "pending"
+    # Still held until the restore lands, and marked so the app's list hides it.
+    assert event_store._events["evt-1"]["executionState"]["pendingRemoval"] == "delete"
+
+    await settle_removal(event_store, lambda _i: executor, "evt-1", _NOW_IN_WINDOW)
+
+    executor.dispatch.assert_awaited_once_with("restore_battery_charge", {"prevSlots": _TABLE})
+    assert "evt-1" not in event_store._events
+
+
+@pytest.mark.asyncio
+async def test_deleting_an_idle_event_writes_nothing():
+    from custom_components.svitgrid.harvest.event_scheduler_loop import request_removal
+
+    event_store = FakeEventStore([_charge_event({"status": "idle"})])
+
+    assert await request_removal(event_store, "evt-1", "delete") == "done"
+    assert "evt-1" not in event_store._events
+
+
+@pytest.mark.asyncio
+async def test_a_failed_cancel_restore_is_kept_and_retried_by_the_tick():
+    from datetime import timedelta
+
+    from custom_components.svitgrid.harvest.event_scheduler_loop import (
+        _tick,
+        request_removal,
+        settle_removal,
+    )
+
+    event_store = FakeEventStore([_charge_event({"status": "active", "prevSlots": _TABLE})])
+    broken = _failing_executor(RuntimeError("write timeout"))
+
+    await request_removal(event_store, "evt-1", "delete")
+    await settle_removal(event_store, lambda _i: broken, "evt-1", _NOW_IN_WINDOW)
+
+    state = event_store._events["evt-1"]["executionState"]
+    assert state["pendingRemoval"] == "delete"
+    assert state["status"] == "active"
+    assert state["lastCommandError"]["command"] == "restore_battery_charge"
+    assert state["lastCommandError"]["reason"] == "write_failed"
+
+    # The tick retries after the backoff, with no live reading needed, and the
+    # cancelled event is never evaluated (it would re-activate in its window).
+    executor = _acking_executor(_TABLE)
+    await _tick(
+        FakeStore([]),
+        event_store,
+        lambda _i: executor,
+        "UTC",
+        _NOW_IN_WINDOW + timedelta(minutes=2),
+    )
+    executor.dispatch.assert_awaited_once_with("restore_battery_charge", {"prevSlots": _TABLE})
+    assert "evt-1" not in event_store._events
+
+
+@pytest.mark.asyncio
+async def test_disabling_an_active_charge_restores_and_keeps_it_idle():
+    from custom_components.svitgrid.harvest.event_scheduler_loop import (
+        request_removal,
+        settle_removal,
+    )
+
+    event_store = FakeEventStore([_charge_event({"status": "active", "prevSlots": _TABLE})])
+    executor = _acking_executor(_TABLE)
+
+    assert await request_removal(event_store, "evt-1", "disable") == "pending"
+    await settle_removal(event_store, lambda _i: executor, "evt-1", _NOW_IN_WINDOW)
+
+    executor.dispatch.assert_awaited_once_with("restore_battery_charge", {"prevSlots": _TABLE})
+    state = event_store._events["evt-1"]["executionState"]
+    assert state["status"] == "idle"
+    assert "pendingRemoval" not in state
+    assert "prevSlots" not in state

@@ -111,6 +111,10 @@ def _read_solarman(cfg: dict, ranges: list[tuple[int, int, int, str]]) -> RawReg
       BrokenPipeError, pysolarmanv5.NoSocketAvailableError when available).
     - Each range read is retried once (with a fresh client) on any exception.
       If the retry also fails, the range is skipped; partial results accumulate.
+    - ``auto_reconnect`` is off, as in ``_write_solarman``. The retry above
+      does the reconnect. With it on, against a logger that closes after each
+      reply, pysolarmanv5's reader thread reconnected and re-sent frames by
+      itself and died with uncaught OSErrors (2026-10-15, mock logger).
     - Raises RuntimeError when zero registers were read across all ranges so
       the calling loop can still back off for a truly dead logger.
     """
@@ -133,7 +137,7 @@ def _read_solarman(cfg: dict, ranges: list[tuple[int, int, int, str]]) -> RawReg
             port=int(cfg.get("port", 8899)),
             mb_slave_id=int(cfg.get("slave_id", 1)),
             socket_timeout=_SOLARMAN_SOCKET_TIMEOUT_S,
-            auto_reconnect=True,
+            auto_reconnect=False,
         )
 
     # --- Connection-setup retry ---
@@ -287,6 +291,57 @@ async def read_word(
         return None
 
 
+def _contiguous_ranges(
+    unit_id: int, addresses: list[int], function_code: str
+) -> list[tuple[int, int, int, str]]:
+    """Group *addresses* into ``(unit, start, count, fc)`` ranges of at most
+    ``MAX_RANGE`` registers."""
+    addrs = sorted(set(addresses))
+    if not addrs:
+        return []
+    ranges: list[tuple[int, int, int, str]] = []
+    start = prev = addrs[0]
+    for a in addrs[1:]:
+        if a == prev + 1 and (a - start + 1) <= MAX_RANGE:
+            prev = a
+            continue
+        ranges.append((unit_id, start, prev - start + 1, function_code))
+        start = prev = a
+    ranges.append((unit_id, start, prev - start + 1, function_code))
+    return ranges
+
+
+async def read_words(
+    hass,
+    spec: RegisterSpec,
+    cfg: dict,
+    unit_id: int,
+    addresses: list[int],
+) -> dict[int, int]:
+    """Read holding registers *addresses* over one connection.
+
+    Returns ``{address: value}`` for every register that was read. An address
+    missing from the result was not read; on any error the result is empty.
+    Contiguous addresses go out as one frame, so a Deye slot table (30
+    registers) costs one request instead of 30 connections.
+    """
+    ranges = _contiguous_ranges(unit_id, list(addresses), "FC03")
+    if not ranges:
+        return {}
+    try:
+        if spec.protocol == "solarman_v5":
+            raw = await hass.async_add_executor_job(_read_solarman, cfg, ranges)
+        elif spec.protocol == "modbus_tcp":
+            raw = await hass.async_add_executor_job(_read_modbus, cfg, ranges)
+        else:
+            return {}
+    except Exception:
+        _LOGGER.debug("read_words error unit=%s addrs=%s", unit_id, sorted(addresses))
+        return {}
+    got = raw.get(unit_id, {})
+    return {a: got[a] for a in addresses if a in got}
+
+
 async def write_registers(
     hass,
     spec: RegisterSpec,
@@ -308,26 +363,57 @@ async def write_registers(
 
 
 def _write_solarman(cfg: dict, writes: list[tuple[int, int, int]]) -> None:
-    """Open one Solarman V5 connection and write all *(unit_id, address, value)* tuples.
+    """Write every *(unit_id, address, value)* tuple over Solarman V5.
 
-    pysolarmanv5 write method:
-      write_holding_registers(register_addr, values) → None
-    (``mb_slave_id`` is fixed at connection time; unit_id is ignored here
-    because Solarman V5 encodes the slave in the protocol header.)
+    Each register goes out as its own FC16 (write multiple registers) frame
+    with one value: ``write_multiple_holding_registers(register_addr,
+    values)``. Deye loggers refuse FC06, which is what pysolarmanv5's
+    ``write_holding_register`` sends, so the edge firmware
+    (``solarman_v5_build_write_frame``) and the phone harvester
+    (``BatteryChargeExecutor``) write a Deye the same way. A whole slot program
+    is not one contiguous block anyway (starts, powers and SOCs are separate
+    six-register runs), and per-register frames keep the recipe's write order.
+
+    Some loggers close the TCP connection after every reply. A write that
+    finds the connection gone is retried once on a fresh client, as a failed
+    read range is in ``_read_solarman``; a logger that keeps the connection
+    takes every write on one. ``auto_reconnect`` stays off here: against a
+    closing logger, pysolarmanv5's reader thread re-sends the last frame on
+    its own and dies with an uncaught ``BrokenPipeError`` (seen against the
+    mock logger), and the explicit retry already covers the reconnect.
+    Writing the same value twice is harmless. A write that fails on the retry
+    too raises, and the registers after it are not written.
+
+    ``mb_slave_id`` is fixed at connection time; *unit_id* is ignored here
+    because Solarman V5 carries the slave in the frame the client builds.
     """
     from pysolarmanv5 import PySolarmanV5  # lazy import
 
-    sm = PySolarmanV5(
-        cfg["ip"],
-        int(cfg["logger_serial"]),
-        port=int(cfg.get("port", 8899)),
-        mb_slave_id=int(cfg.get("slave_id", 1)),
-        socket_timeout=8,
-        auto_reconnect=False,
-    )
+    def _make_client():
+        return PySolarmanV5(
+            cfg["ip"],
+            int(cfg["logger_serial"]),
+            port=int(cfg.get("port", 8899)),
+            mb_slave_id=int(cfg.get("slave_id", 1)),
+            socket_timeout=8,
+            auto_reconnect=False,
+        )
+
+    sm = _make_client()
     try:
         for _unit_id, address, value in writes:
-            sm.write_holding_registers(register_addr=address, values=[value])
+            try:
+                sm.write_multiple_holding_registers(register_addr=address, values=[value])
+            except Exception as exc:
+                _LOGGER.debug(
+                    "solarman: write addr=%s failed (%s); reconnecting and retrying once",
+                    address,
+                    exc,
+                )
+                with contextlib.suppress(Exception):
+                    sm.disconnect()
+                sm = _make_client()
+                sm.write_multiple_holding_registers(register_addr=address, values=[value])
     finally:
         with contextlib.suppress(Exception):
             sm.disconnect()

@@ -175,7 +175,40 @@ def test_battery_charge_hold_when_active():
     assert result.commands == []
 
 
-def test_battery_charge_deactivate_out_of_window():
+# The owner's six-slot table as the set_battery_charge ACK reports it
+# (``prevSlots``, the firmware's entry shape): slot 1 00:00-04:00 to SOC 20.
+_PRIOR_TABLE = [
+    {"start": 0, "end": 400, "power": 5000, "voltage": 5300, "soc": 20, "enable": 1},
+    {"start": 400, "end": 800, "power": 5000, "voltage": 5300, "soc": 30, "enable": 0},
+    {"start": 800, "end": 1200, "power": 5000, "voltage": 5300, "soc": 40, "enable": 0},
+    {"start": 1200, "end": 1600, "power": 5000, "voltage": 5300, "soc": 50, "enable": 0},
+    {"start": 1600, "end": 2000, "power": 5000, "voltage": 5300, "soc": 60, "enable": 0},
+    {"start": 2000, "end": 0, "power": 5000, "voltage": 5300, "soc": 70, "enable": 0},
+]
+
+
+def test_battery_charge_deactivate_restores_the_captured_table():
+    """The restore puts back the table the activation's pre-read captured,
+    as the cloud's restore_battery_charge does: never SOC 0 over the event's
+    own window (observed 2026-10-14: slot 1 00:00-04:00 SOC 20 ended as
+    23:51-00:51 SOC 0)."""
+    event = {
+        "mode": "battery_charge",
+        "schedule": _out_window_schedule(),
+        "config": {"chargeSource": "grid", "targetSoc": 90},
+    }
+    result = evaluate_event(event, {"batterySoc": 50}, _active(prevSlots=_PRIOR_TABLE), _NOW, TZ)
+    assert result.action == "deactivate"
+    assert result.new_state["status"] == "idle"
+    assert result.commands == [("restore_battery_charge", {"prevSlots": _PRIOR_TABLE})]
+    # Restored: the next activation captures a fresh table.
+    assert "prevSlots" not in result.new_state
+    assert "lastCommandError" not in result.new_state
+
+
+def test_battery_charge_deactivate_without_a_captured_table_writes_nothing():
+    """No table, no guess: the event ends, nothing is written, and the app is
+    told the prior settings were never read."""
     event = {
         "mode": "battery_charge",
         "schedule": _out_window_schedule(),
@@ -184,9 +217,12 @@ def test_battery_charge_deactivate_out_of_window():
     result = evaluate_event(event, {"batterySoc": 50}, _active(), _NOW, TZ)
     assert result.action == "deactivate"
     assert result.new_state["status"] == "idle"
-    # restore command disables the slot
-    cmd_names = [c[0] for c in result.commands]
-    assert "set_battery_charge" in cmd_names
+    assert result.commands == []
+    assert result.new_state["lastCommandError"] == {
+        "command": "restore_battery_charge",
+        "reason": "prev_read_failed",
+        "at": _NOW.isoformat(),
+    }
 
 
 def test_battery_charge_solar_source_no_grid_charge():
@@ -502,7 +538,9 @@ def test_use_battery_activate_in_window():
     assert result.new_state["status"] == "active"
     cmds = dict(result.commands)
     assert cmds["set_work_mode"]["workMode"] == 2
-    assert cmds["set_grid_charge_toggle"]["enabled"] is False
+    # The spec recipe and the cloud both name this field gridChargeEnabled
+    # (evaluator.ts touPayload); "enabled" raised KeyError in write_compute.
+    assert cmds["set_grid_charge_toggle"] == {"gridChargeEnabled": False}
 
 
 def test_use_battery_hold_when_active():
@@ -811,13 +849,13 @@ def test_custom_unknown_condition_type_does_not_activate():
     assert r1.new_state.get("status", "idle") == "idle"
 
 
-def test_battery_maintenance_completed_redispatches_solar_sell():
-    """When completed=True and still in-window, hold is returned and set_solar_sell{0}
-    is re-dispatched every tick to keep solar-sell suppressed.
+def test_battery_maintenance_completed_holds_without_writing():
+    """A completed run in-window holds and writes nothing.
 
-    Matches TS evaluateBatteryMaintenanceCharge lines 1814-1841: step 3
-    ('Always: set_solar_sell {solarSell:0}') runs BEFORE the SOC≥99 completed
-    check, so re-dispatch happens unconditionally in-window even post-completion.
+    The activation wrote set_solar_sell {solarSell: 0} once. This test used to
+    expect it again on every tick, returned with action "hold"; the scheduler
+    never dispatches a hold, so it was never written. A completed run with no
+    grid fallback has nothing more to write until the window ends.
     """
     event = {
         "mode": "battery_maintenance",
@@ -825,17 +863,11 @@ def test_battery_maintenance_completed_redispatches_solar_sell():
         "config": {"gridFallbackHour": 20},  # 20:00 Kyiv, not reached at 15:00
     }
     reading = {"batterySoc": 99}
-    # State already marks completed from a previous tick
     state = _active(completed=True, maintenancePriorSolarSell=False)
     result = evaluate_event(event, reading, state, _NOW, TZ)
     assert result.action == "hold"
     assert result.new_state.get("completed") is True
-    cmd_names = [c[0] for c in result.commands]
-    assert "set_solar_sell" in cmd_names
-    solar_sell_cmd = next(c for c in result.commands if c[0] == "set_solar_sell")
-    assert solar_sell_cmd[1]["solarSell"] == 0
-    # Grid-charge NOT dispatched (SOC >= 99 → early return before fallback logic)
-    assert "set_battery_charge" not in cmd_names
+    assert result.commands == []
 
 
 def test_sell_to_grid_smart_reactivates_after_pv_recovery():
@@ -860,3 +892,37 @@ def test_sell_to_grid_smart_reactivates_after_pv_recovery():
     assert result.new_state["status"] == "active"
     cmds = dict(result.commands)
     assert cmds["set_work_mode"]["workMode"] == 0
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# battery_maintenance restore
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def test_battery_maintenance_restores_the_table_its_fallback_captured():
+    event = {"mode": "battery_maintenance", "schedule": _out_window_schedule(), "config": {}}
+    state = _active(maintenancePriorSolarSell=True, gridFallbackFired=True, prevSlots=_PRIOR_TABLE)
+    result = evaluate_event(event, {"batterySoc": 60}, state, _NOW, TZ)
+    assert result.action == "deactivate"
+    assert result.commands == [
+        ("set_solar_sell", {"solarSell": 1}),
+        ("restore_battery_charge", {"prevSlots": _PRIOR_TABLE}),
+    ]
+    assert "lastCommandError" not in result.new_state
+
+
+def test_battery_maintenance_without_a_captured_table_restores_solar_sell_only():
+    event = {"mode": "battery_maintenance", "schedule": _out_window_schedule(), "config": {}}
+    state = _active(maintenancePriorSolarSell=False, gridFallbackFired=True)
+    result = evaluate_event(event, {"batterySoc": 60}, state, _NOW, TZ)
+    assert result.commands == [("set_solar_sell", {"solarSell": 0})]
+    assert result.new_state["lastCommandError"]["reason"] == "prev_read_failed"
+    assert result.new_state["lastCommandError"]["command"] == "restore_battery_charge"
+
+
+def test_battery_maintenance_without_a_fallback_restores_no_charge():
+    event = {"mode": "battery_maintenance", "schedule": _out_window_schedule(), "config": {}}
+    state = _active(maintenancePriorSolarSell=False)
+    result = evaluate_event(event, {"batterySoc": 60}, state, _NOW, TZ)
+    assert result.commands == [("set_solar_sell", {"solarSell": 0})]
+    assert "lastCommandError" not in result.new_state

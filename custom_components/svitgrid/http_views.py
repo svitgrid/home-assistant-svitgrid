@@ -40,6 +40,13 @@ from .const import (
     SET_CLOUD_INGEST_COMMAND,
 )
 from .entry_reload import update_entry_skipping_listener_reload
+from .harvest.event_scheduler_loop import (
+    REMOVAL_DELETE,
+    REMOVAL_DISABLE,
+    REMOVAL_KEY,
+    request_removal,
+    settle_removal,
+)
 from .harvest.read_now import find_triggers
 from .hourly_energy import per_hour_deltas, to_local_hour_rows
 from .island_auth import island_key_present_and_valid, island_request_authorized
@@ -676,6 +683,28 @@ class _IslandEventViewMixin:
     async def _get_event_store(hass):
         return hass.data.get(DOMAIN, {}).get("event_store")
 
+    @staticmethod
+    def _start_restore(hass, event_store, event_id: str) -> None:
+        """Run a cancelled event's restore in the background.
+
+        The restore is a slot-table write and its read-back, several seconds
+        over a Solarman logger, so the app's request does not wait for it. A
+        restore that fails stays marked for the scheduler's next tick.
+        """
+
+        def executor_for(inverter_id):
+            for entry_data in hass.data.get(DOMAIN, {}).values():
+                if isinstance(entry_data, dict):
+                    executor = (entry_data.get("executors_by_inverter") or {}).get(inverter_id)
+                    if executor is not None:
+                        return executor
+            return None
+
+        hass.async_create_background_task(
+            settle_removal(event_store, executor_for, event_id),
+            name=f"svitgrid_event_restore_{event_id}",
+        )
+
 
 class SvitgridEventsView(_IslandEventViewMixin, HomeAssistantView):
     """GET/POST /api/svitgrid/events — island-key read, signed-write for calendar events.
@@ -710,6 +739,11 @@ class SvitgridEventsView(_IslandEventViewMixin, HomeAssistantView):
         if event_store is None:
             return self.json({"events": []})
         events = await event_store.async_list_events()
+        # An event the app deleted while it was active stays stored until its
+        # restore lands; to the app it is already gone.
+        events = [
+            e for e in events if (e.get("executionState") or {}).get(REMOVAL_KEY) != REMOVAL_DELETE
+        ]
         return self.json({"events": events})
 
     async def post(self, request) -> web.Response:  # noqa: D102
@@ -778,6 +812,10 @@ class SvitgridEventDetailView(_IslandEventViewMixin, HomeAssistantView):
     DELETE body: {signingKeyId, signedEventData, signature}.
     ``signedEventData`` must contain ``event_id`` matching the URL segment.
 
+    Deleting an active event, or a PUT that disables one, runs the event's
+    restore in the background before the event is removed or idled (see
+    ``request_removal``). The response does not wait for the inverter.
+
     Error shape mirrors SvitgridCommandsView: ``{"error": "<code>"}``.
     """
 
@@ -844,6 +882,12 @@ class SvitgridEventDetailView(_IslandEventViewMixin, HomeAssistantView):
             return self._json_error(503, "event_store_unavailable")
 
         await event_store.async_upsert_event(signed_event_data)
+        # Disabling an event that is running must undo it at the inverter: the
+        # scheduler skips a disabled event, so nothing else would.
+        if signed_event_data.get("enabled", True) is False:
+            outcome = await request_removal(event_store, event_id, REMOVAL_DISABLE)
+            if outcome == "pending":
+                self._start_restore(hass, event_store, event_id)
         return self.json({"ok": True, "event": signed_event_data})
 
     async def delete(self, request, event_id: str) -> web.Response:  # noqa: D102
@@ -879,8 +923,12 @@ class SvitgridEventDetailView(_IslandEventViewMixin, HomeAssistantView):
         if event_store is None:
             return self._json_error(503, "event_store_unavailable")
 
-        deleted = await event_store.async_delete_event(event_id)
-        return self.json({"ok": True, "deleted": deleted})
+        # An active event is restored first (the same restore its window end
+        # runs), then deleted; see request_removal.
+        outcome = await request_removal(event_store, event_id, REMOVAL_DELETE)
+        if outcome == "pending":
+            self._start_restore(hass, event_store, event_id)
+        return self.json({"ok": True, "deleted": outcome != "missing"})
 
 
 _CADENCE_PRESETS = {5, 15, 30, 60, 300}

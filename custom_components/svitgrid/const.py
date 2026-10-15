@@ -280,12 +280,28 @@ INTERNAL_COMMANDS = frozenset(
 DISPATCHABLE_COMMANDS = frozenset(
     {
         "set_battery_charge",
+        # Ends a cloud charge window: the API sends the slot table it captured
+        # from the set_battery_charge ACK. Without it the window's program
+        # stayed on the inverter after the window ended.
+        "restore_battery_charge",
         "set_work_mode",
         "set_solar_sell",
         "set_grid_charge_toggle",
         "set_gen_force",
         "set_gen_port_mode",
         "set_sell_power_cap",
+        "set_energy_pattern",
+        # The API's restores at the end of a sell_to_grid, use_battery or
+        # custom event (evaluator.ts, custom-action-catalog.ts). Each runs on
+        # its set_* recipe. Without them the poller ACKed every one as
+        # unsupported and the inverter kept the event's setting.
+        "restore_work_mode",
+        "restore_solar_sell",
+        "restore_grid_charge_toggle",
+        "restore_sell_power_cap",
+        "restore_gen_force",
+        "restore_gen_port_mode",
+        "restore_energy_pattern",
         # SMG II settings screen (Anenji/EASUN over an EyBond collector). A
         # name missing here is rejected before any executor is consulted,
         # and that failure looks identical to a broken executor -- see
