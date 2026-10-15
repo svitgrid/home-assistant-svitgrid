@@ -369,6 +369,32 @@ def _decide_gen_force(
 # ─────────────────── Custom conditions (custom-event-decision.ts) ─────────────
 
 
+def _usable_grid_voltages(reading: dict) -> list[float]:
+    """Port of usableGridVoltages: finite phase voltages above 0, else gridVoltage."""
+
+    def usable(v) -> bool:
+        return (
+            isinstance(v, int | float)
+            and not isinstance(v, bool)
+            and math.isfinite(float(v))
+            and float(v) > 0
+        )
+
+    raw = reading.get("phaseVoltages")
+    phases = [float(v) for v in (raw if isinstance(raw, list) else []) if usable(v)]
+    if phases:
+        return phases
+    gv = reading.get("gridVoltage")
+    return [float(gv)] if usable(gv) else []
+
+
+# Conditions that read the reading's numbers. A rule holding one of them does
+# nothing on a reading older than _STALE_READING_MS (evaluator.ts
+# hasReadingDependentCondition): acting on a stale SOC risks a false start.
+_READING_CONDITION_TYPES = frozenset({"battery_soc", "pv_power", "load_power", "grid_voltage"})
+_STALE_READING_MS = 15 * 60_000.0
+
+
 def _numeric_holds(
     op: str,
     value: float,
@@ -417,6 +443,21 @@ def _one_holds(condition: dict, signals: dict, held: bool) -> bool:
         if gp is None:
             return False
         return bool(gp) if condition.get("state") == "up" else not bool(gp)
+    if ctype == "grid_voltage":
+        # A sag reads the lowest usable phase, a surge the highest. Silence is
+        # not a sag, and it never clears a latch: with no usable voltage the
+        # condition keeps its previous state (custom-event-decision.ts).
+        op = condition["op"]
+        v = signals.get("gridVoltageMinV" if op == "lte" else "gridVoltageMaxV")
+        if v is None:
+            return held
+        return _numeric_holds(
+            op,
+            float(v),
+            float(condition["thresholdV"]),
+            condition.get("releaseThresholdV"),
+            held,
+        )
     # Cloud-only types are pre-filtered; an unrecognised type must be fail-closed
     # so a future cloud condition type not yet listed in _CLOUD_CONDITION_TYPES
     # does NOT accidentally pass the guard and always-activate.
@@ -827,8 +868,9 @@ def _report_missing(event: dict, state: dict, missing: list, now_utc: datetime) 
 
 
 def _drop_run_state(state: dict) -> None:
+    # lastActivatedAt stays: with lastDeactivatedAt it is the history the app
+    # shows for a true island, which keeps no run records.
     for key in (
-        "lastActivatedAt",
         "conditionMetSince",
         "conditionLostSince",
         *PRIOR_KEYS,
@@ -858,6 +900,7 @@ def restore_decision(
     new_state = copy.deepcopy(exec_state)
     new_state["status"] = "idle"
     _drop_run_state(new_state)
+    new_state[LAST_DEACTIVATED_KEY] = now_utc.isoformat()
     _report_missing(event, new_state, missing, now_utc)
     return commands, new_state
 
@@ -872,6 +915,10 @@ def restore_decision(
 # хмарної копії» (true-island contract, 2026-10-15).
 SKIPPED_REASON_KEY = "skippedReason"
 NEEDS_CLOUD = "needs_cloud"
+
+# When the event last went active and last let go (the API's keys).
+LAST_ACTIVATED_KEY = "lastActivatedAt"
+LAST_DEACTIVATED_KEY = "lastDeactivatedAt"
 _NEEDS_CLOUD_SKIPS: frozenset[str] = frozenset(
     {
         "cloud_only_mode",
@@ -939,6 +986,12 @@ def evaluate_event(
     state = {k: v for k, v in decision.new_state.items() if k != SKIPPED_REASON_KEY}
     if decision.action == "skip" and decision.skip_reason in _NEEDS_CLOUD_SKIPS:
         state[SKIPPED_REASON_KEY] = NEEDS_CLOUD
+    # The run's times, which the app shows as the event's history on a true
+    # island. The scheduler keeps this state only when the dispatch succeeds.
+    if decision.action == "activate":
+        state[LAST_ACTIVATED_KEY] = now_utc.isoformat()
+    elif decision.action == "deactivate":
+        state[LAST_DEACTIVATED_KEY] = now_utc.isoformat()
     decision.new_state = state
     return decision
 
@@ -977,10 +1030,25 @@ def _evaluate_event(
             skip_reason=cloud_reason,
         )
 
+    # ── A rule an in-window event pauses (rule-pause.ts) ──────────────────────
+    if _is_custom_rule(event):
+        pauser = _pauser(event, exec_state, others, now_utc, tz)
+        if pauser is not None:
+            return _pause_rule(event, reading, exec_state, pauser, now_utc, others)
+        if PAUSED_BY_KEY in exec_state:
+            exec_state = {k: v for k, v in exec_state.items() if k != PAUSED_BY_KEY}
+
     # ── Window check ──────────────────────────────────────────────────────────
     schedule = event.get("schedule") or {}
     in_window = is_event_in_window(schedule, now_utc, tz)
     new_state = copy.deepcopy(exec_state)
+    if _paused_by(new_state.get("skipReason")):
+        new_state.pop("skipReason", None)
+
+    if in_window and not _is_rule(event):
+        blocked = _blocked_by_rule(event, exec_state, new_state, others)
+        if blocked is not None:
+            return blocked
 
     if not in_window:
         current_status = exec_state.get("status", "idle")
@@ -1018,6 +1086,133 @@ def _evaluate_event(
     ):
         return _undo_partial(event, reading, exec_state, decision.new_state, others)
     return decision
+
+
+# ─────────────────── Rule vs windowed event (rule-pause.ts, priority.ts) ─────
+
+# The id of the windowed event a rule stands down for (the API's key).
+PAUSED_BY_KEY = "pausedBy"
+# skipReason of a windowed event that stands down for a rule the owner placed
+# above it (the API's value).
+_PAUSED_BY_EVENT = "paused_by_event:"
+
+
+def _paused_by(skip_reason) -> bool:
+    return isinstance(skip_reason, str) and skip_reason.startswith(_PAUSED_BY_EVENT)
+
+
+def _is_rule(event: dict) -> bool:
+    return (event.get("schedule") or {}).get("recurrence") == "always"
+
+
+def _is_custom_rule(event: dict) -> bool:
+    return event.get("mode") == "custom" and _is_rule(event)
+
+
+def _rank(event: dict) -> tuple[float, int]:
+    """priority.ts arbitrationRank: the owner's slot, then 0 for a windowed
+    event and 1 for a rule. A slot that is not a non-negative integer is
+    unplaced, below every placed automation."""
+    raw = event.get("sortOrder")
+    slot = raw if isinstance(raw, int) and not isinstance(raw, bool) and raw >= 0 else math.inf
+    return (slot, 1 if _is_rule(event) else 0)
+
+
+def _outranks(a: dict, b: dict) -> bool:
+    """priority.ts outranks: strictly higher priority."""
+    return _rank(a) < _rank(b)
+
+
+def _registers(event: dict, state: dict) -> set[str]:
+    """The registers *event* writes, by the key of their prior value. Two
+    events share a register family on the island when they share one."""
+    return {w.key for w in _event_writes(event, state) if w.key}
+
+
+def _live(other: dict) -> bool:
+    state = other.get("executionState") or {}
+    return other.get("enabled", True) is not False and not state.get(_REMOVAL_KEY)
+
+
+def _pauser(rule: dict, state: dict, others, now_utc: datetime, tz: str) -> dict | None:
+    """The windowed event that holds *rule* off, or None.
+
+    One that shares a register with the rule, is enabled and runnable here,
+    is active or in its window, and that the owner has not placed below the
+    rule (pauserStillLive, rulesToPause).
+    """
+    mine = _registers(rule, state)
+    if not mine:
+        return None
+    for other in others or ():
+        if _is_rule(other) or not _live(other) or needs_cloud(other):
+            continue
+        if _outranks(rule, other):
+            continue
+        other_state = other.get("executionState") or {}
+        if not mine & _registers(other, other_state):
+            continue
+        if other_state.get("status") == "active" or is_event_in_window(
+            other.get("schedule") or {}, now_utc, tz
+        ):
+            return other
+    return None
+
+
+def _pause_rule(
+    rule: dict, reading: dict, exec_state: dict, pauser: dict, now_utc: datetime, others
+) -> EvaluatorDecision:
+    """Stand *rule* down for *pauser*: restore what it holds, then stay idle."""
+    new_state = copy.deepcopy(exec_state)
+    new_state[PAUSED_BY_KEY] = pauser.get("id")
+    new_state["status"] = "idle"
+    new_state.pop("conditionMetSince", None)
+    new_state.pop("conditionLostSince", None)
+    if not has_landed_writes(exec_state):
+        return EvaluatorDecision(action="hold", commands=[], new_state=new_state)
+    landed_only = exec_state.get("status") != "active"
+    commands, missing = _restore_plan(rule, exec_state, reading, others, landed_only)
+    for key in PRIOR_KEYS:
+        new_state.pop(key, None)
+    new_state.pop(RELEASED_KEY, None)
+    _report_missing(rule, new_state, missing, now_utc)
+    _LOGGER.info("Rule %s: paused by event %s", rule.get("id"), pauser.get("id"))
+    return EvaluatorDecision(action="deactivate", commands=commands, new_state=new_state)
+
+
+def _blocked_by_rule(
+    event: dict, exec_state: dict, new_state: dict, others
+) -> EvaluatorDecision | None:
+    """Hold a windowed *event* that a rule still keeps from its register.
+
+    A rule the owner placed above the event keeps the register: the event
+    stands down with skipReason ``paused_by_event:<rule id>``. A rule the
+    event outranks is paused by it (``_pauser``), and the event waits until
+    the rule's restore has run, so it reads the owner's value, not the rule's.
+    """
+    if exec_state.get("status") == "active" or has_landed_writes(exec_state):
+        return None
+    mine = _registers(event, exec_state)
+    if not mine:
+        return None
+    waiting = False
+    for other in others or ():
+        if not _is_custom_rule(other) or not _live(other):
+            continue
+        other_state = other.get("executionState") or {}
+        holds = other_state.get("status") in ("active", "pending_condition")
+        if not mine & _registers(other, other_state):
+            continue
+        if holds and not _outranks(event, other):
+            new_state["status"] = "idle"
+            new_state.pop("conditionMetSince", None)
+            new_state["skipReason"] = f"{_PAUSED_BY_EVENT}{other.get('id')}"
+            return EvaluatorDecision(action="hold", commands=[], new_state=new_state)
+        if has_landed_writes(other_state):
+            waiting = True
+    if waiting:
+        return EvaluatorDecision(action="hold", commands=[], new_state=new_state)
+    return None
 
 
 def _undo_partial(
@@ -1590,13 +1785,29 @@ def _eval_custom(
     sustain_minutes = float(config.get("sustainMinutes") or 0)
 
     now_ms = _now_ms(now_utc)
+
+    # An event with nothing to do is dropped, as the API drops it. A rule
+    # whose only setting is the notification has something to do.
+    if not config.get("customActions") and config.get("notifyOnStartStop") is not True:
+        return EvaluatorDecision(action="hold", commands=[], new_state=new_state)
+
+    # Stale-reading guard: no state change on a reading 15 minutes old.
+    if any(isinstance(c, dict) and c.get("type") in _READING_CONDITION_TYPES for c in conditions):
+        reading_ms = _iso_to_ms(reading.get("timestamp"))
+        if reading_ms is not None and now_ms - reading_ms > _STALE_READING_MS:
+            _LOGGER.debug("Event %s: stale reading, deferring", event.get("id"))
+            return EvaluatorDecision(action="hold", commands=[], new_state=new_state)
+
     grid_present = _derive_grid_present(reading)
+    voltages = _usable_grid_voltages(reading)
 
     signals = {
         "batterySoc": reading.get("batterySoc"),
         "pvPowerW": float(reading.get("pvPower") or 0),
         "loadPowerW": float(reading.get("loadPower") or 0),
         "gridPresent": grid_present,
+        "gridVoltageMinV": min(voltages) if voltages else None,
+        "gridVoltageMaxV": max(voltages) if voltages else None,
         # Cloud-only fields unavailable locally; skip guard already fired
         "outageHourNow": False,
         "forecastTodayKwh": None,

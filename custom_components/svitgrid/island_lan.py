@@ -54,8 +54,10 @@ NONCE_MEMORY = 500
 _NONCES_KEY = "_island_lan_nonces"
 
 # What GET /api/svitgrid/island/status advertises. The app picks the LAN path
-# for a job only when its capability is listed here.
-CAPABILITIES = ("cloud_copy_lan", "leave_lan", "revoke_lan", "pair_extra_phone")
+# for a job only when its capability is listed here. `rules`: the island
+# scheduler runs a rule (recurrence "always"), so the app shows the Rules tab
+# of a true island. An older integration raised KeyError on every rule.
+CAPABILITIES = ("cloud_copy_lan", "leave_lan", "revoke_lan", "pair_extra_phone", "rules")
 
 ACTION_SET_CLOUD_COPY = "set_cloud_copy"
 ACTION_LEAVE_ISLAND = "leave_island"

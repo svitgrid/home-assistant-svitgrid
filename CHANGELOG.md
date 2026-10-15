@@ -46,10 +46,22 @@
   `already_configured`, and without the cloud it could not show a code at
   all.
 - **The app learns why an event does not run.** An event that needs cloud
-  data (day planning, or a forecast, day-ahead price or scheduled-outage
-  condition) records `skippedReason: "needs_cloud"` in its execution state,
-  and the app says it does not work without the cloud copy. The reason
-  clears when the event no longer needs the cloud.
+  data records `skippedReason: "needs_cloud"` in its execution state, and
+  the app says it does not work without the cloud copy: day planning, a
+  forecast (today or tomorrow), day-ahead price or scheduled-outage
+  condition, a sale or charge gated on the forecast or a price, and any
+  event that waits for a scheduled outage. Such an event is skipped, never
+  run without its threshold. The reason clears when the event no longer
+  needs the cloud.
+- **Rules run on the island.** A rule from the app's **Правила** tab (a
+  custom event with `recurrence: "always"`) runs while it is enabled, with
+  the API's semantics: sustain and release hysteresis, no change on a
+  reading older than 15 minutes, a grid-voltage condition, and a windowed
+  event on the same register pausing the rule for its window unless you
+  placed the rule above it. Before, every rule raised an error on each tick
+  and never ran. `GET /api/svitgrid/island/status` lists the `rules`
+  capability. Each event records `lastActivatedAt` and `lastDeactivatedAt`,
+  which the app shows as its history.
 - **Pairing works without the cloud.** When the Svitgrid cloud cannot be
   reached, the pairing screen shows a code made on this Home Assistant instead
   of failing with "Could not reach the Svitgrid cloud". Only a guest pairing

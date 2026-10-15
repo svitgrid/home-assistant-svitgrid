@@ -513,7 +513,13 @@ async def test_status_of_a_true_island(hass: HomeAssistant):
         "localOnly": False,
         "trueIsland": True,
         "version": "0.23.0",
-        "capabilities": ["cloud_copy_lan", "leave_lan", "revoke_lan", "pair_extra_phone"],
+        "capabilities": [
+            "cloud_copy_lan",
+            "leave_lan",
+            "revoke_lan",
+            "pair_extra_phone",
+            "rules",
+        ],
     }
 
 
