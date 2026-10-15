@@ -58,6 +58,23 @@
   raised uncaught `OSError`s in its reader thread against a logger that
   closes after each reply. A failed read range is retried once on a new
   connection, as before.
+- **The cloud puts your settings back on an inverter that Home Assistant
+  runs.** When a "sell to grid", "use battery" or custom event ended, the
+  cloud's restores (`restore_work_mode`, `restore_solar_sell`,
+  `restore_grid_charge_toggle`, `restore_sell_power_cap`, `restore_gen_force`,
+  `restore_gen_port_mode`, `restore_energy_pattern`) were refused as
+  unsupported, so the inverter stayed in Selling First or with time-of-use
+  off. Each now runs on the matching write, and `set_energy_pattern` is
+  accepted too. A sell-cap restore writes back the cap the inverter held,
+  even above the 15000 W limit a new cap is held to. A solar-sell command that
+  carries a work mode writes the work mode first, as the edge device does;
+  when the preset cannot write the work mode, nothing is written.
+- **A charge event turns off grid charge in your other time-of-use slots.**
+  A battery-charge event asks for grid charge in its own slot only
+  (`disableOtherSlots`), and the add-on ignored that, so another slot could
+  keep charging from the grid during the event. It now clears the grid-charge
+  bit of every other slot that has it, keeping the rest of the word, as the
+  edge device does. The restore puts the bits back.
 - **"Use battery" in local mode clears grid charging.** It sent the field as
   `enabled` instead of `gridChargeEnabled`, so the write failed.
 - **A local event whose write fails no longer shows as active.** It stays in

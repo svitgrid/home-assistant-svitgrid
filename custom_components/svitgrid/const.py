@@ -290,6 +290,18 @@ DISPATCHABLE_COMMANDS = frozenset(
         "set_gen_force",
         "set_gen_port_mode",
         "set_sell_power_cap",
+        "set_energy_pattern",
+        # The API's restores at the end of a sell_to_grid, use_battery or
+        # custom event (evaluator.ts, custom-action-catalog.ts). Each runs on
+        # its set_* recipe. Without them the poller ACKed every one as
+        # unsupported and the inverter kept the event's setting.
+        "restore_work_mode",
+        "restore_solar_sell",
+        "restore_grid_charge_toggle",
+        "restore_sell_power_cap",
+        "restore_gen_force",
+        "restore_gen_port_mode",
+        "restore_energy_pattern",
         # SMG II settings screen (Anenji/EASUN over an EyBond collector). A
         # name missing here is rejected before any executor is consulted,
         # and that failure looks identical to a broken executor -- see

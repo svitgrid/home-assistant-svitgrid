@@ -38,6 +38,25 @@ from .base import BaseExecutor
 _LOGGER = logging.getLogger(__name__)
 
 
+# The API's restore_* commands carry the same payload as their set_* command,
+# so a preset's set_* recipe serves both, as WriteExecutor's recipes do.
+# restore_battery_charge is not here: it carries a six-slot table, which a
+# preset's one-register charge recipe cannot write back.
+_RESTORE_RECIPES = {
+    "restore_work_mode": "set_work_mode",
+    "restore_solar_sell": "set_solar_sell",
+    "restore_grid_charge_toggle": "set_grid_charge_toggle",
+    "restore_sell_power_cap": "set_sell_power_cap",
+    "restore_gen_force": "set_gen_force",
+    "restore_gen_port_mode": "set_gen_port_mode",
+    "restore_energy_pattern": "set_energy_pattern",
+}
+
+# A solar-sell command that carries a work mode (the API's sell_to_grid floor
+# hold and its restore) writes the work mode first, as the firmware does.
+_WORK_MODE_FIRST = frozenset({"set_solar_sell", "restore_solar_sell"})
+
+
 class UnsupportedCommandError(NotImplementedError):
     """Raised when the preset doesn't have a recipe for the requested command.
     Caller (command_poller) ACKs as rejected='unsupported'."""
@@ -72,10 +91,26 @@ class YamlDispatcher(BaseExecutor):
 
         Raises UnsupportedCommandError for unknown command_names; raises
         DslEvalError (or others) for evaluation / service-call failures."""
-        recipe = self._by_id.get(command_name)
+        recipe = self._recipe(command_name)
+        if command_name in _WORK_MODE_FIRST and payload.get("workMode") is not None:
+            # Writing only the bit would leave the inverter in Selling First.
+            work_mode = self._recipe("set_work_mode")
+            head = await self._call(work_mode, "set_work_mode", payload)
+            tail = await self._call(recipe, command_name, payload)
+            return {"calls": [head, tail], **tail}
+        return await self._call(recipe, command_name, payload)
+
+    def _recipe(self, command_name: str) -> dict[str, Any]:
+        recipe = self._by_id.get(command_name) or self._by_id.get(
+            _RESTORE_RECIPES.get(command_name, "")
+        )
         if recipe is None:
             raise UnsupportedCommandError(f"Preset has no recipe for command {command_name!r}")
+        return recipe
 
+    async def _call(
+        self, recipe: dict[str, Any], command_name: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
         service = recipe.get("service")
         if not isinstance(service, str) or "." not in service:
             raise ValueError(f"Command {command_name!r} has malformed service {service!r}")

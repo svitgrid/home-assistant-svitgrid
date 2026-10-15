@@ -19,6 +19,7 @@ upstream.
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from typing import Any
 
 from ..executors.base import BaseExecutor
@@ -26,11 +27,37 @@ from .register_spec import FieldWrite, RegisterSpec, SlotSpec, WriteCommand
 from .transport import read_word, read_words, write_registers
 from .write_compute import compute_register_writes, is_set, program_field
 
-# Commands that run on another command's recipe. The API ends a charge window
-# with ``restore_battery_charge``, whose payload has the same shape as
-# ``set_battery_charge``, and the edge firmware serves both names with one
-# ``execute_battery_charge``. No register spec carries a restore recipe.
-_RECIPE_ALIASES = {"restore_battery_charge": "set_battery_charge"}
+# Commands that run on another command's recipe. The API ends an event with a
+# restore_* command whose payload has the same shape as the set_* one, and the
+# edge firmware serves both names with one handler (``execute_battery_charge``,
+# ``execute_work_mode`` and the rest, zigbee_poller.c). No register spec
+# carries a restore recipe.
+_RECIPE_ALIASES = {
+    "restore_battery_charge": "set_battery_charge",
+    "restore_work_mode": "set_work_mode",
+    "restore_solar_sell": "set_solar_sell",
+    "restore_grid_charge_toggle": "set_grid_charge_toggle",
+    "restore_sell_power_cap": "set_sell_power_cap",
+    "restore_gen_force": "set_gen_force",
+    "restore_gen_port_mode": "set_gen_port_mode",
+    "restore_energy_pattern": "set_energy_pattern",
+}
+
+# Restores that write back a value the inverter itself reported, so the set
+# recipe's limit does not apply. The API restores a sell cap above the 15000 W
+# set limit on purpose (dispatchSellPowerCap, #52): a Deye accepts 24000 on
+# register 143, and clamping the restore cut an owner's export limit. Only the
+# 16-bit register bounds it.
+_UNCLAMPED_RESTORES = frozenset({"restore_sell_power_cap"})
+_REGISTER_MAX = 0xFFFF
+
+# A payload field one recipe lacks and another recipe writes, written first.
+# The API's sell_to_grid floor hold sends set_solar_sell {solarSell: 1,
+# workMode: 1}, and its restore restore_solar_sell {solarSell, workMode}; the
+# firmware's execute_solar_sell writes the work mode, then the solar-sell bit.
+# The solar-sell recipe has no workMode field, so dropping it left the inverter
+# in Selling First.
+_COMPANIONS = {"set_solar_sell": ("workMode", "set_work_mode")}
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -139,6 +166,15 @@ def _prev_slot_fields(slot: SlotSpec, table: dict[int, int]) -> dict[str, Any]:
     }
 
 
+def _unclamped(cmd: WriteCommand) -> WriteCommand:
+    """*cmd* with each field's upper limit raised to the 16-bit register's."""
+    fields = tuple(
+        replace(f, limits={**f.limits, "max": _REGISTER_MAX}) if isinstance(f.limits, dict) else f
+        for f in cmd.fields
+    )
+    return replace(cmd, fields=fields)
+
+
 def _find_command(spec: RegisterSpec, command_name: str) -> WriteCommand | None:
     """Return the recipe for *command_name*, or for the command it aliases."""
     for name in (command_name, _RECIPE_ALIASES.get(command_name)):
@@ -197,7 +233,29 @@ class WriteExecutor(BaseExecutor):
         cmd = _find_command(spec, command_name)
         if cmd is None:
             raise NotImplementedError(command_name)
+        if command_name in _UNCLAMPED_RESTORES:
+            cmd = _unclamped(cmd)
 
+        # A field another recipe writes goes first, as in the firmware. When
+        # that recipe is missing nothing is written: half of the command would
+        # leave the inverter in the mode the other half undoes.
+        companion = _COMPANIONS.get(cmd.command)
+        if companion is None or payload.get(companion[0]) is None:
+            return await self._execute(spec, cmd, payload)
+        field, recipe = companion
+        first = _find_command(spec, recipe)
+        if first is None:
+            raise NotImplementedError(f"{command_name}: {field} needs a {recipe} recipe")
+        head = await self._execute(spec, first, {field: payload[field]})
+        tail = await self._execute(spec, cmd, payload)
+        result = {**head, **tail}
+        result["written"] = head["written"] + tail["written"]
+        return result
+
+    async def _execute(
+        self, spec: RegisterSpec, cmd: WriteCommand, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Read, compute, write and verify one recipe; return its ACK result."""
         # 3. Gather the prior value of every field written, and a slot command's table
         unit_id = spec.default_slave_id
         prior: dict[int, int] = {}

@@ -157,3 +157,64 @@ async def test_legacy_set_battery_charge_method_routes_to_dispatch(hass):
     result = await d.set_battery_charge({"chargePowerLimitW": 2640})
     hass.services.async_call.assert_awaited_once()
     assert result["args"]["value"] == 500
+
+
+# ── The API's restore_* commands on a preset (round 4) ───────────────────────
+
+_SOLAR_SELL = {
+    "id": "set_solar_sell",
+    "service": "modbus.write_register",
+    "args": {
+        "hub": "config.hub_name",
+        "slave": "config.slave_id",
+        "address": 145,
+        "value": "int(payload.solarSell)",
+    },
+}
+
+
+@pytest.mark.asyncio
+async def test_restore_work_mode_runs_on_the_set_work_mode_recipe(hass):
+    """A preset ships set_* recipes only; the API ends a window with restore_*."""
+    d = YamlDispatcher(hass=hass, commands=DEYE_COMMANDS, config=DEYE_CONFIG)
+    await d.dispatch("restore_work_mode", {"inverterId": "inv-1", "workMode": 1})
+    hass.services.async_call.assert_awaited_once_with(
+        "modbus",
+        "write_register",
+        {"hub": "solarman", "slave": 1, "address": 142, "value": 1},
+        blocking=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_restore_without_a_set_recipe_is_unsupported(hass):
+    d = YamlDispatcher(hass=hass, commands=DEYE_COMMANDS, config=DEYE_CONFIG)
+    with pytest.raises(UnsupportedCommandError):
+        await d.dispatch("restore_sell_power_cap", {"sellPowerCapW": 5000})
+    hass.services.async_call.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_restore_battery_charge_is_unsupported_on_a_preset(hass):
+    """The preset's charge recipe writes one power register; it cannot put a
+    six-slot table back, so the restore is refused rather than half-written."""
+    d = YamlDispatcher(hass=hass, commands=DEYE_COMMANDS, config=DEYE_CONFIG)
+    with pytest.raises(UnsupportedCommandError):
+        await d.dispatch("restore_battery_charge", {"prevSlots": []})
+    hass.services.async_call.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_restore_solar_sell_writes_the_work_mode_first(hass):
+    d = YamlDispatcher(hass=hass, commands=[*DEYE_COMMANDS, _SOLAR_SELL], config=DEYE_CONFIG)
+    await d.dispatch("restore_solar_sell", {"solarSell": 0, "workMode": 1})
+    calls = [c.args[2]["address"] for c in hass.services.async_call.await_args_list]
+    assert calls == [142, 145]
+
+
+@pytest.mark.asyncio
+async def test_solar_sell_with_a_work_mode_and_no_work_mode_recipe_writes_nothing(hass):
+    d = YamlDispatcher(hass=hass, commands=[_SOLAR_SELL], config=DEYE_CONFIG)
+    with pytest.raises(UnsupportedCommandError):
+        await d.dispatch("set_solar_sell", {"solarSell": 1, "workMode": 1})
+    hass.services.async_call.assert_not_awaited()
