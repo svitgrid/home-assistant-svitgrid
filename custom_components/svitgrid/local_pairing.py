@@ -368,6 +368,61 @@ def build_local_inverters(raw_inverters: list[Any]) -> list[dict[str, Any]]:
     return built
 
 
+def _model_id_of(inverter: dict[str, Any]) -> str | None:
+    """The reading-core model id of an entry inverter, or None.
+
+    The entry keeps it in one place: `harvest_config.model_id`, for an
+    inverter Home Assistant reads directly. A relay inverter has none of its
+    own, so its preset's `modelId` stands in when the preset names one.
+    """
+    harvest = inverter.get("harvest_config")
+    if isinstance(harvest, dict):
+        model_id = harvest.get("model_id")
+        if isinstance(model_id, str) and model_id:
+            return model_id
+    preset_id = inverter.get("preset_id")
+    preset = load_bundled_preset(preset_id) if isinstance(preset_id, str) else None
+    model_id = preset.get("modelId") if preset else None
+    return model_id if isinstance(model_id, str) and model_id else None
+
+
+def _name_of(inverter: dict[str, Any]) -> str | None:
+    """The name the first phone gave the inverter, else its brand and model.
+
+    An entry paired through the cloud stores no name.
+    """
+    name = inverter.get("name")
+    if isinstance(name, str) and name.strip():
+        return name
+    parts = [p for p in (inverter.get("brand"), inverter.get("model")) if isinstance(p, str) and p]
+    return " ".join(parts) or None
+
+
+def station_inverters(entry: Any) -> list[dict[str, Any]]:
+    """The station's inverters as pair-local's 200 reports them.
+
+    `[{inverterId, modelId, name}]`, in the entry's order. A phone joining an
+    existing station brings no inverters, and its editors list actions by
+    `modelId` (true-island-contract.md, "Hardening", 2026-10-16). Reads
+    bundled presets from disk, so run it in an executor.
+    """
+    out: list[dict[str, Any]] = []
+    for inverter in entry.data.get("inverters") or []:
+        if not isinstance(inverter, dict):
+            continue
+        inverter_id = inverter.get("inverter_id")
+        if not isinstance(inverter_id, str) or not inverter_id:
+            continue
+        out.append(
+            {
+                "inverterId": inverter_id,
+                "modelId": _model_id_of(inverter),
+                "name": _name_of(inverter),
+            }
+        )
+    return out
+
+
 def _entry_for(hass: HomeAssistant, session: PendingPairing) -> str | None:
     for entry in hass.config_entries.async_entries(DOMAIN):
         if entry.data.get("local_pairing_id") == session.pairing_id:

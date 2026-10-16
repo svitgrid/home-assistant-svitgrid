@@ -543,6 +543,15 @@ class SvitgridPairLocalView(HomeAssistantView):
         _LOGGER.info(
             "Paired over the LAN with device %s (entry %s)", identity["device_id"], entry_id
         )
+        # A joining phone knows nothing of the station: tell it the inverters
+        # and their models. The first phone gets the same, as the entry
+        # stored what it sent.
+        entry = hass.config_entries.async_get_entry(entry_id)
+        inverters = (
+            await hass.async_add_executor_job(local_pairing.station_inverters, entry)
+            if entry is not None
+            else []
+        )
         return self.json(
             {
                 "ok": True,
@@ -551,6 +560,8 @@ class SvitgridPairLocalView(HomeAssistantView):
                 "maxInverters": MAX_INVERTERS,
                 # "control" | "view": what the owner approved this phone for.
                 "role": session.role,
+                "stationName": entry.title if entry is not None else None,
+                "inverters": inverters,
             }
         )
 

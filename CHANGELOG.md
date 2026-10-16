@@ -123,6 +123,11 @@
   with the cloud's approved list, which never includes a key paired over
   the LAN. A resync now keeps the keys of phones paired over the LAN with
   control, unless they were revoked.
+- **A second phone learns the station's inverters.** The answer to
+  `POST /api/svitgrid/pair-local` carries `stationName` and
+  `inverters: [{inverterId, modelId, name}]`, read from the entry, so a
+  phone that joins an existing station can list each inverter's actions.
+  The first phone's answer carries them too.
 - **A battery-charge event reaches the inverter in local mode.** With direct
   Modbus harvest, a charge event or a quick charge from the app that set no
   power limit failed with `KeyError: 'powerLimit'` and never wrote a

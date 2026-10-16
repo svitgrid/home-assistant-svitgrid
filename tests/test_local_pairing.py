@@ -296,6 +296,13 @@ async def test_an_approved_claim_creates_a_local_only_entry(
         "maxInverters": MAX_INVERTERS,
         # The first phone of a new station always controls it.
         "role": "control",
+        # The station as the entry stores it (contract "Hardening",
+        # 2026-10-16). A relay inverter's preset names no model.
+        "stationName": "Дім",
+        "inverters": [
+            {"inverterId": "local-inv-3f9a", "modelId": "deye_sg04lp3", "name": "Deye"},
+            {"inverterId": "local-inv-relay", "modelId": None, "name": "Second"},
+        ],
     }
     assert answer["version"][0].isdigit()
 

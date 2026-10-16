@@ -180,6 +180,8 @@ async def test_approve_with_control_adds_the_phone_to_the_station(
         "version": answer["version"],
         "maxInverters": MAX_INVERTERS,
         "role": "control",
+        "stationName": "Дім",
+        "inverters": [{"inverterId": "inv-1", "modelId": None, "name": None}],
     }
     assert ended["type"] == "abort"
     assert ended["reason"] == "phone_added"
@@ -336,3 +338,51 @@ def test_the_add_phone_dialog_is_translated(lang: str) -> None:
     assert set(step["menu_options"]) == {"pair_approve", "pair_approve_view", "pair_reject"}
     assert "{code}" in config["progress"]["waiting_for_phone"]
     assert "{device}" in config["abort"]["phone_added"]
+
+
+# ── the second phone learns the station's inverters ─────────────────────────
+
+
+async def test_a_second_phone_learns_each_inverter_and_its_model(
+    hass: HomeAssistant, enable_custom_integrations, local_only
+) -> None:
+    """The second phone brings no station, so it knows no inverter. Its
+    editors list actions by `modelId` (contract "Hardening", 2026-10-16)."""
+    entry = await _station(hass, local_only=local_only)
+    hass.config_entries.async_update_entry(
+        entry,
+        data={
+            **entry.data,
+            "inverters": [
+                # Direct harvest: the model is in the harvest config.
+                {
+                    "inverter_id": "inv-direct",
+                    "name": "Deye на даху",
+                    "harvest_config": {"protocol": "solarman_v5", "model_id": "deye_sg04lp3"},
+                },
+                # Relay through a preset that names its model.
+                {
+                    "inverter_id": "inv-preset",
+                    "brand": "Anenji",
+                    "model": "ANJ-6200",
+                    "preset_id": "anenji-anj-6200-smartess-v1",
+                },
+                # Relay through a preset that names none.
+                {"inverter_id": "inv-relay", "preset_id": "deye-sg04lp3-solarman-v1"},
+            ],
+        },
+    )
+    with _cloud(reachable=False):
+        result = await _start_flow(hass)
+        body = _phone_body(_code(hass))
+        resp, _ = await _add(hass, result["flow_id"], body, "pair_approve_view")
+
+    assert resp.status == 200, _body(resp)
+    answer = _body(resp)
+    assert answer["role"] == "view"
+    assert answer["stationName"] == "Дім"
+    assert answer["inverters"] == [
+        {"inverterId": "inv-direct", "modelId": "deye_sg04lp3", "name": "Deye на даху"},
+        {"inverterId": "inv-preset", "modelId": "anenji_anj_6200", "name": "Anenji ANJ-6200"},
+        {"inverterId": "inv-relay", "modelId": None, "name": None},
+    ]
