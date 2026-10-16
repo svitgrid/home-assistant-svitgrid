@@ -205,8 +205,12 @@ async def process_command(
 
     if cmd_type == REVOKE_TRUSTED_KEY_COMMAND:
         payload = command.get("payload") or {}
-        key_id = payload.get("signingKeyId")
-        if not key_id:
+        # The API sends `keyIdToRevoke` (key-management.ts,
+        # trusted-device-revoke.ts), the name the edge firmware and the phone
+        # harvester read. `signingKeyId` is what this handler read alone until
+        # 2026-10-16, which skipped every cloud revoke as malformed.
+        key_id = payload.get("keyIdToRevoke") or payload.get("signingKeyId")
+        if not isinstance(key_id, str) or not key_id:
             _LOGGER.warning("Skipping malformed revoke_trusted_key %s: %s", cmd_id, payload)
             return
         trusted_public_keys_hex.pop(key_id, None)

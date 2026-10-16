@@ -249,6 +249,67 @@ async def test_revoke_trusted_key_command_removes_from_cache():
 
 
 @pytest.mark.asyncio
+async def test_revoke_trusted_key_reads_the_field_the_api_sends():
+    """The API names the key `keyIdToRevoke` (key-management.ts and
+    trusted-device-revoke.ts). Reading only `signingKeyId` skipped every cloud
+    revoke as malformed and never acknowledged it, so the key stayed trusted."""
+    our_priv, _ = generate_keypair()
+    trusted_cache = {
+        "admin-a": "04" + "aa" * 64,
+        "admin-b": "04" + "bb" * 64,
+    }
+    command = {
+        "commandId": "revoke-2",
+        "command": "revoke_trusted_key",
+        "payload": {"keyIdToRevoke": "admin-b"},
+        "signature": "sig-from-the-app",
+        "signerKeyId": "admin-a",
+    }
+    api_client = AsyncMock()
+    keystore = AsyncMock()
+
+    await process_command(
+        command=command,
+        api_client=api_client,
+        api_key="k",
+        trusted_public_keys_hex=trusted_cache,
+        our_private_key=our_priv,
+        our_signing_key_id="us",
+        executor_version="0.2.0",
+        keystore=keystore,
+        executors_by_inverter=None,
+    )
+
+    assert trusted_cache == {"admin-a": "04" + "aa" * 64}
+    api_client.ack_command.assert_awaited_once()
+    ack_body = api_client.ack_command.call_args.kwargs["body"]
+    assert ack_body["success"] is True
+    assert ack_body["result"] == {"revokedKeyId": "admin-b"}
+
+
+@pytest.mark.asyncio
+async def test_revoke_trusted_key_with_no_key_id_is_still_skipped():
+    our_priv, _ = generate_keypair()
+    trusted_cache = {"admin-a": "04" + "aa" * 64}
+    api_client = AsyncMock()
+
+    await process_command(
+        command={"commandId": "revoke-3", "command": "revoke_trusted_key", "payload": {}},
+        api_client=api_client,
+        api_key="k",
+        trusted_public_keys_hex=trusted_cache,
+        our_private_key=our_priv,
+        our_signing_key_id="us",
+        executor_version="0.2.0",
+        keystore=AsyncMock(),
+        executors_by_inverter=None,
+    )
+
+    assert trusted_cache == {"admin-a": "04" + "aa" * 64}
+    api_client.ack_command.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_empty_cache_rejects_write_command_no_fallback():
     """B1-fallback is GONE. Empty trusted-keys cache + writable command →
     skip (no ACK), same as unknown signing key."""
