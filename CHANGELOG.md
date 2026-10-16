@@ -112,6 +112,11 @@
   `{action: "trust_key", keyId, publicKeyHex, nonce, ts}`. Anything else
   answers 403 `signature_invalid` or 400 `bad_request`. LAN pairing still
   trusts a phone's first key, after you approve it with control.
+  `DELETE /api/svitgrid/trust-key/{id}` needed only an island key too, so a
+  view-only phone could untrust any key, the last one included. It is now an
+  alias of `POST /api/svitgrid/keys/revoke`: the same signed body, with
+  `keyId` equal to the path, the same 409 `last_admin_key`, and the same
+  record of revoked keys.
 - **A device you revoke in the app is revoked in Home Assistant.** The cloud
   sends the key in `keyIdToRevoke`, and Home Assistant read only
   `signingKeyId`, so it skipped every cloud revoke as malformed and never

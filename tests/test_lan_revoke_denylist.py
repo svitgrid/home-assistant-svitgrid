@@ -343,7 +343,7 @@ async def test_deleting_a_trusted_key_over_the_lan_also_revokes_it(hass: HomeAss
     owner, phone = _Admin(), _Admin()
     ks, _entry, _ = await _station(hass, owner, phone)
 
-    req = _Req(hass)
+    req = _Req(hass, owner.request("revoke_key", keyId=phone.key_id))
     resp = await SvitgridTrustKeyDetailView().delete(req, phone.key_id)
 
     assert resp.status == 200

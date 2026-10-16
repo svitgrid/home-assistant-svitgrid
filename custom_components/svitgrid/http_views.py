@@ -52,7 +52,12 @@ from .harvest.event_scheduler_loop import (
 from .harvest.read_now import find_triggers
 from .hourly_energy import per_hour_deltas, to_local_hour_rows
 from .island_auth import island_key_present_and_valid, island_request_authorized
-from .island_lan import ACTION_TRUST_KEY, ISLAND_LAN_VIEWS, signed_lan_request
+from .island_lan import (
+    ACTION_TRUST_KEY,
+    ISLAND_LAN_VIEWS,
+    revoke_signed_key,
+    signed_lan_request,
+)
 from .local_time import local_day_of, local_hour_index
 from .signing import compute_key_id, public_key_from_hex, verify_payload
 
@@ -822,38 +827,32 @@ class SvitgridTrustKeyView(HomeAssistantView):
 
 
 class SvitgridTrustKeyDetailView(HomeAssistantView):
-    """DELETE /api/svitgrid/trust-key/{signing_key_id} — island-key-authed
-    revoke (no self-signature: a lost/compromised key must be removable
-    without holding it).
+    """DELETE /api/svitgrid/trust-key/{signing_key_id} — an alias of
+    `POST /api/svitgrid/keys/revoke`.
+
+    The body is the same signed request, `signedData = {action:
+    "revoke_key", keyId, nonce, ts}`, signed by a trusted admin key, and
+    `keyId` must equal the path. It shares the `last_admin_key` guard, the
+    local denylist and the removal of the linked phone's island key. Until
+    2026-10-16 an island key alone was enough, so a view-only phone could
+    untrust any key, the last admin key included. The key being removed need
+    not sign: a lost phone's key must be removable without it.
     """
 
     url = "/api/svitgrid/trust-key/{signing_key_id}"
     name = "api:svitgrid:trust_key_detail"
     requires_auth = False
 
-    @staticmethod
-    def _json_error(status: int, error: str, **extra) -> web.Response:
-        return web.Response(
-            status=status,
-            text=json.dumps({"error": error, **extra}),
-            content_type="application/json",
-        )
-
     async def delete(self, request, signing_key_id: str) -> web.Response:  # noqa: D102
-        hass = request.app["hass"]
-        keystore = hass.data.get(DOMAIN, {}).get("keystore")
-        island_keys: list[str] = (
-            await keystore.async_get_island_keys() if keystore is not None else []
-        )
-        if not island_key_present_and_valid(request, island_keys):
-            return self._json_error(401, "unauthorized")
-
-        # Recorded as revoked as well, so a resync from the cloud cannot trust
-        # the key again.
-        revoked = await keystore.async_untrust_key(signing_key_id)
+        outcome, error = await revoke_signed_key(request, path_key_id=signing_key_id)
+        if error is not None:
+            return error
+        keystore = request.app["hass"].data[DOMAIN]["keystore"]
         state = await keystore.load()
         trusted = state.trusted_public_keys_hex if state is not None else {}
-        return self.json({"ok": True, "revoked": revoked, "trustedKeyIds": sorted(trusted.keys())})
+        return self.json(
+            {"ok": True, "revoked": outcome["untrusted"], "trustedKeyIds": sorted(trusted)}
+        )
 
 
 class _IslandEventViewMixin:

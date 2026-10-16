@@ -281,27 +281,46 @@ class SvitgridKeysRevokeView(HomeAssistantView):
     requires_auth = False
 
     async def post(self, request) -> web.Response:  # noqa: D102
-        signed, error = await signed_lan_request(request, ACTION_REVOKE_KEY)
+        _, error = await revoke_signed_key(request)
         if error is not None:
             return error
-        key_id = signed.get("keyId")
-        if not isinstance(key_id, str) or not key_id:
-            return _json_error(400, "bad_request", detail="keyId must be a string")
-        hass = request.app["hass"]
-        keystore = hass.data.get(DOMAIN, {}).get("keystore")
-        if keystore is None:
-            return _json_error(503, "unavailable")
-        try:
-            outcome = await keystore.async_revoke_signing_key(key_id)
-        except LastAdminKey:
-            return _json_error(409, "last_admin_key")
-        _LOGGER.info(
-            "Revoked signing key %s over the LAN (untrusted=%s, island device=%s)",
-            key_id,
-            outcome["untrusted"],
-            outcome["deviceId"],
-        )
         return web.json_response({"ok": True})
+
+
+async def revoke_signed_key(
+    request, *, path_key_id: str | None = None
+) -> tuple[dict[str, Any] | None, web.Response | None]:
+    """Run a signed `revoke_key` request. Returns `(outcome, None)` or
+    `(None, error response)`; `outcome` is `async_revoke_signing_key`'s.
+
+    Shared by `POST /api/svitgrid/keys/revoke` and its alias
+    `DELETE /api/svitgrid/trust-key/{id}`. With `path_key_id`, the signed
+    `keyId` must name the same key, so a signature for one key cannot be
+    sent to another key's path.
+    """
+    signed, error = await signed_lan_request(request, ACTION_REVOKE_KEY)
+    if error is not None:
+        return None, error
+    key_id = signed.get("keyId")
+    if not isinstance(key_id, str) or not key_id:
+        return None, _json_error(400, "bad_request", detail="keyId must be a string")
+    if path_key_id is not None and key_id != path_key_id:
+        return None, _json_error(400, "bad_request", detail="keyId must match the path")
+    hass = request.app["hass"]
+    keystore = hass.data.get(DOMAIN, {}).get("keystore")
+    if keystore is None:
+        return None, _json_error(503, "unavailable")
+    try:
+        outcome = await keystore.async_revoke_signing_key(key_id)
+    except LastAdminKey:
+        return None, _json_error(409, "last_admin_key")
+    _LOGGER.info(
+        "Revoked signing key %s over the LAN (untrusted=%s, island device=%s)",
+        key_id,
+        outcome["untrusted"],
+        outcome["deviceId"],
+    )
+    return outcome, None
 
 
 class SvitgridIslandStatusView(HomeAssistantView):

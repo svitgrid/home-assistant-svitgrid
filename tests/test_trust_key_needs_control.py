@@ -19,10 +19,11 @@ import pytest
 from homeassistant.core import HomeAssistant
 
 from custom_components.svitgrid.const import DOMAIN
-from custom_components.svitgrid.http_views import SvitgridTrustKeyView
+from custom_components.svitgrid.http_views import SvitgridTrustKeyDetailView, SvitgridTrustKeyView
 from custom_components.svitgrid.island_lan import SvitgridKeysRevokeView
 from custom_components.svitgrid.signing import sign_payload
 from tests.test_extra_phone_pairing import (
+    OWNER_KEY,
     SECOND_ISLAND_KEY,
     _add,
     _phone_body,
@@ -218,3 +219,108 @@ async def test_a_key_revoked_over_the_lan_is_still_409(hass: HomeAssistant):
     assert resp.status == 409
     assert _body(resp) == {"error": "key_revoked"}
     assert phone.key_id not in (await ks.load()).trusted_public_keys_hex
+
+
+# ── DELETE /trust-key/{id} needs control too ────────────────────────────────
+#
+# It needed only an island key, so a view-only phone could untrust any key,
+# the last admin key included. It is now an alias of `POST /keys/revoke`:
+# the same signed body (`action: "revoke_key"`, `keyId` equal to the path),
+# the same `last_admin_key` guard, and the same local denylist.
+
+
+async def _delete(hass, key_id: str, body: dict | None, *, island_key: str = ISLAND_KEY):
+    return await SvitgridTrustKeyDetailView().delete(
+        _Req(hass, body, island_key=island_key), key_id
+    )
+
+
+async def test_delete_signed_by_an_admin_untrusts_and_denylists(hass: HomeAssistant):
+    admin, other = _Admin(), _Admin()
+    ks = await _keystore(hass, admin, other)
+
+    resp = await _delete(hass, other.key_id, admin.request("revoke_key", keyId=other.key_id))
+
+    assert resp.status == 200, _body(resp)
+    assert _body(resp) == {"ok": True, "revoked": True, "trustedKeyIds": [admin.key_id]}
+    state = await ks.load()
+    assert other.key_id not in state.trusted_public_keys_hex
+    assert other.key_id in state.revoked_key_ids
+
+
+async def test_delete_with_only_an_island_key_is_refused(hass: HomeAssistant):
+    admin = _Admin()
+    ks = await _keystore(hass, admin)
+
+    resp = await _delete(hass, admin.key_id, None)
+
+    assert resp.status == 400
+    assert admin.key_id in (await ks.load()).trusted_public_keys_hex
+
+
+async def test_a_view_only_phone_cannot_delete_a_key(
+    hass: HomeAssistant, enable_custom_integrations
+):
+    await _paired_station(hass, local_only=False)
+    with _cloud(reachable=False):
+        result = await _start_flow(hass)
+        body = _phone_body(_code(hass))
+        resp, _ = await _add(hass, result["flow_id"], body, "pair_approve_view")
+    assert _body(resp)["role"] == "view"
+    viewer = _Admin.__new__(_Admin)
+    viewer.priv, viewer.pub, viewer.key_id = (
+        body["_priv"],
+        body["publicKeyHex"],
+        body["signingKeyId"],
+    )
+    owner_key_id = OWNER_KEY[0]
+
+    resp = await _delete(
+        hass,
+        owner_key_id,
+        viewer.request("revoke_key", keyId=owner_key_id),
+        island_key=SECOND_ISLAND_KEY,
+    )
+
+    assert resp.status == 403
+    assert _body(resp) == {"error": "signature_invalid"}
+    state = await hass.data[DOMAIN]["keystore"].load()
+    assert owner_key_id in state.trusted_public_keys_hex
+    assert owner_key_id not in state.revoked_key_ids
+
+
+async def test_delete_keeps_the_last_admin_key(hass: HomeAssistant):
+    admin = _Admin()
+    ks = await _keystore(hass, admin)
+
+    resp = await _delete(hass, admin.key_id, admin.request("revoke_key", keyId=admin.key_id))
+
+    assert resp.status == 409
+    assert _body(resp) == {"error": "last_admin_key"}
+    state = await ks.load()
+    assert admin.key_id in state.trusted_public_keys_hex
+    assert state.revoked_key_ids == []
+
+
+async def test_delete_with_a_key_id_other_than_the_path_is_refused(hass: HomeAssistant):
+    admin, other, third = _Admin(), _Admin(), _Admin()
+    ks = await _keystore(hass, admin, other, third)
+
+    resp = await _delete(hass, other.key_id, admin.request("revoke_key", keyId=third.key_id))
+
+    assert resp.status == 400
+    assert set((await ks.load()).trusted_public_keys_hex) == {
+        admin.key_id,
+        other.key_id,
+        third.key_id,
+    }
+
+
+async def test_delete_of_an_unknown_key_is_ok_and_revokes_nothing(hass: HomeAssistant):
+    admin = _Admin()
+    await _keystore(hass, admin)
+
+    resp = await _delete(hass, "nope", admin.request("revoke_key", keyId="nope"))
+
+    assert resp.status == 200
+    assert _body(resp)["revoked"] is False
