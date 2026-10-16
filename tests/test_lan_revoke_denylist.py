@@ -425,3 +425,85 @@ async def test_the_keystore_notifies_and_unsubscribes(hass: HomeAssistant):
     await ks.update_trusted_keys_hex({owner.key_id: owner.pub})
 
     assert seen == [{owner.key_id}]
+
+
+# ── a revoke from the cloud ─────────────────────────────────────────────────
+
+
+def _cloud_revoke(cmd_id: str, key_id: str) -> dict:
+    """As the API writes it: `routes/v2/key-management.ts` and
+    `services/trusted-device-revoke.ts` put the key in `keyIdToRevoke`."""
+    return {
+        "commandId": cmd_id,
+        "command": "revoke_trusted_key",
+        "payload": {"keyIdToRevoke": key_id},
+    }
+
+
+async def test_a_cloud_revoke_goes_on_the_denylist_and_is_acknowledged(hass: HomeAssistant):
+    owner, phone = _Admin(), _Admin()
+    ks, _entry, our_priv = await _station(hass, owner, phone)
+    trusted = dict((await ks.load()).trusted_public_keys_hex)
+    api = _api([], [])
+
+    await process_command(
+        command=_cloud_revoke("revoke-1", phone.key_id),
+        api_client=api,
+        api_key="k",
+        trusted_public_keys_hex=trusted,
+        our_private_key=our_priv,
+        our_signing_key_id="ha-1",
+        executor_version="t",
+        keystore=ks,
+    )
+
+    assert phone.key_id not in trusted
+    # A fresh instance reads `.storage/svitgrid`, as after a restart.
+    state = await SvitgridKeystore(hass).load()
+    assert phone.key_id not in state.trusted_public_keys_hex
+    assert phone.key_id in state.revoked_key_ids
+    assert owner.key_id in state.trusted_public_keys_hex
+    ack = api.ack_command.await_args.kwargs["body"]
+    assert ack["success"] is True
+    assert ack["result"] == {"revokedKeyId": phone.key_id}
+
+
+async def test_a_cloud_revoke_reaches_the_running_poller_at_once(hass: HomeAssistant):
+    """The revoke and a command signed by the revoked key arrive in one poll.
+    The command must not run."""
+    owner, phone = _Admin(), _Admin()
+    ks, _entry, _ = await _station(hass, owner, phone)
+    api = _api(
+        [owner, phone],
+        [_cloud_revoke("revoke-1", phone.key_id), _signed_command(phone, "cmd-after")],
+    )
+    executor = _executor()
+
+    await _run_one_poll(hass, ks, api, executor)
+
+    executor.dispatch.assert_not_awaited()
+    acks = [c.kwargs["body"] for c in api.ack_command.await_args_list]
+    assert {"success": True, "result": {"revokedKeyId": phone.key_id}}.items() <= acks[0].items()
+
+
+async def test_a_resync_does_not_trust_a_key_the_cloud_revoked(hass: HomeAssistant):
+    """The server's approved list can lag the revoke it sent."""
+    owner, phone = _Admin(), _Admin()
+    ks, _entry, our_priv = await _station(hass, owner, phone)
+    await process_command(
+        command=_cloud_revoke("revoke-1", phone.key_id),
+        api_client=_api([], []),
+        api_key="k",
+        trusted_public_keys_hex=dict((await ks.load()).trusted_public_keys_hex),
+        our_private_key=our_priv,
+        our_signing_key_id="ha-1",
+        executor_version="t",
+        keystore=ks,
+    )
+
+    api = _api([owner, phone], [_signed_command(phone, "cmd-after-restart")])
+    executor = _executor()
+    await _run_one_poll(hass, ks, api, executor)
+
+    executor.dispatch.assert_not_awaited()
+    assert phone.key_id not in (await ks.load()).trusted_public_keys_hex

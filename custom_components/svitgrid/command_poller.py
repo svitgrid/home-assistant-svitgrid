@@ -215,7 +215,11 @@ async def process_command(
             return
         trusted_public_keys_hex.pop(key_id, None)
         if keystore is not None:
-            await keystore.update_trusted_keys_hex(dict(trusted_public_keys_hex))
+            # Recorded as revoked, as a LAN revoke is, so that the server's
+            # approved list cannot trust the key again on the next resync
+            # while it still names it. Notifies the trust listeners, which
+            # keep this poller's cache in step.
+            await keystore.async_untrust_key(key_id)
         _LOGGER.info(
             "Revoked trusted key %s (now %d keys)",
             key_id,

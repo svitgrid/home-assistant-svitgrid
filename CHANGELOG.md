@@ -112,6 +112,12 @@
   `{action: "trust_key", keyId, publicKeyHex, nonce, ts}`. Anything else
   answers 403 `signature_invalid` or 400 `bad_request`. LAN pairing still
   trusts a phone's first key, after you approve it with control.
+- **A device you revoke in the app is revoked in Home Assistant.** The cloud
+  sends the key in `keyIdToRevoke`, and Home Assistant read only
+  `signingKeyId`, so it skipped every cloud revoke as malformed and never
+  acknowledged it. It now reads either field, untrusts the key at once in
+  the running command poller, records it with the keys revoked over the LAN
+  so no resync trusts it again, and acknowledges the command.
 - **A battery-charge event reaches the inverter in local mode.** With direct
   Modbus harvest, a charge event or a quick charge from the app that set no
   power limit failed with `KeyError: 'powerLimit'` and never wrote a

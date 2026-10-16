@@ -228,7 +228,6 @@ async def test_revoke_trusted_key_command_removes_from_cache():
 
     api_client = AsyncMock()
     keystore = AsyncMock()
-    keystore.update_trusted_keys_hex = AsyncMock()
 
     await process_command(
         command=command,
@@ -243,7 +242,7 @@ async def test_revoke_trusted_key_command_removes_from_cache():
     )
 
     assert trusted_cache == {"admin-a": "04" + "aa" * 64}
-    keystore.update_trusted_keys_hex.assert_called_once_with({"admin-a": "04" + "aa" * 64})
+    keystore.async_untrust_key.assert_awaited_once_with("admin-b")
     ack_body = api_client.ack_command.call_args.kwargs["body"]
     assert ack_body["success"] is True
 
