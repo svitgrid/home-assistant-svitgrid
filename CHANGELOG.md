@@ -132,7 +132,9 @@
   `POST /api/svitgrid/pair-local` carries `stationName` and
   `inverters: [{inverterId, modelId, name}]`, read from the entry, so a
   phone that joins an existing station can list each inverter's actions.
-  The first phone's answer carries them too.
+  The first phone's answer carries them too. The first phone may send an
+  optional `modelId` with each inverter; Home Assistant stores it and
+  reports it when neither the harvest config nor the preset names a model.
 - **A battery-charge event reaches the inverter in local mode.** With direct
   Modbus harvest, a charge event or a quick charge from the app that set no
   power limit failed with `KeyError: 'powerLimit'` and never wrote a

@@ -329,8 +329,13 @@ def build_local_inverters(raw_inverters: list[Any]) -> list[dict[str, Any]]:
         seen.add(inverter_id)
         preset_id = raw.get("presetId")
         harvest = raw.get("harvestConfig")
+        sent_model_id = raw.get("modelId")
         if preset_id is not None and not isinstance(preset_id, str):
             raise InvalidClaim("presetId must be a string")
+        if sent_model_id is not None and (
+            not isinstance(sent_model_id, str) or not sent_model_id or len(sent_model_id) > 128
+        ):
+            raise InvalidClaim("modelId must be a non-empty string")
         if harvest is not None and not isinstance(harvest, dict):
             raise InvalidClaim("harvestConfig must be an object")
         if not preset_id and not harvest:
@@ -352,6 +357,11 @@ def build_local_inverters(raw_inverters: list[Any]) -> list[dict[str, Any]]:
             "pv_strings": preset.get("pvStrings") if preset else None,
             "preset_id": preset_id or None,
         }
+        if sent_model_id:
+            # Optional (contract "Hardening", 2026-10-16). The only model a
+            # relay inverter has when its preset names none; pair-local's 200
+            # passes it on to later phones.
+            item["model_id"] = sent_model_id
         if preset is not None:
             # Same field the preset refresh writes, so a later refresh from the
             # cloud does not re-merge what is already here.
@@ -371,9 +381,9 @@ def build_local_inverters(raw_inverters: list[Any]) -> list[dict[str, Any]]:
 def _model_id_of(inverter: dict[str, Any]) -> str | None:
     """The reading-core model id of an entry inverter, or None.
 
-    The entry keeps it in one place: `harvest_config.model_id`, for an
-    inverter Home Assistant reads directly. A relay inverter has none of its
-    own, so its preset's `modelId` stands in when the preset names one.
+    In order: `harvest_config.model_id`, for an inverter Home Assistant reads
+    directly, since that is the model it polls; then the bundled preset's
+    `modelId`; then `model_id`, which the first phone may send in pair-local.
     """
     harvest = inverter.get("harvest_config")
     if isinstance(harvest, dict):
@@ -383,7 +393,10 @@ def _model_id_of(inverter: dict[str, Any]) -> str | None:
     preset_id = inverter.get("preset_id")
     preset = load_bundled_preset(preset_id) if isinstance(preset_id, str) else None
     model_id = preset.get("modelId") if preset else None
-    return model_id if isinstance(model_id, str) and model_id else None
+    if isinstance(model_id, str) and model_id:
+        return model_id
+    stored = inverter.get("model_id")
+    return stored if isinstance(stored, str) and stored else None
 
 
 def _name_of(inverter: dict[str, Any]) -> str | None:

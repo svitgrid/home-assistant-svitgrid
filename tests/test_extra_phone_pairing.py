@@ -369,6 +369,18 @@ async def test_a_second_phone_learns_each_inverter_and_its_model(
                 },
                 # Relay through a preset that names none.
                 {"inverter_id": "inv-relay", "preset_id": "deye-sg04lp3-solarman-v1"},
+                # The same, with the model the first phone sent.
+                {
+                    "inverter_id": "inv-stored",
+                    "preset_id": "deye-sg04lp3-solarman-v1",
+                    "model_id": "deye_sg04lp3",
+                },
+                # The preset's model wins over a stored one.
+                {
+                    "inverter_id": "inv-preset-wins",
+                    "preset_id": "anenji-anj-6200-smartess-v1",
+                    "model_id": "something_else",
+                },
             ],
         },
     )
@@ -385,4 +397,6 @@ async def test_a_second_phone_learns_each_inverter_and_its_model(
         {"inverterId": "inv-direct", "modelId": "deye_sg04lp3", "name": "Deye на даху"},
         {"inverterId": "inv-preset", "modelId": "anenji_anj_6200", "name": "Anenji ANJ-6200"},
         {"inverterId": "inv-relay", "modelId": None, "name": None},
+        {"inverterId": "inv-stored", "modelId": "deye_sg04lp3", "name": None},
+        {"inverterId": "inv-preset-wins", "modelId": "anenji_anj_6200", "name": None},
     ]

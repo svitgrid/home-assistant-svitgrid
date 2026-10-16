@@ -804,6 +804,41 @@ async def test_local_presets_lists_the_bundled_presets_while_pending(
     }
 
 
+async def test_the_first_phone_may_name_each_inverter_model(
+    hass: HomeAssistant, enable_custom_integrations
+) -> None:
+    """A relay inverter's preset rarely names a model, and the entry has no
+    other place for one. The first phone knows it, so pair-local accepts an
+    optional `modelId` per inverter, stores it, and tells later phones."""
+    with _cloud(reachable=False):
+        result = await _start_flow(hass)
+        body = _pair_body(_code(hass))
+        body["inverters"][0]["modelId"] = "deye_sg05lp3"  # harvest config says sg04lp3
+        body["inverters"][1]["modelId"] = "deye_sg04lp3"
+        resp = await _pair(hass, result["flow_id"], body)
+
+    assert resp.status == 200, _body(resp)
+    direct, relay = hass.config_entries.async_entries(DOMAIN)[0].data["inverters"]
+    assert relay["model_id"] == "deye_sg04lp3"
+    assert direct["model_id"] == "deye_sg05lp3"
+    # The harvest config wins over the stored value: it is what is polled.
+    assert _body(resp)["inverters"] == [
+        {"inverterId": "local-inv-3f9a", "modelId": "deye_sg04lp3", "name": "Deye"},
+        {"inverterId": "local-inv-relay", "modelId": "deye_sg04lp3", "name": "Second"},
+    ]
+
+
+async def test_an_inverter_without_a_model_stores_none(
+    hass: HomeAssistant, enable_custom_integrations
+) -> None:
+    with _cloud(reachable=False):
+        result = await _start_flow(hass)
+        await _pair(hass, result["flow_id"], _pair_body(_code(hass)))
+
+    _direct, relay = hass.config_entries.async_entries(DOMAIN)[0].data["inverters"]
+    assert "model_id" not in relay
+
+
 # ── malformed requests ──────────────────────────────────────────────────────
 
 
@@ -822,6 +857,16 @@ def _bad_bodies():
             400,
             "bad_request",
             id="inverter with neither presetId nor harvestConfig",
+        ),
+        pytest.param(
+            {
+                "inverters": [
+                    {"inverterId": "x", "presetId": "deye-sg04lp3-solarman-v1", "modelId": 7}
+                ]
+            },
+            400,
+            "bad_request",
+            id="modelId not a string",
         ),
         pytest.param(
             {"inverters": [{"inverterId": "x", "presetId": "no-such-preset-v1"}]},
