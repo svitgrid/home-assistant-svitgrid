@@ -104,6 +104,14 @@
   `POST /api/svitgrid/trust-key` answers 409 `key_revoked`. Removing an
   entry also untrusts the signing keys linked to its phones, but never the
   last trusted key while another entry remains.
+- **A view-only phone can no longer give itself control.**
+  `POST /api/svitgrid/trust-key` accepted any phone with an island key that
+  proved it held the signing key it asked to trust, and a view-only phone
+  holds an island key. The request is now a signed write like
+  `POST /api/svitgrid/keys/revoke`: an already-trusted admin key signs
+  `{action: "trust_key", keyId, publicKeyHex, nonce, ts}`. Anything else
+  answers 403 `signature_invalid` or 400 `bad_request`. LAN pairing still
+  trusts a phone's first key, after you approve it with control.
 - **A battery-charge event reaches the inverter in local mode.** With direct
   Modbus harvest, a charge event or a quick charge from the app that set no
   power limit failed with `KeyError: 'powerLimit'` and never wrote a

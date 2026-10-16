@@ -62,6 +62,8 @@ CAPABILITIES = ("cloud_copy_lan", "leave_lan", "revoke_lan", "pair_extra_phone",
 ACTION_SET_CLOUD_COPY = "set_cloud_copy"
 ACTION_LEAVE_ISLAND = "leave_island"
 ACTION_REVOKE_KEY = "revoke_key"
+# `POST /api/svitgrid/trust-key`, served by http_views.SvitgridTrustKeyView.
+ACTION_TRUST_KEY = "trust_key"
 
 
 def is_true_island(
@@ -119,7 +121,7 @@ async def _island_key_ok(request) -> bool:
     return island_key_present_and_valid(request, island_keys)
 
 
-async def _signed_request(request, action: str) -> tuple[dict | None, web.Response | None]:
+async def signed_lan_request(request, action: str) -> tuple[dict | None, web.Response | None]:
     """Authenticate a signed management request.
 
     Returns `(signedData, None)` on success, or `(None, error response)`. The
@@ -216,7 +218,7 @@ class SvitgridIslandCloudCopyView(HomeAssistantView):
     requires_auth = False
 
     async def post(self, request) -> web.Response:  # noqa: D102
-        signed, error = await _signed_request(request, ACTION_SET_CLOUD_COPY)
+        signed, error = await signed_lan_request(request, ACTION_SET_CLOUD_COPY)
         if error is not None:
             return error
         enabled = signed.get("enabled")
@@ -249,7 +251,7 @@ class SvitgridIslandLeaveView(HomeAssistantView):
     requires_auth = False
 
     async def post(self, request) -> web.Response:  # noqa: D102
-        _, error = await _signed_request(request, ACTION_LEAVE_ISLAND)
+        _, error = await signed_lan_request(request, ACTION_LEAVE_ISLAND)
         if error is not None:
             return error
         hass = request.app["hass"]
@@ -279,7 +281,7 @@ class SvitgridKeysRevokeView(HomeAssistantView):
     requires_auth = False
 
     async def post(self, request) -> web.Response:  # noqa: D102
-        signed, error = await _signed_request(request, ACTION_REVOKE_KEY)
+        signed, error = await signed_lan_request(request, ACTION_REVOKE_KEY)
         if error is not None:
             return error
         key_id = signed.get("keyId")

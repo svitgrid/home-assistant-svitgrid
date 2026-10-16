@@ -1,12 +1,11 @@
-"""TDD tests for POST /api/svitgrid/trust-key (Task 1 — island LAN trust
-provisioning).
+"""Tests for the key fingerprint and DELETE /api/svitgrid/trust-key/{id}.
 
-Written BEFORE implementation (RED phase). Covers:
+Covers:
 - compute_key_id matches sha256(bytes.fromhex(public_key_hex)).hexdigest()
-- valid island key + self-signed payload + matching keyId → 200, key merged
-- missing/invalid island key → 401, keystore not updated
-- self-signature by the WRONG key → 403, keystore not updated
-- signingKeyId that doesn't match the fingerprint of publicKeyHex → 400
+- DELETE untrusts a key and records it as revoked
+
+POST /api/svitgrid/trust-key needs an already-trusted admin key since
+2026-10-16; its tests are in test_trust_key_needs_control.py.
 
 Import note: importing `custom_components.svitgrid.http_views` normally
 triggers `custom_components/svitgrid/__init__.py` -> `.panel` ->
@@ -131,75 +130,6 @@ def _load_views():
             sys.modules[full_name] = _load(full_name, os.path.join(BASE, f"{name}.py"))
 
     return _load(f"{pkg_name}.http_views", os.path.join(BASE, "http_views.py"))
-
-
-@pytest.mark.asyncio
-async def test_post_adds_self_signed_key():
-    from aiohttp import web  # noqa: F401
-
-    http_views = _load_views()
-    priv, pub_hex, key_id = _make_key()
-    sig = signing.sign_payload({"signingKeyId": key_id, "publicKeyHex": pub_hex}, priv)
-    hass, ks = _hass_with("island-abc", {})
-    view = http_views.SvitgridTrustKeyView()
-    req = _Req(
-        {"X-Island-Key": "island-abc"},
-        {"signingKeyId": key_id, "publicKeyHex": pub_hex, "signature": sig},
-        hass,
-    )
-    resp = await view.post(req)
-    assert resp.status == 200
-    ks.update_trusted_keys_hex.assert_awaited_once()
-    saved = ks.update_trusted_keys_hex.await_args.args[0]
-    assert saved[key_id] == pub_hex
-
-
-@pytest.mark.asyncio
-async def test_post_rejects_without_island_key():
-    http_views = _load_views()
-    priv, pub_hex, key_id = _make_key()
-    sig = signing.sign_payload({"signingKeyId": key_id, "publicKeyHex": pub_hex}, priv)
-    hass, ks = _hass_with("island-abc", {})
-    view = http_views.SvitgridTrustKeyView()
-    req = _Req({}, {"signingKeyId": key_id, "publicKeyHex": pub_hex, "signature": sig}, hass)
-    resp = await view.post(req)
-    assert resp.status == 401
-    ks.update_trusted_keys_hex.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_post_rejects_bad_self_signature():
-    http_views = _load_views()
-    priv, pub_hex, key_id = _make_key()
-    other_priv, _, _ = _make_key()
-    bad = signing.sign_payload({"signingKeyId": key_id, "publicKeyHex": pub_hex}, other_priv)
-    hass, ks = _hass_with("island-abc", {})
-    view = http_views.SvitgridTrustKeyView()
-    req = _Req(
-        {"X-Island-Key": "island-abc"},
-        {"signingKeyId": key_id, "publicKeyHex": pub_hex, "signature": bad},
-        hass,
-    )
-    resp = await view.post(req)
-    assert resp.status == 403
-    ks.update_trusted_keys_hex.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_post_rejects_keyid_mismatch():
-    http_views = _load_views()
-    priv, pub_hex, key_id = _make_key()
-    sig = signing.sign_payload({"signingKeyId": "deadbeef", "publicKeyHex": pub_hex}, priv)
-    hass, ks = _hass_with("island-abc", {})
-    view = http_views.SvitgridTrustKeyView()
-    req = _Req(
-        {"X-Island-Key": "island-abc"},
-        {"signingKeyId": "deadbeef", "publicKeyHex": pub_hex, "signature": sig},
-        hass,
-    )
-    resp = await view.post(req)
-    assert resp.status == 400
-    ks.update_trusted_keys_hex.assert_not_awaited()
 
 
 @pytest.mark.asyncio

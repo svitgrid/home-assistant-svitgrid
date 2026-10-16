@@ -351,19 +351,13 @@ async def test_deleting_a_trusted_key_over_the_lan_also_revokes_it(hass: HomeAss
 
 
 async def test_trust_key_refuses_a_revoked_key(hass: HomeAssistant):
-    """`POST /trust-key` needs only an island key, which a revoked phone with
-    no roster link still holds. It must not let that phone trust itself."""
+    """Even a trusted admin key cannot trust a key revoked over the LAN
+    through `/trust-key`. That takes the owner approving a LAN pairing."""
     owner, phone = _Admin(), _Admin()
     ks, _entry, _ = await _station(hass, owner, phone)
     await _revoke(hass, owner, phone.key_id)
 
-    body = {
-        "signingKeyId": phone.key_id,
-        "publicKeyHex": phone.pub,
-        "signature": sign_payload(
-            {"signingKeyId": phone.key_id, "publicKeyHex": phone.pub}, phone.priv
-        ),
-    }
+    body = owner.request("trust_key", keyId=phone.key_id, publicKeyHex=phone.pub)
     resp = await SvitgridTrustKeyView().post(_Req(hass, body))
 
     assert resp.status == 409

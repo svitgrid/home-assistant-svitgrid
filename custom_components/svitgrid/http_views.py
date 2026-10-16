@@ -52,7 +52,7 @@ from .harvest.event_scheduler_loop import (
 from .harvest.read_now import find_triggers
 from .hourly_energy import per_hour_deltas, to_local_hour_rows
 from .island_auth import island_key_present_and_valid, island_request_authorized
-from .island_lan import ISLAND_LAN_VIEWS
+from .island_lan import ACTION_TRUST_KEY, ISLAND_LAN_VIEWS, signed_lan_request
 from .local_time import local_day_of, local_hour_index
 from .signing import compute_key_id, public_key_from_hex, verify_payload
 
@@ -759,70 +759,54 @@ class SvitgridCommandsView(HomeAssistantView):
 
 
 class SvitgridTrustKeyView(HomeAssistantView):
-    """POST /api/svitgrid/trust-key — island-key + proof-of-possession → add a
-    trusted admin key over the LAN (island-native, no cloud). TOFU: the island
-    key is the LAN root of trust.
+    """POST /api/svitgrid/trust-key — an already-trusted admin key trusts
+    another signing key over the LAN.
+
+    A signed write, like `POST /api/svitgrid/keys/revoke`: the body is
+    `{signingKeyId, signedData, signature}`, with `signedData = {action:
+    "trust_key", keyId, publicKeyHex, nonce, ts}`, signed by a key this
+    install already trusts. Until 2026-10-16 the island key and a self-signed
+    proof of possession were enough, so a view-only phone, which holds an
+    island key, could trust its own key and give itself control. Trusting a
+    first key is the job of LAN pairing (`pair-local`), which the owner
+    approves in Home Assistant.
+
+    Contract: true-island-contract.md, "Hardening (added 2026-10-16)".
     """
 
     url = "/api/svitgrid/trust-key"
     name = "api:svitgrid:trust_key"
     requires_auth = False
 
-    @staticmethod
-    def _json_error(status: int, error: str, **extra) -> web.Response:
-        return web.Response(
-            status=status,
-            text=json.dumps({"error": error, **extra}),
-            content_type="application/json",
-        )
-
     async def post(self, request) -> web.Response:  # noqa: D102
-        hass = request.app["hass"]
-        keystore = hass.data.get(DOMAIN, {}).get("keystore")
-        island_keys: list[str] = (
-            await keystore.async_get_island_keys() if keystore is not None else []
-        )
-        if not island_key_present_and_valid(request, island_keys):
-            return self._json_error(401, "unauthorized")
-
-        try:
-            body = await request.json()
-        except Exception:  # noqa: BLE001
-            return self._json_error(400, "bad_request")
-
-        signing_key_id = body.get("signingKeyId")
-        public_key_hex = body.get("publicKeyHex")
-        signature = body.get("signature")
-        if not signing_key_id or not public_key_hex or not signature:
-            return self._json_error(400, "bad_request")
-
-        # Validate EC point shape.
+        signed, error = await signed_lan_request(request, ACTION_TRUST_KEY)
+        if error is not None:
+            return error
+        key_id = signed.get("keyId")
+        public_key_hex = signed.get("publicKeyHex")
+        if not isinstance(key_id, str) or not key_id or not isinstance(public_key_hex, str):
+            return _json_error(400, "bad_request", detail="keyId and publicKeyHex are required")
         try:
             public_key_from_hex(public_key_hex)
         except Exception:  # noqa: BLE001
-            return self._json_error(400, "bad_public_key")
-
+            return _json_error(400, "bad_public_key")
         # keyId must be the fingerprint of the submitted public key.
-        if signing_key_id != compute_key_id(public_key_hex):
-            return self._json_error(400, "key_id_mismatch")
+        if key_id != compute_key_id(public_key_hex):
+            return _json_error(400, "key_id_mismatch")
 
-        # Proof of possession: request self-signed by the key being added.
-        if not verify_payload(
-            {"signingKeyId": signing_key_id, "publicKeyHex": public_key_hex},
-            signature,
-            public_key_hex,
-        ):
-            return self._json_error(403, "signature_invalid")
-
-        state = await keystore.load()
-        # The island key alone authorizes this, and a phone whose key was
-        # revoked can still hold one. Trusting a revoked key again takes the
-        # owner approving a LAN pairing.
-        if state is not None and signing_key_id in state.revoked_key_ids:
-            return self._json_error(409, "key_revoked")
-        trusted = dict(state.trusted_public_keys_hex) if state is not None else {}
-        trusted[signing_key_id] = public_key_hex
+        hass = request.app["hass"]
+        keystore = hass.data.get(DOMAIN, {}).get("keystore")
+        state = await keystore.load() if keystore is not None else None
+        if state is None:
+            return _json_error(503, "unavailable")
+        # A key revoked over the LAN is trusted again only by the owner
+        # approving a LAN pairing.
+        if key_id in state.revoked_key_ids:
+            return _json_error(409, "key_revoked")
+        trusted = dict(state.trusted_public_keys_hex)
+        trusted[key_id] = public_key_hex
         await keystore.update_trusted_keys_hex(trusted)
+        _LOGGER.info("Trusted signing key %s over the LAN", key_id)
         return self.json({"ok": True, "trustedKeyIds": sorted(trusted.keys())})
 
 
