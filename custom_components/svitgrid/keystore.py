@@ -122,6 +122,22 @@ class KeystoreState:
             keys.append(self.island_key)
         return keys
 
+    def lan_paired_trusted_keys(self) -> dict[str, str]:
+        """The trusted keys of phones paired over the LAN.
+
+        A key counts when it is trusted, is linked to a roster row that still
+        exists, and is not revoked. The cloud never hears of a LAN pairing, so
+        its approved list lacks these keys, and a resync that replaces the
+        trusted keys with that list must keep them. A view-only phone's key
+        is linked but never trusted, so it is not here.
+        """
+        revoked = set(self.revoked_key_ids)
+        return {
+            key_id: public_key_hex
+            for key_id, public_key_hex in self.trusted_public_keys_hex.items()
+            if key_id not in revoked and self.key_devices.get(key_id) in self.island_keys
+        }
+
     def load_private_key(self) -> ec.EllipticCurvePrivateKey:
         return serialization.load_pem_private_key(
             self.private_key_pem.encode("ascii"), password=None

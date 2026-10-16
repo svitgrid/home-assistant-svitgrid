@@ -48,7 +48,7 @@ from .harvest_config_apply import (
     probe_modbus_reachable,
 )
 from .inverter_entry import harvest_config_from_api, inverter_entry_from_api
-from .keystore import SvitgridKeystore
+from .keystore import KeystoreState, SvitgridKeystore
 from .signing import sign_payload
 
 if TYPE_CHECKING:
@@ -112,6 +112,16 @@ def _revoked_ids(state: Any) -> set[str]:
     """The signing key ids revoked over the LAN, from a keystore state."""
     ids = getattr(state, "revoked_key_ids", None)
     return set(ids) if isinstance(ids, list | tuple | set) else set()
+
+
+def _lan_paired_keys(state: Any) -> dict[str, str]:
+    """The trusted keys of phones paired over the LAN, from a keystore state.
+
+    Empty for anything that is not a real keystore state (tests pass mocks).
+    """
+    if isinstance(state, KeystoreState):
+        return state.lan_paired_trusted_keys()
+    return {}
 
 
 async def process_command(
@@ -1251,11 +1261,13 @@ async def _run_loop_body(
         _resync_state["at"] = asyncio.get_running_loop().time()
         api_key = (entry_data or {}).get("api_key")
         revoked: set[str] = set()
+        lan_paired: dict[str, str] = {}
         if keystore is not None:
             ks_state = await keystore.load()
             if ks_state is not None:
                 api_key = ks_state.api_key
                 revoked = _revoked_ids(ks_state)
+                lan_paired = _lan_paired_keys(ks_state)
         if not api_key:
             return
         try:
@@ -1278,6 +1290,11 @@ async def _run_loop_body(
             and k.get("publicKeyHex")
             and k["keyId"] not in revoked
         }
+        # A LAN pairing never reaches the server either, so its list lacks
+        # the keys of phones paired over the LAN. Keep those, or a restart
+        # with the cloud copy on takes control away from the phone.
+        if fetched:
+            fetched = {**fetched, **lan_paired}
         if fetched == trusted_public_keys_hex:
             return
         # An EMPTY set is the one answer that could silently disarm control for

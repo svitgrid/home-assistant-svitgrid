@@ -41,7 +41,7 @@ from custom_components.svitgrid.keystore import (
     ENTRY_TRUSTED_KEY_IDS,
     SvitgridKeystore,
 )
-from custom_components.svitgrid.local_pairing import ROLE_CONTROL, LanClaim, add_phone
+from custom_components.svitgrid.local_pairing import ROLE_CONTROL, ROLE_VIEW, LanClaim, add_phone
 from custom_components.svitgrid.signing import generate_keypair, sign_payload
 from tests.test_island_lan import ISLAND_KEY, NOW_MS, OTHER_ISLAND_KEY, _Admin, _body, _Req
 
@@ -502,6 +502,95 @@ async def test_a_resync_does_not_trust_a_key_the_cloud_revoked(hass: HomeAssista
     )
 
     api = _api([owner, phone], [_signed_command(phone, "cmd-after-restart")])
+    executor = _executor()
+    await _run_one_poll(hass, ks, api, executor)
+
+    executor.dispatch.assert_not_awaited()
+    assert phone.key_id not in (await ks.load()).trusted_public_keys_hex
+
+
+# ── a resync keeps the phones paired over the LAN ──────────────────────────
+
+
+async def test_a_startup_resync_keeps_a_phone_paired_over_the_lan(hass: HomeAssistant):
+    """The cloud never hears of a LAN pairing, so its approved list lacks the
+    phone's key. Replacing the trusted keys with that list took control away
+    from the phone at every restart with the cloud copy on."""
+    owner, phone = _Admin(), _Admin()
+    ks, entry, _ = await _station(hass, owner)
+    await add_phone(hass, entry, _claim_for(phone), ROLE_CONTROL)
+
+    api = _api([owner], [_signed_command(phone, "cmd-lan-phone")])
+    executor = _executor()
+    await _run_one_poll(hass, ks, api, executor)
+
+    executor.dispatch.assert_awaited_once()
+    state = await ks.load()
+    assert state.trusted_public_keys_hex[phone.key_id] == phone.pub
+    assert owner.key_id in state.trusted_public_keys_hex
+
+
+async def test_an_unknown_key_resync_keeps_a_phone_paired_over_the_lan(hass: HomeAssistant):
+    owner, phone, newcomer = _Admin(), _Admin(), _Admin()
+    ks, entry, _ = await _station(hass, owner)
+    await add_phone(hass, entry, _claim_for(phone), ROLE_CONTROL)
+
+    api = _api(
+        [owner],
+        [_signed_command(newcomer, "cmd-new"), _signed_command(phone, "cmd-lan-phone")],
+    )
+    # The owner approves the newcomer in the cloud after the poller started.
+    api.get_trusted_keys.side_effect = [
+        [{"keyId": owner.key_id, "publicKeyHex": owner.pub}],
+        [{"keyId": a.key_id, "publicKeyHex": a.pub} for a in (owner, newcomer)],
+    ]
+    executor = _executor()
+    with patch("custom_components.svitgrid.command_poller.TRUSTED_KEY_RESYNC_MIN_INTERVAL_S", 0):
+        await _run_one_poll(hass, ks, api, executor)
+
+    assert api.get_trusted_keys.await_count == 2
+    assert executor.dispatch.await_count == 2
+    assert {owner.key_id, newcomer.key_id, phone.key_id} <= set(
+        (await ks.load()).trusted_public_keys_hex
+    )
+
+
+async def test_a_resync_does_not_trust_a_view_only_phone(hass: HomeAssistant):
+    """A view-only phone's key is linked to its roster row and was never
+    trusted. Keeping LAN keys must not promote it."""
+    owner, viewer = _Admin(), _Admin()
+    ks, entry, _ = await _station(hass, owner)
+    await add_phone(hass, entry, _claim_for(viewer), ROLE_VIEW)
+
+    api = _api([owner], [_signed_command(viewer, "cmd-viewer")])
+    executor = _executor()
+    await _run_one_poll(hass, ks, api, executor)
+
+    executor.dispatch.assert_not_awaited()
+    assert viewer.key_id not in (await ks.load()).trusted_public_keys_hex
+
+
+async def test_a_resync_drops_a_key_trusted_with_no_phone(hass: HomeAssistant):
+    """Only LAN-paired keys are kept. A key the cloud trusted and no longer
+    lists goes, as before."""
+    owner, cloud_key = _Admin(), _Admin()
+    ks, _entry, _ = await _station(hass, owner, cloud_key)
+
+    api = _api([owner], [_signed_command(cloud_key, "cmd-cloud-key")])
+    executor = _executor()
+    await _run_one_poll(hass, ks, api, executor)
+
+    executor.dispatch.assert_not_awaited()
+    assert cloud_key.key_id not in (await ks.load()).trusted_public_keys_hex
+
+
+async def test_a_resync_drops_a_lan_phone_that_was_revoked(hass: HomeAssistant):
+    owner, phone = _Admin(), _Admin()
+    ks, entry, _ = await _station(hass, owner)
+    await add_phone(hass, entry, _claim_for(phone), ROLE_CONTROL)
+    assert (await _revoke(hass, owner, phone.key_id)).status == 200
+
+    api = _api([owner], [_signed_command(phone, "cmd-revoked-phone")])
     executor = _executor()
     await _run_one_poll(hass, ks, api, executor)
 

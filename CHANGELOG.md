@@ -118,6 +118,11 @@
   acknowledged it. It now reads either field, untrusts the key at once in
   the running command poller, records it with the keys revoked over the LAN
   so no resync trusts it again, and acknowledges the command.
+- **A phone paired over your network keeps control after a restart.** With
+  the cloud copy on, every start and every resync replaced the trusted keys
+  with the cloud's approved list, which never includes a key paired over
+  the LAN. A resync now keeps the keys of phones paired over the LAN with
+  control, unless they were revoked.
 - **A battery-charge event reaches the inverter in local mode.** With direct
   Modbus harvest, a charge event or a quick charge from the app that set no
   power limit failed with `KeyError: 'powerLimit'` and never wrote a
