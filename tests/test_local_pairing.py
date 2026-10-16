@@ -300,8 +300,18 @@ async def test_an_approved_claim_creates_a_local_only_entry(
         # 2026-10-16). A relay inverter's preset names no model.
         "stationName": "Дім",
         "inverters": [
-            {"inverterId": "local-inv-3f9a", "modelId": "deye_sg04lp3", "name": "Deye"},
-            {"inverterId": "local-inv-relay", "modelId": None, "name": "Second"},
+            {
+                "inverterId": "local-inv-3f9a",
+                "modelId": "deye_sg04lp3",
+                "name": "Deye",
+                "hasBattery": True,
+            },
+            {
+                "inverterId": "local-inv-relay",
+                "modelId": None,
+                "name": "Second",
+                "hasBattery": True,
+            },
         ],
     }
     assert answer["version"][0].isdigit()
@@ -823,9 +833,52 @@ async def test_the_first_phone_may_name_each_inverter_model(
     assert direct["model_id"] == "deye_sg05lp3"
     # The harvest config wins over the stored value: it is what is polled.
     assert _body(resp)["inverters"] == [
-        {"inverterId": "local-inv-3f9a", "modelId": "deye_sg04lp3", "name": "Deye"},
-        {"inverterId": "local-inv-relay", "modelId": "deye_sg04lp3", "name": "Second"},
+        {
+            "inverterId": "local-inv-3f9a",
+            "modelId": "deye_sg04lp3",
+            "name": "Deye",
+            "hasBattery": True,
+        },
+        {
+            "inverterId": "local-inv-relay",
+            "modelId": "deye_sg04lp3",
+            "name": "Second",
+            "hasBattery": True,
+        },
     ]
+
+
+async def test_the_first_phone_may_say_whether_each_inverter_has_a_battery(
+    hass: HomeAssistant, enable_custom_integrations
+) -> None:
+    """A preset's `hasBattery` is only a default; the owner answers in the
+    app. Pair-local stores the first phone's answer, so a later phone's
+    editors offer battery actions only where there is a battery."""
+    with _cloud(reachable=False):
+        result = await _start_flow(hass)
+        body = _pair_body(_code(hass))
+        body["inverters"][0]["hasBattery"] = False  # the preset says True
+        resp = await _pair(hass, result["flow_id"], body)
+
+    assert resp.status == 200, _body(resp)
+    direct, relay = hass.config_entries.async_entries(DOMAIN)[0].data["inverters"]
+    assert direct["has_battery"] is False
+    assert relay["has_battery"] is True  # nothing sent: the preset's default
+    assert [i["hasBattery"] for i in _body(resp)["inverters"]] == [False, True]
+
+
+async def test_an_inverter_with_no_preset_and_no_answer_has_unknown_battery(
+    hass: HomeAssistant, enable_custom_integrations
+) -> None:
+    with _cloud(reachable=False):
+        result = await _start_flow(hass)
+        body = _pair_body(_code(hass))
+        del body["inverters"][0]["presetId"]
+        body["inverters"] = body["inverters"][:1]
+        resp = await _pair(hass, result["flow_id"], body)
+
+    assert resp.status == 200, _body(resp)
+    assert _body(resp)["inverters"][0]["hasBattery"] is None
 
 
 async def test_an_inverter_without_a_model_stores_none(
@@ -867,6 +920,16 @@ def _bad_bodies():
             400,
             "bad_request",
             id="modelId not a string",
+        ),
+        pytest.param(
+            {
+                "inverters": [
+                    {"inverterId": "x", "presetId": "deye-sg04lp3-solarman-v1", "hasBattery": "yes"}
+                ]
+            },
+            400,
+            "bad_request",
+            id="hasBattery not a bool",
         ),
         pytest.param(
             {"inverters": [{"inverterId": "x", "presetId": "no-such-preset-v1"}]},

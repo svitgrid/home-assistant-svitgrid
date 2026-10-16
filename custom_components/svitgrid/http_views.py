@@ -553,7 +553,9 @@ class SvitgridPairLocalView(HomeAssistantView):
         # stored what it sent.
         entry = hass.config_entries.async_get_entry(entry_id)
         inverters = (
-            await hass.async_add_executor_job(local_pairing.station_inverters, entry)
+            await hass.async_add_executor_job(
+                local_pairing.station_inverters, entry, await _measured_batteries(hass, entry_id)
+            )
             if entry is not None
             else []
         )
@@ -569,6 +571,21 @@ class SvitgridPairLocalView(HomeAssistantView):
                 "inverters": inverters,
             }
         )
+
+
+async def _measured_batteries(hass, entry_id: str) -> set[str]:
+    """Inverters whose latest stored reading shows a battery. Pairing never
+    fails for this: no store, or a store that errors, measures nothing."""
+    entry_data = (hass.data.get(DOMAIN) or {}).get(entry_id)
+    store = entry_data.get("store") if isinstance(entry_data, dict) else None
+    if store is None:
+        return set()
+    try:
+        snapshot = await store.live_snapshot()
+    except Exception:  # noqa: BLE001
+        _LOGGER.warning("Could not read the latest readings for pair-local", exc_info=True)
+        return set()
+    return local_pairing.measured_batteries(snapshot)
 
 
 class SvitgridCommandsView(HomeAssistantView):

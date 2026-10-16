@@ -336,6 +336,9 @@ def build_local_inverters(raw_inverters: list[Any]) -> list[dict[str, Any]]:
             not isinstance(sent_model_id, str) or not sent_model_id or len(sent_model_id) > 128
         ):
             raise InvalidClaim("modelId must be a non-empty string")
+        sent_has_battery = raw.get("hasBattery")
+        if sent_has_battery is not None and not isinstance(sent_has_battery, bool):
+            raise InvalidClaim("hasBattery must be a bool")
         if harvest is not None and not isinstance(harvest, dict):
             raise InvalidClaim("harvestConfig must be an object")
         if not preset_id and not harvest:
@@ -353,7 +356,13 @@ def build_local_inverters(raw_inverters: list[Any]) -> list[dict[str, Any]]:
             "brand": preset.get("brand") if preset else None,
             "model": preset.get("model") if preset else None,
             "phases": preset.get("phases") if preset else None,
-            "has_battery": preset.get("hasBattery") if preset else None,
+            # A preset's hasBattery is a default; the owner's answer in the
+            # app replaces it.
+            "has_battery": (
+                sent_has_battery
+                if sent_has_battery is not None
+                else (preset.get("hasBattery") if preset else None)
+            ),
             "pv_strings": preset.get("pvStrings") if preset else None,
             "preset_id": preset_id or None,
         }
@@ -411,14 +420,51 @@ def _name_of(inverter: dict[str, Any]) -> str | None:
     return " ".join(parts) or None
 
 
-def station_inverters(entry: Any) -> list[dict[str, Any]]:
+# Positive evidence only: a battery-less model reads 0 V (decoder sanitize
+# zero-fills the field), and a pack at rest never reads under this.
+_MEASURED_BATTERY_MIN_V = 5.0
+
+
+def measured_batteries(snapshot: list[dict[str, Any]]) -> set[str]:
+    """Inverter ids whose latest stored reading shows a battery's voltage."""
+    found: set[str] = set()
+    for row in snapshot or []:
+        if not isinstance(row, dict):
+            continue
+        payload = row.get("payload")
+        voltage = payload.get("batteryVoltage") if isinstance(payload, dict) else None
+        inverter_id = row.get("inverterId")
+        if (
+            isinstance(inverter_id, str)
+            and isinstance(voltage, int | float)
+            and not isinstance(voltage, bool)
+            and voltage >= _MEASURED_BATTERY_MIN_V
+        ):
+            found.add(inverter_id)
+    return found
+
+
+def _has_battery_of(inverter: dict[str, Any], measured: set[str]) -> bool | None:
+    """In order: Home Assistant measured one, the entry's configured answer
+    (the config flow's, the cloud's, or the first phone's for a LAN-paired
+    inverter), else None. A measurement never says no."""
+    if inverter.get("inverter_id") in measured:
+        return True
+    configured = inverter.get("has_battery")
+    return configured if isinstance(configured, bool) else None
+
+
+def station_inverters(entry: Any, measured: set[str] | None = None) -> list[dict[str, Any]]:
     """The station's inverters as pair-local's 200 reports them.
 
-    `[{inverterId, modelId, name}]`, in the entry's order. A phone joining an
-    existing station brings no inverters, and its editors list actions by
-    `modelId` (true-island-contract.md, "Hardening", 2026-10-16). Reads
-    bundled presets from disk, so run it in an executor.
+    `[{inverterId, modelId, name, hasBattery}]`, in the entry's order. A
+    phone joining an existing station brings no inverters, and its editors
+    list actions by `modelId` and offer battery actions by `hasBattery`
+    (true-island-contract.md, "Hardening", 2026-10-16). `measured` holds the
+    ids `measured_batteries` found. Reads bundled presets from disk, so run
+    it in an executor.
     """
+    measured = measured or set()
     out: list[dict[str, Any]] = []
     for inverter in entry.data.get("inverters") or []:
         if not isinstance(inverter, dict):
@@ -431,6 +477,7 @@ def station_inverters(entry: Any) -> list[dict[str, Any]]:
                 "inverterId": inverter_id,
                 "modelId": _model_id_of(inverter),
                 "name": _name_of(inverter),
+                "hasBattery": _has_battery_of(inverter, measured),
             }
         )
     return out

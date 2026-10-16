@@ -135,6 +135,10 @@
   The first phone's answer carries them too. The first phone may send an
   optional `modelId` with each inverter; Home Assistant stores it and
   reports it when neither the harvest config nor the preset names a model.
+  Each inverter also carries `hasBattery`: true when its latest stored
+  reading shows a battery's voltage, else the entry's answer (for a
+  LAN-paired inverter, what the first phone sent, which replaces the
+  preset's default), else null. The first phone may send `hasBattery`.
 - **A battery-charge event reaches the inverter in local mode.** With direct
   Modbus harvest, a charge event or a quick charge from the app that set no
   power limit failed with `KeyError: 'powerLimit'` and never wrote a

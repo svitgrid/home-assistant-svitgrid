@@ -181,7 +181,7 @@ async def test_approve_with_control_adds_the_phone_to_the_station(
         "maxInverters": MAX_INVERTERS,
         "role": "control",
         "stationName": "Дім",
-        "inverters": [{"inverterId": "inv-1", "modelId": None, "name": None}],
+        "inverters": [{"inverterId": "inv-1", "modelId": None, "name": None, "hasBattery": None}],
     }
     assert ended["type"] == "abort"
     assert ended["reason"] == "phone_added"
@@ -393,10 +393,90 @@ async def test_a_second_phone_learns_each_inverter_and_its_model(
     answer = _body(resp)
     assert answer["role"] == "view"
     assert answer["stationName"] == "Дім"
-    assert answer["inverters"] == [
+    assert [{k: v for k, v in i.items() if k != "hasBattery"} for i in answer["inverters"]] == [
         {"inverterId": "inv-direct", "modelId": "deye_sg04lp3", "name": "Deye на даху"},
         {"inverterId": "inv-preset", "modelId": "anenji_anj_6200", "name": "Anenji ANJ-6200"},
         {"inverterId": "inv-relay", "modelId": None, "name": None},
         {"inverterId": "inv-stored", "modelId": "deye_sg04lp3", "name": None},
         {"inverterId": "inv-preset-wins", "modelId": "anenji_anj_6200", "name": None},
     ]
+
+
+class _Store:
+    """The reading store's latest reading per inverter, as /live reads it."""
+
+    def __init__(self, snapshot: list[dict]) -> None:
+        self._snapshot = snapshot
+
+    async def live_snapshot(self) -> list[dict]:
+        return self._snapshot
+
+
+async def test_a_second_phone_learns_which_inverters_have_a_battery(
+    hass: HomeAssistant, enable_custom_integrations, local_only
+) -> None:
+    """In order: what Home Assistant measured, what is configured on the
+    entry (the first phone's answer for a LAN-paired inverter), then null.
+    A measurement only ever says yes: a battery-less model reads 0 V."""
+    entry = await _station(hass, local_only=local_only)
+    hass.config_entries.async_update_entry(
+        entry,
+        data={
+            **entry.data,
+            "inverters": [
+                {"inverter_id": "inv-measured", "has_battery": False},
+                {"inverter_id": "inv-configured", "has_battery": True},
+                {"inverter_id": "inv-no", "has_battery": False},
+                {"inverter_id": "inv-zero-volts", "has_battery": None},
+                {"inverter_id": "inv-unknown"},
+            ],
+        },
+    )
+    hass.data[DOMAIN][entry.entry_id] = {
+        "store": _Store(
+            [
+                {
+                    "inverterId": "inv-measured",
+                    "payload": {"batteryVoltage": 51.2, "batterySoc": 64},
+                },
+                {
+                    "inverterId": "inv-zero-volts",
+                    "payload": {"batteryVoltage": 0.0, "batterySoc": 0},
+                },
+            ]
+        )
+    }
+    with _cloud(reachable=False):
+        result = await _start_flow(hass)
+        resp, _ = await _add(hass, result["flow_id"], _phone_body(_code(hass)), "pair_approve")
+
+    assert resp.status == 200, _body(resp)
+    assert {i["inverterId"]: i["hasBattery"] for i in _body(resp)["inverters"]} == {
+        "inv-measured": True,
+        "inv-configured": True,
+        "inv-no": False,
+        "inv-zero-volts": None,
+        "inv-unknown": None,
+    }
+
+
+async def test_a_broken_reading_store_leaves_the_configured_answer(
+    hass: HomeAssistant, enable_custom_integrations, local_only
+) -> None:
+    entry = await _station(hass, local_only=local_only)
+    hass.config_entries.async_update_entry(
+        entry,
+        data={**entry.data, "inverters": [{"inverter_id": "inv-1", "has_battery": True}]},
+    )
+
+    class _Broken:
+        async def live_snapshot(self) -> list[dict]:
+            raise RuntimeError("database is locked")
+
+    hass.data[DOMAIN][entry.entry_id] = {"store": _Broken()}
+    with _cloud(reachable=False):
+        result = await _start_flow(hass)
+        resp, _ = await _add(hass, result["flow_id"], _phone_body(_code(hass)), "pair_approve")
+
+    assert resp.status == 200, _body(resp)
+    assert _body(resp)["inverters"][0]["hasBattery"] is True
