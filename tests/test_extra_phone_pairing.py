@@ -334,7 +334,9 @@ def test_the_add_phone_dialog_is_translated(lang: str) -> None:
     data = json.loads((base / "translations" / f"{lang}.json").read_text(encoding="utf-8"))
     config = data["config"]
     step = config["step"]["pair_approval_add"]
-    assert "{device}" in step["title"]
+    # A placeholder in a menu step's title renders as a formatjs error.
+    assert "{" not in step["title"]
+    assert "{device}" in step["description"]
     assert set(step["menu_options"]) == {"pair_approve", "pair_approve_view", "pair_reject"}
     assert "{code}" in config["progress"]["waiting_for_phone"]
     assert "{device}" in config["abort"]["phone_added"]

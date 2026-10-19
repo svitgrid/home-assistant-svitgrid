@@ -1035,7 +1035,11 @@ def test_the_approval_question_is_translated(lang: str) -> None:
     base = Path(__file__).resolve().parent.parent / "custom_components" / "svitgrid"
     data = json.loads((base / "translations" / f"{lang}.json").read_text(encoding="utf-8"))
     step = data["config"]["step"]["pair_approval"]
-    assert "{device}" in step["title"]
+    # Home Assistant fills placeholders into a menu step's text but not its
+    # title, which then renders "Translation [formatjs Error:
+    # MISSING_VALUE]" (2026-10-19). The phone's name goes in the text.
+    assert "{" not in step["title"]
+    assert "{device}" in step["description"]
     assert set(step["menu_options"]) == {"pair_approve", "pair_reject"}
     if lang == "uk":
-        assert step["title"].startswith("Підключити")
+        assert step["title"] == "Підключити телефон"

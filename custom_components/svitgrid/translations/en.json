@@ -76,16 +76,16 @@
         }
       },
       "pair_approval": {
-        "title": "Connect {device}?",
-        "description": "A phone called {device} would like to connect to this Home Assistant over your home network, without a Svitgrid account. If it is your phone, or one you expect, approve it. If you do not recognise it, reject it, and nothing is shared.",
+        "title": "Connect a phone",
+        "description": "**{device}** wants to connect to this Home Assistant over your home network, without a Svitgrid account.\n\nApprove it if it is your phone, or one you expect. If you do not recognise it, reject it, and nothing is shared.",
         "menu_options": {
           "pair_approve": "Approve",
           "pair_reject": "Reject"
         }
       },
       "pair_approval_add": {
-        "title": "Connect {device} to this station?",
-        "description": "A phone called {device} would like to join this Svitgrid station over your home network. **Approve with control** lets it change inverter settings and the schedule. **Approve view only** lets it see readings and history, and change nothing. If you do not recognise it, reject it, and nothing is shared.",
+        "title": "Add a phone to this station",
+        "description": "**{device}** wants to join this Svitgrid station over your home network.\n\n- **Approve with control:** it can change inverter settings and the schedule.\n- **Approve view only:** it can see readings and history, and change nothing.\n\nIf you do not recognise it, reject it, and nothing is shared.",
         "menu_options": {
           "pair_approve": "Approve with control",
           "pair_approve_view": "Approve view only",
