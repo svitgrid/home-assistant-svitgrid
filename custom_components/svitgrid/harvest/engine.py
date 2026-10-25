@@ -33,6 +33,14 @@ _LOGGER = logging.getLogger(__name__)
 _FIRST_READING_RETRY_MAX_S = 30
 
 
+# After the first stored reading the sender learns the server's cadence about a
+# second later (svitgrid#1117), but the loop has already chosen a sleep from the
+# cold-start default. For this long after that reading, the wait re-reads the
+# shared cadence every _FIRST_READING_RETRY_S and adopts a new value, measured
+# from the tick, without an extra poll.
+_CADENCE_SETTLE_S = 30
+
+
 def _first_reading_backoff(attempt: int) -> float:
     return float(min(_FIRST_READING_RETRY_S * (2**attempt), _FIRST_READING_RETRY_MAX_S))
 
@@ -97,7 +105,9 @@ async def run_direct_harvest_loop(
     (so the sender can adjust it) and clamped to sane bounds. On exception
     the loop falls back to _DEFAULT_INTERVAL_S to avoid tight retry loops.
     Before the first reading is stored, a gated or failed tick is retried on
-    a short capped back-off instead (see _first_reading_backoff).
+    a short capped back-off instead (see _first_reading_backoff). The wait
+    after the first stored reading adopts the cadence the sender learns from
+    the server's reply to it (see _CADENCE_SETTLE_S).
 
     Read now: when ``read_now`` is given, the loop waits on it instead of a
     plain sleep. A request runs one extra poll and the loop then waits out the
@@ -188,6 +198,7 @@ async def run_direct_harvest_loop(
     while alive():
         interval_s = _clamp_interval(float(cadence.interval_s))
         result = (await tick(interval_s))["outcome"]
+        first_stored = not stored_any and result == "stored"
         stored_any = stored_any or result == "stored"
         failed = result in ("unreachable", "failed")
         if not stored_any and (failed or result == "incomplete"):
@@ -197,16 +208,41 @@ async def run_direct_harvest_loop(
             next_sleep_s = float(_DEFAULT_INTERVAL_S)
         else:
             next_sleep_s = interval_s
+        # Only the wait after the first stored reading watches for the
+        # server's cadence; every later wait keeps its interval.
+        settle_s = float(_CADENCE_SETTLE_S) if first_stored else 0.0
 
         if read_now is None:
-            await asyncio.sleep(next_sleep_s)
+            slept_s = 0.0
+            while slept_s < min(settle_s, next_sleep_s):
+                step_s = min(float(_FIRST_READING_RETRY_S), next_sleep_s - slept_s)
+                await asyncio.sleep(step_s)
+                slept_s += step_s
+                learned_s = _clamp_interval(float(cadence.interval_s))
+                if learned_s != interval_s:
+                    next_sleep_s = learned_s
+                    break
+            if next_sleep_s > slept_s:
+                await asyncio.sleep(next_sleep_s - slept_s)
             continue
-        deadline = clock() + next_sleep_s
+        started = clock()
+        deadline = started + next_sleep_s
+        settling = settle_s > 0
         while alive():
-            remaining = deadline - clock()
+            now = clock()
+            remaining = deadline - now
             if remaining <= 0:
                 break
-            if await read_now.wait(remaining):
+            settling = settling and now - started < settle_s
+            if settling:
+                remaining = min(remaining, float(_FIRST_READING_RETRY_S))
+            woke = await read_now.wait(remaining)
+            if settling:
+                learned_s = _clamp_interval(float(cadence.interval_s))
+                if learned_s != interval_s:
+                    deadline = started + learned_s
+                    settling = False
+            if woke:
                 extra = await tick(interval_s)
                 stored_any = stored_any or extra["outcome"] == "stored"
     _LOGGER.info("Direct harvest loop stopped for inverter %s", inverter_id)

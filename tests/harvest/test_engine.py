@@ -324,10 +324,12 @@ async def test_first_reading_backoff_is_capped_well_under_the_app_budget(monkeyp
 @pytest.mark.asyncio
 async def test_after_first_stored_reading_the_loop_uses_the_normal_cadence(monkeypatch):
     delays, _ = await _run_loop_with(monkeypatch, ["gated", "stored", "gated", "stored"])
-    # delays[0] is the fast retry; after the stored reading every sleep is the
-    # cadence, including after a later gated tick.
-    assert delays[1] == 300
-    assert delays[2] == 300
+    # delays[0] is the fast retry. After the first stored reading the wait
+    # re-reads the cadence in 5 s steps for 30 s (svitgrid#1117), still 300 s
+    # in all. After a later gated tick the sleep is the cadence in one go.
+    assert delays[1:7] == [5] * 6
+    assert sum(delays[1:8]) == 300
+    assert delays[8] == 300
 
 
 @pytest.mark.asyncio
@@ -411,9 +413,11 @@ async def test_read_now_runs_one_extra_poll_without_resetting_the_cadence(monkey
         read_now=trigger,
         clock=lambda: now[0],
     )
-    # Regular poll at t=0, extra poll at t=100, regular poll at t=300.
+    # Regular poll at t=0, extra poll at t=100, regular poll at t=300. The
+    # first wait follows the first stored reading, so it is capped at 5 s to
+    # re-read the cadence (svitgrid#1117); the scripted wait still ran 100 s.
     assert polls == 3
-    assert timeouts == [300.0, 200.0]
+    assert timeouts == [5.0, 200.0]
     assert delays == []  # the trigger replaces asyncio.sleep
 
 
@@ -546,3 +550,116 @@ async def test_poll_once_omits_grid_power_when_no_grid_leg_answered(hass, monkey
     monkeypatch.setattr(eng, "read_raw", AsyncMock(return_value=raw))
     returned = await eng.poll_once(hass=hass, spec=spec, cfg=cfg, inverter_id="i", store=store)
     assert returned["gridPower"] == 120.0
+
+
+# ---------------------------------------------------------------------------
+# svitgrid#1117: the loop chose its sleep before the server's first reply.
+# The first tick ran at the cold-start cadence (300 s); the sender learned
+# ingestIntervalMs=60000 about a second later, but the loop still slept 300 s,
+# so the second reading came 5 minutes after the first.
+# ---------------------------------------------------------------------------
+
+
+def _run_loop_with_sender(monkeypatch, polls_wanted, *, learned_s, answer_after_s=1.0):
+    """Drive the loop on a fake clock. A fake sender sets the shared cadence to
+    ``learned_s`` once ``answer_after_s`` has passed since the first poll
+    (``learned_s=None``: the sender never answers). Returns the poll times."""
+    from custom_components.svitgrid.harvest.read_now import ReadNowTrigger
+
+    now = [0.0]
+    poll_times: list[float] = []
+    cadence = type("C", (), {"interval_s": 300})()
+
+    class FakeHass:
+        is_stopping = False
+
+    fake_hass = FakeHass()
+
+    def sender_catches_up():
+        if learned_s is not None and poll_times and now[0] - poll_times[0] >= answer_after_s:
+            cadence.interval_s = learned_s
+
+    class ClockedTrigger(ReadNowTrigger):
+        async def wait(self, seconds):
+            now[0] += seconds
+            sender_catches_up()
+            return False
+
+    async def fake_poll_once(**kwargs):
+        poll_times.append(now[0])
+        if len(poll_times) == polls_wanted:
+            fake_hass.is_stopping = True
+        return {"inverterId": "inv-1"}
+
+    monkeypatch.setattr(eng, "poll_once", fake_poll_once)
+
+    async def go():
+        await eng.run_direct_harvest_loop(
+            hass=fake_hass,
+            store=None,
+            cadence=cadence,
+            inverter_id="inv-1",
+            cfg={"ip": "x", "logger_serial": "1"},
+            spec_holder=type("SH", (), {"spec": SPEC})(),
+            read_now=ClockedTrigger(),
+            clock=lambda: now[0],
+        )
+        return poll_times
+
+    return go()
+
+
+@pytest.mark.asyncio
+async def test_second_reading_follows_the_cadence_the_server_sent_after_the_first(monkeypatch):
+    poll_times = await _run_loop_with_sender(monkeypatch, 3, learned_s=60)
+    assert poll_times[0] == 0
+    # The server answered the first batch with 60 s: the second reading lands
+    # about 60 s after the first, not at the 300 s cold-start default.
+    assert poll_times[1] <= 65
+    assert poll_times[2] - poll_times[1] == 60
+
+
+@pytest.mark.asyncio
+async def test_second_reading_waits_the_default_cadence_when_the_server_never_answers(
+    monkeypatch,
+):
+    poll_times = await _run_loop_with_sender(monkeypatch, 2, learned_s=None)
+    # No answer, no extra poll: the default cadence still holds.
+    assert poll_times == [0, 300]
+
+
+@pytest.mark.asyncio
+async def test_without_read_now_the_second_reading_also_follows_the_learned_cadence(
+    monkeypatch,
+):
+    cadence = type("C", (), {"interval_s": 300})()
+    delays: list[float] = []
+    poll_times: list[float] = []
+
+    class FakeHass:
+        is_stopping = False
+
+    fake_hass = FakeHass()
+
+    async def fake_poll_once(**kwargs):
+        poll_times.append(sum(delays))
+        if len(poll_times) == 2:
+            fake_hass.is_stopping = True
+        return {"inverterId": "inv-1"}
+
+    async def fake_sleep(s):
+        delays.append(s)
+        cadence.interval_s = 60  # the sender's answer to the first batch
+
+    monkeypatch.setattr(eng, "poll_once", fake_poll_once)
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    await eng.run_direct_harvest_loop(
+        hass=fake_hass,
+        store=None,
+        cadence=cadence,
+        inverter_id="inv-1",
+        cfg={"ip": "x", "logger_serial": "1"},
+        spec_holder=type("SH", (), {"spec": SPEC})(),
+    )
+    assert poll_times[1] <= 65
