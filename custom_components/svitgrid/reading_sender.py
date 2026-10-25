@@ -101,6 +101,7 @@ async def _http_send(
     readings: list[Any],
     publisher,
     health: SenderHealth | None = None,
+    control: MqttControlState | None = None,
 ) -> tuple[int, bool]:
     """POST ``readings`` (aligned with ``keys``) via the HTTP batch ingest,
     map the per-item results back onto the store, handle DeviceEvicted /
@@ -203,6 +204,14 @@ async def _http_send(
             if key in sent_set:
                 publisher.publish(json.dumps(reading))
 
+    # The HTTP response is also the MQTT-primary switch, as it is for the edge
+    # firmware and the mobile harvester. Before 2026-10-25 only a
+    # `devices/{id}/config` push set it, and the server sends that push only
+    # on a cadence change or refresh-now, so an install stayed on HTTP and
+    # fell back to it on every restart. An absent field leaves it unchanged.
+    if control is not None and isinstance(body, dict) and "mqttPublishReadings" in body:
+        control.mqtt_primary = bool(body["mqttPublishReadings"])
+
     interval_ms = body.get("ingestIntervalMs") if isinstance(body, dict) else None
     if isinstance(interval_ms, (int, float)) and interval_ms > 0:
         cadence.interval_s = int(interval_ms / 1000)
@@ -234,7 +243,8 @@ async def drain_once(
     the server contract is unchanged. See battery_sign.py.
 
     ``control`` (Task 3) is the shared ``MqttControlState`` updated by the
-    MQTT wake client from `devices/{deviceId}/config`. When it says the
+    MQTT wake client from `devices/{deviceId}/config` and, for
+    ``mqtt_primary``, by every HTTP response's ``mqttPublishReadings``. When it says the
     server wants MQTT-primary AND this session already proved the HTTP path
     once (bootstrapped) AND the readings publisher is connected, each row is
     published QoS-1 and PUBACK-confirmed (`publish_and_wait`); rows the broker
@@ -315,6 +325,7 @@ async def drain_once(
                 readings=unacked_readings,
                 publisher=publisher,
                 health=health,
+                control=control,
             )
         return len(acked_keys) + http_sent
 
@@ -332,6 +343,7 @@ async def drain_once(
         readings=readings,
         publisher=publisher,
         health=health,
+        control=control,
     )
     if control is not None and response_ok:
         control.bootstrapped = True

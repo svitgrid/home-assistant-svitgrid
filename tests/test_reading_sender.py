@@ -655,3 +655,71 @@ async def test_drain_applies_config_cadence_on_http_path(tmp_path):
 
     assert sent == 1
     assert cadence.interval_s == 45
+
+
+@pytest.mark.asyncio
+async def test_drain_http_flag_turns_mqtt_primary_on_after_restart(tmp_path):
+    """After a restart the control state is fresh (no config push yet). The
+    bootstrap HTTP response's mqttPublishReadings=True must switch the add-on
+    to MQTT-primary, so the next drain sends over MQTT with no HTTP call.
+    Measured 2026-10-25: without this, an install stayed on HTTP until the
+    owner moved the cadence slider, and fell back to HTTP on every restart."""
+    store = _store(tmp_path)
+    now = "2026-06-24T12:00:00Z"
+    store._append_sync({"inverterId": "inv-1", "timestamp": "2026-06-24T10:00:00Z"})
+    client = _FakeClient({"results": [{"ok": True}], "mqttPublishReadings": True})
+    pub = _PubAckPublisher(acks=True)
+    control = MqttControlState()
+
+    await drain_once(
+        store=store, api_client=client, api_key="k", now_iso=now,
+        cadence=Cadence(interval_s=10), publisher=pub, control=control,
+    )
+    assert control.mqtt_primary is True
+    assert control.bootstrapped is True
+
+    store._append_sync({"inverterId": "inv-1", "timestamp": "2026-06-24T10:01:00Z"})
+    sent = await drain_once(
+        store=store, api_client=client, api_key="k", now_iso=now,
+        cadence=Cadence(interval_s=10), publisher=pub, control=control,
+    )
+
+    assert sent == 1
+    assert len(client.calls) == 1  # only the bootstrap batch went over HTTP
+    assert len(pub.publish_and_wait_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_drain_http_flag_false_turns_mqtt_primary_off(tmp_path):
+    """The server can withdraw MQTT-primary through the same HTTP field."""
+    store = _store(tmp_path)
+    now = "2026-06-24T12:00:00Z"
+    store._append_sync({"inverterId": "inv-1", "timestamp": "2026-06-24T10:00:00Z"})
+    client = _FakeClient({"results": [{"ok": True}], "mqttPublishReadings": False})
+    pub = _PubAckPublisher(acks=False)  # forces the HTTP fallback
+    control = MqttControlState(mqtt_primary=True, bootstrapped=True)
+
+    await drain_once(
+        store=store, api_client=client, api_key="k", now_iso=now,
+        cadence=Cadence(interval_s=10), publisher=pub, control=control,
+    )
+
+    assert control.mqtt_primary is False
+
+
+@pytest.mark.asyncio
+async def test_drain_http_flag_absent_leaves_mqtt_primary_unchanged(tmp_path):
+    """An older server that omits the field must not switch MQTT-primary off."""
+    store = _store(tmp_path)
+    now = "2026-06-24T12:00:00Z"
+    store._append_sync({"inverterId": "inv-1", "timestamp": "2026-06-24T10:00:00Z"})
+    client = _FakeClient({"results": [{"ok": True}]})
+    pub = _PubAckPublisher(acks=False)
+    control = MqttControlState(mqtt_primary=True, bootstrapped=True)
+
+    await drain_once(
+        store=store, api_client=client, api_key="k", now_iso=now,
+        cadence=Cadence(interval_s=10), publisher=pub, control=control,
+    )
+
+    assert control.mqtt_primary is True

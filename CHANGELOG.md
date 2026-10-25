@@ -74,6 +74,14 @@
   offers LAN pairing only to an integration that supports it.
 
 ### Changed
+- **Readings go to the cloud over MQTT, with HTTP as the backup.** The add-on
+  takes its MQTT-primary switch from every ingest response's
+  `mqttPublishReadings`, the way the edge firmware and the mobile harvester
+  do. Before, only a `devices/{id}/config` push set it. The cloud sends that
+  push only when the owner changes the reporting cadence or taps refresh, so an
+  install sent over HTTP until then and went back to HTTP on every restart.
+  The first batch of each session still goes over HTTP, and any reading the
+  broker does not acknowledge falls back to HTTP.
 - **Presets ship inside the integration.** HACS installs only
   `custom_components/svitgrid/`, so the presets never reached an install; they
   are now bundled there too. The cloud stays the source of updates.
