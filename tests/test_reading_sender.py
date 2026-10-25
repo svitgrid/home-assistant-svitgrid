@@ -672,16 +672,26 @@ async def test_drain_http_flag_turns_mqtt_primary_on_after_restart(tmp_path):
     control = MqttControlState()
 
     await drain_once(
-        store=store, api_client=client, api_key="k", now_iso=now,
-        cadence=Cadence(interval_s=10), publisher=pub, control=control,
+        store=store,
+        api_client=client,
+        api_key="k",
+        now_iso=now,
+        cadence=Cadence(interval_s=10),
+        publisher=pub,
+        control=control,
     )
     assert control.mqtt_primary is True
     assert control.bootstrapped is True
 
     store._append_sync({"inverterId": "inv-1", "timestamp": "2026-06-24T10:01:00Z"})
     sent = await drain_once(
-        store=store, api_client=client, api_key="k", now_iso=now,
-        cadence=Cadence(interval_s=10), publisher=pub, control=control,
+        store=store,
+        api_client=client,
+        api_key="k",
+        now_iso=now,
+        cadence=Cadence(interval_s=10),
+        publisher=pub,
+        control=control,
     )
 
     assert sent == 1
@@ -700,8 +710,13 @@ async def test_drain_http_flag_false_turns_mqtt_primary_off(tmp_path):
     control = MqttControlState(mqtt_primary=True, bootstrapped=True)
 
     await drain_once(
-        store=store, api_client=client, api_key="k", now_iso=now,
-        cadence=Cadence(interval_s=10), publisher=pub, control=control,
+        store=store,
+        api_client=client,
+        api_key="k",
+        now_iso=now,
+        cadence=Cadence(interval_s=10),
+        publisher=pub,
+        control=control,
     )
 
     assert control.mqtt_primary is False
@@ -718,8 +733,13 @@ async def test_drain_http_flag_absent_leaves_mqtt_primary_unchanged(tmp_path):
     control = MqttControlState(mqtt_primary=True, bootstrapped=True)
 
     await drain_once(
-        store=store, api_client=client, api_key="k", now_iso=now,
-        cadence=Cadence(interval_s=10), publisher=pub, control=control,
+        store=store,
+        api_client=client,
+        api_key="k",
+        now_iso=now,
+        cadence=Cadence(interval_s=10),
+        publisher=pub,
+        control=control,
     )
 
     assert control.mqtt_primary is True
