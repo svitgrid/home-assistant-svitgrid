@@ -314,3 +314,10 @@ async def test_setup_keeps_the_phone_key_links(hass, enable_custom_integrations)
 
     state = await ks.load()
     assert state.key_devices == {app_key_id: DEVICE_ID, "other-key": "phone-2"}
+
+
+@pytest.mark.asyncio
+async def test_a_local_entry_starts_reading_every_five_seconds(hass, enable_custom_integrations):
+    entry, _, _ = _local_entry()
+    await _setup(hass, entry)
+    assert hass.data[DOMAIN]["cadence"].interval_s == 5

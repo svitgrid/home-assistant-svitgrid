@@ -405,16 +405,22 @@ def _migrate_v1_to_v2(data: dict) -> dict:
     return new
 
 
-def _initial_cadence_seconds(entry_data: dict) -> int:
-    """Clamp the persisted harvest interval into the harvest clamp bounds."""
+def _initial_cadence_seconds(entry_data: dict, local_only: bool = False) -> int:
+    """Clamp the persisted harvest interval into the harvest clamp bounds.
+
+    With no stored rate, a fully local island starts in Live: it reads every
+    5 s (Live's checkSec), free, because nothing leaves the house. A cloud
+    entry starts at the 5-minute default until the server sends its cadence.
+    """
     from .const import CADENCE_DEFAULT_INTERVAL_S
     from .readings_publisher import _INTERVAL_CEILING_S, _INTERVAL_FLOOR_S
 
-    raw = entry_data.get("harvest_interval_seconds", CADENCE_DEFAULT_INTERVAL_S)
+    default = _INTERVAL_FLOOR_S if local_only else CADENCE_DEFAULT_INTERVAL_S
+    raw = entry_data.get("harvest_interval_seconds", default)
     try:
         v = int(raw)
     except (TypeError, ValueError):
-        return CADENCE_DEFAULT_INTERVAL_S
+        return default
     return max(_INTERVAL_FLOOR_S, min(_INTERVAL_CEILING_S, v))
 
 
@@ -815,7 +821,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         lifecycle.on_deprovision = lambda: hass.async_create_task(
             _revoke_entry_island_keys(hass, entry), "svitgrid_revoke_island_keys"
         )
-        cadence.interval_s = _initial_cadence_seconds(dict(entry.data))
+        cadence.interval_s = _initial_cadence_seconds(dict(entry.data), local_only=local_only)
         hass.data.setdefault(DOMAIN, {})
         hass.data[DOMAIN]["cadence"] = cadence
         hass.data[DOMAIN]["cadence_entry_id"] = entry.entry_id
