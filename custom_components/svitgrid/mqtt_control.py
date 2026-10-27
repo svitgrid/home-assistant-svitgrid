@@ -21,7 +21,9 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+from .live_gate import LiveControl, parse_live_control
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -34,6 +36,26 @@ class MqttControlState:
     mqtt_primary: bool = False
     interval_s: int | None = None
     bootstrapped: bool = False
+    # Live or interval reporting, set by every channel that carries the
+    # server's cadence: this config push, the HTTP ingest ack and the command
+    # poll response (apply_cadence).
+    live: LiveControl = field(default_factory=LiveControl)
+
+
+def apply_cadence(state: MqttControlState, data: dict) -> None:
+    """Apply the cadence fields of one server message (`ingestIntervalMs`,
+    `ingestMode`, `live`) to `state`. A message without them changes nothing."""
+    state.live = parse_live_control(data, state.live)
+    if state.live.interval_s is not None and state.live.interval_s > 0:
+        state.interval_s = state.live.interval_s
+
+
+def effective_interval_s(state: MqttControlState) -> int | None:
+    """How often the read loops sample: every `checkSec` in Live (the sender's
+    gate decides what leaves), else the server's ingest interval."""
+    if state.live.live:
+        return state.live.params.check_s
+    return state.interval_s
 
 
 def apply_config(
@@ -66,14 +88,7 @@ def apply_config(
     if "mqttPublishReadings" in data:
         state.mqtt_primary = bool(data["mqttPublishReadings"])
 
-    if "ingestIntervalMs" in data:
-        interval_ms = data["ingestIntervalMs"]
-        if (
-            isinstance(interval_ms, (int, float))
-            and not isinstance(interval_ms, bool)
-            and interval_ms > 0
-        ):
-            state.interval_s = int(interval_ms / 1000)
+    apply_cadence(state, data)
 
     if data.get("updateCheck") is True and on_update_check is not None:
         try:

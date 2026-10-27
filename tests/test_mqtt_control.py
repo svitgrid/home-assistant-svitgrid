@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import json
 
-from custom_components.svitgrid.mqtt_control import MqttControlState, apply_config
+from custom_components.svitgrid.mqtt_control import (
+    MqttControlState,
+    apply_config,
+    effective_interval_s,
+)
 
 
 def test_defaults():
@@ -167,3 +171,37 @@ def test_update_check_callback_exception_is_swallowed():
 def test_update_check_without_callback_is_noop():
     state = MqttControlState()
     apply_config(state, json.dumps({"updateCheck": True}))  # no callback wired — no raise
+
+
+# ── Live mode (dynamic cadence plan 2) ──────────────────────────────────────
+
+LIVE_CONFIG = {
+    "mqttPublishReadings": True,
+    "ingestIntervalMs": 30000,
+    "ingestMode": "live",
+    "live": {"checkSec": 5, "deltaW": 50, "deltaSocPct": 1, "heartbeatSec": 30},
+}
+
+
+def test_live_config_sets_live_mode():
+    state = MqttControlState()
+    apply_config(state, json.dumps(LIVE_CONFIG))
+    assert state.live.mode == "live"
+    assert state.live.params.check_s == 5
+    assert effective_interval_s(state) == 5
+
+
+def test_config_without_cadence_fields_keeps_live():
+    state = MqttControlState()
+    apply_config(state, json.dumps(LIVE_CONFIG))
+    apply_config(state, json.dumps({"mqttPublishReadings": True}))
+    assert state.live.mode == "live"
+
+
+def test_interval_config_ends_live():
+    state = MqttControlState()
+    apply_config(state, json.dumps(LIVE_CONFIG))
+    apply_config(state, json.dumps({"ingestIntervalMs": 300000, "ingestMode": "interval"}))
+    assert state.live.mode == "interval"
+    assert state.interval_s == 300
+    assert effective_interval_s(state) == 300

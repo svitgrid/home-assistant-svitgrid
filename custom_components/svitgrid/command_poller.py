@@ -49,6 +49,7 @@ from .harvest_config_apply import (
 )
 from .inverter_entry import harvest_config_from_api, inverter_entry_from_api
 from .keystore import KeystoreState, SvitgridKeystore
+from .mqtt_control import apply_cadence
 from .signing import sign_payload
 
 if TYPE_CHECKING:
@@ -1153,6 +1154,7 @@ async def run_loop(
     lifecycle: Any = None,  # LifecycleState; None acceptable (keeps existing callers working)
     store: Any = None,  # store with async set_lifecycle; None acceptable
     entry: ConfigEntry | None = None,
+    control: Any = None,  # MqttControlState; None acceptable
 ) -> None:
     """Polling coroutine. Exits when hass.is_stopping becomes True.
 
@@ -1220,6 +1222,7 @@ async def run_loop(
             lifecycle=lifecycle,
             store=store,
             entry=entry,
+            control=control,
         )
     finally:
         if _unsubscribe_trust is not None:
@@ -1242,6 +1245,7 @@ async def _run_loop_body(
     lifecycle: Any,
     store: Any,
     entry: ConfigEntry | None,
+    control: Any = None,
 ) -> None:
     """`run_loop` after the trusted keys are seeded: resync, then poll."""
 
@@ -1349,6 +1353,11 @@ async def _run_loop_body(
                 api_key=state.api_key, integration_version=integration_version
             )
             next_interval_s = _next_poll_interval_s(resp, interval_s)
+            # The poll carries the server's cadence too: the fallback when a
+            # config push was lost, and the only cadence channel an
+            # MQTT-primary install hears from between HTTP acks.
+            if control is not None and isinstance(resp, dict):
+                apply_cadence(control, resp)
             for command in resp.get("commands", []):
                 if activity is not None:
                     activity.record_command(

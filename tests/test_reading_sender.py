@@ -743,3 +743,70 @@ async def test_drain_http_flag_absent_leaves_mqtt_primary_unchanged(tmp_path):
     )
 
     assert control.mqtt_primary is True
+
+
+# ── Live mode: the cadence follows the server's mode (dynamic cadence plan 2) ─
+
+
+@pytest.mark.asyncio
+async def test_drain_after_live_config_samples_every_check_sec(tmp_path):
+    from custom_components.svitgrid.mqtt_control import apply_config
+
+    store = _store(tmp_path)
+    store._append_sync({"inverterId": "inv-1", "timestamp": "2026-06-24T10:00:00Z"})
+    control = MqttControlState()
+    apply_config(
+        control, {"ingestIntervalMs": 30000, "ingestMode": "live", "live": {"checkSec": 5}}
+    )
+    cadence = Cadence(interval_s=300)
+    # The ack repeats Live with the server's 30 s interval: sampling stays at checkSec.
+    client = _FakeClient(
+        {"results": [{"ok": True}], "ingestIntervalMs": 30000, "ingestMode": "live"}
+    )
+
+    await drain_once(
+        store=store,
+        api_client=client,
+        api_key="k",
+        now_iso="2026-06-24T12:00:00Z",
+        cadence=cadence,
+        control=control,
+    )
+
+    assert cadence.interval_s == 5
+
+
+@pytest.mark.asyncio
+async def test_http_ack_in_interval_mode_ends_live(tmp_path):
+    from custom_components.svitgrid.mqtt_control import apply_config
+
+    store = _store(tmp_path)
+    store._append_sync({"inverterId": "inv-1", "timestamp": "2026-06-24T10:00:00Z"})
+    control = MqttControlState()
+    apply_config(control, {"ingestIntervalMs": 30000, "ingestMode": "live"})
+    cadence = Cadence(interval_s=5)
+    client = _FakeClient(
+        {"results": [{"ok": True}], "ingestIntervalMs": 300000, "ingestMode": "interval"}
+    )
+
+    await drain_once(
+        store=store,
+        api_client=client,
+        api_key="k",
+        now_iso="2026-06-24T12:00:00Z",
+        cadence=cadence,
+        control=control,
+    )
+
+    assert control.live.mode == "interval"
+    assert cadence.interval_s == 300
+    # The next drain keeps 300 s: the ack updated the shared interval too.
+    await drain_once(
+        store=store,
+        api_client=client,
+        api_key="k",
+        now_iso="2026-06-24T12:00:01Z",
+        cadence=cadence,
+        control=control,
+    )
+    assert cadence.interval_s == 300

@@ -14,7 +14,7 @@ from homeassistant.core import HomeAssistant
 from .api_client import DeviceEvicted, ReadingRejected
 from .battery_sign import flip_battery_sign
 from .const import BACKFILL_CAP_S, CADENCE_DEFAULT_INTERVAL_S, INGEST_BATCH_MAX, SENDER_TICK_S
-from .mqtt_control import MqttControlState
+from .mqtt_control import MqttControlState, apply_cadence, effective_interval_s
 from .mqtt_readings_publisher import ReadingsMqttClient
 
 _LOGGER = logging.getLogger(__name__)
@@ -212,9 +212,18 @@ async def _http_send(
     if control is not None and isinstance(body, dict) and "mqttPublishReadings" in body:
         control.mqtt_primary = bool(body["mqttPublishReadings"])
 
-    interval_ms = body.get("ingestIntervalMs") if isinstance(body, dict) else None
-    if isinstance(interval_ms, (int, float)) and interval_ms > 0:
-        cadence.interval_s = int(interval_ms / 1000)
+    if control is not None:
+        # The ack carries the server's mode as well as its interval; in Live
+        # the read loops sample every checkSec, not at the 30 s interval.
+        if isinstance(body, dict):
+            apply_cadence(control, body)
+        eff = effective_interval_s(control)
+        if eff is not None and eff > 0:
+            cadence.interval_s = eff
+    else:
+        interval_ms = body.get("ingestIntervalMs") if isinstance(body, dict) else None
+        if isinstance(interval_ms, (int, float)) and interval_ms > 0:
+            cadence.interval_s = int(interval_ms / 1000)
 
     return len(sent_keys), True
 
@@ -266,8 +275,10 @@ async def drain_once(
     # runs on every real HTTP round-trip (bootstrap/fallback source) and may
     # overwrite this in the same cycle — both derive from the same server
     # cadence logic, so they agree.
-    if control is not None and control.interval_s is not None and control.interval_s > 0:
-        cadence.interval_s = control.interval_s
+    if control is not None:
+        eff = effective_interval_s(control)
+        if eff is not None and eff > 0:
+            cadence.interval_s = eff
 
     # Failure backoff (0.17.1): while cooling down, the drain is a complete
     # no-op — no store queries, no HTTP. The store's data-available event may

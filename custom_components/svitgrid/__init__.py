@@ -997,6 +997,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 store=store,
                 entry=entry,
                 integration_version=read_installed_version(Path(__file__).parent),
+                # The poll response carries the server's cadence and mode too.
+                control=control,
             ),
             name="svitgrid_command_poller",
         )

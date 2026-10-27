@@ -956,3 +956,26 @@ async def test_add_trusted_key_for_someone_elses_key_leaves_us_pending():
     )
 
     assert activity.signing_key_approved is False
+
+
+@pytest.mark.asyncio
+async def test_poll_response_in_interval_mode_ends_live(monkeypatch):
+    from custom_components.svitgrid.mqtt_control import MqttControlState, apply_config
+
+    monkeypatch.setattr(asyncio, "sleep", AsyncMock())
+    control = MqttControlState()
+    apply_config(control, {"ingestIntervalMs": 30000, "ingestMode": "live"})
+    api = MagicMock()
+    api.poll_commands = AsyncMock(
+        return_value={"commands": [], "ingestIntervalMs": 300000, "ingestMode": "interval"}
+    )
+    await poller_run_loop(
+        hass=_hass_one_iter(),
+        api_client=api,
+        keystore=None,
+        entry_data=_entry_data(),
+        wake_event=None,
+        control=control,
+    )
+    assert control.live.mode == "interval"
+    assert control.interval_s == 300
