@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import json
 from datetime import UTC, datetime
 
 import pytest
@@ -810,3 +811,142 @@ async def test_http_ack_in_interval_mode_ends_live(tmp_path):
         control=control,
     )
     assert cadence.interval_s == 300
+
+
+# ── Live mode: the sender's gate (dynamic cadence plan 2, task 5) ───────────
+
+
+def _live_control(**kw):
+    from custom_components.svitgrid.mqtt_control import apply_config
+
+    c = MqttControlState(**kw)
+    apply_config(c, {"ingestIntervalMs": 30000, "ingestMode": "live"})
+    return c
+
+
+def _live_row(store, second, batt=-400):
+    ts = f"2026-06-24T10:{second // 60:02d}:{second % 60:02d}Z"
+    store._append_sync(
+        {
+            "inverterId": "inv-1",
+            "timestamp": ts,
+            "pvPower": 1000,
+            "gridPower": 200,
+            "loadPower": 800,
+            "batteryPower": batt,
+            "batterySoc": 55,
+        }
+    )
+
+
+class _AllOkClient(_FakeClient):
+    def __init__(self):
+        super().__init__(None)
+
+    async def push_readings_batch(self, api_key, readings):
+        self.calls.append(readings)
+        return {"results": [{"ok": True} for _ in readings], "ingestMode": "live"}
+
+
+@pytest.mark.asyncio
+async def test_live_uploads_heartbeat_rows_only_and_marks_all_done(tmp_path):
+    store = _store(tmp_path)
+    for i in range(12):
+        _live_row(store, i * 5)
+    client = _AllOkClient()
+
+    await drain_once(
+        store=store,
+        api_client=client,
+        api_key="k",
+        now_iso="2026-06-24T10:02:00Z",
+        cadence=Cadence(),
+        control=_live_control(),
+        live_gates={},
+    )
+
+    uploaded = [r["timestamp"] for batch in client.calls for r in batch]
+    assert uploaded == ["2026-06-24T10:00:00Z", "2026-06-24T10:00:30Z"]
+    assert store._count_by_state_sync() == {"sent": 12}
+
+
+@pytest.mark.asyncio
+async def test_live_battery_step_uploads_that_row(tmp_path):
+    store = _store(tmp_path)
+    _live_row(store, 0)
+    _live_row(store, 5)
+    _live_row(store, 10, batt=-340)
+    client = _AllOkClient()
+
+    await drain_once(
+        store=store,
+        api_client=client,
+        api_key="k",
+        now_iso="2026-06-24T10:02:00Z",
+        cadence=Cadence(),
+        control=_live_control(),
+        live_gates={},
+    )
+
+    uploaded = [r["timestamp"] for batch in client.calls for r in batch]
+    assert uploaded == ["2026-06-24T10:00:00Z", "2026-06-24T10:00:10Z"]
+
+
+@pytest.mark.asyncio
+async def test_live_failed_send_leaves_next_send_to_heartbeat(tmp_path):
+    store = _store(tmp_path)
+    gates: dict = {}
+    control = _live_control(mqtt_primary=True, bootstrapped=True)
+    _live_row(store, 0)
+    # Not acked over MQTT, and the HTTP fallback hits a 5xx: the row stays pending.
+    await drain_once(
+        store=store,
+        api_client=_FakeClient(None),
+        api_key="k",
+        now_iso="2026-06-24T10:02:00Z",
+        cadence=Cadence(),
+        publisher=_PubAckPublisher(acks=False),
+        control=control,
+        live_gates=gates,
+    )
+    assert store._count_by_state_sync() == {"pending": 1}
+
+    _live_row(store, 10, batt=100)  # a 500 W move, inside the heartbeat
+    _live_row(store, 30)  # one heartbeat after the failed attempt
+    pub = _PubAckPublisher(acks=True)
+    await drain_once(
+        store=store,
+        api_client=_AllOkClient(),
+        api_key="k",
+        now_iso="2026-06-24T10:02:00Z",
+        cadence=Cadence(),
+        publisher=pub,
+        control=control,
+        live_gates=gates,
+    )
+
+    sent = [json.loads(p)["timestamp"] for p in pub.publish_and_wait_calls]
+    # The failed row retries; the 500 W move waits for the heartbeat.
+    assert sent == ["2026-06-24T10:00:00Z", "2026-06-24T10:00:30Z"]
+    assert store._count_by_state_sync() == {"sent": 3}
+
+
+@pytest.mark.asyncio
+async def test_interval_mode_uploads_every_row(tmp_path):
+    store = _store(tmp_path)
+    for i in range(6):
+        _live_row(store, i * 5)
+    client = _AllOkClient()
+    control = MqttControlState()
+
+    await drain_once(
+        store=store,
+        api_client=client,
+        api_key="k",
+        now_iso="2026-06-24T10:02:00Z",
+        cadence=Cadence(),
+        control=control,
+        live_gates={},
+    )
+
+    assert sum(len(b) for b in client.calls) == 6

@@ -14,6 +14,7 @@ from homeassistant.core import HomeAssistant
 from .api_client import DeviceEvicted, ReadingRejected
 from .battery_sign import flip_battery_sign
 from .const import BACKFILL_CAP_S, CADENCE_DEFAULT_INTERVAL_S, INGEST_BATCH_MAX, SENDER_TICK_S
+from .live_gate import LiveGate
 from .mqtt_control import MqttControlState, apply_cadence, effective_interval_s
 from .mqtt_readings_publisher import ReadingsMqttClient
 
@@ -102,7 +103,7 @@ async def _http_send(
     publisher,
     health: SenderHealth | None = None,
     control: MqttControlState | None = None,
-) -> tuple[int, bool]:
+) -> tuple[list[tuple[str, str]], bool]:
     """POST ``readings`` (aligned with ``keys``) via the HTTP batch ingest,
     map the per-item results back onto the store, handle DeviceEvicted /
     ReadingRejected / transient-5xx / ``stopped`` responses, best-effort
@@ -111,7 +112,7 @@ async def _http_send(
     HTTP path and the MQTT-primary fallback path (Task 3) so this logic is
     never duplicated.
 
-    Returns ``(sent_count, response_ok)`` where ``response_ok`` is True iff
+    Returns ``(sent_keys, response_ok)`` where ``response_ok`` is True iff
     the cloud returned a real, parseable response (i.e. not DeviceEvicted,
     not ReadingRejected, not a transient-5xx ``None``) — the caller uses this
     to flip ``control.bootstrapped`` once the cloud path is proven this
@@ -123,7 +124,7 @@ async def _http_send(
         if lifecycle is not None:
             lifecycle.deprovision(str(exc), now_iso)
             await _maybe(store.set_lifecycle(lifecycle.state, lifecycle.reason, lifecycle.since))
-        return 0, False
+        return [], False
     except ReadingRejected as exc:
         if exc.status == 401:
             # AUTH failure, not a reading failure: the key is dead (rotated /
@@ -137,11 +138,11 @@ async def _http_send(
             )
             if health is not None:
                 health.note_auth_failure()
-            return 0, False
+            return [], False
         await _maybe(store.mark_failed(keys, now_iso))
         if health is not None:
             health.note_batch_failure()
-        return 0, False
+        return [], False
 
     if body is None:  # transient 5xx
         # Leave the rows PENDING — a server outage must not burn the per-row
@@ -149,7 +150,7 @@ async def _http_send(
         # recovery. The sender-wide backoff below paces the retries instead.
         if health is not None:
             health.note_batch_failure()
-        return 0, False
+        return [], False
 
     if isinstance(body, dict) and body.get("stopped"):
         _LOGGER.warning(
@@ -160,7 +161,7 @@ async def _http_send(
         if lifecycle is not None:
             lifecycle.pause(str(body.get("stoppedReason") or "stopped"), now_iso)
             await _maybe(store.set_lifecycle(lifecycle.state, lifecycle.reason, lifecycle.since))
-        return 0, True
+        return [], True
 
     # Map per-item results back to rows (results are returned in input order).
     results = body.get("results") if isinstance(body, dict) else None
@@ -225,7 +226,62 @@ async def _http_send(
         if isinstance(interval_ms, (int, float)) and interval_ms > 0:
             cadence.interval_s = int(interval_ms / 1000)
 
-    return len(sent_keys), True
+    return sent_keys, True
+
+
+def _epoch_s(ts: str) -> float:
+    return datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+
+
+def _gate_rows(
+    rows: list[dict], control: MqttControlState, live_gates: dict[str, LiveGate]
+) -> tuple[list[dict], list[tuple[str, str]], list[dict]]:
+    """Split sendable rows into (to_send, skipped_keys, retries) by the Live gate.
+
+    Rows are judged oldest first by their own timestamps, so a backlog
+    drained in one batch keeps the same spacing it would have had live. A
+    passed row is recorded as sent at once, so the next row compares with
+    it; the upload's outcome corrects that afterwards (_record_outcomes). A
+    row at or before the gate's last attempt is a retry of a row the gate
+    already passed (rejected rows never come back), and it goes out ungated.
+    """
+    params = control.live.params
+    to_send: list[dict] = []
+    skipped: list[tuple[str, str]] = []
+    retries: list[dict] = []
+    for r in rows:
+        gate = live_gates.setdefault(r["inverter_id"], LiveGate())
+        t = _epoch_s(r["ts"])
+        if gate.has_attempted and t <= gate.last_attempt_s:
+            to_send.append(r)
+            retries.append(r)
+        elif gate.should_send(r["payload"], t, params):
+            gate.record_attempt(r["payload"], t, ok=True)
+            to_send.append(r)
+        else:
+            skipped.append((r["inverter_id"], r["ts"]))
+    return to_send, skipped, retries
+
+
+def _record_outcomes(
+    to_send: list[dict],
+    retries: list[dict],
+    sent_keys: set[tuple[str, str]],
+    live_gates: dict[str, LiveGate],
+) -> None:
+    """Tell each gate how its rows fared. A row that did not go out holds the
+    gate until one heartbeat after it; a retry that did go out counts as sent."""
+    retry_ids = {id(r) for r in retries}
+    failed: dict[str, dict] = {}
+    for r in to_send:
+        key = (r["inverter_id"], r["ts"])
+        gate = live_gates[r["inverter_id"]]
+        if key not in sent_keys:
+            failed[r["inverter_id"]] = r  # the latest failed row per inverter wins
+        elif id(r) in retry_ids and _epoch_s(r["ts"]) >= gate.last_attempt_s:
+            gate.record_attempt(r["payload"], _epoch_s(r["ts"]), ok=True)
+    for inv, r in failed.items():
+        live_gates[inv].record_attempt(r["payload"], _epoch_s(r["ts"]), ok=False)
 
 
 async def drain_once(
@@ -242,8 +298,15 @@ async def drain_once(
     publisher=None,
     control: MqttControlState | None = None,
     health: SenderHealth | None = None,
+    live_gates: dict[str, LiveGate] | None = None,
 ) -> int:
     """Drain at most one batch. Returns number of rows marked 'sent'.
+
+    ``live_gates`` (one LiveGate per inverter, owned by the sender loop) turns
+    on the Live gate while ``control`` says Live: a row the gate rejects is
+    marked sent without being uploaded, so the cloud sees only the rows that
+    moved or the heartbeat, and the local store keeps every row for the panel
+    and the rollups. Leaving Live clears the gates.
 
     ``discharge_positive_ids`` names inverters whose battery power we normalized
     to Svitgrid's charge-positive convention at capture (HA Solarman). We
@@ -294,6 +357,19 @@ async def drain_once(
     if not rows:
         return 0
 
+    gating = live_gates is not None and control is not None and control.live.live
+    if live_gates is not None and not gating:
+        live_gates.clear()
+    retries: list[dict] = []
+    skipped_count = 0
+    if gating:
+        rows, skipped, retries = _gate_rows(rows, control, live_gates)
+        if skipped:
+            await _maybe(store.mark_sent(skipped))
+            skipped_count = len(skipped)
+        if not rows:
+            return skipped_count
+
     flip_ids = discharge_positive_ids or set()
     keys = [(r["inverter_id"], r["ts"]) for r in rows]
     readings = [
@@ -323,7 +399,7 @@ async def drain_once(
         if acked_keys:
             await _maybe(store.mark_sent(acked_keys))
 
-        http_sent = 0
+        http_sent: list[tuple[str, str]] = []
         if unacked_keys:
             http_sent, _ok = await _http_send(
                 store=store,
@@ -338,12 +414,14 @@ async def drain_once(
                 health=health,
                 control=control,
             )
-        return len(acked_keys) + http_sent
+        if gating:
+            _record_outcomes(rows, retries, set(acked_keys) | set(http_sent), live_gates)
+        return skipped_count + len(acked_keys) + len(http_sent)
 
     # Bootstrap (first drain this session) or MQTT-primary not ready: HTTP for
     # every row, as before Task 3. A real cloud response proves the HTTP path
     # is up this session, so later drains may switch to MQTT-primary.
-    sent_count, response_ok = await _http_send(
+    sent_keys, response_ok = await _http_send(
         store=store,
         api_client=api_client,
         api_key=api_key,
@@ -358,7 +436,9 @@ async def drain_once(
     )
     if control is not None and response_ok:
         control.bootstrapped = True
-    return sent_count
+    if gating:
+        _record_outcomes(rows, retries, set(sent_keys), live_gates)
+    return skipped_count + len(sent_keys)
 
 
 async def run_sender_loop(
@@ -383,6 +463,8 @@ async def run_sender_loop(
     wait_for_data = getattr(store, "wait_for_data", None)
     # One health tracker per loop: failure backoff spans drains (0.17.1).
     health = SenderHealth()
+    # One Live gate per inverter, for the life of the loop (cleared on leaving Live).
+    live_gates: dict[str, LiveGate] = {}
     try:
         while not hass.is_stopping and (lifecycle is None or lifecycle.active):
             try:
@@ -397,6 +479,7 @@ async def run_sender_loop(
                     publisher=publisher,
                     control=control,
                     health=health,
+                    live_gates=live_gates,
                 )
             except Exception:  # never let the sender loop die
                 _LOGGER.exception("sender drain failed")

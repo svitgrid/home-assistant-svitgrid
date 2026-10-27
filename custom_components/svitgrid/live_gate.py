@@ -106,6 +106,14 @@ class LiveGate:
         self._last_sent: dict = {}
         self._last_sent_s = 0.0
 
+    @property
+    def has_attempted(self) -> bool:
+        return self._has_attempted
+
+    @property
+    def last_attempt_s(self) -> float:
+        return self._last_attempt_s
+
     def should_send(self, reading: dict, now_s: float, params: LiveParams) -> bool:
         hb = params.heartbeat_s
         if not self._has_sent:
