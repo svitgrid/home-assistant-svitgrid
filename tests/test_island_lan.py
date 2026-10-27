@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -508,11 +509,14 @@ async def test_status_of_a_true_island(hass: HomeAssistant):
     _entry(hass, cloud_ingest=False)
     resp = await SvitgridIslandStatusView().get(_Req(hass))
     assert resp.status == 200
+    # The installed version, read from the manifest so a release bump keeps it.
+    manifest = Path(__file__).parents[1] / "custom_components" / "svitgrid" / "manifest.json"
+    version = json.loads(manifest.read_text())["version"]
     assert _body(resp) == {
         "cloudCopy": False,
         "localOnly": False,
         "trueIsland": True,
-        "version": "0.23.0",
+        "version": version,
         "capabilities": [
             "cloud_copy_lan",
             "leave_lan",

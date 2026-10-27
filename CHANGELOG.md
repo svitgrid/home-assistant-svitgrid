@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.24.0 — 2026-10-27
+
+### Added
+- **Live reporting («Наживо»).** When the household picks Live in the
+  Svitgrid app, Home Assistant reads the inverter every 5 seconds and sends a
+  reading only when something moved: any of PV, grid, load or battery power by
+  50 W, or the battery charge by 1 %, since the last reading it sent, with a
+  check-in every 30 seconds otherwise. The rule is the edge connector's, so
+  both kinds of station send on the same moves. Every reading still stays in
+  the local store, so the panel and the local totals are unchanged. Live
+  arrives with the ingest response, the MQTT config push or the command poll,
+  whichever comes first, and leaving Live returns to the chosen interval the
+  same way. A send that fails waits one check-in before the next.
+- **A fully local island starts in Live.** A local-only entry with no rate
+  chosen in the panel reads every 5 seconds, because nothing leaves the
+  house. A rate picked in the panel still wins.
+
+### Fixed
+- **The native harvest loop adopts the server's cadence after its first
+  reading** (svitgrid#1117). The first sleep used the 5-minute default, so a
+  new install's second reading came 5 minutes late.
+
 ## 0.23.0 — 2026-10-10
 
 ### Added
