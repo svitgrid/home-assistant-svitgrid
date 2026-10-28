@@ -646,6 +646,7 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
             # true island keeps the cloud out of day-to-day operation — so the
             # code is minted here and only pair-local can claim it.
             existing = self.hass.config_entries.async_entries(DOMAIN)
+            window_s: float = PAIRING_MAX_POLL_DURATION_S
 
             if existing:
                 self._add_to_entry_id = existing[0].entry_id
@@ -661,6 +662,7 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
                     )
                     self._secret = start_result["secret"]
                     self._code = start_result["code"]
+                    window_s = _pairing_window_s(start_result)
                 except Exception:  # noqa: BLE001
                     # No cloud: a guest can still pair over the LAN. The code
                     # is minted here from the cloud's alphabet, and only
@@ -682,7 +684,7 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
             # LAN complete this pairing themselves.
             self._local_session = local_pairing.PendingPairing(self._code, flow_id=self.flow_id)
             local_pairing.publish(self.hass, self._local_session)
-            self._pair_deadline = self.hass.loop.time() + PAIRING_MAX_POLL_DURATION_S
+            self._pair_deadline = self.hass.loop.time() + window_s
             self._local_session.expires_at = self._pair_deadline
             # Outlives each waiting task: the poll keeps running while the
             # owner answers a LAN approval question. Created eagerly, so a
@@ -1238,6 +1240,19 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
                     session.offer_cloud_claim(status)
                 return
         raise PairingExpired("pairing window expired during polling")
+
+
+def _pairing_window_s(start_result: dict[str, Any]) -> float:
+    """Seconds the cloud keeps this code claimable, from /start's `expiresIn`.
+
+    Waiting less than the server does lets the app claim a code the flow has
+    already given up on: the household is created, nothing finalizes, and the
+    owner gets a cloud station with no Home Assistant behind it.
+    """
+    expires_in = start_result.get("expiresIn")
+    if isinstance(expires_in, bool) or not isinstance(expires_in, int | float) or expires_in <= 0:
+        return PAIRING_MAX_POLL_DURATION_S
+    return float(expires_in)
 
 
 class SvitgridOptionsFlow(EybondCollectorSteps, config_entries.OptionsFlow):

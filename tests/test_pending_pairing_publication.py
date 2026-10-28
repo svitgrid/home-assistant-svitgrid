@@ -96,11 +96,10 @@ async def test_a_failing_cloud_poll_keeps_the_code_for_the_lan_until_the_window_
     with (
         patch("custom_components.svitgrid.config_flow.PairingClient") as mock_client_cls,
         patch("custom_components.svitgrid.config_flow.PAIRING_POLL_INTERVAL_S", 0),
-        patch("custom_components.svitgrid.config_flow.PAIRING_MAX_POLL_DURATION_S", 0.3),
     ):
         mock_client = mock_client_cls.return_value
         mock_client.start = AsyncMock(
-            return_value={"secret": "s" * 40, "code": "7K9PA2", "expiresIn": 300}
+            return_value={"secret": "s" * 40, "code": "7K9PA2", "expiresIn": 0.3}
         )
         mock_client.get_status = AsyncMock(side_effect=RuntimeError("boom"))
 
