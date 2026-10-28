@@ -59,7 +59,11 @@ from .island_lan import (
     signed_lan_request,
 )
 from .local_time import local_day_of, local_hour_index
-from .settings_sync import find_settings_snapshot, seed_onboarding_settings
+from .settings_sync import (
+    find_known_inverter,
+    find_settings_snapshot,
+    seed_onboarding_settings,
+)
 from .signing import compute_key_id, public_key_from_hex, verify_payload
 
 _LOGGER = logging.getLogger(__name__)
@@ -321,8 +325,9 @@ class SvitgridSettingsView(_BaseView):
     cloud ingest off, where the settings never leave the house. Answers
     ``{"inverterId", "modelId", "startRegister", "registers", "readAt"}``;
     400 ``missing_inverter_id`` without the query parameter; 404
-    ``not_read_yet`` for an inverter with no successful read, including an
-    unknown one. The mobile app consumes these field names.
+    ``unknown_inverter`` for an id no config entry lists; 404
+    ``not_read_yet`` for a listed inverter with no successful read. The
+    mobile app consumes these field names.
 
     Auth: island key OR authenticated HA session (``_BaseView._authorize``).
     """
@@ -336,8 +341,11 @@ class SvitgridSettingsView(_BaseView):
         inverter_id = request.query.get("inverter_id")
         if not inverter_id:
             return self.json({"error": "missing_inverter_id"}, status_code=400)
-        snapshot = find_settings_snapshot(request.app["hass"], inverter_id)
+        hass = request.app["hass"]
+        snapshot = find_settings_snapshot(hass, inverter_id)
         if snapshot is None:
+            if find_known_inverter(hass, inverter_id) is None:
+                return self.json({"error": "unknown_inverter"}, status_code=404)
             return self.json({"error": "not_read_yet"}, status_code=404)
         return self.json(
             {

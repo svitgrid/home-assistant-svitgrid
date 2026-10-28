@@ -48,6 +48,17 @@ def find_settings_snapshot(hass, inverter_id: str) -> dict | None:
     return None
 
 
+def find_known_inverter(hass, inverter_id: str) -> dict | None:
+    """The inverter ``inverter_id`` as some config entry lists it, or None."""
+    for state in (getattr(hass, "data", {}).get(DOMAIN) or {}).values():
+        if not isinstance(state, dict):
+            continue
+        for inv in (state.get("entry_data") or {}).get("inverters") or []:
+            if inv.get("inverter_id") == inverter_id:
+                return inv
+    return None
+
+
 def _parse_read_at(value) -> datetime | None:
     """An ISO 8601 instant with a zone, or None. A naive time is refused:
     nothing says which clock it was read on."""

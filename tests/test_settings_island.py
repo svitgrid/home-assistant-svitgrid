@@ -18,8 +18,6 @@ import logging
 import re
 from types import SimpleNamespace
 
-import pytest
-
 from custom_components.svitgrid import settings_sync
 from custom_components.svitgrid.api_client import SettingsSyncRejected
 from custom_components.svitgrid.const import DOMAIN
@@ -517,8 +515,11 @@ class _Req:
         return self._data[key]
 
 
-def _hass_with_snapshots(snapshots: dict):
-    return SimpleNamespace(data={DOMAIN: {"entry-1": {"settings_snapshots": snapshots}}})
+def _hass_with_snapshots(snapshots: dict, inverters=("inv-1", "inv-2")):
+    entry_data = {"inverters": [{"inverter_id": i, "model_id": "deye_sg04lp3"} for i in inverters]}
+    return SimpleNamespace(
+        data={DOMAIN: {"entry-1": {"settings_snapshots": snapshots, "entry_data": entry_data}}}
+    )
 
 
 _SNAPSHOT = {
@@ -545,14 +546,22 @@ async def test_settings_view_without_inverter_id_is_a_bad_request():
     assert json.loads(resp.body) == {"error": "missing_inverter_id"}
 
 
-@pytest.mark.parametrize("inverter_id", ["inv-2", "unknown"])
-async def test_settings_view_before_a_read_is_not_found(inverter_id):
+async def test_settings_view_before_a_read_is_not_found():
     view = SvitgridSettingsView(store=None)
     resp = await view.get(
-        _Req(_hass_with_snapshots({"inv-1": _SNAPSHOT}), {"inverter_id": inverter_id})
+        _Req(_hass_with_snapshots({"inv-1": _SNAPSHOT}), {"inverter_id": "inv-2"})
     )
     assert resp.status == 404
     assert json.loads(resp.body) == {"error": "not_read_yet"}
+
+
+async def test_settings_unknown_inverter_is_404_unknown_inverter():
+    view = SvitgridSettingsView(store=None)
+    resp = await view.get(
+        _Req(_hass_with_snapshots({"inv-1": _SNAPSHOT}), {"inverter_id": "unknown"})
+    )
+    assert resp.status == 404
+    assert json.loads(resp.body) == {"error": "unknown_inverter"}
 
 
 async def test_settings_view_returns_the_last_read():
