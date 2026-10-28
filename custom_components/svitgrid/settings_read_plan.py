@@ -23,6 +23,7 @@ constant names its source. Pure module: no HA imports, no I/O.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -313,3 +314,100 @@ def build_snapshot_body(plan: SettingsReadPlan, words: dict[int, int]) -> dict |
             "registers": {str(a): words[a] for a in SOLIS_SETTINGS_ADDRESSES},
         }
     return None
+
+
+# ── Onboarding bodies ──────────────────────────────────────────────────
+
+_EDITION_TEXT = re.compile(r"^\d+\.\d{2}\.\d{2}$")
+
+
+def _is_word(value) -> bool:
+    return type(value) is int and 0 <= value <= 0xFFFF
+
+
+def _checked_blocks(blocks, expected) -> tuple[list[dict] | None, str | None]:
+    """``blocks`` copied when they lay out exactly as ``expected``, or why not.
+
+    ``bad_body`` for a value that is not a block list, ``bad_range`` for a
+    layout other than ``expected``, ``bad_registers`` for a value that is
+    not a register word.
+    """
+    if not isinstance(blocks, list) or not all(
+        isinstance(b, dict) and isinstance(b.get("registers"), list) for b in blocks
+    ):
+        return None, "bad_body"
+    layout = [(b.get("startRegister"), len(b["registers"])) for b in blocks]
+    if layout != [tuple(e) for e in expected]:
+        return None, "bad_range"
+    if not all(_is_word(v) for b in blocks for v in b["registers"]):
+        return None, "bad_registers"
+    return [
+        {"startRegister": b["startRegister"], "registers": list(b["registers"])} for b in blocks
+    ], None
+
+
+def onboarding_body(kind: str, settings: dict) -> tuple[dict | None, str | None]:
+    """The brand body of an onboarding snapshot, or the reason it is refused.
+
+    ``settings`` is the app's snapshot in the contract's keys; the body that
+    comes back is what a read of the same inverter would store, so the
+    settings view serves the two alike. Refusals: ``bad_body`` (not this
+    kind's body), ``bad_range`` (blocks or addresses other than this
+    add-on reads), ``bad_registers`` (a value that is not a register word).
+    Not for ``deye``, whose onboarding block keeps its own rules.
+    """
+    if kind == "luxpower":
+        family = settings.get("familyCode")
+        if (
+            settings.get("protocol") != "luxpower"
+            or not isinstance(family, str)
+            or len(family) != 4
+            or not all(0x21 <= ord(c) <= 0x7E for c in family)
+        ):
+            return None, "bad_body"
+        blocks, error = _checked_blocks(settings.get("blocks"), LUXPOWER_SETTINGS_BLOCKS)
+        if error:
+            return None, error
+        return {"protocol": "luxpower", "familyCode": family, "blocks": blocks}, None
+    if kind == "must":
+        if settings.get("protocol") != "must":
+            return None, "bad_body"
+        body: dict = {"protocol": "must"}
+        edition = settings.get("edition")
+        if _is_word(edition):
+            body["edition"] = must_edition_text(edition)
+        elif isinstance(edition, str) and _EDITION_TEXT.match(edition):
+            body["edition"] = edition
+        elif edition is not None:
+            return None, "bad_body"
+        pack = settings.get("packVoltage")
+        if pack is not None:
+            if pack not in MUST_PACK_VOLTAGES or type(pack) is not int:
+                return None, "bad_body"
+            body["packVoltage"] = pack
+        blocks, error = _checked_blocks(settings.get("blocks"), MUST_SETTINGS_BLOCKS)
+        if error:
+            return None, error
+        body["blocks"] = blocks
+        return body, None
+    if kind == "smg":
+        number = settings.get("protocolNumber")
+        if type(number) is not int or number not in SMG_SYNC_BLOCKS:
+            return None, "bad_body"
+        blocks, error = _checked_blocks(settings.get("blocks"), SMG_SYNC_BLOCKS[number])
+        if error:
+            return None, error
+        return {"protocolNumber": number, "blocks": blocks}, None
+    if kind == "solis":
+        registers = settings.get("registers")
+        if settings.get("protocol") != "solis" or not isinstance(registers, dict):
+            return None, "bad_body"
+        if set(registers) != {str(a) for a in SOLIS_SETTINGS_ADDRESSES}:
+            return None, "bad_range"
+        if not all(_is_word(v) for v in registers.values()):
+            return None, "bad_registers"
+        return {
+            "protocol": "solis",
+            "registers": {str(a): registers[str(a)] for a in SOLIS_SETTINGS_ADDRESSES},
+        }, None
+    return None, "bad_body"

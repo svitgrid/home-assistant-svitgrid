@@ -523,6 +523,7 @@ async def test_status_of_a_true_island(hass: HomeAssistant):
             "revoke_lan",
             "pair_extra_phone",
             "rules",
+            "settings_lan",
         ],
     }
 

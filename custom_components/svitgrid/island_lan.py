@@ -57,7 +57,17 @@ _NONCES_KEY = "_island_lan_nonces"
 # for a job only when its capability is listed here. `rules`: the island
 # scheduler runs a rule (recurrence "always"), so the app shows the Rules tab
 # of a true island. An older integration raised KeyError on every rule.
-CAPABILITIES = ("cloud_copy_lan", "leave_lan", "revoke_lan", "pair_extra_phone", "rules")
+CAPABILITIES = (
+    "cloud_copy_lan",
+    "leave_lan",
+    "revoke_lan",
+    "pair_extra_phone",
+    "rules",
+    # GET /api/svitgrid/settings serves every brand's snapshot and tells
+    # not_read_yet from nothing_to_configure; an app reads a 404 from a host
+    # without it as "host too old".
+    "settings_lan",
+)
 
 ACTION_SET_CLOUD_COPY = "set_cloud_copy"
 ACTION_LEAVE_ISLAND = "leave_island"

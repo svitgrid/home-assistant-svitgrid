@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.25.0 — 2026-10-28
+
+### Added
+- **The settings mirror works on every island.** The Svitgrid app can show an
+  inverter's settings over the LAN for LuxPower SNA, MUST, Anenji (SMG II on
+  the EyBond collector) and the Solis hybrids, as it already could for Deye,
+  Sunsynk and Sol-Ark. Home Assistant reads the same settings the edge
+  connector reads for each brand and keeps them in the house.
+- **Settings are read on a fully local island too.** A local-only entry, or
+  one with the cloud copy off, now reads its inverter's settings for the app.
+  It never uploads them.
+- **The app can tell why there are no settings yet.** An inverter this
+  installation does not know, one whose model has nothing to configure, and
+  one not read yet now get three different answers, so the app never waits
+  for a read that cannot come. The installation advertises this to the app.
+- **Onboarding settings for every brand.** The settings the app reads while
+  it identifies a LuxPower, MUST, Anenji or Solis inverter are accepted over
+  the LAN and shown straight away, as they already were for Deye.
+
 ## 0.24.0 — 2026-10-27
 
 ### Added

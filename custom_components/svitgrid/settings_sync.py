@@ -26,6 +26,7 @@ from .settings_read_plan import (
     SettingsReadPlan,
     build_snapshot_body,
     config_range_for_model,
+    onboarding_body,
     settings_read_plan_for,
     settings_snapshot_kind_for,
 )
@@ -130,6 +131,43 @@ def _parse_read_at(value) -> datetime | None:
     return parsed if parsed.tzinfo is not None else None
 
 
+async def _seed_onboarding_body(
+    state: dict, inverter_id: str, model_id: str, kind: str, settings: dict, read_at
+) -> str | None:
+    """``seed_onboarding_settings`` for a kind with a brand body."""
+    body, refusal = onboarding_body(kind, settings)
+    if refusal is not None:
+        return refusal
+    parsed = _parse_read_at(read_at)
+    if parsed is None:
+        return "bad_read_at"
+    snapshots = state.setdefault("settings_snapshots", {})
+    if inverter_id in snapshots:
+        return "already_read"
+    snapshot = {
+        "inverter_id": inverter_id,
+        "model_id": model_id,
+        "kind": kind,
+        "body": body,
+        "read_at": parsed.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    await _store_onboarding_snapshot(state, inverter_id, snapshot)
+    return None
+
+
+async def _store_onboarding_snapshot(state: dict, inverter_id: str, snapshot: dict) -> None:
+    state.setdefault("settings_snapshots", {})[inverter_id] = snapshot
+    store = state.get("store")
+    if store is not None:
+        try:
+            await store.set_settings_snapshot(snapshot)
+        except Exception:  # noqa: BLE001 — the in-memory cache still serves
+            _LOGGER.exception(
+                "settings_sync: could not persist the onboarding read of %s", inverter_id
+            )
+    _LOGGER.info("settings_sync: seeded the onboarding read of inverter %s", inverter_id)
+
+
 async def seed_onboarding_settings(
     hass,
     inverter_id: str,
@@ -138,6 +176,7 @@ async def seed_onboarding_settings(
     start_register,
     registers,
     read_at,
+    settings: dict | None = None,
 ) -> str | None:
     """Seed the settings the app read while onboarding identified the inverter.
 
@@ -147,12 +186,18 @@ async def seed_onboarding_settings(
 
     Returns None once seeded, or why not: ``unknown_inverter`` (no entry
     harvests it natively), ``model_mismatch``, ``bad_range`` (not the model's
-    config block), ``bad_registers``, ``bad_read_at``, or ``already_read``.
+    config block), ``bad_registers``, ``bad_read_at``, ``already_read``, or
+    ``bad_body`` (not the brand body this inverter's model reads).
+
+    A Deye-family model takes ``start_register`` and ``registers``. Every
+    other kind takes its brand body from ``settings``, the app's whole
+    snapshot, checked by ``settings_read_plan.onboarding_body``.
     The loop reads after setup, so a read it already made is fresher than the
     phone's and is never replaced.
     """
     state = None
     harvested_model = None
+    harvest_config = None
     for candidate in (getattr(hass, "data", {}).get(DOMAIN) or {}).values():
         if not isinstance(candidate, dict):
             continue
@@ -161,7 +206,8 @@ async def seed_onboarding_settings(
                 continue
             eligible = _eligible_for_settings_sync(inv)
             if eligible is not None:
-                state, harvested_model = candidate, eligible[0]
+                state = candidate
+                harvested_model, harvest_config = eligible
                 break
         if state is not None:
             break
@@ -169,6 +215,12 @@ async def seed_onboarding_settings(
         return "unknown_inverter"
     if model_id != harvested_model:
         return "model_mismatch"
+
+    plan = settings_read_plan_for(harvested_model, harvest_config, _is_eybond(harvest_config))
+    if plan is not None and plan.kind != "deye":
+        return await _seed_onboarding_body(
+            state, inverter_id, harvested_model, plan.kind, settings or {}, read_at
+        )
 
     # A partial or mis-aligned block maps to zeroed settings; the server
     # refuses one for the same reason.
@@ -196,16 +248,7 @@ async def seed_onboarding_settings(
         "registers": list(registers),
         "read_at": parsed.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
-    snapshots[inverter_id] = snapshot
-    store = state.get("store")
-    if store is not None:
-        try:
-            await store.set_settings_snapshot(snapshot)
-        except Exception:  # noqa: BLE001 — the in-memory cache still serves
-            _LOGGER.exception(
-                "settings_sync: could not persist the onboarding read of %s", inverter_id
-            )
-    _LOGGER.info("settings_sync: seeded the onboarding read of inverter %s", inverter_id)
+    await _store_onboarding_snapshot(state, inverter_id, snapshot)
     return None
 
 

@@ -305,6 +305,124 @@ async def test_view_ignores_a_reading():
     assert json.loads(resp.body)["reading"] is None
 
 
+# ── Brand bodies other than the Deye block ─────────────────────────────
+
+
+def _lux_inv() -> dict:
+    inv = _inv(model_id="luxpower_sna_5000_wpv")
+    inv["harvest_config"]["protocol"] = "modbus_tcp"
+    return inv
+
+
+def _lux_settings(**overrides) -> dict:
+    settings = {
+        "modelId": "luxpower_sna_5000_wpv",
+        "protocol": "luxpower",
+        "familyCode": "cBaa",
+        "blocks": [
+            {"startRegister": start, "registers": list(range(40))}
+            for start in (0, 40, 80, 120, 160)
+        ],
+        "readAt": "2026-09-15T09:30:05.000Z",
+    }
+    settings.update(overrides)
+    return settings
+
+
+async def test_onboarding_snapshot_accepts_luxpower_body():
+    hass, state = _hass(inverters=[_lux_inv()])
+
+    resp = await _post(hass, body={"settings": _lux_settings()})
+
+    assert json.loads(resp.body)["settings"] == {"ok": True}
+    served = await SvitgridSettingsView(store=None).get(_Req(hass, {"inverter_id": "inv-1"}))
+    assert served.status == 200
+    out = json.loads(served.body)
+    assert out["protocol"] == "luxpower"
+    assert out["familyCode"] == "cBaa"
+    assert [b["startRegister"] for b in out["blocks"]] == [0, 40, 80, 120, 160]
+    assert out["readAt"] == "2026-09-15T09:30:05Z"
+
+
+async def test_onboarding_snapshot_refuses_unknown_body_with_bad_body():
+    hass, state = _hass(inverters=[_lux_inv()])
+    # A Deye-shaped body for a LuxPower inverter is no LuxPower body.
+    body = {"settings": {**_BODY["settings"], "modelId": "luxpower_sna_5000_wpv"}}
+
+    resp = await _post(hass, body=body)
+
+    assert json.loads(resp.body)["settings"] == {"ok": False, "error": "bad_body"}
+    assert state["settings_snapshots"] == {}
+
+
+@pytest.mark.parametrize(
+    ("overrides", "error"),
+    [
+        ({"blocks": [{"startRegister": 0, "registers": list(range(200))}]}, "bad_range"),
+        (
+            {
+                "blocks": [
+                    {"startRegister": s, "registers": [70000] * 40} for s in (0, 40, 80, 120, 160)
+                ]
+            },
+            "bad_registers",
+        ),
+        ({"familyCode": 7}, "bad_body"),
+    ],
+)
+async def test_onboarding_snapshot_validates_the_luxpower_blocks(overrides, error):
+    hass, state = _hass(inverters=[_lux_inv()])
+
+    resp = await _post(hass, body={"settings": _lux_settings(**overrides)})
+
+    assert json.loads(resp.body)["settings"] == {"ok": False, "error": error}
+    assert state["settings_snapshots"] == {}
+
+
+async def test_onboarding_snapshot_accepts_a_must_body():
+    inv = _inv(model_id="must_pv18_5248")
+    inv["harvest_config"]["protocol"] = "modbus_tcp"
+    hass, state = _hass(inverters=[inv])
+    settings = {
+        "modelId": "must_pv18_5248",
+        "protocol": "must",
+        "edition": 10415,
+        "packVoltage": 48,
+        "blocks": [
+            {"startRegister": 10101, "registers": list(range(12))},
+            {"startRegister": 20101, "registers": list(range(43))},
+        ],
+        "readAt": "2026-09-15T09:30:05.000Z",
+    }
+
+    resp = await _post(hass, body={"settings": settings})
+
+    assert json.loads(resp.body)["settings"] == {"ok": True}
+    body = state["settings_snapshots"]["inv-1"]["body"]
+    # The integer edition is stored as the firmware's text, as a read makes it.
+    assert body["edition"] == "1.04.15"
+    assert body["packVoltage"] == 48
+
+
+async def test_onboarding_snapshot_accepts_a_solis_body_and_refuses_a_missing_address():
+    from custom_components.svitgrid.settings_read_plan import SOLIS_SETTINGS_ADDRESSES
+
+    inv = _inv(model_id="solis_s6_eh3p_h")
+    inv["harvest_config"].update(protocol="modbus_tcp", port=502)
+    registers = {str(a): 1 for a in SOLIS_SETTINGS_ADDRESSES}
+    base = {"modelId": "solis_s6_eh3p_h", "protocol": "solis", "readAt": "2026-09-15T09:30:05Z"}
+
+    hass, state = _hass(inverters=[inv])
+    short = dict(registers)
+    short.pop(str(SOLIS_SETTINGS_ADDRESSES[0]))
+    refused = await _post(hass, body={"settings": {**base, "registers": short}})
+    assert json.loads(refused.body)["settings"] == {"ok": False, "error": "bad_range"}
+
+    accepted = await _post(hass, body={"settings": {**base, "registers": registers}})
+    assert json.loads(accepted.body)["settings"] == {"ok": True}
+    assert state["settings_snapshots"]["inv-1"]["kind"] == "solis"
+
+
 def test_view_is_registered():
     registered = []
     hass = SimpleNamespace(http=SimpleNamespace(register_view=registered.append))

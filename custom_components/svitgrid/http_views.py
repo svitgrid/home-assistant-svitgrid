@@ -397,6 +397,7 @@ class SvitgridOnboardingSnapshotView(_BaseView):
             start_register=settings.get("startRegister"),
             registers=settings.get("registers"),
             read_at=settings.get("readAt"),
+            settings=settings,
         )
         if refusal == "unknown_inverter":
             return self.json({"error": "unknown_inverter"}, status_code=404)
