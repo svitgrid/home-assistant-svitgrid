@@ -1,8 +1,14 @@
-"""Settings-sync gate: model ranges, FNV hash, upload decision logic.
+"""Settings-sync gate: FNV hash, upload decision logic, and the settings reads.
 
-Mostly a pure module — no HA imports, no I/O — except for
-``read_config_registers``, which performs the actual chunked device read via
-``harvest.transport`` and is the one impure/async function here.
+Which models have settings, and which registers hold them, lives in
+``settings_read_plan``. The reads here (``read_config_registers``,
+``read_holding_blocks``, ``read_settings_snapshot``) are the impure/async
+part: they reach the device through ``harvest.transport``, or for an SMG II
+inverter through the EyBond collector's session.
+
+Only the Deye-family read is POSTed to the cloud. Every other kind is read
+and cached for the island settings view, and never leaves the house from
+here.
 """
 
 from __future__ import annotations
@@ -16,6 +22,13 @@ from .api_client import SettingsSyncRejected
 from .const import DOMAIN
 from .harvest import transport
 from .harvest.device_lock import logger_lock
+from .settings_read_plan import (
+    SettingsReadPlan,
+    build_snapshot_body,
+    config_range_for_model,
+    settings_read_plan_for,
+    settings_snapshot_kind_for,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -57,6 +70,52 @@ def find_known_inverter(hass, inverter_id: str) -> dict | None:
             if inv.get("inverter_id") == inverter_id:
                 return inv
     return None
+
+
+def known_inverter_model_id(inv: dict) -> str | None:
+    """The model id of an entry's inverter: its harvest config's, else its own."""
+    return (inv.get("harvest_config") or {}).get("model_id") or inv.get("model_id")
+
+
+def missing_snapshot_error(hass, inverter_id: str) -> str:
+    """Why the settings view has no snapshot for ``inverter_id``.
+
+    ``unknown_inverter`` when no entry lists it; ``nothing_to_configure``
+    when its model has no snapshot kind (the app's generic screen, and
+    SolaX), so the app never waits for a read that cannot come; else
+    ``not_read_yet``, which includes a PI30 inverter this add-on cannot read.
+    """
+    inv = find_known_inverter(hass, inverter_id)
+    if inv is None:
+        return "unknown_inverter"
+    if settings_snapshot_kind_for(known_inverter_model_id(inv)) is None:
+        return "nothing_to_configure"
+    return "not_read_yet"
+
+
+def settings_snapshot_response(snapshot: dict) -> dict:
+    """The settings view's 200 body for a cached snapshot.
+
+    A Deye snapshot (no ``kind``, as every row stored before other brands
+    were read) answers ``{"inverterId", "modelId", "startRegister",
+    "registers", "readAt"}``, unchanged. Any other kind answers
+    ``{"inverterId", "modelId", "readAt"}`` plus its brand body, the keys the
+    harvester would POST to the cloud's ``sync-settings`` route.
+    """
+    if snapshot.get("kind", "deye") == "deye":
+        return {
+            "inverterId": snapshot["inverter_id"],
+            "modelId": snapshot["model_id"],
+            "startRegister": snapshot["start_register"],
+            "registers": list(snapshot["registers"]),
+            "readAt": snapshot["read_at"],
+        }
+    return {
+        "inverterId": snapshot["inverter_id"],
+        "modelId": snapshot["model_id"],
+        **snapshot["body"],
+        "readAt": snapshot["read_at"],
+    }
 
 
 def _parse_read_at(value) -> datetime | None:
@@ -156,56 +215,6 @@ async def seed_onboarding_settings(
 # — so retrying every 5-min tick just hammers the server. See item 4,
 # 2026-07-25 final review ("permanent 403 loop for unbound devices").
 SETTINGS_SYNC_BACKOFF_S = 6 * 60 * 60  # 6 hours
-
-# Config register ranges: model family → (start, count)
-#
-# 3-phase models were widened 2026-07-28 (peak-shaving read path, task 8)
-# from 63 to 77 registers (115-191) to reach register 178 (grid
-# peak-shaving enable, bit 4) and register 191 (grid peak-shaving power,
-# 1 W) — see docs/superpowers/specs/2026-07-26-peak-shaving-registers.md
-# in the main svitgrid repo. 1-phase is intentionally left at 63: 1-phase
-# peak-shaving addresses are unprobed and gated off everywhere, so we must
-# not sync values we don't trust. The server's `validateRegisterBatch`
-# accepts BOTH the legacy 63-count 3-phase batch and this widened 77-count
-# one, so an add-on that hasn't picked up this change yet is never rejected.
-#
-# `read_config_registers` above always reads in <=25-register chunks
-# regardless of this count, so widening here does not add single-frame
-# partial-read risk the way it does on the edge-connector firmware path
-# (which reads its config batch in one Solarman V5 frame).
-CONFIG_RANGES = {
-    # 3-phase models: registers 115-191 (77 registers)
-    "deye_sg04lp3": (115, 77),
-    "deye_sg01hp3": (115, 77),
-    "deye_sg01hp3_50k": (115, 77),
-    "deye_sg01hp3_30k": (115, 77),
-    "deye_sg02hp3_80k": (115, 77),
-    "deye_sg05lp3": (115, 77),
-    "deye_gb_s20k": (115, 77),
-    "sunsynk_3phase": (115, 77),
-    "sunsynk_3phase_15k": (115, 77),
-    # 1-phase models: registers 217-279 (63 registers, unwidened)
-    "deye_sg03lp1": (217, 63),
-    "deye_sg01lp1": (217, 63),
-    "deye_sg02lp1": (217, 63),
-    "deye_sun_g3": (217, 63),
-    "deye_sg04lp1": (217, 63),
-    "deye_sg05lp1": (217, 63),
-    "deye_sg01lp1_16k": (217, 63),
-    "sunsynk_1phase": (217, 63),
-    "sunsynk_1phase_12k": (217, 63),
-    "sunsynk_1phase_16k": (217, 63),
-    "deye_sg01lp1_us": (217, 63),
-    "solark_5k": (217, 63),
-    "solark_12k": (217, 63),
-    "solark_15k": (217, 63),
-    "solark_18k": (217, 63),
-}
-
-
-def config_range_for_model(model_id: str) -> tuple[int, int] | None:
-    """Return (start, count) register range for a model, or None if unsupported."""
-    return CONFIG_RANGES.get(model_id)
 
 
 def registers_hash(regs: list[int]) -> int:
@@ -313,16 +322,50 @@ async def read_config_registers(
     if chunk_size <= 0:
         raise ValueError(f"chunk_size must be positive, got {chunk_size}")
 
-    def fail(reason: str) -> None:
-        if errors_out is not None:
-            errors_out.append(reason)
-
     config_range = config_range_for_model(model_id)
     if config_range is None:
         _LOGGER.debug("read_config_registers: unsupported model %s", model_id)
-        fail(f"unsupported model {model_id}")
+        if errors_out is not None:
+            errors_out.append(f"unsupported model {model_id}")
         return None
     start, count = config_range
+
+    words = await read_holding_blocks(
+        hass, cfg, (config_range,), chunk_size=chunk_size, errors_out=errors_out
+    )
+    if words is None:
+        return None
+    return [words[addr] for addr in range(start, start + count)]
+
+
+async def read_holding_blocks(
+    hass,
+    cfg: dict,
+    blocks,
+    *,
+    optional=(),
+    chunk_size: int = 25,
+    errors_out: list[str] | None = None,
+) -> dict[int, int] | None:
+    """Read ``(start, count)`` holding-register blocks, all or nothing.
+
+    The read ``read_config_registers`` describes, for any list of blocks:
+    every block in ``chunk_size`` pieces, all in ONE transport call under the
+    logger's lock, and ``None`` unless every address of every block answered.
+
+    ``optional`` are single registers read in the same call whose absence
+    does not fail the read (MUST's edition and pack words: the firmware
+    posts its body without them).
+
+    Returns the words keyed by address, optional ones only when they
+    answered.
+    """
+    if chunk_size <= 0:
+        raise ValueError(f"chunk_size must be positive, got {chunk_size}")
+
+    def fail(reason: str) -> None:
+        if errors_out is not None:
+            errors_out.append(reason)
 
     protocol = cfg.get("protocol", "solarman_v5")
     if protocol == "solarman_v5":
@@ -330,73 +373,180 @@ async def read_config_registers(
     elif protocol == "modbus_tcp":
         read_fn = transport._read_modbus
     else:
-        _LOGGER.debug("read_config_registers: unsupported protocol %s", protocol)
+        _LOGGER.debug("read_holding_blocks: unsupported protocol %s", protocol)
         fail(f"unsupported protocol {protocol}")
         return None
 
     unit_id = int(cfg.get("slave_id", 1))
 
     # Build every chunk's range up front and read them all in ONE transport
-    # call (one TCP connection) — see the docstring above.
+    # call (one TCP connection) — see read_config_registers' docstring.
     ranges: list[tuple[int, int, int, str]] = []
-    offset = 0
-    while offset < count:
-        chunk_count = min(chunk_size, count - offset)
-        chunk_start = start + offset
-        ranges.append((unit_id, chunk_start, chunk_count, "FC03"))
-        offset += chunk_count
+    for start, count in blocks:
+        offset = 0
+        while offset < count:
+            chunk_count = min(chunk_size, count - offset)
+            ranges.append((unit_id, start + offset, chunk_count, "FC03"))
+            offset += chunk_count
+    for address in optional:
+        ranges.append((unit_id, address, 1, "FC03"))
 
     try:
         async with logger_lock(cfg):
             raw = await hass.async_add_executor_job(read_fn, cfg, ranges)
     except Exception as exc:  # noqa: BLE001 — any transport failure aborts the read
-        _LOGGER.debug(
-            "read_config_registers: batched read failed at addr=%s count=%s: %s",
-            start,
-            count,
-            exc,
-        )
+        _LOGGER.debug("read_holding_blocks: batched read of %s failed: %s", list(blocks), exc)
         fail(str(exc) or type(exc).__name__)
         return None
 
     slot = raw.get(unit_id, {}) if raw else {}
-    registers: list[int] = []
-    for addr in range(start, start + count):
-        if addr not in slot:
-            _LOGGER.debug(
-                "read_config_registers: short/incomplete batched read at addr=%s "
-                "count=%s (missing register %s) — aborting, no partial result",
-                start,
-                count,
-                addr,
-            )
-            fail(f"incomplete read, register {addr} missing")
-            return None
-        registers.append(slot[addr])
+    words: dict[int, int] = {}
+    for start, count in blocks:
+        for addr in range(start, start + count):
+            if addr not in slot:
+                _LOGGER.debug(
+                    "read_holding_blocks: short/incomplete batched read at addr=%s "
+                    "count=%s (missing register %s) — aborting, no partial result",
+                    start,
+                    count,
+                    addr,
+                )
+                fail(f"incomplete read, register {addr} missing")
+                return None
+            words[addr] = slot[addr]
+    for address in optional:
+        if address in slot:
+            words[address] = slot[address]
+    return words
 
-    return registers
+
+# The EyBond collector transport (`eybond_at.setup.EYBOND_PROTOCOL`), spelled
+# out so this module does not import the collector stack.
+_EYBOND_PROTOCOL = "eybond_at"
+
+
+def _is_eybond(cfg: dict) -> bool:
+    return cfg.get("protocol") == _EYBOND_PROTOCOL
 
 
 def _eligible_for_settings_sync(inv: dict) -> tuple[str, dict] | None:
     """Return ``(model_id, harvest_config)`` if this inverter should be
     settings-synced, else ``None``.
 
-    Eligible = a direct native ``harvest_config`` (solarman_v5 or modbus_tcp)
-    whose ``model_id`` has a known register range. Relay/preset inverters
-    (HA-entity ``entity_map``, no ``harvest_config`` at all) and MQTT-only
-    inverters are never eligible — they carry no register address space to
-    mirror, so they must never POST.
+    Eligible = a direct native ``harvest_config`` (solarman_v5, modbus_tcp,
+    or an EyBond collector) whose ``model_id`` has a settings read plan
+    (``settings_read_plan_for``). Relay/preset inverters (HA-entity
+    ``entity_map``, no ``harvest_config`` at all) and MQTT-only inverters are
+    never eligible — they carry no register address space to mirror, so they
+    must never POST.
     """
     hc = inv.get("harvest_config")
     if not hc:
         return None
     protocol = hc.get("protocol", "solarman_v5")
-    if protocol not in ("solarman_v5", "modbus_tcp"):
+    if protocol not in ("solarman_v5", "modbus_tcp", _EYBOND_PROTOCOL):
         return None
     model_id = hc.get("model_id")
-    if not model_id or config_range_for_model(model_id) is None:
+    if not model_id or settings_read_plan_for(model_id, hc, _is_eybond(hc)) is None:
         return None
     return model_id, hc
+
+
+async def read_settings_snapshot(
+    hass,
+    plan: SettingsReadPlan,
+    inverter_id: str,
+    model_id: str,
+    cfg: dict,
+    *,
+    eybond_hub=None,
+    errors_out: list[str] | None = None,
+) -> dict | None:
+    """Read one non-Deye inverter's settings into a snapshot, or None.
+
+    The snapshot is stored as ``{"inverter_id", "model_id", "kind", "body",
+    "read_at"}``, where ``body`` is the brand body in the contract's own
+    camelCase keys (``settings_read_plan`` describes each one). A Deye
+    snapshot keeps its older shape and is read by ``sync_inverter_once``.
+
+    An SMG II inverter is read through the EyBond collector that reports its
+    serial on ``eybond_hub``; every other kind over the harvest transport.
+    """
+
+    def fail(reason: str) -> None:
+        if errors_out is not None:
+            errors_out.append(reason)
+
+    if plan.kind == "smg":
+        if eybond_hub is None:
+            fail("the EyBond hub is not running")
+            return None
+        from .executors.smg_settings_executor import EybondSmgSettingsExecutor
+
+        executor = EybondSmgSettingsExecutor(
+            hub=eybond_hub, inverter_serial=cfg.get("inverter_serial")
+        )
+        try:
+            body = await executor.read_sync_body()
+        except Exception as exc:  # noqa: BLE001 — any collector failure aborts the read
+            fail(str(exc) or type(exc).__name__)
+            return None
+        if body is None:
+            fail("no settings body for this protocol number, or a short block")
+            return None
+    else:
+        words = await read_holding_blocks(
+            hass,
+            cfg,
+            plan.blocks,
+            optional=plan.extra.get("optional", ()),
+            errors_out=errors_out,
+        )
+        if words is None:
+            return None
+        body = build_snapshot_body(plan, words)
+        if body is None:
+            fail(f"the {plan.kind} read cannot make a settings body")
+            return None
+    return {
+        "inverter_id": inverter_id,
+        "model_id": model_id,
+        "kind": plan.kind,
+        "body": body,
+        "read_at": _utc_now_iso(),
+    }
+
+
+def _note_read_failure(
+    inverter_id: str, model_id: str, cfg: dict, errors: list[str], failing: set[str] | None
+) -> None:
+    """Log a failed settings read: WARNING once per failure streak, then DEBUG."""
+    reason = "; ".join(errors) or "unknown error"
+    if failing is None or inverter_id not in failing:
+        _LOGGER.warning(
+            "settings_sync: could not read the settings of inverter %s (model %s) "
+            "at %s:%s: %s. Retrying; repeat failures are logged at debug level",
+            inverter_id,
+            model_id,
+            cfg.get("ip"),
+            cfg.get("port"),
+            reason,
+        )
+        if failing is not None:
+            failing.add(inverter_id)
+    else:
+        _LOGGER.debug(
+            "settings_sync: settings read of inverter %s failed again: %s",
+            inverter_id,
+            reason,
+        )
+
+
+def _note_read_success(inverter_id: str, failing: set[str] | None) -> None:
+    """End a failure streak, if one was running."""
+    if failing is not None and inverter_id in failing:
+        failing.discard(inverter_id)
+        _LOGGER.info("settings_sync: settings of inverter %s read again", inverter_id)
 
 
 async def sync_inverter_once(
@@ -414,14 +564,22 @@ async def sync_inverter_once(
     cloud_ingest_enabled: bool = True,
     snapshots: dict[str, dict] | None = None,
     failing: set[str] | None = None,
+    eybond_hub=None,
 ) -> bool:
     """One settings-sync cycle for a single already-eligible inverter.
 
     Read -> cache -> hash -> ``should_upload`` -> POST.
 
-    ``snapshots`` maps ``inverter_id`` to the last successful read
-    (``inverter_id``, ``model_id``, ``start_register``, ``registers``,
-    ``read_at``) and is replaced on EVERY successful read, whether or not a
+    Only a Deye-family inverter goes past the cache. Any other kind
+    (LuxPower, MUST, SMG II, Solis) is read with ``read_settings_snapshot``,
+    cached in ``snapshots``, and never POSTed: the cloud upload from this
+    add-on stays Deye-only. ``eybond_hub`` is the running EyBond hub, which
+    an SMG II read needs.
+
+    ``snapshots`` maps ``inverter_id`` to the last successful read (for a
+    Deye: ``inverter_id``, ``model_id``, ``start_register``, ``registers``,
+    ``read_at``; for any other kind see ``read_settings_snapshot``) and is
+    replaced on EVERY successful read, whether or not a
     POST follows — the island settings view serves it.
 
     With ``cloud_ingest_enabled`` False the cycle stops after the cache: no
@@ -451,6 +609,22 @@ async def sync_inverter_once(
     """
     now = now_monotonic_fn()
 
+    plan = settings_read_plan_for(model_id, cfg, _is_eybond(cfg))
+    if plan is None:  # pragma: no cover — caller already filtered this
+        return False
+    if plan.kind != "deye":
+        read_errors: list[str] = []
+        snapshot = await read_settings_snapshot(
+            hass, plan, inverter_id, model_id, cfg, eybond_hub=eybond_hub, errors_out=read_errors
+        )
+        if snapshot is None:
+            _note_read_failure(inverter_id, model_id, cfg, read_errors, failing)
+            return False
+        _note_read_success(inverter_id, failing)
+        if snapshots is not None:
+            snapshots[inverter_id] = snapshot
+        return False
+
     if cloud_ingest_enabled and backoff_until is not None:
         until = backoff_until.get(inverter_id)
         if until is not None and now < until:
@@ -465,29 +639,9 @@ async def sync_inverter_once(
     errors: list[str] = []
     registers = await read_config_registers(hass, cfg, model_id, errors_out=errors)
     if registers is None:
-        reason = "; ".join(errors) or "unknown error"
-        if failing is None or inverter_id not in failing:
-            _LOGGER.warning(
-                "settings_sync: could not read the settings of inverter %s (model %s) "
-                "at %s:%s: %s. Retrying; repeat failures are logged at debug level",
-                inverter_id,
-                model_id,
-                cfg.get("ip"),
-                cfg.get("port"),
-                reason,
-            )
-            if failing is not None:
-                failing.add(inverter_id)
-        else:
-            _LOGGER.debug(
-                "settings_sync: settings read of inverter %s failed again: %s",
-                inverter_id,
-                reason,
-            )
+        _note_read_failure(inverter_id, model_id, cfg, errors, failing)
         return False
-    if failing is not None and inverter_id in failing:
-        failing.discard(inverter_id)
-        _LOGGER.info("settings_sync: settings of inverter %s read again", inverter_id)
+    _note_read_success(inverter_id, failing)
 
     config_range = config_range_for_model(model_id)
     if config_range is None:  # pragma: no cover — caller already filtered this
@@ -559,18 +713,20 @@ async def settings_sync_tick(
     cloud_ingest_enabled: bool = True,
     snapshots: dict[str, dict] | None = None,
     failing: set[str] | None = None,
+    eybond_hub=None,
 ) -> None:
     """One pass over every inverter on an entry: sync each eligible one.
 
     Ineligible inverters (relay/preset — no ``harvest_config`` — or a
-    ``harvest_config`` whose model has no ``CONFIG_RANGES`` entry) are
-    skipped with zero reads and zero POSTs; this is the enforcement point for
+    ``harvest_config`` whose model has no settings read plan) are skipped
+    with zero reads and zero POSTs; this is the enforcement point for
     "preset/MQTT-only inverters must never POST". A per-inverter exception is
     caught and logged so one bad inverter can't stall the rest of the tick.
 
     ``backoff_until`` (per-inverter 4xx backoff — see ``sync_inverter_once``)
     is threaded through unchanged so it persists across ticks within the same
-    loop instance, same as ``cache``.
+    loop instance, same as ``cache``. ``eybond_hub`` reaches the SMG II
+    inverters on an EyBond collector.
     """
     for inv in inverters:
         eligible = _eligible_for_settings_sync(inv)
@@ -595,9 +751,21 @@ async def settings_sync_tick(
                 cloud_ingest_enabled=cloud_ingest_enabled,
                 snapshots=snapshots,
                 failing=failing,
+                eybond_hub=eybond_hub,
             )
         except Exception:  # noqa: BLE001 — one inverter's failure must not block others
             _LOGGER.exception("settings_sync: tick failed for inverter %s", inverter_id)
+
+
+def _eybond_hub_of(hass, entry):
+    """The entry's running EyBond hub, or None.
+
+    Read every tick: setup starts the hub after this loop, and stores it in
+    ``hass.data`` only once setup finishes. Until then an SMG II read fails
+    and takes the fast first-read retry like any other failed read.
+    """
+    state = (getattr(hass, "data", {}).get(DOMAIN) or {}).get(entry.entry_id)
+    return state.get("eybond_hub") if isinstance(state, dict) else None
 
 
 async def _seed_snapshots(store, eligible: dict[str, str], snapshots: dict[str, dict]) -> None:
@@ -642,7 +810,8 @@ async def settings_sync_loop(
     inverter has been read, the loop keeps ``interval_s``.
 
     Cloud ingest: the entry's ``cloud_ingest_enabled`` flag is re-read every
-    tick. While it is off, reads are cached and never POSTed.
+    tick. While it is off, reads are cached and never POSTed. Reads of any
+    kind but Deye are never POSTed at all.
 
     ``cloud_upload=False`` is a true island: reads are cached and never
     POSTed whatever the flag says, and the loop never touches the entry's
@@ -721,6 +890,7 @@ async def settings_sync_loop(
             cloud_ingest_enabled=cloud_upload and _cloud_ingest_enabled(entry),
             snapshots=snapshots,
             failing=failing,
+            eybond_hub=_eybond_hub_of(hass, entry),
         )
         for inv_id, snapshot in snapshots.items():
             if before.get(inv_id) is snapshot:

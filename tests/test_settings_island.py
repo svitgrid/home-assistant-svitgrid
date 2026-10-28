@@ -632,3 +632,275 @@ def test_settings_view_is_registered():
     register_views(hass, store=None)
     assert any(isinstance(v, SvitgridSettingsView) for v in registered)
     assert SvitgridSettingsView.url == "/api/svitgrid/settings"
+
+
+# ── 7. Every brand with settings, and nothing to configure for the rest ─
+
+
+_CBAA = {7: ord("c") | ord("B") << 8, 8: ord("a") | ord("a") << 8}
+
+
+def _stub_modbus(monkeypatch, overrides: dict | None = None) -> None:
+    def fake_read_modbus(cfg, ranges):
+        out: dict = {}
+        for unit_id, start, count, _fc in ranges:
+            slot = out.setdefault(unit_id, {})
+            for addr in range(start, start + count):
+                slot[addr] = (overrides or {}).get(addr, addr & 0xFFFF)
+        return out
+
+    monkeypatch.setattr(transport, "_read_modbus", fake_read_modbus)
+
+
+def _tcp_inv(inverter_id: str, model_id: str, slave_id: int = 1, port: int = 502) -> dict:
+    return {
+        "inverter_id": inverter_id,
+        "harvest_config": {
+            "protocol": "modbus_tcp",
+            "ip": "192.168.1.60",
+            "port": port,
+            "slave_id": slave_id,
+            "model_id": model_id,
+        },
+    }
+
+
+class _Session:
+    def __init__(self, words: dict[int, int]) -> None:
+        self.words = words
+
+    async def read_registers(self, address, count, timeout_s=5.0):
+        return [self.words.get(a, a & 0xFFFF) for a in range(address, address + count)]
+
+
+class _Hub:
+    def __init__(self, session) -> None:
+        self.session = session
+
+    def session_for(self, serial):
+        return self.session if serial == "SN1" else None
+
+
+async def _read_and_serve(inv: dict, *, eybond_hub=None) -> tuple[_FakeApiClient, dict]:
+    """One tick with the cloud copy ON, then GET /settings for the inverter."""
+    api = _FakeApiClient()
+    snapshots: dict = {}
+    await settings_sync_tick(
+        _FakeHass(),
+        api,
+        "key",
+        [inv],
+        {},
+        snapshots=snapshots,
+        eybond_hub=eybond_hub,
+    )
+    hass = SimpleNamespace(
+        data={
+            DOMAIN: {
+                "entry-1": {"settings_snapshots": snapshots, "entry_data": {"inverters": [inv]}}
+            }
+        }
+    )
+    resp = await SvitgridSettingsView(store=None).get(
+        _Req(hass, {"inverter_id": inv["inverter_id"]})
+    )
+    assert resp.status == 200, resp.body
+    return api, json.loads(resp.body)
+
+
+def _block_shape(body: dict) -> list[tuple[int, int]]:
+    return [(b["startRegister"], len(b["registers"])) for b in body["blocks"]]
+
+
+async def test_settings_serves_luxpower_snapshot_shape(monkeypatch):
+    """The body `luxpower_build_sync_body` posts: five blocks of 40 from
+    holding 0, as the app's `luxpowerCurrentState` parses it."""
+    _stub_modbus(monkeypatch, _CBAA)
+    api, body = await _read_and_serve(_tcp_inv("inv-lux", "luxpower_sna_5000_wpv", port=8899))
+
+    assert api.calls == []  # the cloud upload stays Deye-only
+    assert set(body) == {"inverterId", "modelId", "readAt", "protocol", "familyCode", "blocks"}
+    assert body["inverterId"] == "inv-lux"
+    assert body["modelId"] == "luxpower_sna_5000_wpv"
+    assert body["protocol"] == "luxpower"
+    assert body["familyCode"] == "cBaa"
+    assert body["blocks"][0]["startRegister"] == 0
+    assert _block_shape(body) == [(0, 40), (40, 40), (80, 40), (120, 40), (160, 40)]
+    assert _ISO_Z.match(body["readAt"])
+
+
+async def test_settings_serves_must_snapshot_shape(monkeypatch):
+    _stub_modbus(monkeypatch, {20006: 10415, 25275: 24})
+    api, body = await _read_and_serve(_tcp_inv("inv-must", "must_pv18_5248", slave_id=4))
+
+    assert api.calls == []
+    assert set(body) == {
+        "inverterId",
+        "modelId",
+        "readAt",
+        "protocol",
+        "edition",
+        "packVoltage",
+        "blocks",
+    }
+    assert body["protocol"] == "must"
+    assert body["edition"] == "1.04.15"
+    assert body["packVoltage"] == 24
+    assert _block_shape(body) == [(10101, 12), (20101, 43)]
+
+
+async def test_settings_serves_smg_snapshot_shape():
+    inv = {
+        "inverter_id": "inv-smg",
+        "harvest_config": {
+            "protocol": "eybond_at",
+            "model_id": "anenji_anj_6200",
+            "inverter_serial": "SN1",
+        },
+    }
+    api, body = await _read_and_serve(inv, eybond_hub=_Hub(_Session({184: 11})))
+
+    assert api.calls == []
+    assert set(body) == {"inverterId", "modelId", "readAt", "protocolNumber", "blocks"}
+    assert body["protocolNumber"] == 11
+    assert _block_shape(body) == [(303, 1), (313, 31)]
+
+
+async def test_settings_serves_solis_snapshot_shape(monkeypatch):
+    _stub_modbus(monkeypatch)
+    api, body = await _read_and_serve(_tcp_inv("inv-solis", "solis_s6_eh3p_h"))
+
+    assert api.calls == []
+    assert set(body) == {"inverterId", "modelId", "readAt", "protocol", "registers"}
+    assert body["protocol"] == "solis"
+    assert len(body["registers"]) == 23
+    assert body["registers"]["43011"] == 43011
+    assert body["registers"]["43118"] == 43118
+
+
+def _hass_with_inverter(inv: dict, snapshots: dict | None = None):
+    return SimpleNamespace(
+        data={
+            DOMAIN: {
+                "entry-1": {
+                    "settings_snapshots": snapshots or {},
+                    "entry_data": {"inverters": [inv]},
+                }
+            }
+        }
+    )
+
+
+async def test_settings_answers_nothing_to_configure_for_huawei():
+    hass = _hass_with_inverter(_tcp_inv("inv-hw", "huawei_sun2000_30ktl_m3"))
+    resp = await SvitgridSettingsView(store=None).get(_Req(hass, {"inverter_id": "inv-hw"}))
+    assert resp.status == 404
+    assert json.loads(resp.body) == {"error": "nothing_to_configure"}
+
+
+async def test_settings_answers_nothing_to_configure_for_solax_and_solis_string():
+    for model_id in ("solax_x3_hybrid_g4_15k", "solis_30k_5g", "luxpower_lxp_lb_eu_7k"):
+        hass = _hass_with_inverter(_tcp_inv("inv-x", model_id))
+        resp = await SvitgridSettingsView(store=None).get(_Req(hass, {"inverter_id": "inv-x"}))
+        assert json.loads(resp.body) == {"error": "nothing_to_configure"}, model_id
+
+
+async def test_settings_answers_not_read_yet_for_unread_deye():
+    hass = _hass_with_inverter(_harvest_inv("inv-deye"))
+    resp = await SvitgridSettingsView(store=None).get(_Req(hass, {"inverter_id": "inv-deye"}))
+    assert resp.status == 404
+    assert json.loads(resp.body) == {"error": "not_read_yet"}
+
+
+async def test_settings_answers_not_read_yet_for_pi30_it_cannot_read():
+    """Edecoa has settings; this add-on cannot harvest PI30, so the truth is
+    "not read yet", never "nothing to configure"."""
+    hass = _hass_with_inverter(_tcp_inv("inv-pi30", "edecoa_em_624a"))
+    resp = await SvitgridSettingsView(store=None).get(_Req(hass, {"inverter_id": "inv-pi30"}))
+    assert json.loads(resp.body) == {"error": "not_read_yet"}
+
+
+async def test_loop_reads_smg_through_the_entry_eybond_hub():
+    """Setup stores the EyBond hub in hass.data; the loop finds it there."""
+    inv = {
+        "inverter_id": "inv-smg",
+        "harvest_config": {
+            "protocol": "eybond_at",
+            "model_id": "anenji_anj_11kw",
+            "inverter_serial": "SN1",
+        },
+    }
+    hass = _FakeHass()
+    hass.data = {DOMAIN: {"entry-1": {"eybond_hub": _Hub(_Session({184: 4}))}}}
+    lifecycle = SimpleNamespace(active=True)
+    snapshots: dict = {}
+    api = _FakeApiClient()
+
+    await settings_sync_loop(
+        hass,
+        _entry([inv]),
+        lifecycle=lifecycle,
+        api_client=api,
+        sleep_fn=_stop_after(1, lifecycle, []),
+        snapshots=snapshots,
+    )
+
+    assert api.calls == []
+    assert snapshots["inv-smg"]["kind"] == "smg"
+    assert snapshots["inv-smg"]["body"]["protocolNumber"] == 4
+
+
+def test_reading_store_round_trips_a_non_deye_snapshot(tmp_path):
+    db = str(tmp_path / "readings.db")
+    snap = {
+        "inverter_id": "inv-must",
+        "model_id": "must_pv18_5248",
+        "kind": "must",
+        "body": {
+            "protocol": "must",
+            "edition": "1.04.15",
+            "packVoltage": 24,
+            "blocks": [{"startRegister": 10101, "registers": [1] * 12}],
+        },
+        "read_at": "2026-10-28T08:00:00Z",
+    }
+    ReadingStore(None, db)._set_settings_snapshot_sync(snap)
+
+    assert ReadingStore(None, db)._get_settings_snapshot_sync("inv-must") == snap
+
+
+async def test_restart_serves_a_persisted_non_deye_snapshot(monkeypatch):
+    def failing_read(cfg, ranges):
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(transport, "_read_modbus", failing_read)
+    inv = _tcp_inv("inv-solis", "solis_s6_eh3p_h")
+    saved = {
+        "inverter_id": "inv-solis",
+        "model_id": "solis_s6_eh3p_h",
+        "kind": "solis",
+        "body": {"protocol": "solis", "registers": {"43011": 20}},
+        "read_at": "2026-10-28T08:00:00Z",
+    }
+    lifecycle = SimpleNamespace(active=True)
+    snapshots: dict = {}
+
+    await settings_sync_loop(
+        _FakeHass(),
+        _entry([inv], cloud_ingest_enabled=False),
+        lifecycle=lifecycle,
+        api_client=_FakeApiClient(),
+        sleep_fn=_stop_after(1, lifecycle, []),
+        store=_MemoryStore({"inv-solis": saved}),
+        snapshots=snapshots,
+    )
+
+    hass = _hass_with_inverter(inv, snapshots)
+    resp = await SvitgridSettingsView(store=None).get(_Req(hass, {"inverter_id": "inv-solis"}))
+    assert json.loads(resp.body) == {
+        "inverterId": "inv-solis",
+        "modelId": "solis_s6_eh3p_h",
+        "protocol": "solis",
+        "registers": {"43011": 20},
+        "readAt": "2026-10-28T08:00:00Z",
+    }

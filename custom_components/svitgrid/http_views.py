@@ -60,9 +60,10 @@ from .island_lan import (
 )
 from .local_time import local_day_of, local_hour_index
 from .settings_sync import (
-    find_known_inverter,
     find_settings_snapshot,
+    missing_snapshot_error,
     seed_onboarding_settings,
+    settings_snapshot_response,
 )
 from .signing import compute_key_id, public_key_from_hex, verify_payload
 
@@ -322,12 +323,15 @@ class SvitgridSettingsView(_BaseView):
     """GET /api/svitgrid/settings?inverter_id=<id> — the inverter's last settings read.
 
     Serves the settings-sync loop's cache, so it works in island mode with
-    cloud ingest off, where the settings never leave the house. Answers
-    ``{"inverterId", "modelId", "startRegister", "registers", "readAt"}``;
-    400 ``missing_inverter_id`` without the query parameter; 404
-    ``unknown_inverter`` for an id no config entry lists; 404
-    ``not_read_yet`` for a listed inverter with no successful read. The
-    mobile app consumes these field names.
+    cloud ingest off, where the settings never leave the house. Answers the
+    settings snapshot (``settings_sync.settings_snapshot_response``): for a
+    Deye-family inverter ``{"inverterId", "modelId", "startRegister",
+    "registers", "readAt"}``, for LuxPower, MUST, SMG II and Solis the same
+    three ids plus the brand body. 400 ``missing_inverter_id`` without the
+    query parameter; 404 ``unknown_inverter`` for an id no config entry
+    lists; 404 ``nothing_to_configure`` for a listed inverter whose model has
+    no settings; 404 ``not_read_yet`` for one with settings and no
+    successful read. The mobile app consumes these field names.
 
     Auth: island key OR authenticated HA session (``_BaseView._authorize``).
     """
@@ -344,18 +348,9 @@ class SvitgridSettingsView(_BaseView):
         hass = request.app["hass"]
         snapshot = find_settings_snapshot(hass, inverter_id)
         if snapshot is None:
-            if find_known_inverter(hass, inverter_id) is None:
-                return self.json({"error": "unknown_inverter"}, status_code=404)
-            return self.json({"error": "not_read_yet"}, status_code=404)
-        return self.json(
-            {
-                "inverterId": snapshot["inverter_id"],
-                "modelId": snapshot["model_id"],
-                "startRegister": snapshot["start_register"],
-                "registers": list(snapshot["registers"]),
-                "readAt": snapshot["read_at"],
-            }
-        )
+            error = missing_snapshot_error(hass, inverter_id)
+            return self.json({"error": error}, status_code=404)
+        return self.json(settings_snapshot_response(snapshot))
 
 
 class SvitgridOnboardingSnapshotView(_BaseView):

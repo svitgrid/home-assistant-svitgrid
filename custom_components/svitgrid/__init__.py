@@ -1040,9 +1040,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
 
     if loops_active:
-        # Settings-sync loop — mirrors config registers (TOU/work-mode block)
-        # for every direct-harvest (solarman_v5/modbus_tcp) inverter with a
-        # known CONFIG_RANGES entry every 5 min, hash-gated + 30-min heartbeat.
+        # Settings-sync loop — every 5 min reads the settings of every
+        # direct-harvest inverter with a settings read plan (Deye family,
+        # LuxPower SNA, MUST and Solis hybrids over solarman_v5/modbus_tcp;
+        # SMG II through the EyBond hub, which it finds in hass.data). Only
+        # the Deye read is POSTed, hash-gated + 30-min heartbeat.
         # Relay/preset-only entries are a no-op tick (settings_sync_tick's
         # eligibility filter skips them) — spawned unconditionally so a later
         # set_read_source switch to native picks it up without a reload. Every

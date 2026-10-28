@@ -34,6 +34,7 @@ from ..eybond_at.smg_settings import (
     unevaluatable_constraints_for,
     validate_smg_settings,
 )
+from ..settings_read_plan import SMG_SYNC_BLOCKS, blocks_body
 from .base import BaseExecutor
 
 _LOGGER = logging.getLogger(__name__)
@@ -455,6 +456,35 @@ class SmgSettingsExecutor(BaseExecutor):
         raise NotImplementedError(f"SmgSettingsExecutor does not support command {command_name!r}")
 
 
+async def read_smg_sync_body(link: RegisterLink, timeout_s: float = 5.0) -> dict | None:
+    """The SMG II settings snapshot body: ``{"protocolNumber", "blocks"}``.
+
+    The body the edge firmware posts to the cloud's ``sync-settings`` route
+    (``smg_settings_sync.c``), read over ``link``. Register 184 is read first
+    and picks the blocks (``SMG_SYNC_BLOCKS``). Returns None for a protocol
+    number with no blocks, and for a block that comes back short: the app
+    refuses a partial body as a whole, so none is built. A transport failure
+    raises, as ``read_registers`` does.
+
+    Not ``SmgSettingsExecutor.read_all``: that reads the catalogue's
+    addresses and returns display values, while the app maps the raw blocks
+    the cloud would receive.
+    """
+    protocol_words = await link.read_registers(REG_PROTOCOL, 1, timeout_s=timeout_s)
+    protocol_number = protocol_words[0] if protocol_words else None
+    blocks = SMG_SYNC_BLOCKS.get(protocol_number)
+    if blocks is None:
+        return None
+    words: dict[int, int] = {}
+    for start, count in blocks:
+        read = await link.read_registers(start, count, timeout_s=timeout_s)
+        if len(read) != count:
+            return None
+        for i, word in enumerate(read):
+            words[start + i] = word
+    return {"protocolNumber": protocol_number, "blocks": blocks_body(blocks, words)}
+
+
 class NoCollectorConnected(Exception):
     """No live CollectorSession for this inverter's serial right now."""
 
@@ -497,6 +527,19 @@ class EybondSmgSettingsExecutor(BaseExecutor):
 
     async def set_battery_charge(self, payload: dict[str, Any]) -> dict[str, Any]:
         raise NotImplementedError("EybondSmgSettingsExecutor does not support set_battery_charge")
+
+    async def read_sync_body(self) -> dict | None:
+        """The settings snapshot body from the collector connected right now.
+
+        Raises ``NoCollectorConnected`` while no collector reports this
+        inverter's serial. See ``read_smg_sync_body`` for the rest.
+        """
+        session = self._hub.session_for(self._inverter_serial)
+        if session is None:
+            raise NoCollectorConnected(
+                f"no collector connected for serial {self._inverter_serial!r}"
+            )
+        return await read_smg_sync_body(session, timeout_s=self._timeout_s)
 
     async def dispatch(self, command_name: str, payload: dict[str, Any]) -> dict[str, Any]:
         session = self._hub.session_for(self._inverter_serial)
