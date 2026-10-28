@@ -156,7 +156,9 @@ async def test_no_loop_that_calls_the_cloud_starts(hass, enable_custom_integrati
     m["command"].assert_not_called()
     m["mqtt_wake"].assert_not_called()
     m["sender"].assert_not_called()
-    m["settings_sync"].assert_not_called()
+    # The settings read runs for the LAN settings view, with no upload.
+    m["settings_sync"].assert_called_once()
+    assert m["settings_sync"].call_args.kwargs["cloud_upload"] is False
     # The only client is the public one; no keyed client is kept for loops.
     assert hass.data[DOMAIN][entry.entry_id]["api_client"] is None
 
@@ -183,7 +185,7 @@ async def test_harvest_store_views_and_scheduler_run(hass, enable_custom_integra
     assert state["cancel_rollup"] is not None
     assert state["command_task"] is None
     assert state["mqtt_wake_task"] is None
-    assert state["settings_sync_task"] is None
+    assert state["settings_sync_task"] is not None
     assert state["sender_task"] is None
 
 

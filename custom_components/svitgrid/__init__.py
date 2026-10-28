@@ -737,7 +737,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # True island: island mode on and the cloud copy off. The cloud then takes
     # no part in day-to-day operation (owner, 2026-10-15): no command poller,
-    # no MQTT wake, no settings sync, no reading upload, no version report.
+    # no MQTT wake, no settings upload, no reading upload, no version report.
     # The app reaches this install over the LAN (island_lan.py).
     true_island = is_true_island(
         data,
@@ -1039,14 +1039,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             name="svitgrid_mqtt_wake",
         )
 
-        # Task 11: settings-sync loop — mirrors config registers (TOU/work-mode
-        # block) for every direct-harvest (solarman_v5/modbus_tcp) inverter with
-        # a known CONFIG_RANGES entry every 5 min, hash-gated + 30-min heartbeat.
+    if loops_active:
+        # Settings-sync loop — mirrors config registers (TOU/work-mode block)
+        # for every direct-harvest (solarman_v5/modbus_tcp) inverter with a
+        # known CONFIG_RANGES entry every 5 min, hash-gated + 30-min heartbeat.
         # Relay/preset-only entries are a no-op tick (settings_sync_tick's
-        # eligibility filter skips them) — spawned unconditionally like
-        # command_task so a later set_read_source switch to native picks it up
-        # without a reload. Every read is cached for the island settings view;
-        # the POST happens only while cloud ingest is on.
+        # eligibility filter skips them) — spawned unconditionally so a later
+        # set_read_source switch to native picks it up without a reload. Every
+        # read is cached for the island settings view, so it runs on a true
+        # island too; there it never uploads (cloud_upload=False) and never
+        # reads the entry's api_key, which a local-only entry does not have.
         settings_sync_task = hass.async_create_background_task(
             run_settings_sync_loop(
                 hass=hass,
@@ -1054,11 +1056,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 lifecycle=lifecycle,
                 snapshots=settings_snapshots,
                 store=store,
+                cloud_upload=not true_island,
             ),
             name="svitgrid_settings_sync",
         )
 
-    if loops_active:
         # Island event scheduler — spawned ONLY in pure island mode (cloud-sync off).
         # With cloud_ingest_enabled=True the cloud engine handles calendar events;
         # running both would double-fire commands.

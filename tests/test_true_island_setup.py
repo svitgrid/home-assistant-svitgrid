@@ -161,13 +161,23 @@ async def test_true_island_starts_no_cloud_loop(hass, enable_custom_integrations
     m["command"].assert_not_called()
     m["mqtt_wake"].assert_not_called()
     m["sender"].assert_not_called()
-    m["settings_sync"].assert_not_called()
     state = hass.data[DOMAIN][entry.entry_id]
     assert state["command_task"] is None
     assert state["mqtt_wake_task"] is None
-    assert state["settings_sync_task"] is None
     assert state["sender_task"] is None
     assert state["true_island"] is True
+
+
+@pytest.mark.asyncio
+async def test_settings_read_runs_on_true_island(hass, enable_custom_integrations):
+    """The settings mirror needs a read on the island too; it never uploads."""
+    await _seed_keystore(hass)
+    entry = _cloud_entry(cloud_ingest=False)
+    _, m = await _setup(hass, entry)
+
+    m["settings_sync"].assert_called_once()
+    assert m["settings_sync"].call_args.kwargs["cloud_upload"] is False
+    assert hass.data[DOMAIN][entry.entry_id]["settings_sync_task"] is not None
 
 
 @pytest.mark.asyncio
@@ -224,6 +234,7 @@ async def test_cloud_copy_on_starts_the_cloud_loops(hass, enable_custom_integrat
     m["mqtt_wake"].assert_called_once()
     m["sender"].assert_called_once()
     m["settings_sync"].assert_called_once()
+    assert m["settings_sync"].call_args.kwargs["cloud_upload"] is True
     m["scheduler"].assert_not_called()
     assert hass.data[DOMAIN][entry.entry_id]["true_island"] is False
 

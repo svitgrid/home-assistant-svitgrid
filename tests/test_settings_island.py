@@ -312,6 +312,53 @@ async def test_cloud_ingest_off_reads_and_caches_but_never_posts(monkeypatch):
     assert _ISO_Z.match(snap["read_at"])
 
 
+async def test_settings_read_runs_on_local_only_entry_without_api_key(monkeypatch):
+    """A local-only entry has no account: no api_key, no api_base. The loop
+    must still read and cache, and never build a client or post."""
+    _stub_read(monkeypatch)
+    entry = SimpleNamespace(
+        entry_id="entry-1",
+        data={"inverters": [_harvest_inv()], "local_only": True},
+        options={},
+    )
+    lifecycle = SimpleNamespace(active=True)
+    snapshots: dict = {}
+    sleeps: list[float] = []
+
+    await settings_sync_loop(
+        _FakeHass(),
+        entry,
+        lifecycle=lifecycle,
+        cloud_upload=False,
+        sleep_fn=_stop_after(1, lifecycle, sleeps),
+        snapshots=snapshots,
+    )
+
+    assert snapshots["inv-1"]["registers"] == list(range(115, 115 + 77))
+
+
+async def test_cloud_upload_off_never_posts_even_with_the_copy_on(monkeypatch):
+    """A true island keeps the cloud out even if its entry still says the copy
+    is on: cloud_upload=False wins over the flag."""
+    _stub_read(monkeypatch)
+    api = _FakeApiClient()
+    lifecycle = SimpleNamespace(active=True)
+    snapshots: dict = {}
+
+    await settings_sync_loop(
+        _FakeHass(),
+        _entry([_harvest_inv()], cloud_ingest_enabled=True),
+        lifecycle=lifecycle,
+        api_client=api,
+        cloud_upload=False,
+        sleep_fn=_stop_after(1, lifecycle, []),
+        snapshots=snapshots,
+    )
+
+    assert api.calls == []
+    assert "inv-1" in snapshots
+
+
 async def test_cloud_ingest_on_caches_every_read_even_when_the_hash_gate_skips(monkeypatch):
     _stub_read(monkeypatch)
     api = _FakeApiClient()

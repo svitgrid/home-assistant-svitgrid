@@ -630,6 +630,7 @@ async def settings_sync_loop(
     now_monotonic_fn=time.monotonic,
     snapshots: dict[str, dict] | None = None,
     store=None,
+    cloud_upload: bool = True,
 ) -> None:
     """Every ``interval_s`` (default 300s / 5 min), settings-sync every
     register-capable inverter on this config entry.
@@ -642,6 +643,10 @@ async def settings_sync_loop(
 
     Cloud ingest: the entry's ``cloud_ingest_enabled`` flag is re-read every
     tick. While it is off, reads are cached and never POSTed.
+
+    ``cloud_upload=False`` is a true island: reads are cached and never
+    POSTed whatever the flag says, and the loop never touches the entry's
+    ``api_key`` or ``api_base``, which a local-only entry does not have.
 
     ``snapshots`` receives every successful read (see ``sync_inverter_once``);
     pass the dict the island settings view reads. With a ``store``, each new
@@ -665,7 +670,7 @@ async def settings_sync_loop(
     more rejected POST before backing off again) once more on the next tick
     — not a correctness issue.
     """
-    if api_client is None:
+    if cloud_upload and api_client is None:
         from homeassistant.helpers import aiohttp_client
 
         from .api_client import SvitgridApiClient
@@ -673,7 +678,7 @@ async def settings_sync_loop(
         session = aiohttp_client.async_get_clientsession(hass)
         api_client = SvitgridApiClient(session, api_base=entry.data["api_base"])
 
-    api_key = entry.data["api_key"]
+    api_key = entry.data["api_key"] if cloud_upload else None
     cache: dict[str, tuple[int, int]] = {}
     backoff_until: dict[str, float] = {}
     if snapshots is None:
@@ -713,7 +718,7 @@ async def settings_sync_loop(
             heartbeat_s=heartbeat_s,
             now_monotonic_fn=now_monotonic_fn,
             backoff_until=backoff_until,
-            cloud_ingest_enabled=_cloud_ingest_enabled(entry),
+            cloud_ingest_enabled=cloud_upload and _cloud_ingest_enabled(entry),
             snapshots=snapshots,
             failing=failing,
         )
