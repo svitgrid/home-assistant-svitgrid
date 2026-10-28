@@ -41,6 +41,7 @@ from .const import (
     MAX_INVERTERS,
     SET_CLOUD_INGEST_COMMAND,
 )
+from .edge_api import EDGE_VIEWS
 from .entry_reload import update_entry_skipping_listener_reload
 from .harvest.event_scheduler_loop import (
     REMOVAL_DELETE,
@@ -1464,6 +1465,8 @@ def register_views(hass: HomeAssistant, store) -> None:
         SvitgridLocalPresetsView(),
         SvitgridPairLocalView(),
         *(view_cls() for view_cls in ISLAND_LAN_VIEWS),
+        # The edge box's views answer 404 until a box is adopted.
+        *(view_cls() for view_cls in EDGE_VIEWS),
     ):
         # View routes are GLOBAL to hass.http and PERSIST across config-entry
         # reloads, but the _views_registered guard in hass.data[DOMAIN] is
