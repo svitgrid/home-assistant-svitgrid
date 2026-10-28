@@ -37,7 +37,7 @@ from typing import Any
 from aiohttp import web
 from homeassistant.components.http import HomeAssistantView
 
-from .api_client import _integration_version
+from .api_client import async_integration_version
 from .command_auth import verify_signed_command
 from .const import CONF_LOCAL_ONLY, DOMAIN
 from .entry_reload import update_entry_skipping_listener_reload
@@ -362,7 +362,7 @@ class SvitgridIslandStatusView(HomeAssistantView):
                 "trueIsland": is_true_island(
                     entry.data, options=entry.options, has_island_key=has_island_key
                 ),
-                "version": _integration_version(),
+                "version": await async_integration_version(hass),
                 "capabilities": list(CAPABILITIES),
             }
         )

@@ -27,7 +27,7 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.typing import ConfigType
 
 from .activity import ActivityTracker
-from .api_client import SvitgridApiClient
+from .api_client import SvitgridApiClient, async_integration_version
 from .battery_sign import preset_is_discharge_positive
 from .bootstrap import run_first_time
 from .cloud_endpoint_handler import probe_endpoint_auth
@@ -501,6 +501,13 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
     session = aiohttp_client.async_get_clientsession(hass)
     api_client = SvitgridApiClient(session, api_base=api_base)
+    # manifest.json is read in the executor: a file read on the event loop makes
+    # Home Assistant log a blocking-call warning with a stack trace (#1210).
+    # The second call warms the cache push_readings_batch reads haVersion from.
+    integration_version = await hass.async_add_executor_job(
+        read_installed_version, Path(__file__).parent
+    )
+    await async_integration_version(hass)
     keystore = SvitgridKeystore(hass)
 
     state = await keystore.load()
@@ -562,7 +569,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 keystore=keystore,
                 trusted_public_keys_hex=trusted_public_keys_hex,
                 executor_version="0.2.0",
-                integration_version=read_installed_version(Path(__file__).parent),
+                integration_version=integration_version,
                 executors_by_inverter=({inverter_id: executor} if executor else {}),
                 interval_s=command_interval,
                 lifecycle=lifecycle,
@@ -620,6 +627,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _snake_case_stored_harvest_configs(hass, entry)
     data = entry.data
     session = aiohttp_client.async_get_clientsession(hass)
+    # manifest.json is read in the executor: a file read on the event loop makes
+    # Home Assistant log a blocking-call warning with a stack trace (#1210).
+    # The second call warms the cache push_readings_batch reads haVersion from.
+    integration_version = await hass.async_add_executor_job(
+        read_installed_version, Path(__file__).parent
+    )
+    await async_integration_version(hass)
     # A local-only entry was paired over the LAN by a guest with no cloud
     # account: it has no api_key, api_base, edge_device_id or household_id.
     # It gets no keyed API client, so no loop below can call the cloud and
@@ -1005,7 +1019,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 lifecycle=lifecycle,
                 store=store,
                 entry=entry,
-                integration_version=read_installed_version(Path(__file__).parent),
+                integration_version=integration_version,
                 # The poll response carries the server's cadence and mode too.
                 control=control,
             ),
@@ -1094,6 +1108,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass,
         session=aiohttp_client.async_get_clientsession(hass),
         install_dir=Path(__file__).parent,
+        installed_version=integration_version,
         activity=activity,
         get_auto_update=lambda: entry.options.get(CONF_AUTO_UPDATE, True),
     )

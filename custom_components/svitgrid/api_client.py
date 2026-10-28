@@ -26,6 +26,17 @@ def _integration_version() -> str | None:
         return None
 
 
+async def async_integration_version(hass: Any) -> str | None:
+    """`_integration_version` for callers on the event loop. The first call reads
+    manifest.json in the executor — a read on the loop makes Home Assistant log
+    a blocking-call warning with a stack trace — and every later one is a cache
+    hit. async_setup and async_setup_entry warm it, so the sync call inside
+    push_readings_batch never reads either."""
+    if _integration_version.cache_info().currsize:
+        return _integration_version()
+    return await hass.async_add_executor_job(_integration_version)
+
+
 _LOGGER = logging.getLogger(__name__)
 
 

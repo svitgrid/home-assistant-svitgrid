@@ -24,8 +24,8 @@ def _coordinator(hass, *, installed="0.10.1", auto_update=True, last_command_at=
         install_dir=Path("/tmp/does-not-matter"),
         activity=activity,
         get_auto_update=lambda: auto_update,
+        installed_version=installed,
     )
-    coord.installed_version = installed
     return coord
 
 

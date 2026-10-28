@@ -31,7 +31,7 @@ from homeassistant.components.http import HomeAssistantView
 from homeassistant.core import HomeAssistant
 
 from . import local_pairing
-from .api_client import _integration_version
+from .api_client import async_integration_version
 from .bundled_presets import list_bundled_presets
 from .command_auth import verify_signed_command
 from .const import (
@@ -456,7 +456,7 @@ class SvitgridHelloView(HomeAssistantView):
         return self.json(
             {
                 "service": "svitgrid",
-                "version": _integration_version(),
+                "version": await async_integration_version(hass),
                 "instanceName": hass.config.location_name,
                 # Asked of Home Assistant rather than tracked in a counter of
                 # our own: a paired add-on is the household's existing station,
@@ -659,7 +659,7 @@ class SvitgridPairLocalView(HomeAssistantView):
             {
                 "ok": True,
                 "stationId": entry_id,
-                "version": _integration_version(),
+                "version": await async_integration_version(hass),
                 "maxInverters": MAX_INVERTERS,
                 # "control" | "view": what the owner approved this phone for.
                 "role": session.role,
