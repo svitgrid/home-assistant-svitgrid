@@ -4,11 +4,13 @@ signingKeyId, the cached trustedKeyIds list, and the island API key."""
 from __future__ import annotations
 
 import hashlib
+import hmac
 import logging
 import secrets
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
-from typing import Any
+from datetime import UTC, datetime, timedelta
+from typing import Any, Literal
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -76,6 +78,63 @@ def _normalise_island_entry(value: Any) -> dict[str, Any] | None:
     return None
 
 
+# How long a pairing code issued for an edge box stays valid.
+EDGE_PAIR_CODE_TTL = timedelta(seconds=600)
+
+
+def _utcnow() -> datetime:
+    return datetime.now(UTC)
+
+
+def _hash_pair_code(code: str) -> str:
+    return hashlib.sha256(code.encode("utf-8")).hexdigest()
+
+
+@dataclass
+class EdgeBoxEntry:
+    """An edge box adopted by this integration, keyed by its device id.
+
+    `api_key` is None until the box presents the pairing code issued for it.
+    The code itself is never stored: only its SHA-256 hex and its expiry.
+    """
+
+    device_id: str
+    api_key: str | None
+    inverter_ids: list[str]
+    # inverter id -> the adopt payload's per-inverter dict.
+    inverters: dict[str, dict]
+    added_at: str
+    pair_code_hash: str | None
+    pair_code_expires_at: str | None
+
+
+def _parse_edge_box(device_id: str, value: Any) -> EdgeBoxEntry | None:
+    """Build an entry from its stored dict, or None for anything malformed.
+
+    A corrupt entry is dropped rather than raising, so it cannot lock out the
+    rest of the keystore.
+    """
+    if not isinstance(value, dict) or not device_id:
+        return None
+
+    def _opt_str(key: str) -> str | None:
+        v = value.get(key)
+        return v if isinstance(v, str) and v else None
+
+    inverters = value.get("inverters")
+    return EdgeBoxEntry(
+        device_id=device_id,
+        api_key=_opt_str("api_key"),
+        inverter_ids=[i for i in list(value.get("inverter_ids") or []) if isinstance(i, str)],
+        inverters={str(k): dict(v) for k, v in (inverters or {}).items() if isinstance(v, dict)}
+        if isinstance(inverters, dict)
+        else {},
+        added_at=value.get("added_at") if isinstance(value.get("added_at"), str) else "",
+        pair_code_hash=_opt_str("pair_code_hash"),
+        pair_code_expires_at=_opt_str("pair_code_expires_at"),
+    )
+
+
 @dataclass
 class KeystoreState:
     api_key: str
@@ -103,6 +162,57 @@ class KeystoreState:
     # these ids from the trusted keys, so no resync can trust one again. Only
     # a LAN pairing that the owner approves clears an id (`async_trust_key`).
     revoked_key_ids: list[str] = field(default_factory=list)
+    # deviceId -> the edge boxes adopted for an edge island. Any number of
+    # boxes; a keystore written before 0.26.0 has none.
+    edge_boxes: dict[str, EdgeBoxEntry] = field(default_factory=dict)
+
+    def edge_boxes_list(self) -> list[EdgeBoxEntry]:
+        """Every adopted edge box, in insertion order."""
+        return list(self.edge_boxes.values())
+
+    def edge_box_for_api_key(self, api_key: str) -> EdgeBoxEntry | None:
+        """The box bound to `api_key`, or None.
+
+        Compares against every bound entry in constant time and does not stop
+        at the first match, so the timing says nothing about which key matched.
+        """
+        if not api_key:
+            return None
+        found: EdgeBoxEntry | None = None
+        presented = api_key.encode("utf-8")
+        for entry in self.edge_boxes.values():
+            if entry.api_key is None:
+                continue
+            if hmac.compare_digest(entry.api_key.encode("utf-8"), presented) and found is None:
+                found = entry
+        return found
+
+    def edge_box_for_pair_code(
+        self, code: str
+    ) -> tuple[EdgeBoxEntry | None, Literal["ok", "invalid", "expired"]]:
+        """The unbound box a pairing code was issued for.
+
+        Returns the box and "ok", or None with "invalid" (no unbound box holds
+        this code) or "expired" (one does, but its ten minutes have passed).
+        """
+        if not code:
+            return None, "invalid"
+        presented = _hash_pair_code(code)
+        match: EdgeBoxEntry | None = None
+        for entry in self.edge_boxes.values():
+            if entry.api_key is not None or entry.pair_code_hash is None:
+                continue
+            if hmac.compare_digest(entry.pair_code_hash, presented) and match is None:
+                match = entry
+        if match is None:
+            return None, "invalid"
+        try:
+            expires_at = datetime.fromisoformat(match.pair_code_expires_at or "")
+        except ValueError:
+            return None, "expired"
+        if _utcnow() >= expires_at:
+            return None, "expired"
+        return match, "ok"
 
     def all_island_keys(self) -> list[str]:
         """Every currently-valid island key: the per-device map plus the
@@ -155,7 +265,8 @@ class SvitgridKeystore:
         "signing_key_id": "ha-...",
         "trusted_key_ids": ["keyId1", "keyId2"],
         "trusted_public_keys_hex": {"keyId1": "04...", "keyId2": "04..."},
-        "island_key": "<url-safe token or null>"
+        "island_key": "<url-safe token or null>",
+        "edge_boxes": {"<deviceId>": {"device_id": "...", "api_key": null, ...}}
       }
     """
 
@@ -229,6 +340,14 @@ class SvitgridKeystore:
             revoked_key_ids=[
                 k for k in list(data.get("revoked_key_ids") or []) if isinstance(k, str) and k
             ],
+            edge_boxes={
+                did: entry
+                for did, entry in (
+                    (str(did), _parse_edge_box(str(did), val))
+                    for did, val in dict(data.get("edge_boxes") or {}).items()
+                )
+                if entry is not None
+            },
         )
 
     async def save(
@@ -265,6 +384,7 @@ class SvitgridKeystore:
         current = await self.load()
         resolved_key_devices = current.key_devices if current is not None else {}
         resolved_revoked = current.revoked_key_ids if current is not None else []
+        resolved_edge_boxes = current.edge_boxes if current is not None else {}
         await self._write(
             KeystoreState(
                 api_key=api_key,
@@ -277,8 +397,58 @@ class SvitgridKeystore:
                 island_keys=resolved_island_keys or {},
                 key_devices=resolved_key_devices,
                 revoked_key_ids=resolved_revoked,
+                edge_boxes=resolved_edge_boxes,
             )
         )
+
+    async def async_add_edge_box(self, entry: EdgeBoxEntry) -> None:
+        """Store `entry`, replacing any entry with the same device id. A no-op
+        on an empty keystore."""
+        current = await self.load()
+        if current is None:
+            return
+        current.edge_boxes = {**current.edge_boxes, entry.device_id: entry}
+        await self._write(current)
+
+    async def async_remove_edge_box(self, device_id: str) -> bool:
+        """Forget an edge box. Returns whether it was there; idempotent."""
+        current = await self.load()
+        if current is None or device_id not in current.edge_boxes:
+            return False
+        current.edge_boxes = {k: v for k, v in current.edge_boxes.items() if k != device_id}
+        await self._write(current)
+        return True
+
+    async def async_issue_pair_code(self, device_id: str) -> str:
+        """Mint a pairing code for an adopted box and return it, once.
+
+        Only the code's SHA-256 hex and its expiry, ten minutes on, are stored;
+        a new code replaces the box's previous one. Raises KeyError for a box
+        that is not adopted.
+        """
+        from .local_pairing import mint_code  # local_pairing imports this module
+
+        current = await self.load()
+        if current is None or device_id not in current.edge_boxes:
+            raise KeyError(device_id)
+        code = mint_code()
+        entry = current.edge_boxes[device_id]
+        entry.pair_code_hash = _hash_pair_code(code)
+        entry.pair_code_expires_at = (_utcnow() + EDGE_PAIR_CODE_TTL).isoformat()
+        await self._write(current)
+        return code
+
+    async def async_bind_edge_box(self, device_id: str, api_key: str) -> None:
+        """Bind the box's API key and clear its pairing code, so the code is
+        single use. Raises KeyError for a box that is not adopted."""
+        current = await self.load()
+        if current is None or device_id not in current.edge_boxes:
+            raise KeyError(device_id)
+        entry = current.edge_boxes[device_id]
+        entry.api_key = api_key
+        entry.pair_code_hash = None
+        entry.pair_code_expires_at = None
+        await self._write(current)
 
     async def update_trusted_keys(self, trusted_key_ids: list[str]) -> None:
         """Used by command_poller when it receives add_trusted_key / revoke_trusted_key."""
