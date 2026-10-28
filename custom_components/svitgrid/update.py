@@ -32,7 +32,6 @@ from .updater import (
     apply_update_bytes,
     fetch_latest_release,
     fetch_release_zip,
-    read_installed_version,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -53,7 +52,13 @@ class SvitgridUpdateCoordinator(DataUpdateCoordinator[ReleaseInfo | None]):
     """Polls GitHub for the latest release and drives the auto-install."""
 
     def __init__(
-        self, hass, session, install_dir: Path, activity, get_auto_update: Callable[[], bool]
+        self,
+        hass,
+        session,
+        install_dir: Path,
+        activity,
+        get_auto_update: Callable[[], bool],
+        installed_version: str,
     ):
         super().__init__(
             hass,
@@ -69,10 +74,8 @@ class SvitgridUpdateCoordinator(DataUpdateCoordinator[ReleaseInfo | None]):
         self._activity = activity
         self._get_auto_update = get_auto_update
         self._installing = False
-        try:
-            self.installed_version = read_installed_version(install_dir)
-        except Exception:  # noqa: BLE001
-            self.installed_version = "0.0.0"
+        # Read by the caller, off the event loop (#1210).
+        self.installed_version = installed_version
 
     async def _async_update_data(self) -> ReleaseInfo | None:
         release = await fetch_latest_release(self._session)
