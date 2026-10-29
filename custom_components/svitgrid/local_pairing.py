@@ -7,11 +7,14 @@ app, with no account, claims it on the LAN with `POST /api/svitgrid/pair-local`.
 claimant always loses.
 
 `/hello` publishes the code to anyone on the network, so the code alone does
-not authorise a LAN claim. A LAN claim that passes every check becomes a
-*candidate*: the pairing dialog asks the owner to approve it, and pair-local
-waits for the answer, for up to APPROVAL_TIMEOUT_S. Only an approved candidate
-claims the pairing. While a candidate waits, a cloud claim is held back: it
-wins if the owner rejects, and loses (with a warning) if the owner approves.
+not authorise a claim from either side. A LAN claim that passes every check
+becomes a *candidate*: the pairing dialog asks the owner to approve it, and
+pair-local waits for the answer, for up to APPROVAL_TIMEOUT_S. Only an approved
+candidate claims the pairing. A cloud claim is asked about the same way, since
+a stranger's signed-in app on the same Wi-Fi can claim the code too (owner,
+svitgrid#1200): it claims the pairing only when the owner approves it. While a
+LAN candidate waits, a cloud claim is held back: it is asked about if the
+owner rejects, and loses (with a warning) if the owner approves.
 
 When the cloud cannot be reached, the flow mints the code here instead, from
 the cloud's alphabet, and only the LAN can claim it.
@@ -126,7 +129,8 @@ class PendingPairing:
     # A LAN claim waiting for the owner, and the approved one.
     candidate: LanClaim | None = None
     lan_claim: LanClaim | None = None
-    # A cloud claim, as the /status poll returned it.
+    # A cloud claim, as the /status poll returned it. It waits for the owner
+    # until claimed_by is "cloud".
     cloud_claim: Any = None
     # Loop time the pairing window closes; pair-local refuses after it.
     expires_at: float | None = None
@@ -157,7 +161,17 @@ class PendingPairing:
     @property
     def lan_open(self) -> bool:
         """True while a LAN claim may still become a candidate."""
-        return self.claimed_by is None and not self.lan_closed and self.candidate is None
+        return (
+            self.claimed_by is None
+            and not self.lan_closed
+            and self.candidate is None
+            and self.cloud_claim is None
+        )
+
+    @property
+    def cloud_awaits_owner(self) -> bool:
+        """True while a cloud claim waits for the owner's answer."""
+        return self.cloud_claim is not None and self.claimed_by is None and self.candidate is None
 
     def code_matches(self, code: str) -> bool:
         candidate = code.strip().upper() if isinstance(code, str) else ""
@@ -222,7 +236,6 @@ class PendingPairing:
         if self.candidate is None:
             return
         self._decide(REJECTED)
-        self._settle_held_cloud_claim()
         self._notify()
 
     def withdraw(self, claim: LanClaim) -> None:
@@ -231,13 +244,13 @@ class PendingPairing:
         if self.candidate is not claim:
             return
         self._decide(GONE)
-        self._settle_held_cloud_claim()
         self._notify()
 
     # ── the cloud claim ─────────────────────────────────────────────────
     def offer_cloud_claim(self, status: Any) -> None:
-        """The /status poll saw a claim. It wins unless the LAN won first; it
-        is held while the owner decides on a LAN candidate."""
+        """The /status poll saw a claim. The owner is asked about it unless
+        the LAN won first; it is held while the owner decides on a LAN
+        candidate."""
         if self.claimed_by == "lan":
             _LOGGER.warning(
                 "The Svitgrid cloud reports a claim of this pairing code after a "
@@ -248,12 +261,16 @@ class PendingPairing:
         if self.claimed_by == "cloud":
             return
         self.cloud_claim = status
-        self._settle_held_cloud_claim()
         self._notify()
 
-    def _settle_held_cloud_claim(self) -> None:
-        if self.cloud_claim is not None and self.claimed_by is None and self.candidate is None:
-            self.claimed_by = "cloud"
+    def approve_cloud(self, shown: Any) -> bool:
+        """The owner approved `shown`, the cloud claim the dialog asked about.
+        False when it no longer waits."""
+        if shown is None or self.cloud_claim is not shown or not self.cloud_awaits_owner:
+            return False
+        self.claimed_by = "cloud"
+        self._notify()
+        return True
 
     def finish_add(self, entry_id: str, role: str) -> None:
         """The approved phone joined `entry_id` as `role`."""

@@ -548,7 +548,11 @@ class SvitgridPairLocalView(HomeAssistantView):
         session = local_pairing.get_session(hass)
         if session is None or session.lan_closed or session.window_closed():
             return _json_error(404, "no_pending_pairing")
-        if session.claimed_by is not None or session.candidate is not None:
+        if (
+            session.claimed_by is not None
+            or session.candidate is not None
+            or session.cloud_claim is not None
+        ):
             return _json_error(409, "already_claimed")
 
         try:

@@ -43,6 +43,7 @@ from custom_components.svitgrid.keystore import SvitgridKeystore
 from custom_components.svitgrid.pairing_client import PairingClaimed
 from custom_components.svitgrid.reading_store import ReadingStore
 from custom_components.svitgrid.signing import generate_keypair, serialize_private_key
+from tests.cloud_approval import approve_cloud_claims
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -298,6 +299,8 @@ async def test_island_full_flow_entry_has_cloud_ingest_enabled(
         await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
         await hass.async_block_till_done()
 
+        await approve_cloud_claims(hass)
+
     entries = hass.config_entries.async_entries(DOMAIN)
     assert len(entries) == 1
     assert entries[0].data.get("cloud_ingest_enabled") is True
@@ -357,6 +360,8 @@ async def test_island_full_flow_finalize_body_excludes_island_key(
 
         await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
         await hass.async_block_till_done()
+
+        await approve_cloud_claims(hass)
 
     # finalize POST body must NOT carry the key (app owns it; cloud got it via claim)
     assert "island_key" not in captured_kwargs, "finalize must NOT send island_key"

@@ -19,6 +19,7 @@ from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
 
 from custom_components.svitgrid.const import DOMAIN
+from tests.cloud_approval import approve_cloud_claims
 
 
 async def _run_pairing(hass: HomeAssistant, finalize_payload: dict) -> dict:
@@ -62,6 +63,8 @@ async def _run_pairing(hass: HomeAssistant, finalize_payload: dict) -> dict:
             DOMAIN, context={"source": config_entries.SOURCE_USER}
         )
         await hass.async_block_till_done()
+
+        await approve_cloud_claims(hass)
 
     entries = hass.config_entries.async_entries(DOMAIN)
     assert len(entries) == 1

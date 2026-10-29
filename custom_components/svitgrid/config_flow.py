@@ -372,6 +372,8 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
         # The LAN claim the approval question named, so Approve grants
         # exactly that one.
         self._shown_candidate: local_pairing.LanClaim | None = None
+        # The cloud claim the approval question asked about, likewise.
+        self._shown_cloud_claim: PairingClaimed | None = None
         # Why the claim task ended without a claim, for async_step_pair_aborted.
         self._pair_abort_reason: str | None = None
         # Set when this Home Assistant already has a station: the pairing then
@@ -732,6 +734,10 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
             # A LAN claim waits for the owner. The code stays on offer and the
             # cloud poll keeps running.
             return self.async_show_progress_done(next_step_id="pair_approval")
+        if outcome == "cloud_approval":
+            # A cloud claim waits for the owner. The code stays published, and
+            # pair-local refuses it while the question is open.
+            return self.async_show_progress_done(next_step_id="pair_cloud_approval")
 
         # The window closes here on every other ending — claimed, expired,
         # cancelled and failed. A code still on offer afterwards sends the app
@@ -851,6 +857,61 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
         session = self._local_session
         if session is not None and shown is not None and session.candidate is shown:
             session.reject()
+        return await self.async_step_pair()
+
+    async def async_step_pair_cloud_approval(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Ask the owner whether a signed-in Svitgrid app's claim is theirs.
+
+        `/hello` publishes the code to the whole network, so a stranger's
+        signed-in app can claim it through the cloud while the owner pairs
+        (svitgrid#1200). Nothing is finalized until this is approved.
+        """
+        session = self._local_session
+        if session is None or not session.cloud_awaits_owner:
+            return await self.async_step_pair()
+        self._shown_cloud_claim = session.cloud_claim
+        return self.async_show_menu(
+            step_id="pair_cloud_approval",
+            menu_options=["pair_cloud_approve", "pair_cloud_reject"],
+        )
+
+    async def async_step_pair_cloud_approve(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """The owner approved the cloud claim: finalize it."""
+        session = self._local_session
+        shown, self._shown_cloud_claim = self._shown_cloud_claim, None
+        if session is None or not session.approve_cloud(shown):
+            return await self.async_step_pair()
+        self._claimed_status = session.cloud_claim
+        self._stop_cloud_poll()
+        local_pairing.close(self.hass, session)
+        return await self.async_step_pair_finalize()
+
+    async def async_step_pair_cloud_reject(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """The owner rejected the cloud claim. Nothing is finalized.
+
+        The cloud has spent this code on the claim (/claim answers 409 to it
+        from here on), so the pairing starts over with a fresh code, as after
+        a refused /finalize.
+        """
+        self._shown_cloud_claim = None
+        _LOGGER.warning(
+            "The owner rejected a Svitgrid cloud claim of the pairing code; "
+            "nothing was finalized, and a new code is shown"
+        )
+        self._stop_cloud_poll()
+        local_pairing.close(self.hass, self._local_session)
+        self._local_session = None
+        self._pair_task = None
+        self._secret = None
+        self._code = None
+        self._claimed_status = None
+        self._final_payload = None
         return await self.async_step_pair()
 
     def _stop_cloud_poll(self) -> None:
@@ -1166,7 +1227,8 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
         """Background task — wait until the pairing needs the flow's attention.
 
         Returns "cloud" when the cloud claimed the code (self._claimed_status
-        is set) and "approval" when a LAN claim waits for the owner. Raises
+        is set), "approval" when a LAN claim waits for the owner and
+        "cloud_approval" when a cloud claim does. Raises
         PairingExpired when the window closes, PairingCancelled when wrong
         codes closed the LAN half and no cloud path is left, and PairingError
         when the cloud failed and the LAN half is closed for another reason.
@@ -1183,6 +1245,8 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
                 return "cloud"
             if session.candidate is not None:
                 return "approval"
+            if session.cloud_awaits_owner:
+                return "cloud_approval"
             cloud = self._cloud_task
             if cloud is not None and cloud.done():
                 error = None if cloud.cancelled() else cloud.exception()

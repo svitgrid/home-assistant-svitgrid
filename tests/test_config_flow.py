@@ -11,6 +11,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 
 from custom_components.svitgrid.const import DOMAIN
+from tests.cloud_approval import approve_cloud_claims
 
 
 @pytest.mark.asyncio
@@ -117,8 +118,9 @@ async def test_pair_finalize_creates_entry(hass: HomeAssistant, enable_custom_in
         await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": config_entries.SOURCE_USER}
         )
-        # SHOW_PROGRESS → eventually CREATE_ENTRY after the polling loop sees claimed.
+        # SHOW_PROGRESS → the owner approves the claim → CREATE_ENTRY.
         await hass.async_block_till_done()
+        await approve_cloud_claims(hass)
         entries = hass.config_entries.async_entries(DOMAIN)
         assert len(entries) == 1
         assert entries[0].data["api_key"] == "test-key"
@@ -192,6 +194,8 @@ async def test_pair_finalize_persists_preset_fields(
             DOMAIN, context={"source": config_entries.SOURCE_USER}
         )
         await hass.async_block_till_done()
+
+        await approve_cloud_claims(hass)
 
         entries = hass.config_entries.async_entries(DOMAIN)
         assert len(entries) == 1
@@ -290,6 +294,8 @@ async def test_pair_finalize_populates_inverters_list(
         )
         await hass.async_block_till_done()
 
+        await approve_cloud_claims(hass)
+
         entries = hass.config_entries.async_entries(DOMAIN)
         assert len(entries) == 1
         entry = entries[0]
@@ -374,6 +380,8 @@ async def test_pair_finalize_phase_1_compat_when_no_preset(
             DOMAIN, context={"source": config_entries.SOURCE_USER}
         )
         await hass.async_block_till_done()
+
+        await approve_cloud_claims(hass)
 
         entries = hass.config_entries.async_entries(DOMAIN)
         assert len(entries) == 1
@@ -594,6 +602,8 @@ async def _run_pair_flow_with_finalize(hass, finalize_payload):
             DOMAIN, context={"source": config_entries.SOURCE_USER}
         )
         await hass.async_block_till_done()
+
+        await approve_cloud_claims(hass)
         # Snapshot INSIDE the patch context: leaving it lets HA re-enter setup
         # with the real store, which has no writable db path under pytest.
         return dict(hass.config_entries.async_entries(DOMAIN)[0].data)
@@ -688,8 +698,16 @@ async def _drive_refused_pair_flow(
         results = [init]
         # Bounded: one round per code on offer, plus a margin that would catch
         # a restart loop instead of hanging the suite.
-        for _ in range(len(start_results) + 2):
-            if results[-1]["type"] != FlowResultType.SHOW_PROGRESS:
+        # Each code takes two rounds: its progress screen, then the owner's
+        # Approve of the cloud claim.
+        for _ in range(2 * len(start_results) + 2):
+            last = results[-1]
+            if last["type"] == FlowResultType.MENU and last["step_id"] == "pair_cloud_approval":
+                results.append(
+                    await manager.async_configure(flow_id, {"next_step_id": "pair_cloud_approve"})
+                )
+                continue
+            if last["type"] != FlowResultType.SHOW_PROGRESS:
                 break
             await hass.async_block_till_done()
             results.append(await manager.async_configure(flow_id))
@@ -832,6 +850,7 @@ async def test_pair_finalize_plain_failure_aborts_as_pairing_failed(
         # The user step opens pairing directly; record that first result too.
         results.append(result)
         await hass.async_block_till_done()
+        await approve_cloud_claims(hass)
 
     aborts = [r for r in results if r["type"] == FlowResultType.ABORT]
     assert aborts and aborts[-1]["reason"] == "pairing_failed"
