@@ -568,3 +568,26 @@ async def test_append_async_signals_wait_for_data(tmp_path):
     await store.wait_for_data(wait_s=5.0)
     elapsed = asyncio.get_event_loop().time() - start
     assert elapsed < 0.5
+
+
+def test_edge_box_state_round_trips_per_box(tmp_path):
+    store = _store(tmp_path)
+    assert store._get_edge_box_state_sync("EC-1") is None
+    store._set_edge_box_state_sync("EC-1", {"version": "2.172.0", "uptime": 10})
+    store._set_edge_box_state_sync("EC-2", {"version": "2.171.0"})
+    assert store._get_edge_box_state_sync("EC-1") == {"version": "2.172.0", "uptime": 10}
+    assert store._get_edge_box_state_sync("EC-2") == {"version": "2.171.0"}
+    store._set_edge_box_state_sync("EC-1", {"version": "2.173.0"})
+    assert store._get_edge_box_state_sync("EC-1") == {"version": "2.173.0"}
+    assert store._get_meta_sync("edge_box:EC-1") is not None
+
+
+@pytest.mark.asyncio
+async def test_edge_box_state_async_wrappers(tmp_path):
+    class _Hass:
+        async def async_add_executor_job(self, func, *args):
+            return func(*args)
+
+    store = ReadingStore(_Hass(), str(tmp_path / "readings.db"))
+    await store.set_edge_box_state("EC-1", {"lastContactAt": "2026-10-28T10:00:00.000Z"})
+    assert await store.get_edge_box_state("EC-1") == {"lastContactAt": "2026-10-28T10:00:00.000Z"}
