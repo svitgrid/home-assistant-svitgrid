@@ -733,3 +733,338 @@ async def test_sync_settings_refuses_a_gzip_body_that_inflates_too_far():
     assert resp.status == 200
     assert _json(resp) == {"ok": False, "error": "bad_body"}
     assert store.snapshots == {}
+
+
+# ── Task 3: the ingest views and the box lifecycle (svitgrid#1205) ──────
+
+TASK3_VIEWS = [
+    (edge_api.EdgeIngestBatchView, "post", {}),
+    (edge_api.EdgeIngestReadingView, "post", {}),
+]
+
+
+class _FakeIngestStore(_FakeReadingStore):
+    def __init__(self):
+        super().__init__()
+        self.appended: list[dict] = []
+        self.box_states: dict[str, dict] = {}
+
+    async def append(self, reading):
+        self.appended.append(reading)
+
+    async def set_edge_box_state(self, device_id, state):
+        self.box_states[device_id] = state
+
+    async def get_edge_box_state(self, device_id):
+        return self.box_states.get(device_id)
+
+
+class _FakeEdgeQueue:
+    def __init__(self, pending: dict[str, int]):
+        self.pending = pending
+
+    async def async_pending_count(self, device_id):
+        return self.pending.get(device_id, 0)
+
+
+def _reading(inverter_id="inv-1", ts="2026-10-28T10:00:00.000Z", **extra) -> dict:
+    return {"inverterId": inverter_id, "timestamp": ts, "batterySoc": 80, **extra}
+
+
+_SERVER_TIME = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("view_cls", "method", "match_info"), TASK3_VIEWS, ids=lambda v: getattr(v, "__name__", None)
+)
+async def test_ingest_views_are_404_without_adopted_boxes(view_cls, method, match_info):
+    for hass in (_hass(_keystore()), _hass(None)):
+        for api_key in (None, BOX_KEY):
+            resp = await _call(
+                view_cls, method, hass, api_key=api_key, match_info=match_info, body=_reading()
+            )
+            assert resp.status == 404
+            assert _json(resp) == {"error": "no_edge_boxes"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("view_cls", "method", "match_info"), TASK3_VIEWS, ids=lambda v: getattr(v, "__name__", None)
+)
+async def test_ingest_unknown_key_is_401_not_410(view_cls, method, match_info):
+    store = _FakeIngestStore()
+    hass = _hass_with_store(_keystore(_box(inverters={"inv-1": _INV_1})), store)
+    for api_key in (None, "", "not-a-bound-key"):
+        resp = await _call(
+            view_cls, method, hass, api_key=api_key, match_info=match_info, body=_reading()
+        )
+        assert resp.status == 401
+        assert _json(resp) == {"error": "unauthorized"}
+    assert store.appended == []
+
+
+def test_ingest_views_use_the_cloud_paths_and_are_registered():
+    assert edge_api.EdgeIngestBatchView.url == "/api/v1/ingest/readings"
+    assert edge_api.EdgeIngestReadingView.url == "/api/v1/ingest/reading"
+    hass = MagicMock()
+    hass.data = {}
+    register_views(hass, MagicMock())
+    registered = {type(v) for v in _registered(hass)}
+    for view_cls, _method, _match in TASK3_VIEWS:
+        assert view_cls.requires_auth is False
+        assert view_cls in registered
+
+
+@pytest.mark.asyncio
+async def test_batch_stores_each_known_reading():
+    store = _FakeIngestStore()
+    hass = _hass_with_store(_keystore(_box(inverters={"inv-1": _INV_1, "inv-2": _INV_2})), store)
+    readings = [
+        _reading("inv-1", "2026-10-28T10:00:00.000Z"),
+        _reading("inv-2", "2026-10-28T10:00:01.000Z"),
+        _reading("inv-1", "2026-10-28T10:01:00.000Z"),
+    ]
+    resp = await _call(
+        edge_api.EdgeIngestBatchView, "post", hass, api_key=BOX_KEY, body={"readings": readings}
+    )
+    assert resp.status == 200
+    body = _json(resp)
+    assert body["results"] == [
+        {"ok": True, "inverterId": "inv-1"},
+        {"ok": True, "inverterId": "inv-2"},
+        {"ok": True, "inverterId": "inv-1"},
+    ]
+    assert store.appended == readings
+    assert body["pollIntervalMs"] == 30000
+    assert body["mqttPublishReadings"] is False
+    assert body["ingestMode"] == "batch"
+    assert body["expectedInverterCount"] == 2
+    assert _SERVER_TIME.fullmatch(body["serverTime"])
+    assert "dropped" not in body
+    assert "stopped" not in body
+
+
+@pytest.mark.asyncio
+async def test_batch_runs_each_reading_through_the_pipeline(monkeypatch):
+    """The pipeline (Task 5) decides what is stored; a reading it refuses is
+    a per-item 422, as the cloud answers it."""
+    from custom_components.svitgrid import edge_reading_pipeline
+
+    calls = []
+
+    def _process(reading, ctx, prev, *, now):
+        calls.append((reading["inverterId"], ctx))
+        if reading["batterySoc"] > 100:
+            return edge_reading_pipeline.PipelineResult(None, "soc_out_of_range", [], {})
+        return edge_reading_pipeline.PipelineResult({**reading, "derived": True}, None, [], {})
+
+    monkeypatch.setattr(edge_reading_pipeline, "process", _process)
+    store = _FakeIngestStore()
+    hass = _hass_with_store(_keystore(_box(inverters={"inv-1": _INV_1})), store)
+    readings = [_reading(), _reading(ts="2026-10-28T10:01:00.000Z", batterySoc=140)]
+    resp = await _call(
+        edge_api.EdgeIngestBatchView, "post", hass, api_key=BOX_KEY, body={"readings": readings}
+    )
+    assert resp.status == 200
+    assert _json(resp)["results"] == [
+        {"ok": True, "inverterId": "inv-1"},
+        {
+            "ok": False,
+            "inverterId": "inv-1",
+            "error": "Reading rejected",
+            "reason": "soc_out_of_range",
+            "status": 422,
+        },
+    ]
+    assert store.appended == [{**readings[0], "derived": True}]
+    assert calls == [("inv-1", _INV_1), ("inv-1", _INV_1)]
+
+
+def test_pipeline_stub_returns_the_reading_unchanged():
+    from datetime import UTC, datetime
+
+    from custom_components.svitgrid import edge_reading_pipeline
+
+    reading = _reading()
+    result = edge_reading_pipeline.process(reading, _INV_1, None, now=datetime.now(UTC))
+    assert result.store_data == reading
+    assert result.rejected is None
+
+
+@pytest.mark.asyncio
+async def test_unknown_inverter_item_is_404_not_whole_batch():
+    """Review focus 2: a box with two inverters, one not adopted. Only that
+    item fails; the other is stored and the answer stays 200, so the box
+    drops only that item (`parse_batch_response_results_ex`)."""
+    store = _FakeIngestStore()
+    other = _box(device_id="EC-2", api_key="other-key", inverters={"inv-2": _INV_2})
+    hass = _hass_with_store(_keystore(_box(inverters={"inv-1": _INV_1}), other), store)
+    readings = [_reading("inv-1"), _reading("inv-x"), _reading("inv-2")]
+    resp = await _call(
+        edge_api.EdgeIngestBatchView, "post", hass, api_key=BOX_KEY, body={"readings": readings}
+    )
+    assert resp.status == 200
+    assert _json(resp)["results"] == [
+        {"ok": True, "inverterId": "inv-1"},
+        {"ok": False, "inverterId": "inv-x", "error": "Inverter not found", "status": 404},
+        {"ok": False, "inverterId": "inv-2", "error": "Inverter not found", "status": 404},
+    ]
+    assert store.appended == [readings[0]]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "item",
+    [None, "x", {"inverterId": "inv-1"}, {"timestamp": "2026-10-28T10:00:00Z"}],
+)
+async def test_invalid_item_is_400_not_whole_batch(item):
+    store = _FakeIngestStore()
+    hass = _hass_with_store(_keystore(_box(inverters={"inv-1": _INV_1})), store)
+    body = {"readings": [item, _reading()]}
+    resp = await _call(edge_api.EdgeIngestBatchView, "post", hass, api_key=BOX_KEY, body=body)
+    assert resp.status == 200
+    results = _json(resp)["results"]
+    assert results[0]["ok"] is False
+    assert results[0]["status"] == 400
+    assert results[1] == {"ok": True, "inverterId": "inv-1"}
+    assert store.appended == [_reading()]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body", ["x", [], {"readings": "x"}])
+async def test_batch_with_a_bad_body_is_400_not_410(body):
+    store = _FakeIngestStore()
+    hass = _hass_with_store(_keystore(_box(inverters={"inv-1": _INV_1})), store)
+    resp = await _call(edge_api.EdgeIngestBatchView, "post", hass, api_key=BOX_KEY, body=body)
+    assert resp.status == 400
+    assert store.appended == []
+
+
+@pytest.mark.asyncio
+async def test_gzip_body_is_inflated():
+    import gzip
+    import json
+
+    store = _FakeIngestStore()
+    hass = _hass_with_store(_keystore(_box(inverters={"inv-1": _INV_1})), store)
+    readings = [_reading(ts=f"2026-10-28T10:{m:02d}:00.000Z") for m in range(10)]
+    request = _FakeRequest(hass, api_key=BOX_KEY)
+    request.headers["Content-Encoding"] = "gzip"
+    raw = gzip.compress(json.dumps({"readings": readings}).encode())
+
+    async def _read():
+        return raw
+
+    async def _no_json():
+        raise ValueError("gzip body is not JSON")
+
+    request.read = _read
+    request.json = _no_json
+    resp = await edge_api.EdgeIngestBatchView().post(request)
+    assert resp.status == 200
+    assert len(_json(resp)["results"]) == 10
+    assert store.appended == readings
+
+
+@pytest.mark.asyncio
+async def test_poll_interval_is_5000_with_pending_commands():
+    store = _FakeIngestStore()
+    other = _box(device_id="EC-2", api_key="other-key", inverters={"inv-2": _INV_2})
+    hass = _hass_with_store(_keystore(_box(inverters={"inv-1": _INV_1}), other), store)
+    hass.data[DOMAIN][ENTRY_ID]["edge_queue"] = _FakeEdgeQueue({"EC-1": 2})
+    body = {"readings": [_reading()]}
+    resp = await _call(edge_api.EdgeIngestBatchView, "post", hass, api_key=BOX_KEY, body=body)
+    assert _json(resp)["pollIntervalMs"] == 5000
+
+    resp = await _call(
+        edge_api.EdgeIngestBatchView, "post", hass, api_key="other-key", body={"readings": []}
+    )
+    assert _json(resp)["pollIntervalMs"] == 30000
+
+
+@pytest.mark.asyncio
+async def test_telemetry_updates_box_state():
+    store = _FakeIngestStore()
+    hass = _hass_with_store(_keystore(_box(inverters={"inv-1": _INV_1})), store)
+    telemetry = {
+        "version": "2.172.0",
+        "uptime": 3600,
+        "wifiRssi": -55,
+        "otaStatus": "idle",
+        "freeHeap": 145000,
+    }
+    body = {
+        "readings": [_reading()],
+        "telemetry": telemetry,
+        "bms": [{"soc": 1}],
+        "socketReadings": [{"x": 1}],
+    }
+    resp = await _call(edge_api.EdgeIngestBatchView, "post", hass, api_key=BOX_KEY, body=body)
+    assert resp.status == 200
+    state = store.box_states["EC-1"]
+    assert {k: state[k] for k in ("version", "uptime", "wifiRssi", "otaStatus")} == {
+        "version": "2.172.0",
+        "uptime": 3600,
+        "wifiRssi": -55,
+        "otaStatus": "idle",
+    }
+    assert "freeHeap" not in state
+    assert _SERVER_TIME.fullmatch(state["lastContactAt"])
+    assert set(store.box_states) == {"EC-1"}
+
+
+@pytest.mark.asyncio
+async def test_every_ingest_stamps_last_contact_and_keeps_telemetry():
+    store = _FakeIngestStore()
+    store.box_states["EC-1"] = {
+        "version": "2.172.0",
+        "lastContactAt": "2026-10-28T09:00:00.000Z",
+    }
+    hass = _hass_with_store(_keystore(_box(inverters={"inv-1": _INV_1})), store)
+    resp = await _call(
+        edge_api.EdgeIngestReadingView, "post", hass, api_key=BOX_KEY, body=_reading()
+    )
+    assert resp.status == 200
+    state = store.box_states["EC-1"]
+    assert state["version"] == "2.172.0"
+    assert state["lastContactAt"] != "2026-10-28T09:00:00.000Z"
+    assert _SERVER_TIME.fullmatch(state["lastContactAt"])
+
+
+@pytest.mark.asyncio
+async def test_single_reading_path_answers_success():
+    store = _FakeIngestStore()
+    hass = _hass_with_store(_keystore(_box(inverters={"inv-1": _INV_1})), store)
+    resp = await _call(
+        edge_api.EdgeIngestReadingView, "post", hass, api_key=BOX_KEY, body=_reading()
+    )
+    assert resp.status == 200
+    body = _json(resp)
+    assert body["success"] is True
+    assert body["stored"] is True
+    assert body["mqttPublishReadings"] is False
+    assert _SERVER_TIME.fullmatch(body["serverTime"])
+    assert "stopped" not in body
+    assert store.appended == [_reading()]
+
+
+@pytest.mark.asyncio
+async def test_single_reading_for_an_unknown_inverter_is_404_not_410():
+    store = _FakeIngestStore()
+    hass = _hass_with_store(_keystore(_box(inverters={"inv-1": _INV_1})), store)
+    resp = await _call(
+        edge_api.EdgeIngestReadingView, "post", hass, api_key=BOX_KEY, body=_reading("inv-x")
+    )
+    assert resp.status == 404
+    assert _json(resp) == {"error": "Inverter not found"}
+    assert store.appended == []
+
+
+@pytest.mark.asyncio
+async def test_ingest_without_a_reading_store_is_503_so_the_box_keeps_its_readings():
+    hass = _hass(_keystore(_box(inverters={"inv-1": _INV_1})))
+    resp = await _call(
+        edge_api.EdgeIngestBatchView, "post", hass, api_key=BOX_KEY, body={"readings": [_reading()]}
+    )
+    assert resp.status == 503

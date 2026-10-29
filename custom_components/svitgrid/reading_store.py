@@ -960,6 +960,22 @@ class ReadingStore:
             self._get_settings_snapshot_sync, inverter_id
         )
 
+    # What an adopted edge box last told the integration about itself (its
+    # ingest `telemetry`) and when it last got a 2xx, per box, for the app's
+    # edge status.
+    def _set_edge_box_state_sync(self, device_id: str, state: dict) -> None:
+        self._set_meta_sync(f"edge_box:{device_id}", json.dumps(state))
+
+    def _get_edge_box_state_sync(self, device_id: str) -> dict | None:
+        value = self._get_meta_sync(f"edge_box:{device_id}")
+        return json.loads(value) if value else None
+
+    async def set_edge_box_state(self, device_id: str, state: dict) -> None:
+        await self._hass.async_add_executor_job(self._set_edge_box_state_sync, device_id, state)
+
+    async def get_edge_box_state(self, device_id: str) -> dict | None:
+        return await self._hass.async_add_executor_job(self._get_edge_box_state_sync, device_id)
+
     _LIFECYCLE_KEYS = ("lifecycle_state", "lifecycle_reason", "lifecycle_since")
 
     def _lifecycle_key(self, key: str) -> str:

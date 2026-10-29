@@ -32,6 +32,7 @@ from datetime import UTC, datetime
 from aiohttp import web
 from homeassistant.components.http import HomeAssistantView
 
+from . import edge_reading_pipeline
 from .const import DOMAIN
 from .keystore import EdgeBoxEntry, KeystoreState
 from .settings_read_plan import settings_snapshot_kind_for
@@ -48,6 +49,15 @@ def _server_time() -> str:
 # The largest body an edge view inflates from gzip. A settings body is a few
 # kilobytes; anything past this is refused rather than held in memory.
 MAX_INFLATED_BODY_BYTES = 256 * 1024
+
+# How often the box polls for commands: soon while one waits for it, else
+# at the idle cadence (both inside the firmware's 500-600,000 ms clamp).
+POLL_INTERVAL_PENDING_MS = 5000
+POLL_INTERVAL_IDLE_MS = 30000
+
+# The `telemetry` keys of an ingest batch kept as the box's state
+# (`heartbeat-canonical.json` in the firmware's tests names them).
+_TELEMETRY_STATE_KEYS = ("version", "uptime", "wifiRssi", "otaStatus")
 
 # The per-inverter keys of the cloud's `config` block that the box reads
 # (`config_sync_models_from_block`, the reconcile in `cloud_uploader.c`).
@@ -277,6 +287,136 @@ class EdgeSyncSettingsView(_EdgeView):
         return self.json({"ok": True})
 
 
+def _entry_state(hass) -> dict | None:
+    """The first config entry's state holding a reading store: the entry an
+    edge box's readings, state and commands belong to."""
+    for state in (hass.data.get(DOMAIN) or {}).values():
+        if isinstance(state, dict) and state.get("store") is not None:
+            return state
+    return None
+
+
+async def _poll_interval_ms(entry_state: dict, box: EdgeBoxEntry) -> int:
+    queue = entry_state.get("edge_queue")
+    if queue is not None and await queue.async_pending_count(box.device_id) > 0:
+        return POLL_INTERVAL_PENDING_MS
+    return POLL_INTERVAL_IDLE_MS
+
+
+async def _stamp_contact(store, box: EdgeBoxEntry, telemetry=None) -> None:
+    """Record the box's 2xx as `lastContactAt`, with what its `telemetry`
+    says about it. Keys the box did not send keep their last value."""
+    state = dict(await store.get_edge_box_state(box.device_id) or {})
+    if isinstance(telemetry, dict):
+        state.update({k: telemetry[k] for k in _TELEMETRY_STATE_KEYS if k in telemetry})
+    state["lastContactAt"] = _server_time()
+    await store.set_edge_box_state(box.device_id, state)
+
+
+async def _ingest_one(store, box: EdgeBoxEntry, reading) -> dict:
+    """Store one reading of the box; the per-item result in the cloud's shape."""
+    inverter_id = reading.get("inverterId") if isinstance(reading, dict) else None
+    if (
+        not isinstance(inverter_id, str)
+        or not inverter_id
+        or not isinstance(reading.get("timestamp"), str)
+    ):
+        return {
+            "ok": False,
+            "inverterId": inverter_id if isinstance(inverter_id, str) else None,
+            "error": "Validation error",
+            "status": 400,
+        }
+    if inverter_id not in box.inverters:
+        return {
+            "ok": False,
+            "inverterId": inverter_id,
+            "error": "Inverter not found",
+            "status": 404,
+        }
+    result = edge_reading_pipeline.process(
+        reading, box.inverters[inverter_id], None, now=datetime.now(UTC)
+    )
+    if result.store_data is None:
+        return {
+            "ok": False,
+            "inverterId": inverter_id,
+            "error": "Reading rejected",
+            "reason": result.rejected,
+            "status": 422,
+        }
+    await store.append(result.store_data)
+    return {"ok": True, "inverterId": inverter_id}
+
+
+class EdgeIngestBatchView(_EdgeView):
+    """The box's batch upload. Each reading gets its own result, so a reading
+    of an inverter the box does not hold fails alone while the rest are
+    stored. Never `dropped` or `stopped`: the integration has no cadence floor
+    and never evicts a box."""
+
+    url = "/api/v1/ingest/readings"
+    name = "svitgrid:edge:ingest-readings"
+
+    async def post(self, request):
+        box = await self._box(request)
+        if isinstance(box, web.Response):
+            return box
+        entry_state = _entry_state(request.app["hass"])
+        if entry_state is None:
+            return self.json({"error": "store_unavailable"}, status_code=503)
+        body = await _json_body(request)
+        readings = body.get("readings", []) if isinstance(body, dict) else None
+        if not isinstance(readings, list):
+            return self.json({"error": "Validation error"}, status_code=400)
+        store = entry_state["store"]
+        results = [await _ingest_one(store, box, reading) for reading in readings]
+        # `bms` and `socketReadings` have no reader on an island.
+        await _stamp_contact(store, box, body.get("telemetry"))
+        return self.json(
+            {
+                "results": results,
+                "pollIntervalMs": await _poll_interval_ms(entry_state, box),
+                "mqttPublishReadings": False,
+                "ingestMode": "batch",
+                "expectedInverterCount": len(box.inverter_ids),
+                "serverTime": _server_time(),
+            }
+        )
+
+
+class EdgeIngestReadingView(_EdgeView):
+    """One reading, answered as the cloud answers the single path."""
+
+    url = "/api/v1/ingest/reading"
+    name = "svitgrid:edge:ingest-reading"
+
+    async def post(self, request):
+        box = await self._box(request)
+        if isinstance(box, web.Response):
+            return box
+        entry_state = _entry_state(request.app["hass"])
+        if entry_state is None:
+            return self.json({"error": "store_unavailable"}, status_code=503)
+        store = entry_state["store"]
+        result = await _ingest_one(store, box, await _json_body(request))
+        if not result["ok"]:
+            refusal = {"error": result["error"]}
+            if result.get("reason") is not None:
+                refusal["reason"] = result["reason"]
+            return self.json(refusal, status_code=result["status"])
+        await _stamp_contact(store, box)
+        return self.json(
+            {
+                "success": True,
+                "stored": True,
+                "deduplicated": False,
+                "mqttPublishReadings": False,
+                "serverTime": _server_time(),
+            }
+        )
+
+
 class EdgeFirmwareCheckView(_EdgeView):
     url = "/api/v3/executors/firmware-check"
     name = "svitgrid:edge:firmware-check"
@@ -411,6 +551,8 @@ EDGE_VIEWS = (
     EdgeBootstrapView,
     EdgeConfigView,
     EdgeSyncSettingsView,
+    EdgeIngestBatchView,
+    EdgeIngestReadingView,
     EdgeFirmwareCheckView,
     EdgeMqttTokenView,
     EdgeCoredumpView,
