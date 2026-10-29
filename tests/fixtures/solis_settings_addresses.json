@@ -1,5 +1,5 @@
 {
-  "_source": "packages/inverter_protocol/lib/src/registers/solis/settings.dart (monorepo): solisSettingsReadAddresses, the addresses SolisSettingsExecutor._readRaw reads, from _blocks = [(43011, 14), (43110, 9)]. Hand-copied 2026-10-28; Task 12 generates this file from the Dart.",
+  "_source": "GENERATED from solisSettingsReadAddresses (packages/inverter_protocol/lib/src/registers/solis/settings.dart) by test/registers/settings_register_mapping_test.dart. Do not edit by hand.",
   "addresses": [
     43011,
     43012,
