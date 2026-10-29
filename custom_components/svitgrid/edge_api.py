@@ -41,6 +41,13 @@ from .settings_sync import store_edge_settings_snapshot
 _LOGGER = logging.getLogger(__name__)
 
 
+def _now() -> datetime:
+    """The clock the reading pipeline and grid events are judged against. A
+    seam, so a test with fixed reading timestamps cannot age past the
+    pipeline's 24-hour window."""
+    return datetime.now(UTC)
+
+
 def _server_time() -> str:
     """Now, in the cloud's wire format: `YYYY-MM-DDTHH:MM:SS.fffZ`."""
     return datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
@@ -354,9 +361,7 @@ async def _ingest_one(store, box: EdgeBoxEntry, reading) -> dict:
         await _previous_reading(store, inverter_id),
         await _latest_grid_event(store, inverter_id),
     )
-    result = edge_reading_pipeline.process(
-        reading, box.inverters[inverter_id], prev, now=datetime.now(UTC)
-    )
+    result = edge_reading_pipeline.process(reading, box.inverters[inverter_id], prev, now=_now())
     if result.rejected == "schema":
         # The cloud's schema answers 400, not 422.
         return {
@@ -540,9 +545,7 @@ class EdgeGridEventView(_EdgeView):
         box = await self._box(request)
         if isinstance(box, web.Response):
             return box
-        event, error = edge_reading_pipeline.parse_grid_event(
-            await _json_body(request), now=datetime.now(UTC)
-        )
+        event, error = edge_reading_pipeline.parse_grid_event(await _json_body(request), now=_now())
         if error is not None:
             return self.json({"error": error}, status_code=400)
         inverter_id = event["inverterId"]
