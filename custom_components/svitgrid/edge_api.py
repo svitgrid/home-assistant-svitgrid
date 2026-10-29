@@ -417,6 +417,83 @@ class EdgeIngestReadingView(_EdgeView):
         )
 
 
+def _command_for_box(row: dict) -> dict:
+    """A queued command in the names the box's `poll_task` reads. The
+    phone's signature travels untouched, and only when there is one."""
+    command = {
+        "id": row["id"],
+        "command": row["command"],
+        "payload": row["payload"],
+        "inverterId": row["inverter_id"],
+    }
+    signing = row.get("signing") or {}
+    for key in ("signedEventData", "signature", "signingKeyId"):
+        if key in signing:
+            command[key] = signing[key]
+    return command
+
+
+class EdgeCommandsPollView(_EdgeView):
+    """The box's command poll: one command at a time, as the box runs one per
+    poll. `wait` is ignored (the box sends `wait=0`). Nothing pending is a 200
+    with an empty list, never a 204, so the parser path stays the same.
+    `config` is left out while the box's `configHash` matches."""
+
+    url = "/api/v3/executors/commands"
+    name = "svitgrid:edge:commands"
+
+    async def get(self, request):
+        box = await self._box(request)
+        if isinstance(box, web.Response):
+            return box
+        entry_state = _entry_state(request.app["hass"]) or {}
+        queue = entry_state.get("edge_queue")
+        row = await queue.async_next_pending(box.device_id) if queue is not None else None
+        body = {
+            "commands": [_command_for_box(row)] if row is not None else [],
+            "serverTime": _server_time(),
+            "executorType": "edge",
+            "pollIntervalMs": await _poll_interval_ms(entry_state, box),
+            "ingestMode": "batch",
+            "periodicPollDisabled": False,
+        }
+        config = build_edge_config(box)
+        if request.query.get("configHash") != config["configHash"]:
+            body["config"] = config
+        return self.json(body)
+
+
+class EdgeCommandAckView(_EdgeView):
+    """The box's answer to one command. An id this box was not given answers
+    200 `{"success": false, "status": "unknown"}`: a 4xx would only make the
+    box retry it."""
+
+    url = "/api/v3/executors/commands/{command_id}/ack"
+    name = "svitgrid:edge:commands-ack"
+
+    async def post(self, request, command_id: str):
+        box = await self._box(request)
+        if isinstance(box, web.Response):
+            return box
+        body = await _json_body(request)
+        if not isinstance(body, dict):
+            body = {}
+        queue = (_entry_state(request.app["hass"]) or {}).get("edge_queue")
+        row = None
+        if queue is not None:
+            row = await queue.async_ack(
+                command_id,
+                success=body.get("success") is True,
+                result=body.get("result"),
+                rejected=body.get("rejected"),
+                reason=body.get("reason"),
+                device_id=box.device_id,
+            )
+        if row is None:
+            return self.json({"success": False, "status": "unknown"})
+        return self.json({"success": True, "status": row["state"]})
+
+
 class EdgeFirmwareCheckView(_EdgeView):
     url = "/api/v3/executors/firmware-check"
     name = "svitgrid:edge:firmware-check"
@@ -553,6 +630,8 @@ EDGE_VIEWS = (
     EdgeSyncSettingsView,
     EdgeIngestBatchView,
     EdgeIngestReadingView,
+    EdgeCommandsPollView,
+    EdgeCommandAckView,
     EdgeFirmwareCheckView,
     EdgeMqttTokenView,
     EdgeCoredumpView,
