@@ -313,6 +313,15 @@ async def _stamp_contact(store, box: EdgeBoxEntry, telemetry=None) -> None:
     await store.set_edge_box_state(box.device_id, state)
 
 
+async def _previous_reading(store, inverter_id: str) -> dict | None:
+    """The inverter's latest stored reading, the cloud's `current/latest`
+    the pipeline derives the next one from; None before the first."""
+    for row in await store.live_snapshot():
+        if row.get("inverterId") == inverter_id and isinstance(row.get("payload"), dict):
+            return row["payload"]
+    return None
+
+
 async def _ingest_one(store, box: EdgeBoxEntry, reading) -> dict:
     """Store one reading of the box; the per-item result in the cloud's shape."""
     inverter_id = reading.get("inverterId") if isinstance(reading, dict) else None
@@ -335,8 +344,19 @@ async def _ingest_one(store, box: EdgeBoxEntry, reading) -> dict:
             "status": 404,
         }
     result = edge_reading_pipeline.process(
-        reading, box.inverters[inverter_id], None, now=datetime.now(UTC)
+        reading,
+        box.inverters[inverter_id],
+        await _previous_reading(store, inverter_id),
+        now=datetime.now(UTC),
     )
+    if result.rejected == "schema":
+        # The cloud's schema answers 400, not 422.
+        return {
+            "ok": False,
+            "inverterId": inverter_id,
+            "error": "Validation error",
+            "status": 400,
+        }
     if result.store_data is None:
         return {
             "ok": False,

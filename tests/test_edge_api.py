@@ -11,8 +11,11 @@ box sees no change.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
+from datetime import UTC, datetime
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -752,6 +755,20 @@ class _FakeIngestStore(_FakeReadingStore):
     async def append(self, reading):
         self.appended.append(reading)
 
+    async def live_snapshot(self):
+        latest = {}
+        for reading in self.appended:
+            inverter_id = reading["inverterId"]
+            if (
+                inverter_id not in latest
+                or reading["timestamp"] >= latest[inverter_id]["timestamp"]
+            ):
+                latest[inverter_id] = reading
+        return [
+            {"inverterId": k, "ts": v["timestamp"], "payload": v, "intervalS": None}
+            for k, v in latest.items()
+        ]
+
     async def set_edge_box_state(self, device_id, state):
         self.box_states[device_id] = state
 
@@ -767,8 +784,32 @@ class _FakeEdgeQueue:
         return self.pending.get(device_id, 0)
 
 
+_PIPELINE_CASES = Path(__file__).parent / "fixtures" / "island_pipeline_cases.jsonl"
+# A complete battery Deye reading: the shared pipeline fixture's first case.
+_CASE_0_PAYLOAD = json.loads(_PIPELINE_CASES.read_text().splitlines()[0])["payload"]
+
+
 def _reading(inverter_id="inv-1", ts="2026-10-28T10:00:00.000Z", **extra) -> dict:
-    return {"inverterId": inverter_id, "timestamp": ts, "batterySoc": 80, **extra}
+    return {**_CASE_0_PAYLOAD, "inverterId": inverter_id, "timestamp": ts, **extra}
+
+
+def _stored(readings, inverters=None) -> list[dict]:
+    """What the pipeline stores for `readings`, in order, each derived from
+    the previous stored reading of its inverter."""
+    from custom_components.svitgrid import edge_reading_pipeline
+
+    inverters = inverters or {"inv-1": _INV_1, "inv-2": _INV_2}
+    latest: dict[str, dict] = {}
+    out = []
+    for reading in readings:
+        inverter_id = reading["inverterId"]
+        result = edge_reading_pipeline.process(
+            reading, inverters[inverter_id], latest.get(inverter_id), now=datetime.now(UTC)
+        )
+        assert result.store_data is not None, result.rejected
+        latest[inverter_id] = result.store_data
+        out.append(result.store_data)
+    return out
 
 
 _SERVER_TIME = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z")
@@ -835,7 +876,7 @@ async def test_batch_stores_each_known_reading():
         {"ok": True, "inverterId": "inv-2"},
         {"ok": True, "inverterId": "inv-1"},
     ]
-    assert store.appended == readings
+    assert store.appended == _stored(readings)
     assert body["pollIntervalMs"] == 30000
     assert body["mqttPublishReadings"] is False
     assert body["ingestMode"] == "batch"
@@ -881,15 +922,35 @@ async def test_batch_runs_each_reading_through_the_pipeline(monkeypatch):
     assert calls == [("inv-1", _INV_1), ("inv-1", _INV_1)]
 
 
-def test_pipeline_stub_returns_the_reading_unchanged():
-    from datetime import UTC, datetime
-
-    from custom_components.svitgrid import edge_reading_pipeline
-
-    reading = _reading()
-    result = edge_reading_pipeline.process(reading, _INV_1, None, now=datetime.now(UTC))
-    assert result.store_data == reading
-    assert result.rejected is None
+@pytest.mark.asyncio
+async def test_batch_answers_what_the_real_pipeline_refuses_per_item():
+    """A reading the cloud's schema refuses is a per-item 400 and one its
+    validator refuses a 422 with the reason; the rest of the batch is stored."""
+    store = _FakeIngestStore()
+    hass = _hass_with_store(_keystore(_box(inverters={"inv-1": _INV_1})), store)
+    no_voltage = {k: v for k, v in _reading().items() if k != "batteryVoltage"}
+    impossible = _reading(ts="2026-10-28T10:01:00.000Z", loadPower=9000)
+    stored = _reading(ts="2026-10-28T10:02:00.000Z")
+    resp = await _call(
+        edge_api.EdgeIngestBatchView,
+        "post",
+        hass,
+        api_key=BOX_KEY,
+        body={"readings": [no_voltage, impossible, stored]},
+    )
+    assert resp.status == 200
+    results = _json(resp)["results"]
+    assert results[0] == {
+        "ok": False,
+        "inverterId": "inv-1",
+        "error": "Validation error",
+        "status": 400,
+    }
+    assert results[1]["ok"] is False
+    assert results[1]["status"] == 422
+    assert results[1]["reason"].startswith("energyBalance: loadPower=9000W")
+    assert results[2] == {"ok": True, "inverterId": "inv-1"}
+    assert store.appended == _stored([stored])
 
 
 @pytest.mark.asyncio
@@ -910,7 +971,7 @@ async def test_unknown_inverter_item_is_404_not_whole_batch():
         {"ok": False, "inverterId": "inv-x", "error": "Inverter not found", "status": 404},
         {"ok": False, "inverterId": "inv-2", "error": "Inverter not found", "status": 404},
     ]
-    assert store.appended == [readings[0]]
+    assert store.appended == _stored([readings[0]])
 
 
 @pytest.mark.asyncio
@@ -928,7 +989,7 @@ async def test_invalid_item_is_400_not_whole_batch(item):
     assert results[0]["ok"] is False
     assert results[0]["status"] == 400
     assert results[1] == {"ok": True, "inverterId": "inv-1"}
-    assert store.appended == [_reading()]
+    assert store.appended == _stored([_reading()])
 
 
 @pytest.mark.asyncio
@@ -964,7 +1025,7 @@ async def test_gzip_body_is_inflated():
     resp = await edge_api.EdgeIngestBatchView().post(request)
     assert resp.status == 200
     assert len(_json(resp)["results"]) == 10
-    assert store.appended == readings
+    assert store.appended == _stored(readings)
 
 
 @pytest.mark.asyncio
@@ -1046,7 +1107,7 @@ async def test_single_reading_path_answers_success():
     assert body["mqttPublishReadings"] is False
     assert _SERVER_TIME.fullmatch(body["serverTime"])
     assert "stopped" not in body
-    assert store.appended == [_reading()]
+    assert store.appended == _stored([_reading()])
 
 
 @pytest.mark.asyncio
