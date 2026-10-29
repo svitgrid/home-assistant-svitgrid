@@ -904,3 +904,137 @@ async def test_restart_serves_a_persisted_non_deye_snapshot(monkeypatch):
         "registers": {"43011": 20},
         "readAt": "2026-10-28T08:00:00Z",
     }
+
+
+# ── The settings view for an edge box's inverter (svitgrid#1204) ────────
+
+
+class _FakeKeystore:
+    def __init__(self, boxes):
+        edge_boxes = {b.device_id: b for b in boxes}
+        self._state = SimpleNamespace(
+            edge_boxes=edge_boxes,
+            edge_box_for_api_key=lambda key: next(
+                (b for b in edge_boxes.values() if key and b.api_key == key), None
+            ),
+        )
+
+    async def load(self):
+        return self._state
+
+    async def async_get_island_keys(self):
+        return []
+
+
+class _FakeSnapshotStore:
+    def __init__(self, snapshots=None):
+        self.snapshots = dict(snapshots or {})
+
+    async def get_settings_snapshot(self, inverter_id):
+        return self.snapshots.get(inverter_id)
+
+    async def set_settings_snapshot(self, snapshot):
+        self.snapshots[snapshot["inverter_id"]] = snapshot
+
+
+def _edge_box(inverters: dict):
+    from custom_components.svitgrid.keystore import EdgeBoxEntry
+
+    return EdgeBoxEntry(
+        device_id="EC-1",
+        api_key="box-key",
+        inverter_ids=list(inverters),
+        inverters=inverters,
+        added_at="2026-10-28T10:00:00+00:00",
+        pair_code_hash=None,
+        pair_code_expires_at=None,
+    )
+
+
+def _edge_hass(store, inverters=None):
+    """An edge island: the entry harvests nothing, the box holds the inverter."""
+    inverters = inverters if inverters is not None else {"inv-e": {"modelId": "deye_sg04lp3"}}
+    return SimpleNamespace(
+        data={
+            DOMAIN: {
+                "keystore": _FakeKeystore([_edge_box(inverters)]),
+                "entry-1": {
+                    "settings_snapshots": {},
+                    "entry_data": {"inverters": []},
+                    "store": store,
+                },
+            }
+        }
+    )
+
+
+_EDGE_SNAPSHOT = {
+    "inverter_id": "inv-e",
+    "model_id": "deye_sg04lp3",
+    "start_register": 115,
+    "registers": [4, 5, 6],
+    "read_at": "2026-10-29T00:00:00Z",
+}
+
+
+async def test_settings_view_serves_edge_snapshot():
+    """What the box posts to sync-settings is what the app reads back."""
+    from custom_components.svitgrid.edge_api import EdgeSyncSettingsView
+
+    store = _FakeSnapshotStore()
+    hass = _edge_hass(store)
+    post = SimpleNamespace(app={"hass": hass}, headers={"X-API-Key": "box-key"}, match_info={})
+
+    async def _json_body():
+        return {
+            "inverterId": "inv-e",
+            "modelId": "deye_sg04lp3",
+            "startRegister": 115,
+            "registers": [4, 5, 6],
+        }
+
+    post.json = _json_body
+    resp = await EdgeSyncSettingsView().post(post)
+    assert json.loads(resp.body) == {"ok": True}
+
+    resp = await SvitgridSettingsView(store=None).get(_Req(hass, {"inverter_id": "inv-e"}))
+    assert resp.status == 200
+    body = json.loads(resp.body)
+    assert body["inverterId"] == "inv-e"
+    assert body["modelId"] == "deye_sg04lp3"
+    assert body["startRegister"] == 115
+    assert body["registers"] == [4, 5, 6]
+    assert _ISO_Z.match(body["readAt"])
+
+
+async def test_settings_view_serves_a_persisted_edge_snapshot_after_restart():
+    """The box posts settings only when they change, so after a restart the
+    view serves what the store kept."""
+    hass = _edge_hass(_FakeSnapshotStore({"inv-e": _EDGE_SNAPSHOT}))
+    resp = await SvitgridSettingsView(store=None).get(_Req(hass, {"inverter_id": "inv-e"}))
+    assert resp.status == 200
+    assert json.loads(resp.body) == settings_sync.settings_snapshot_response(_EDGE_SNAPSHOT)
+
+
+async def test_settings_view_does_not_serve_a_persisted_edge_snapshot_of_another_model():
+    hass = _edge_hass(
+        _FakeSnapshotStore({"inv-e": _EDGE_SNAPSHOT}),
+        inverters={"inv-e": {"modelId": "deye_sg01hp3"}},
+    )
+    resp = await SvitgridSettingsView(store=None).get(_Req(hass, {"inverter_id": "inv-e"}))
+    assert resp.status == 404
+    assert json.loads(resp.body) == {"error": "not_read_yet"}
+
+
+async def test_settings_view_edge_inverter_before_sync_is_not_read_yet():
+    hass = _edge_hass(_FakeSnapshotStore())
+    resp = await SvitgridSettingsView(store=None).get(_Req(hass, {"inverter_id": "inv-e"}))
+    assert resp.status == 404
+    assert json.loads(resp.body) == {"error": "not_read_yet"}
+
+
+async def test_settings_view_edge_inverter_with_nothing_to_configure():
+    hass = _edge_hass(_FakeSnapshotStore(), inverters={"inv-e": {"modelId": "huawei_sun2000"}})
+    resp = await SvitgridSettingsView(store=None).get(_Req(hass, {"inverter_id": "inv-e"}))
+    assert resp.status == 404
+    assert json.loads(resp.body) == {"error": "nothing_to_configure"}

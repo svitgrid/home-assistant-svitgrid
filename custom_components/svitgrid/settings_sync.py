@@ -51,15 +51,86 @@ def _cloud_ingest_enabled(entry) -> bool:
     return bool(entry.data.get("cloud_ingest_enabled", options.get("cloud_ingest_enabled", True)))
 
 
+# ``hass.data[DOMAIN]`` key: inverter id -> the settings an adopted edge box
+# posted to ``/api/v1/edge-devices/sync-settings`` (edge island). The box
+# posts only when its settings change, so each one is also persisted to a
+# reading store, and ``find_edge_settings_snapshot`` reads it back after a
+# restart.
+EDGE_SETTINGS_SNAPSHOTS = "edge_settings_snapshots"
+
+
 def find_settings_snapshot(hass, inverter_id: str) -> dict | None:
-    """The last successful settings read of ``inverter_id`` across config entries."""
-    for state in (getattr(hass, "data", {}).get(DOMAIN) or {}).values():
+    """The last successful settings read of ``inverter_id`` across config
+    entries, else the last settings an edge box posted for it."""
+    data = getattr(hass, "data", {}).get(DOMAIN) or {}
+    for state in data.values():
         if not isinstance(state, dict):
             continue
         snapshot = (state.get("settings_snapshots") or {}).get(inverter_id)
         if snapshot is not None:
             return snapshot
-    return None
+    return (data.get(EDGE_SETTINGS_SNAPSHOTS) or {}).get(inverter_id)
+
+
+def _entry_stores(hass) -> list:
+    """Every config entry's reading store, in entry order."""
+    return [
+        state["store"]
+        for state in (getattr(hass, "data", {}).get(DOMAIN) or {}).values()
+        if isinstance(state, dict) and state.get("store") is not None
+    ]
+
+
+async def store_edge_settings_snapshot(hass, snapshot: dict) -> None:
+    """Cache what an edge box posted for the settings view, and persist it to
+    the first entry's reading store."""
+    data = hass.data.setdefault(DOMAIN, {})
+    data.setdefault(EDGE_SETTINGS_SNAPSHOTS, {})[snapshot["inverter_id"]] = snapshot
+    stores = _entry_stores(hass)
+    if not stores:
+        return
+    try:
+        await stores[0].set_settings_snapshot(snapshot)
+    except Exception:  # noqa: BLE001 — the in-memory cache still serves
+        _LOGGER.exception(
+            "settings_sync: could not persist the edge settings of %s", snapshot["inverter_id"]
+        )
+
+
+async def find_edge_settings_snapshot(hass, inverter_id: str) -> tuple[dict | None, str | None]:
+    """The settings an adopted edge box posted for ``inverter_id``, read back
+    from the reading stores when none is cached.
+
+    ``(snapshot, None)`` once found; ``(None, error)`` for an inverter a box
+    lists with no settings to serve (``nothing_to_configure`` or
+    ``not_read_yet``, as ``missing_snapshot_error``); ``(None, None)`` when no
+    adopted box lists it. A persisted read of another model than the box's
+    is not served: its registers describe another address map.
+    """
+    data = getattr(hass, "data", {}).get(DOMAIN) or {}
+    keystore = data.get("keystore")
+    if keystore is None:
+        return None, None
+    state = await keystore.load()
+    boxes = list(getattr(state, "edge_boxes", {}).values()) if state is not None else []
+    box = next(
+        (b for b in boxes if inverter_id in b.inverter_ids or inverter_id in b.inverters), None
+    )
+    if box is None:
+        return None, None
+    model_id = (box.inverters.get(inverter_id) or {}).get("modelId")
+    if model_id is not None and settings_snapshot_kind_for(model_id) is None:
+        return None, "nothing_to_configure"
+    for store in _entry_stores(hass):
+        try:
+            snapshot = await store.get_settings_snapshot(inverter_id)
+        except Exception:  # noqa: BLE001 — a missing read only delays the view
+            _LOGGER.exception("settings_sync: could not load the edge settings of %s", inverter_id)
+            continue
+        if snapshot is not None and model_id in (None, snapshot.get("model_id")):
+            hass.data[DOMAIN].setdefault(EDGE_SETTINGS_SNAPSHOTS, {})[inverter_id] = snapshot
+            return snapshot, None
+    return None, "not_read_yet"
 
 
 def find_known_inverter(hass, inverter_id: str) -> dict | None:

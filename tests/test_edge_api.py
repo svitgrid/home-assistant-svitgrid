@@ -12,12 +12,13 @@ box sees no change.
 from __future__ import annotations
 
 import logging
+import re
 from unittest.mock import MagicMock
 
 import pytest
 from multidict import CIMultiDict
 
-from custom_components.svitgrid import edge_api
+from custom_components.svitgrid import edge_api, settings_sync
 from custom_components.svitgrid.const import DOMAIN
 from custom_components.svitgrid.http_views import register_views
 from custom_components.svitgrid.keystore import EdgeBoxEntry, SvitgridKeystore
@@ -446,3 +447,289 @@ def test_existing_views_unchanged_by_edge_registration():
     for view_cls, _method, _match in EDGE_VIEWS:
         edge_urls |= {view_cls.url, *view_cls.extra_urls}
     assert not edge_urls & set(_VIEWS_BEFORE_EDGE.values())
+
+
+# ── Task 6: the config block and sync-settings (svitgrid#1204) ──────────
+
+_INV_1 = {
+    "ipAddress": "10.0.0.5",
+    "loggerSerial": "2712345678",
+    "modelId": "deye_sg04lp3",
+    "protocolId": "deye_3phase",
+    "phases": 3,
+    "hasBattery": True,
+    "slaveId": 1,
+    "pollingInterval": 60000,
+    "reportingInterval": 60000,
+}
+_INV_2 = {**_INV_1, "ipAddress": "10.0.0.6", "loggerSerial": "2712345679"}
+
+TASK6_VIEWS = [
+    (edge_api.EdgeConfigView, "get", {}),
+    (edge_api.EdgeSyncSettingsView, "post", {}),
+]
+
+
+class _FakeReadingStore:
+    def __init__(self, snapshots=None):
+        self.snapshots = dict(snapshots or {})
+
+    async def set_settings_snapshot(self, snapshot):
+        self.snapshots[snapshot["inverter_id"]] = snapshot
+
+    async def get_settings_snapshot(self, inverter_id):
+        return self.snapshots.get(inverter_id)
+
+
+def _hass_with_store(keystore, store):
+    hass = _hass(keystore)
+    hass.data[DOMAIN][ENTRY_ID] = {"store": store}
+    return hass
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("view_cls", "method", "match_info"), TASK6_VIEWS, ids=lambda v: getattr(v, "__name__", None)
+)
+async def test_config_and_sync_settings_are_404_without_adopted_boxes(view_cls, method, match_info):
+    for hass in (_hass(_keystore()), _hass(None)):
+        resp = await _call(view_cls, method, hass, api_key=BOX_KEY, match_info=match_info)
+        assert resp.status == 404
+        assert _json(resp) == {"error": "no_edge_boxes"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("view_cls", "method", "match_info"), TASK6_VIEWS, ids=lambda v: getattr(v, "__name__", None)
+)
+async def test_config_and_sync_settings_unknown_key_is_401_not_410(view_cls, method, match_info):
+    hass = _hass(_keystore(_box()))
+    for api_key in (None, "", "not-a-bound-key"):
+        resp = await _call(view_cls, method, hass, api_key=api_key, match_info=match_info)
+        assert resp.status == 401
+        assert _json(resp) == {"error": "unauthorized"}
+
+
+def test_config_and_sync_settings_use_the_cloud_paths_and_are_registered():
+    assert edge_api.EdgeConfigView.url == "/api/v1/edge-devices/config"
+    assert edge_api.EdgeSyncSettingsView.url == "/api/v1/edge-devices/sync-settings"
+    hass = MagicMock()
+    hass.data = {}
+    register_views(hass, MagicMock())
+    registered = {type(v) for v in _registered(hass)}
+    for view_cls, _method, _match in TASK6_VIEWS:
+        assert view_cls.requires_auth is False
+        assert view_cls in registered
+
+
+@pytest.mark.asyncio
+async def test_sync_settings_stores_snapshot_with_read_at():
+    store = _FakeReadingStore()
+    hass = _hass_with_store(_keystore(_box(inverters={"inv-1": _INV_1})), store)
+    body = {
+        "inverterId": "inv-1",
+        "modelId": "deye_sg04lp3",
+        "startRegister": 115,
+        "registers": [1, 2, 3],
+    }
+    resp = await _call(edge_api.EdgeSyncSettingsView, "post", hass, api_key=BOX_KEY, body=body)
+    assert resp.status == 200
+    assert _json(resp) == {"ok": True}
+
+    stored = store.snapshots["inv-1"]
+    assert stored["inverter_id"] == "inv-1"
+    assert stored["model_id"] == "deye_sg04lp3"
+    assert stored["start_register"] == 115
+    assert stored["registers"] == [1, 2, 3]
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", stored["read_at"])
+    assert settings_sync.find_settings_snapshot(hass, "inv-1") == stored
+
+
+@pytest.mark.asyncio
+async def test_sync_settings_stores_a_brand_body_as_its_kind():
+    store = _FakeReadingStore()
+    inverters = {"inv-lux": {**_INV_1, "modelId": "luxpower_sna_5000_wpv"}}
+    hass = _hass_with_store(_keystore(_box(inverters=inverters)), store)
+    blocks = [{"startRegister": 0, "registers": [7] * 40}]
+    body = {
+        "inverterId": "inv-lux",
+        "modelId": "luxpower_sna_5000_wpv",
+        "protocol": "luxpower",
+        "familyCode": "AAAA",
+        "blocks": blocks,
+    }
+    resp = await _call(edge_api.EdgeSyncSettingsView, "post", hass, api_key=BOX_KEY, body=body)
+    assert _json(resp) == {"ok": True}
+    stored = store.snapshots["inv-lux"]
+    assert stored["kind"] == "luxpower"
+    assert stored["body"] == {"protocol": "luxpower", "familyCode": "AAAA", "blocks": blocks}
+    served = settings_sync.settings_snapshot_response(stored)
+    assert served == {
+        "inverterId": "inv-lux",
+        "modelId": "luxpower_sna_5000_wpv",
+        "protocol": "luxpower",
+        "familyCode": "AAAA",
+        "blocks": blocks,
+        "readAt": stored["read_at"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_sync_settings_unknown_inverter_is_200_not_ok():
+    store = _FakeReadingStore()
+    hass = _hass_with_store(_keystore(_box(inverters={"inv-1": _INV_1})), store)
+    body = {"inverterId": "inv-x", "modelId": "deye_sg04lp3", "startRegister": 115, "registers": []}
+    resp = await _call(edge_api.EdgeSyncSettingsView, "post", hass, api_key=BOX_KEY, body=body)
+    assert resp.status == 200
+    assert _json(resp) == {"ok": False, "error": "unknown_inverter"}
+    assert store.snapshots == {}
+    assert settings_sync.find_settings_snapshot(hass, "inv-x") is None
+
+
+@pytest.mark.asyncio
+async def test_sync_settings_inverter_of_another_box_is_unknown():
+    store = _FakeReadingStore()
+    other = _box(device_id="EC-2", api_key="other-key", inverters={"inv-2": _INV_2})
+    hass = _hass_with_store(_keystore(_box(inverters={"inv-1": _INV_1}), other), store)
+    body = {"inverterId": "inv-2", "modelId": "deye_sg04lp3", "startRegister": 115, "registers": []}
+    resp = await _call(edge_api.EdgeSyncSettingsView, "post", hass, api_key=BOX_KEY, body=body)
+    assert resp.status == 200
+    assert _json(resp) == {"ok": False, "error": "unknown_inverter"}
+    assert store.snapshots == {}
+
+
+@pytest.mark.asyncio
+async def test_sync_settings_model_mismatch_is_200_not_ok():
+    store = _FakeReadingStore()
+    hass = _hass_with_store(_keystore(_box(inverters={"inv-1": _INV_1})), store)
+    body = {"inverterId": "inv-1", "modelId": "deye_sg01hp3", "startRegister": 115, "registers": []}
+    resp = await _call(edge_api.EdgeSyncSettingsView, "post", hass, api_key=BOX_KEY, body=body)
+    assert resp.status == 200
+    assert _json(resp) == {"ok": False, "error": "model_mismatch"}
+    assert store.snapshots == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    [
+        None,
+        [],
+        {"modelId": "deye_sg04lp3"},
+        {"inverterId": "inv-1"},
+        {"inverterId": "inv-1", "modelId": "deye_sg04lp3", "startRegister": 115},
+        {"inverterId": "inv-1", "modelId": "deye_sg04lp3", "registers": "x"},
+    ],
+)
+async def test_sync_settings_bad_body_is_200_not_ok(body):
+    store = _FakeReadingStore()
+    hass = _hass_with_store(_keystore(_box(inverters={"inv-1": _INV_1})), store)
+    resp = await _call(edge_api.EdgeSyncSettingsView, "post", hass, api_key=BOX_KEY, body=body)
+    assert resp.status == 200
+    assert _json(resp)["ok"] is False
+    assert store.snapshots == {}
+
+
+def test_config_block_lists_every_adopted_inverter():
+    box = _box(inverters={"inv-1": _INV_1, "inv-2": _INV_2})
+    block = edge_api.build_edge_config(box)
+    assert [inv["inverterId"] for inv in block["inverters"]] == ["inv-1", "inv-2"]
+    assert block["inverters"][0] == {"inverterId": "inv-1", **_INV_1}
+    assert block["inverters"][1] == {"inverterId": "inv-2", **_INV_2}
+    assert block["pollingInterval"] == 60000
+    assert block["reportingInterval"] == 60000
+    assert block["nonMeteringModels"] == []
+    assert block["chargers"] == []
+    assert block["relayChargers"] == []
+    assert re.fullmatch(r"[0-9a-f]{16}", block["configHash"])
+
+
+def test_config_block_lists_an_inverter_with_no_adopt_details():
+    """The reconcile prunes every inverter the block does not list, so an id
+    in `inverter_ids` is listed even before its adopt details are known."""
+    box = EdgeBoxEntry(
+        device_id="EC-1",
+        api_key=BOX_KEY,
+        inverter_ids=["inv-1", "inv-bare"],
+        inverters={"inv-1": _INV_1},
+        added_at="2026-10-28T10:00:00+00:00",
+        pair_code_hash=None,
+        pair_code_expires_at=None,
+    )
+    block = edge_api.build_edge_config(box)
+    assert [inv["inverterId"] for inv in block["inverters"]] == ["inv-1", "inv-bare"]
+    assert block["inverters"][1] == {"inverterId": "inv-bare"}
+
+
+def test_config_hash_is_stable_for_same_inverters():
+    first = edge_api.build_edge_config(_box(inverters={"inv-1": _INV_1, "inv-2": _INV_2}))
+    again = edge_api.build_edge_config(
+        _box(inverters={"inv-1": dict(reversed(list(_INV_1.items()))), "inv-2": _INV_2})
+    )
+    assert first["configHash"] == again["configHash"]
+    moved = edge_api.build_edge_config(
+        _box(inverters={"inv-1": {**_INV_1, "ipAddress": "10.0.0.9"}, "inv-2": _INV_2})
+    )
+    assert moved["configHash"] != first["configHash"]
+
+
+@pytest.mark.asyncio
+async def test_config_view_answers_the_box_config():
+    box = _box(inverters={"inv-1": _INV_1})
+    hass = _hass(_keystore(box, _box(device_id="EC-2", api_key="k2", inverters={"x": _INV_2})))
+    resp = await _call(edge_api.EdgeConfigView, "get", hass, api_key=BOX_KEY)
+    assert resp.status == 200
+    assert _json(resp) == edge_api.build_edge_config(box)
+
+
+@pytest.mark.asyncio
+async def test_sync_settings_inflates_a_gzip_body():
+    """The box gzips every body of 256 bytes or more
+    (`HTTP_WORKER_COMPRESS_MIN_BYTES`), so every Deye settings body arrives
+    gzipped; aiohttp does not inflate a request body by itself."""
+    import gzip
+    import json
+
+    store = _FakeReadingStore()
+    hass = _hass_with_store(_keystore(_box(inverters={"inv-1": _INV_1})), store)
+    body = {
+        "inverterId": "inv-1",
+        "modelId": "deye_sg04lp3",
+        "startRegister": 115,
+        "registers": list(range(77)),
+    }
+    request = _FakeRequest(hass, api_key=BOX_KEY)
+    request.headers["Content-Encoding"] = "gzip"
+    raw = gzip.compress(json.dumps(body).encode())
+
+    async def _read():
+        return raw
+
+    async def _no_json():
+        raise ValueError("gzip body is not JSON")
+
+    request.read = _read
+    request.json = _no_json
+    resp = await edge_api.EdgeSyncSettingsView().post(request)
+    assert _json(resp) == {"ok": True}
+    assert store.snapshots["inv-1"]["registers"] == list(range(77))
+
+
+@pytest.mark.asyncio
+async def test_sync_settings_refuses_a_gzip_body_that_inflates_too_far():
+    import gzip
+
+    store = _FakeReadingStore()
+    hass = _hass_with_store(_keystore(_box(inverters={"inv-1": _INV_1})), store)
+    request = _FakeRequest(hass, api_key=BOX_KEY)
+    request.headers["Content-Encoding"] = "gzip"
+    raw = gzip.compress(b" " * (edge_api.MAX_INFLATED_BODY_BYTES + 1))
+
+    async def _read():
+        return raw
+
+    request.read = _read
+    resp = await edge_api.EdgeSyncSettingsView().post(request)
+    assert resp.status == 200
+    assert _json(resp) == {"ok": False, "error": "bad_body"}
+    assert store.snapshots == {}

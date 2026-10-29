@@ -61,6 +61,7 @@ from .island_lan import (
 )
 from .local_time import local_day_of, local_hour_index
 from .settings_sync import (
+    find_edge_settings_snapshot,
     find_settings_snapshot,
     missing_snapshot_error,
     seed_onboarding_settings,
@@ -332,7 +333,9 @@ class SvitgridSettingsView(_BaseView):
     query parameter; 404 ``unknown_inverter`` for an id no config entry
     lists; 404 ``nothing_to_configure`` for a listed inverter whose model has
     no settings; 404 ``not_read_yet`` for one with settings and no
-    successful read. The mobile app consumes these field names.
+    successful read. The mobile app consumes these field names. An
+    inverter an adopted edge box lists is served what the box posted to
+    ``sync-settings`` (``settings_sync.find_edge_settings_snapshot``).
 
     Auth: island key OR authenticated HA session (``_BaseView._authorize``).
     """
@@ -349,7 +352,9 @@ class SvitgridSettingsView(_BaseView):
         hass = request.app["hass"]
         snapshot = find_settings_snapshot(hass, inverter_id)
         if snapshot is None:
-            error = missing_snapshot_error(hass, inverter_id)
+            snapshot, error = await find_edge_settings_snapshot(hass, inverter_id)
+        if snapshot is None:
+            error = error or missing_snapshot_error(hass, inverter_id)
             return self.json({"error": error}, status_code=404)
         return self.json(settings_snapshot_response(snapshot))
 
