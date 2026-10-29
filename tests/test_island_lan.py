@@ -931,3 +931,243 @@ async def test_the_edge_views_are_registered_with_the_others(hass: HomeAssistant
         "/api/svitgrid/edge/forget",
         "/api/svitgrid/edge/status",
     } <= urls
+
+
+# ── edge boxes: leave and the command view (edge island plan, Task 16) ──────
+
+
+def _box_command(admin: _Admin, **signed_fields) -> dict:
+    """The phone-signed `clear_island_endpoint` the box itself verifies."""
+    signed = {
+        "command": "clear_island_endpoint",
+        "payload": {},
+        "validUntil": "2026-10-29T10:20:00.000Z",
+        **signed_fields,
+    }
+    return {
+        "signedEventData": signed,
+        "signature": sign_payload(signed, admin.priv),
+        "signingKeyId": admin.key_id,
+    }
+
+
+async def _leave(hass, admin, device_id, **fields):
+    from custom_components.svitgrid.island_lan import SvitgridEdgeLeaveView
+
+    return await SvitgridEdgeLeaveView().post(
+        _Req(hass, admin.request("edge_leave", deviceId=device_id, **fields))
+    )
+
+
+async def _edge_command(hass, command_id, **req):
+    from custom_components.svitgrid.island_lan import SvitgridEdgeCommandView
+
+    return await SvitgridEdgeCommandView().get(_Req(hass, **req), command_id)
+
+
+async def _leave_setup(hass, tmp_path):
+    from custom_components.svitgrid.edge_command_queue import EdgeCommandQueue
+
+    admin = _Admin()
+    await _keystore(hass, admin)
+    entry = _entry(hass)
+    queue = EdgeCommandQueue(str(tmp_path / "edge_commands.db"), None)
+    _entry_state(hass, entry, queue=queue)
+    await _adopt(hass, admin, "EC-1", _inv("inv-1"))
+    await _adopt(hass, admin, "EC-2", _inv("inv-2"))
+    return admin, queue
+
+
+async def test_edge_leave_enqueues_clear_island_endpoint_with_the_box_signature(
+    hass: HomeAssistant, tmp_path
+):
+    from custom_components.svitgrid.edge_api import _command_for_box
+
+    admin, queue = await _leave_setup(hass, tmp_path)
+    box_command = _box_command(admin)
+
+    resp = await _leave(hass, admin, "EC-1", boxCommand=box_command)
+
+    assert resp.status == 200, _body(resp)
+    command_id = _body(resp)["commandId"]
+    assert _body(resp) == {"commandId": command_id}
+    assert await queue.async_pending_count("EC-2") == 0
+    row = await queue.async_next_pending("EC-1")
+    assert row["id"] == command_id
+    assert row["command"] == "clear_island_endpoint"
+    assert row["payload"] == {}
+    assert row["source"] == "leave"
+    assert row["inverter_id"] is None
+    assert row["signing"] == box_command
+    # The box receives the phone's signature untouched.
+    sent = _command_for_box(row)
+    assert sent["signedEventData"] == box_command["signedEventData"]
+    assert sent["signature"] == box_command["signature"]
+    assert sent["signingKeyId"] == box_command["signingKeyId"]
+
+
+@pytest.mark.parametrize(
+    "box_command",
+    [
+        pytest.param(None, id="absent"),
+        pytest.param("signed", id="not-a-dict"),
+        pytest.param({"signature": "s", "signingKeyId": "k"}, id="no-signed-event-data"),
+        pytest.param(
+            {"signedEventData": {"command": "clear_island_endpoint", "payload": {}}},
+            id="no-signature",
+        ),
+        pytest.param(
+            {
+                "signedEventData": {"command": "clear_island_endpoint", "payload": {}},
+                "signature": "s",
+            },
+            id="no-signing-key-id",
+        ),
+    ],
+)
+async def test_edge_leave_without_box_signature_is_400(hass: HomeAssistant, tmp_path, box_command):
+    admin, queue = await _leave_setup(hass, tmp_path)
+    fields = {} if box_command is None else {"boxCommand": box_command}
+
+    resp = await _leave(hass, admin, "EC-1", **fields)
+
+    assert resp.status == 400
+    assert _body(resp) == {"error": "box_signature_required"}
+    assert await queue.async_pending_count("EC-1") == 0
+
+
+@pytest.mark.parametrize(
+    "signed_fields",
+    [
+        pytest.param({"command": "set_island_endpoint"}, id="another-command"),
+        pytest.param({"payload": {"url": "http://192.168.1.2:8123"}}, id="payload-with-url"),
+    ],
+)
+async def test_edge_leave_box_command_must_be_an_empty_clear(
+    hass: HomeAssistant, tmp_path, signed_fields
+):
+    admin, queue = await _leave_setup(hass, tmp_path)
+
+    resp = await _leave(hass, admin, "EC-1", boxCommand=_box_command(admin, **signed_fields))
+
+    assert resp.status == 400
+    assert _body(resp)["error"] == "bad_request"
+    assert await queue.async_pending_count("EC-1") == 0
+
+
+async def test_edge_leave_carries_no_url(hass: HomeAssistant, tmp_path):
+    from custom_components.svitgrid.edge_api import _command_for_box
+
+    admin, queue = await _leave_setup(hass, tmp_path)
+
+    resp = await _leave(
+        hass,
+        admin,
+        "EC-1",
+        boxCommand=_box_command(admin),
+        url="http://192.168.1.2:8123",
+        cloudEndpoint="https://api.example.com",
+    )
+
+    assert resp.status == 200, _body(resp)
+    row = await queue.async_next_pending("EC-1")
+    assert row["payload"] == {}
+    sent = json.dumps(_command_for_box(row))
+    assert "http" not in sent
+    assert "192.168" not in sent
+
+
+async def test_edge_leave_unknown_box_is_404(hass: HomeAssistant, tmp_path):
+    admin, queue = await _leave_setup(hass, tmp_path)
+
+    resp = await _leave(hass, admin, "EC-9", boxCommand=_box_command(admin))
+
+    assert resp.status == 404
+    assert _body(resp) == {"error": "unknown_box"}
+    assert await queue.async_pending_count("EC-9") == 0
+
+
+async def test_edge_leave_needs_signature_and_a_device_id(hass: HomeAssistant, tmp_path):
+    from custom_components.svitgrid.island_lan import SvitgridEdgeLeaveView
+
+    admin, queue = await _leave_setup(hass, tmp_path)
+    fields = {"deviceId": "EC-1", "boxCommand": _box_command(admin)}
+
+    no_key = await SvitgridEdgeLeaveView().post(
+        _Req(hass, admin.request("edge_leave", **fields), island_key=None)
+    )
+    assert no_key.status == 401
+    untrusted = await SvitgridEdgeLeaveView().post(
+        _Req(hass, _Admin().request("edge_leave", **fields))
+    )
+    assert _body(untrusted) == {"error": "signature_invalid"}
+    other_action = await SvitgridEdgeLeaveView().post(
+        _Req(hass, admin.request("edge_forget", **fields))
+    )
+    assert other_action.status == 400
+    no_device = await SvitgridEdgeLeaveView().post(
+        _Req(hass, admin.request("edge_leave", boxCommand=_box_command(admin)))
+    )
+    assert no_device.status == 400
+    assert _body(no_device)["error"] == "bad_request"
+    assert await queue.async_pending_count("EC-1") == 0
+
+
+async def test_edge_command_view_reports_state(hass: HomeAssistant, tmp_path):
+    admin, queue = await _leave_setup(hass, tmp_path)
+    command_id = _body(await _leave(hass, admin, "EC-1", boxCommand=_box_command(admin)))[
+        "commandId"
+    ]
+
+    pending = await _edge_command(hass, command_id)
+    assert pending.status == 200, _body(pending)
+    assert _body(pending) == {
+        "id": command_id,
+        "state": "pending",
+        "result": None,
+        "reason": None,
+        "ackedAt": None,
+    }
+
+    await queue.async_next_pending("EC-1")
+    assert _body(await _edge_command(hass, command_id))["state"] == "delivered"
+
+    # The box acks before it reboots onto its cloud endpoint.
+    await queue.async_ack(
+        command_id, success=True, result={"cleared": True}, rejected=None, reason=None
+    )
+    acked = _body(await _edge_command(hass, command_id))
+    assert acked["state"] == "success"
+    assert acked["result"] == {"cleared": True}
+    assert acked["reason"] is None
+    assert acked["ackedAt"].endswith("Z")
+
+
+async def test_edge_command_view_unknown_id_is_404(hass: HomeAssistant, tmp_path):
+    await _leave_setup(hass, tmp_path)
+    resp = await _edge_command(hass, "no-such-command")
+    assert resp.status == 404
+    assert _body(resp) == {"error": "unknown_command"}
+
+
+async def test_edge_command_view_needs_the_island_key(hass: HomeAssistant, tmp_path):
+    admin, _ = await _leave_setup(hass, tmp_path)
+    command_id = _body(await _leave(hass, admin, "EC-1", boxCommand=_box_command(admin)))[
+        "commandId"
+    ]
+    assert (await _edge_command(hass, command_id, island_key=None)).status == 401
+    assert (await _edge_command(hass, command_id, island_key=OTHER_ISLAND_KEY)).status == 401
+
+
+async def test_the_edge_leave_views_are_registered_with_the_others(hass: HomeAssistant):
+    from unittest.mock import MagicMock
+
+    from custom_components.svitgrid.http_views import register_views
+
+    hass.http = MagicMock()
+    register_views(hass, store=MagicMock())
+    urls = {call.args[0].url for call in hass.http.register_view.call_args_list}
+    assert {
+        "/api/svitgrid/edge/leave",
+        "/api/svitgrid/edge/commands/{command_id}",
+    } <= urls
