@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -108,6 +108,17 @@ def _json(resp) -> dict:
     import json
 
     return json.loads(resp.body)
+
+
+# Every reading and grid event here carries a fixed 2026-10-28 timestamp, and
+# the pipeline refuses one more than 24 hours old, so the views' clock is pinned
+# near them (#1215: these tests went red 24 hours after they were written).
+_NOW = datetime(2026, 10, 28, 10, 5, tzinfo=UTC)
+
+
+@pytest.fixture(autouse=True)
+def _pinned_clock(monkeypatch):
+    monkeypatch.setattr(edge_api, "_now", lambda: _NOW)
 
 
 async def _call(view_cls, method, hass, **kwargs):
@@ -1401,9 +1412,7 @@ def _grid_event(state="lost", confirmed_at=None, inverter_id="inv-1", **signals)
 
 
 def _server_time_offset(seconds: int) -> str:
-    from datetime import timedelta
-
-    at = datetime.now(UTC) + timedelta(seconds=seconds)
+    at = _NOW + timedelta(seconds=seconds)
     return at.isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
