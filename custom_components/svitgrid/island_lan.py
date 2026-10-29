@@ -12,6 +12,10 @@ app directly:
 - `GET /api/svitgrid/island/status` says which of these this integration
   serves. An integration without it answers 404, and the app falls back to the
   cloud path.
+- `POST /api/svitgrid/edge/adopt` and `POST /api/svitgrid/edge/forget` add
+  and remove an edge box, and `GET /api/svitgrid/edge/status` reports each one
+  (edge island mode). Adopting the first box is what opens the edge-facing
+  views (`edge_api`); an install that never calls these sees no change.
 
 The three writes carry the phone's island key in `X-Island-Key` and are
 signed by a trusted admin key over the canonical JSON of `signedData`, exactly
@@ -32,6 +36,7 @@ import logging
 import time
 from collections import OrderedDict
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from typing import Any
 
 from aiohttp import web
@@ -40,9 +45,11 @@ from homeassistant.components.http import HomeAssistantView
 from .api_client import async_integration_version
 from .command_auth import verify_signed_command
 from .const import CONF_LOCAL_ONLY, DOMAIN
+from .edge_api import EDGE_BOX_LOCK, edge_refusals
 from .entry_reload import update_entry_skipping_listener_reload
 from .island_auth import island_key_present_and_valid
-from .keystore import LastAdminKey
+from .keystore import EdgeBoxEntry, LastAdminKey
+from .settings_sync import find_edge_settings_snapshot
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -74,6 +81,29 @@ ACTION_LEAVE_ISLAND = "leave_island"
 ACTION_REVOKE_KEY = "revoke_key"
 # `POST /api/svitgrid/trust-key`, served by http_views.SvitgridTrustKeyView.
 ACTION_TRUST_KEY = "trust_key"
+ACTION_EDGE_ADOPT = "edge_adopt"
+ACTION_EDGE_FORGET = "edge_forget"
+ACTION_EDGE_LEAVE = "edge_leave"
+ACTION_EDGE_KEY_ADD = "edge_key_add"
+
+# The per-inverter keys of an `edge_adopt` body kept on the box's entry: the
+# box's own harvest config, as the cloud holds it. `build_edge_config` serves
+# them back to the box and the reading pipeline reads its calibration here.
+EDGE_ADOPT_INVERTER_KEYS = (
+    "inverterId",
+    "modelId",
+    "protocolId",
+    "transport",
+    "ipAddress",
+    "loggerSerial",
+    "slaveId",
+    "phases",
+    "hasBattery",
+    "pvStrings",
+    "batteryCapacityWh",
+    "batterySignInverted",
+    "powerScaleOverrides",
+)
 
 
 def is_true_island(
@@ -368,9 +398,220 @@ class SvitgridIslandStatusView(HomeAssistantView):
         )
 
 
+def _wire_time(iso: str | None) -> str | None:
+    """A stored ISO time as `YYYY-MM-DDTHH:MM:SS.fffZ`, or None."""
+    if not iso:
+        return None
+    try:
+        parsed = datetime.fromisoformat(iso)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def _device_id(signed: dict) -> str | None:
+    device_id = signed.get("deviceId")
+    return device_id if isinstance(device_id, str) and device_id else None
+
+
+def _adopt_inverters(raw) -> list[dict] | None:
+    """The adopt body's inverters, each cut to `EDGE_ADOPT_INVERTER_KEYS`, or
+    None when the list is malformed: not a list, an entry without a string
+    `inverterId` or `modelId`, or one inverter twice."""
+    if not isinstance(raw, list):
+        return None
+    inverters: list[dict] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            return None
+        inverter_id = item.get("inverterId")
+        model_id = item.get("modelId")
+        if not isinstance(inverter_id, str) or not inverter_id:
+            return None
+        if not isinstance(model_id, str) or not model_id:
+            return None
+        if any(i["inverterId"] == inverter_id for i in inverters):
+            return None
+        inverters.append({k: item[k] for k in EDGE_ADOPT_INVERTER_KEYS if k in item})
+    return inverters
+
+
+def _edge_entry_states(hass) -> list[dict]:
+    """Every config entry's state that holds an edge command queue."""
+    return [
+        state
+        for state in (hass.data.get(DOMAIN) or {}).values()
+        if isinstance(state, dict) and state.get("edge_queue") is not None
+    ]
+
+
+def _first_store(hass):
+    for state in (hass.data.get(DOMAIN) or {}).values():
+        if isinstance(state, dict) and state.get("store") is not None:
+            return state["store"]
+    return None
+
+
+class SvitgridEdgeAdoptView(HomeAssistantView):
+    """POST /api/svitgrid/edge/adopt — adopt one edge box and its inverters.
+
+    `signedData`: `{action: "edge_adopt", deviceId, inverters: [{inverterId,
+    modelId, ...}], pollIntervalMs?, nonce, ts}`. The box is stored unbound,
+    with a fresh pairing code, which this answer carries in clear and nothing
+    else ever does: `{ok, pairCode, expiresAt}`. Adopting the same box again
+    replaces its inverters, drops its binding and issues a new code, which is
+    the app's retry after `pair_code_expired`. An inverter another box holds
+    is 409 `inverter_held_by_other_box`.
+    """
+
+    url = "/api/svitgrid/edge/adopt"
+    name = "api:svitgrid:edge:adopt"
+    requires_auth = False
+
+    async def post(self, request) -> web.Response:  # noqa: D102
+        signed, error = await signed_lan_request(request, ACTION_EDGE_ADOPT)
+        if error is not None:
+            return error
+        device_id = _device_id(signed)
+        if device_id is None:
+            return _json_error(400, "bad_request", detail="deviceId must be a string")
+        inverters = _adopt_inverters(signed.get("inverters"))
+        if inverters is None:
+            return _json_error(
+                400, "bad_request", detail="inverters must list inverterId and modelId once each"
+            )
+        hass = request.app["hass"]
+        keystore = hass.data.get(DOMAIN, {}).get("keystore")
+        if keystore is None:
+            return _json_error(503, "unavailable")
+        inverter_ids = [i["inverterId"] for i in inverters]
+        async with EDGE_BOX_LOCK:
+            state = await keystore.load()
+            if state is None:
+                return _json_error(503, "unavailable")
+            for other in state.edge_boxes.values():
+                if other.device_id == device_id:
+                    continue
+                held = set(other.inverter_ids) | set(other.inverters)
+                if held.intersection(inverter_ids):
+                    return _json_error(409, "inverter_held_by_other_box")
+            previous = state.edge_boxes.get(device_id)
+            await keystore.async_add_edge_box(
+                EdgeBoxEntry(
+                    device_id=device_id,
+                    api_key=None,
+                    inverter_ids=inverter_ids,
+                    inverters={i["inverterId"]: i for i in inverters},
+                    added_at=previous.added_at
+                    if previous is not None and previous.added_at
+                    else datetime.now(UTC).isoformat(),
+                    pair_code_hash=None,
+                    pair_code_expires_at=None,
+                )
+            )
+            code = await keystore.async_issue_pair_code(device_id)
+            state = await keystore.load()
+            expires_at = state.edge_boxes[device_id].pair_code_expires_at
+        edge_refusals(hass).pop(device_id, None)
+        _LOGGER.info(
+            "Edge box %s adopted over the LAN with %d inverter(s)", device_id, len(inverters)
+        )
+        return web.json_response(
+            {"ok": True, "pairCode": code, "expiresAt": _wire_time(expires_at)}
+        )
+
+
+class SvitgridEdgeForgetView(HomeAssistantView):
+    """POST /api/svitgrid/edge/forget — forget one edge box.
+
+    `signedData`: `{action: "edge_forget", deviceId, nonce, ts}`. Removes the
+    box and every command queued for it; other boxes stay. Idempotent: a box
+    this integration does not hold is `{ok: true}` too. With the last box gone
+    the edge-facing views answer 404 again.
+    """
+
+    url = "/api/svitgrid/edge/forget"
+    name = "api:svitgrid:edge:forget"
+    requires_auth = False
+
+    async def post(self, request) -> web.Response:  # noqa: D102
+        signed, error = await signed_lan_request(request, ACTION_EDGE_FORGET)
+        if error is not None:
+            return error
+        device_id = _device_id(signed)
+        if device_id is None:
+            return _json_error(400, "bad_request", detail="deviceId must be a string")
+        hass = request.app["hass"]
+        keystore = hass.data.get(DOMAIN, {}).get("keystore")
+        if keystore is None:
+            return _json_error(503, "unavailable")
+        async with EDGE_BOX_LOCK:
+            removed = await keystore.async_remove_edge_box(device_id)
+        for state in _edge_entry_states(hass):
+            await state["edge_queue"].async_forget_device(device_id)
+        edge_refusals(hass).pop(device_id, None)
+        if removed:
+            _LOGGER.info("Edge box %s forgotten over the LAN", device_id)
+        return web.json_response({"ok": True})
+
+
+class SvitgridEdgeStatusView(HomeAssistantView):
+    """GET /api/svitgrid/edge/status — every adopted edge box.
+
+    Island key only. `{boxes: [{deviceId, bound, codeExpiresAt, lastContactAt,
+    version, pendingCommands, inverterIds, lastSettingsReadAt, lastRefusal}]}`.
+    `lastRefusal` is the last `pair_code_*` answer the box got, `{error, at}`,
+    so the app can tell an expired code from a box that never called.
+    """
+
+    url = "/api/svitgrid/edge/status"
+    name = "api:svitgrid:edge:status"
+    requires_auth = False
+
+    async def get(self, request) -> web.Response:  # noqa: D102
+        if not await _island_key_ok(request):
+            return _json_error(401, "unauthorized")
+        hass = request.app["hass"]
+        keystore = hass.data.get(DOMAIN, {}).get("keystore")
+        state = await keystore.load() if keystore is not None else None
+        boxes = list(state.edge_boxes.values()) if state is not None else []
+        return web.json_response({"boxes": [await _box_status(hass, box) for box in boxes]})
+
+
+async def _box_status(hass, box: EdgeBoxEntry) -> dict[str, Any]:
+    store = _first_store(hass)
+    contact = (await store.get_edge_box_state(box.device_id) if store is not None else None) or {}
+    pending = 0
+    for state in _edge_entry_states(hass):
+        pending += await state["edge_queue"].async_pending_count(box.device_id)
+    read_ats = []
+    for inverter_id in box.inverter_ids:
+        snapshot, _ = await find_edge_settings_snapshot(hass, inverter_id)
+        if snapshot is not None and isinstance(snapshot.get("read_at"), str):
+            read_ats.append(snapshot["read_at"])
+    refusal = edge_refusals(hass).get(box.device_id)
+    bound = box.api_key is not None
+    return {
+        "deviceId": box.device_id,
+        "bound": bound,
+        "codeExpiresAt": None if bound else _wire_time(box.pair_code_expires_at),
+        "lastContactAt": contact.get("lastContactAt"),
+        "version": contact.get("version"),
+        "pendingCommands": pending,
+        "inverterIds": list(box.inverter_ids),
+        "lastSettingsReadAt": max(read_ats) if read_ats else None,
+        "lastRefusal": dict(refusal) if refusal is not None else None,
+    }
+
+
 ISLAND_LAN_VIEWS = (
     SvitgridIslandCloudCopyView,
     SvitgridIslandLeaveView,
     SvitgridKeysRevokeView,
     SvitgridIslandStatusView,
+    SvitgridEdgeAdoptView,
+    SvitgridEdgeForgetView,
+    SvitgridEdgeStatusView,
 )

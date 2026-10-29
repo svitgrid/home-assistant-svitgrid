@@ -1708,3 +1708,47 @@ async def test_a_lost_event_holds_the_grid_down_through_the_next_reading():
     assert stored["gridPresent"] is False
     assert stored["gridConfirmedSource"] == "edge"
     assert stored["gridConfirmedAt"] == event["confirmedAt"]
+
+
+# ── the last refusal, for GET /api/svitgrid/edge/status (Task 15) ────────────
+
+
+@pytest.mark.asyncio
+async def test_an_invalid_code_is_recorded_against_the_only_unbound_box():
+    hass = _hass(_keystore(_box(), _box(device_id="EC-2", api_key=None)))
+    resp = await _me(hass, api_key="unbound", pair_code="ABCDEF")
+    assert resp.status == 403
+    refusals = edge_api.edge_refusals(hass)
+    assert list(refusals) == ["EC-2"]
+    assert refusals["EC-2"]["error"] == "pair_code_invalid"
+
+
+@pytest.mark.asyncio
+async def test_an_invalid_code_blames_no_box_when_several_are_unbound():
+    ks = _keystore(_box(api_key=None), _box(device_id="EC-2", api_key=None))
+    hass = _hass(ks)
+    resp = await _me(hass, api_key="unbound", pair_code="ABCDEF")
+    assert _json(resp) == {"error": "pair_code_invalid"}
+    assert edge_api.edge_refusals(hass) == {}
+
+
+@pytest.mark.asyncio
+async def test_a_bound_key_with_another_box_code_is_recorded_against_it():
+    ks = _keystore(_box(), _box(device_id="EC-2", api_key=None))
+    code = await ks.async_issue_pair_code("EC-2")
+    hass = _hass(ks)
+    resp = await _me(hass, api_key=BOX_KEY, pair_code=code)
+    assert _json(resp) == {"error": "pair_code_invalid"}
+    assert edge_api.edge_refusals(hass)["EC-1"]["error"] == "pair_code_invalid"
+    assert "EC-2" not in edge_api.edge_refusals(hass)
+
+
+@pytest.mark.asyncio
+async def test_binding_clears_the_box_refusal():
+    ks = _keystore(_box(api_key=None))
+    hass = _hass(ks)
+    await _me(hass, api_key="new-key", pair_code="ABCDEF")
+    assert "EC-1" in edge_api.edge_refusals(hass)
+    code = await ks.async_issue_pair_code("EC-1")
+    assert (await _me(hass, api_key="new-key", pair_code=code)).status == 200
+    assert edge_api.edge_refusals(hass) == {}

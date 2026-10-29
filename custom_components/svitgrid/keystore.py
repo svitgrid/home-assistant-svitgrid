@@ -214,6 +214,20 @@ class KeystoreState:
             return None, "expired"
         return match, "ok"
 
+    def edge_box_issued_pair_code(self, code: str) -> EdgeBoxEntry | None:
+        """The unbound box `code` was issued to, live or expired, or None.
+        Names the box a refused code belongs to; it never authenticates."""
+        if not code:
+            return None
+        presented = _hash_pair_code(code)
+        match: EdgeBoxEntry | None = None
+        for entry in self.edge_boxes.values():
+            if entry.api_key is not None or entry.pair_code_hash is None:
+                continue
+            if hmac.compare_digest(entry.pair_code_hash, presented) and match is None:
+                match = entry
+        return match
+
     def all_island_keys(self) -> list[str]:
         """Every currently-valid island key: the per-device map plus the
         legacy scalar.  Order is stable (map first, insertion order), and
