@@ -16,6 +16,10 @@ app directly:
   and remove an edge box, and `GET /api/svitgrid/edge/status` reports each one
   (edge island mode). Adopting the first box is what opens the edge-facing
   views (`edge_api`); an install that never calls these sees no change.
+- `POST /api/svitgrid/edge/leave` queues the phone-signed
+  `clear_island_endpoint` that sends a box back to its cloud endpoint, and
+  `GET /api/svitgrid/edge/commands/{command_id}` reports how a queued command
+  stands.
 
 The three writes carry the phone's island key in `X-Island-Key` and are
 signed by a trusted admin key over the canonical JSON of `signedData`, exactly
@@ -46,6 +50,7 @@ from .api_client import async_integration_version
 from .command_auth import verify_signed_command
 from .const import CONF_LOCAL_ONLY, DOMAIN
 from .edge_api import EDGE_BOX_LOCK, edge_refusals
+from .edge_api import _entry_state as _edge_poll_state
 from .entry_reload import update_entry_skipping_listener_reload
 from .island_auth import island_key_present_and_valid
 from .keystore import EdgeBoxEntry, LastAdminKey
@@ -606,6 +611,112 @@ async def _box_status(hass, box: EdgeBoxEntry) -> dict[str, Any]:
     }
 
 
+def _box_command(raw) -> dict | None:
+    """The leave body's `boxCommand` when it carries a phone signature for
+    the box: `signedEventData` (an object), `signature` and `signingKeyId`
+    (non-empty strings). None otherwise."""
+    if not isinstance(raw, dict):
+        return None
+    signed = raw.get("signedEventData")
+    signature = raw.get("signature")
+    key_id = raw.get("signingKeyId")
+    if not isinstance(signed, dict):
+        return None
+    if not isinstance(signature, str) or not signature:
+        return None
+    if not isinstance(key_id, str) or not key_id:
+        return None
+    return {"signedEventData": signed, "signature": signature, "signingKeyId": key_id}
+
+
+class SvitgridEdgeLeaveView(HomeAssistantView):
+    """POST /api/svitgrid/edge/leave — send one edge box back to the cloud.
+
+    `signedData`: `{action: "edge_leave", deviceId, boxCommand, nonce, ts}`.
+    `boxCommand` is `{signedEventData: {command: "clear_island_endpoint",
+    payload: {}, validUntil}, signature, signingKeyId}`, signed by the phone
+    for the box: the integration holds no key the box trusts, so a leave
+    without it is 400 `box_signature_required`. It is queued for the box with
+    an empty payload and the signature untouched; no URL travels, the box
+    falls back to its own cloud endpoint. Answers `{commandId}`, which
+    `/edge/commands/{command_id}` reports on. A box this integration does not
+    hold is 404 `unknown_box`.
+    """
+
+    url = "/api/svitgrid/edge/leave"
+    name = "api:svitgrid:edge:leave"
+    requires_auth = False
+
+    async def post(self, request) -> web.Response:  # noqa: D102
+        signed, error = await signed_lan_request(request, ACTION_EDGE_LEAVE)
+        if error is not None:
+            return error
+        device_id = _device_id(signed)
+        if device_id is None:
+            return _json_error(400, "bad_request", detail="deviceId must be a string")
+        box_command = _box_command(signed.get("boxCommand"))
+        if box_command is None:
+            return _json_error(400, "box_signature_required")
+        event = box_command["signedEventData"]
+        if event.get("command") != "clear_island_endpoint" or event.get("payload", {}) != {}:
+            return _json_error(
+                400,
+                "bad_request",
+                detail="boxCommand must be clear_island_endpoint with an empty payload",
+            )
+        hass = request.app["hass"]
+        keystore = hass.data.get(DOMAIN, {}).get("keystore")
+        state = await keystore.load() if keystore is not None else None
+        if state is None:
+            return _json_error(503, "unavailable")
+        if device_id not in state.edge_boxes:
+            return _json_error(404, "unknown_box")
+        # The queue the box drains on its poll (`EdgeCommandsPollView`).
+        queue = (_edge_poll_state(hass) or {}).get("edge_queue")
+        if queue is None:
+            return _json_error(503, "unavailable")
+        command_id = await queue.async_enqueue(
+            device_id,
+            "clear_island_endpoint",
+            {},
+            signing=box_command,
+            inverter_id=None,
+            source="leave",
+        )
+        _LOGGER.info("Edge box %s sent back to the cloud over the LAN (%s)", device_id, command_id)
+        return web.json_response({"commandId": command_id})
+
+
+class SvitgridEdgeCommandView(HomeAssistantView):
+    """GET /api/svitgrid/edge/commands/{command_id} — one queued command.
+
+    Island key only. `{id, state, result, reason, ackedAt}`, where `state` is
+    `pending`, `delivered`, `success`, `failed` or `expired`. An id no queue
+    holds is 404 `unknown_command`.
+    """
+
+    url = "/api/svitgrid/edge/commands/{command_id}"
+    name = "api:svitgrid:edge:command"
+    requires_auth = False
+
+    async def get(self, request, command_id: str) -> web.Response:  # noqa: D102
+        if not await _island_key_ok(request):
+            return _json_error(401, "unauthorized")
+        for state in _edge_entry_states(request.app["hass"]):
+            row = await state["edge_queue"].async_get(command_id)
+            if row is not None:
+                return web.json_response(
+                    {
+                        "id": row["id"],
+                        "state": row["state"],
+                        "result": row["result"],
+                        "reason": row["reason"],
+                        "ackedAt": row["acked_at"],
+                    }
+                )
+        return _json_error(404, "unknown_command")
+
+
 ISLAND_LAN_VIEWS = (
     SvitgridIslandCloudCopyView,
     SvitgridIslandLeaveView,
@@ -614,4 +725,6 @@ ISLAND_LAN_VIEWS = (
     SvitgridEdgeAdoptView,
     SvitgridEdgeForgetView,
     SvitgridEdgeStatusView,
+    SvitgridEdgeLeaveView,
+    SvitgridEdgeCommandView,
 )

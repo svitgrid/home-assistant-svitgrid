@@ -370,6 +370,10 @@ class EdgeCommandQueue:
             if self._events.get(command_id) is event:
                 del self._events[command_id]
 
+    async def async_get(self, command_id: str) -> dict[str, Any] | None:
+        """The command's row as it stands, or None for an unknown id."""
+        return await self._run(self._get_by_id_sync, command_id)
+
     async def async_recent(self, device_id: str, limit: int = 20) -> list[dict[str, Any]]:
         """The box's latest commands, newest first."""
         return await self._run(self._recent_sync, device_id, limit)
