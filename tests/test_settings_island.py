@@ -16,7 +16,10 @@ import asyncio
 import json
 import logging
 import re
+from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 from custom_components.svitgrid import settings_sync
 from custom_components.svitgrid.api_client import SettingsSyncRejected
@@ -1038,3 +1041,94 @@ async def test_settings_view_edge_inverter_with_nothing_to_configure():
     resp = await SvitgridSettingsView(store=None).get(_Req(hass, {"inverter_id": "inv-e"}))
     assert resp.status == 404
     assert json.loads(resp.body) == {"error": "nothing_to_configure"}
+
+
+# ── The vendored snapshot fixture (svitgrid#1157, Task 12) ──────────────
+#
+# `tests/fixtures/island_settings_snapshots.json` is the monorepo's
+# `packages/inverter_protocol/test/fixtures/island_settings_snapshots.json`,
+# vendored by `scripts/sync-island-settings-fixtures.sh`: one body per kind
+# the app's settings screens parse. The view must serve that shape.
+
+_VENDORED_SNAPSHOTS = json.loads(
+    (Path(__file__).parent / "fixtures" / "island_settings_snapshots.json").read_text()
+)["snapshots"]
+
+
+def _shape(body: dict) -> dict:
+    """The key set, plus the block layout and register count where present."""
+    shape: dict = {"keys": set(body)}
+    if "blocks" in body:
+        shape["blocks"] = _block_shape(body)
+    if "registers" in body:
+        shape["registers"] = len(body["registers"])
+    return shape
+
+
+async def _served_body(monkeypatch, vendored: dict) -> dict:
+    """The view's 200 body after this add-on reads the vendored model; PI30,
+    which the add-on cannot read, through an edge box's sync-settings post."""
+    snapshot = vendored["snapshot"]
+    model_id = snapshot["modelId"]
+    kind = vendored["kind"]
+    if kind == "deye":
+        _stub_read(monkeypatch)
+        inv = _harvest_inv("inv-v")
+        inv["harvest_config"]["model_id"] = model_id
+        return (await _read_and_serve(inv))[1]
+    if kind in ("luxpower", "must", "solis"):
+        overrides = {"luxpower": _CBAA, "must": {20006: 10415, 25275: 24}}.get(kind)
+        _stub_modbus(monkeypatch, overrides)
+        slave_id = 4 if kind == "must" else 1
+        return (await _read_and_serve(_tcp_inv("inv-v", model_id, slave_id=slave_id)))[1]
+    if kind == "smg":
+        inv = {
+            "inverter_id": "inv-v",
+            "harvest_config": {
+                "protocol": "eybond_at",
+                "model_id": model_id,
+                "inverter_serial": "SN1",
+            },
+        }
+        hub = _Hub(_Session({184: snapshot["protocolNumber"]}))
+        return (await _read_and_serve(inv, eybond_hub=hub))[1]
+    assert kind == "pi30", kind
+    from custom_components.svitgrid.edge_api import EdgeSyncSettingsView
+
+    hass = _edge_hass(_FakeSnapshotStore(), inverters={"inv-v": {"modelId": model_id}})
+    post = SimpleNamespace(app={"hass": hass}, headers={"X-API-Key": "box-key"}, match_info={})
+    body = {k: v for k, v in snapshot.items() if k != "readAt"}
+    body["inverterId"] = "inv-v"
+
+    async def _json_body():
+        return body
+
+    post.json = _json_body
+    resp = await EdgeSyncSettingsView().post(post)
+    assert json.loads(resp.body) == {"ok": True}, resp.body
+    resp = await SvitgridSettingsView(store=None).get(_Req(hass, {"inverter_id": "inv-v"}))
+    assert resp.status == 200, resp.body
+    return json.loads(resp.body)
+
+
+@pytest.mark.parametrize(
+    "vendored", _VENDORED_SNAPSHOTS, ids=[s["name"] for s in _VENDORED_SNAPSHOTS]
+)
+async def test_served_snapshot_matches_vendored_shape(monkeypatch, vendored):
+    """A key the app parses that the view does not serve, or one it serves
+    that the app does not know, is a drift between the app and the add-on."""
+    body = await _served_body(monkeypatch, vendored)
+
+    assert body["modelId"] == vendored["snapshot"]["modelId"]
+    assert _shape(body) == _shape(vendored["snapshot"])
+
+
+def test_vendored_snapshots_cover_every_kind():
+    assert {s["kind"] for s in _VENDORED_SNAPSHOTS} == {
+        "deye",
+        "pi30",
+        "luxpower",
+        "must",
+        "smg",
+        "solis",
+    }

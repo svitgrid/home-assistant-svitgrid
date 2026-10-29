@@ -209,6 +209,16 @@ def test_kind_table_names_representative_models():
     assert {m: settings_snapshot_kind_for(m) for m in expected} == expected
 
 
+def test_kind_table_matches_shared_fixture():
+    """`settings_snapshot_kinds.json` is the monorepo's
+    `packages/inverter_protocol/fixtures/settings_snapshot_kinds.json`, written
+    from `settingsSnapshotKindFor` for every model in `InverterModels.all` and
+    vendored by `scripts/sync-island-settings-fixtures.sh`."""
+    fixture = json.loads((_FIXTURES / "settings_snapshot_kinds.json").read_text())
+    assert fixture
+    assert {m: settings_snapshot_kind_for(m) for m in fixture} == fixture
+
+
 def test_luxpower_plan_reads_five_blocks_of_40():
     """The firmware's `BLOCKS` in `luxpower_settings.c`: holding 0-199 in five
     blocks of 40, which is also how the app parses the body."""
