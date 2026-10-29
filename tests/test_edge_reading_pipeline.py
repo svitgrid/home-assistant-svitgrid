@@ -128,3 +128,177 @@ def test_model_tables_match_reading_core():
     lv = {k: int(v) for k, v in re.findall(r"(\w+):\s*(\d+)", _ts_body("LV_PACK_NOMINAL_V"))}
     assert lv
     assert lv == pipeline.LV_PACK_NOMINAL_V
+
+
+# ── Task 7: grid events and the edge-confirmed precedence (svitgrid#1208) ──
+
+# The fixture's edge-only case whose reading carries no grid signal at all,
+# so the derived `gridPresent` is null and the precedence decides.
+_NO_GRID_SIGNAL = next(c for c in _CASES if c["name"].startswith("a fresh edge-confirmed outage"))
+# The stored reading before it, without the edge marker it carried there.
+_PREV_UP = {
+    **{
+        k: v
+        for k, v in _NO_GRID_SIGNAL["prev"].items()
+        if k not in ("gridConfirmedSource", "gridConfirmedAt")
+    },
+    "gridPresent": True,
+    "gridPresentRaw": True,
+    "gridPresentSince": "2026-10-07T10:00:00.000Z",
+}
+
+
+def _with_event(event, prev=_PREV_UP, payload=None):
+    return pipeline.process(
+        payload or _NO_GRID_SIGNAL["payload"],
+        _NO_GRID_SIGNAL["inverter"],
+        pipeline.with_grid_event(prev, event),
+        now=_RECEIVED_AT,
+        default_source="edge-device",
+    )
+
+
+def test_edge_confirmed_grid_present_wins_within_window():
+    """A `lost` the box confirmed after the last stored reading holds the
+    grid down through a reading that cannot tell, as the cloud's merge onto
+    `current/latest` does for the next reading it processes."""
+    event = {"state": "lost", "confirmedAt": "2026-10-07T11:59:30.000Z"}
+    stored = _with_event(event).store_data
+    assert stored["gridPresent"] is False
+    assert stored["gridPresentSince"] == "2026-10-07T11:59:30.000Z"
+    assert stored["gridConfirmedSource"] == "edge"
+    assert stored["gridConfirmedAt"] == "2026-10-07T11:59:30.000Z"
+
+    # Without the event the same reading leaves the grid unknown.
+    plain = _with_event(None).store_data
+    assert plain["gridPresent"] is None
+    assert "gridConfirmedSource" not in plain
+
+
+def test_edge_confirmed_grid_present_is_stale_after_five_minutes():
+    event = {"state": "lost", "confirmedAt": "2026-10-07T11:55:29.000Z"}
+    prev = {**_PREV_UP, "timestamp": "2026-10-07T11:55:00.000Z"}
+    stored = _with_event(event, prev=prev).store_data
+    assert stored["gridPresent"] is None
+    assert "gridConfirmedSource" not in stored
+
+
+def test_a_real_aggregate_wins_over_the_edge_event():
+    """A reading that does see the grid decides, as `shouldKeepEdgeConfirmed`
+    lets a boolean aggregate win."""
+    case = _CASES[0]
+    event = {"state": "lost", "confirmedAt": "2026-10-07T11:59:30.000Z"}
+    stored = pipeline.process(
+        case["payload"],
+        case["inverter"],
+        pipeline.with_grid_event(case["prev"], event),
+        now=_RECEIVED_AT,
+    ).store_data
+    assert stored["gridPresent"] == case["storeData"]["gridPresent"]
+    assert stored["gridPresent"] is not None
+    assert "gridConfirmedSource" not in stored
+
+
+def test_an_event_older_than_the_last_reading_is_already_spent():
+    """The reading stored after the event was derived with it; an older
+    event does not hold the grid down again."""
+    event = {"state": "lost", "confirmedAt": "2026-10-07T11:58:30.000Z"}
+    stored = _with_event(event).store_data
+    assert stored["gridPresent"] is None
+    assert "gridConfirmedSource" not in stored
+
+
+def test_a_restored_event_keeps_the_grid_up_and_needs_no_prev():
+    event = {"state": "restored", "confirmedAt": "2026-10-07T11:59:30.000Z"}
+    stored = _with_event(event, prev=None).store_data
+    assert stored["gridPresent"] is True
+    assert stored["gridPresentSince"] == "2026-10-07T11:59:30.000Z"
+    assert stored["gridConfirmedSource"] == "edge"
+
+
+def test_with_grid_event_does_not_mutate_prev():
+    prev = json.loads(json.dumps(_PREV_UP))
+    pipeline.with_grid_event(prev, {"state": "lost", "confirmedAt": "2026-10-07T11:59:30.000Z"})
+    assert prev == _PREV_UP
+
+
+def test_a_re_confirmed_state_keeps_its_since():
+    prev = {**_PREV_UP, "gridPresent": False, "gridPresentRaw": False}
+    prev["gridPresentSince"] = "2026-10-07T11:50:00.000Z"
+    event = {"state": "lost", "confirmedAt": "2026-10-07T11:59:30.000Z"}
+    stored = _with_event(event, prev=prev).store_data
+    assert stored["gridPresent"] is False
+    assert stored["gridPresentSince"] == "2026-10-07T11:50:00.000Z"
+
+
+@pytest.mark.parametrize(
+    ("body", "error"),
+    [
+        (None, "invalid_body"),
+        ([], "invalid_body"),
+        ({"state": "lost"}, "missing_inverterId"),
+        ({"inverterId": "", "state": "lost"}, "missing_inverterId"),
+        ({"inverterId": "inv-1", "state": "down"}, "invalid_state"),
+    ],
+)
+def test_parse_grid_event_refuses_what_the_cloud_refuses(body, error):
+    assert pipeline.parse_grid_event(body, now=_RECEIVED_AT) == (None, error)
+
+
+def test_parse_grid_event_defaults_confirmed_at_to_now():
+    event, error = pipeline.parse_grid_event(
+        {"inverterId": "inv-1", "state": "restored", "signals": [1]}, now=_RECEIVED_AT
+    )
+    assert error is None
+    assert event == {
+        "inverterId": "inv-1",
+        "state": "restored",
+        "confirmedAt": "2026-10-07T12:00:30.000Z",
+        "signals": None,
+    }
+
+
+@pytest.mark.parametrize(
+    ("signals", "model_id", "prev", "inverter", "reason"),
+    [
+        # (a) every phase energized, frequency healthy or not read.
+        ({"phaseVoltages": [228, 231, 229], "gridFrequency": 50}, None, None, {}, "signals"),
+        ({"phaseVoltages": [133], "gridFrequency": 0}, None, None, {}, "signals"),
+        # (c) the grid block was not read on a model that reads the relay.
+        (
+            {"phaseVoltages": [0], "gridRelayClosed": -1},
+            "deye_sg04lp1",
+            None,
+            {},
+            "unread_grid_block",
+        ),
+        # (b) the last reading's pack voltage contradicts its SOC.
+        (
+            {"phaseVoltages": [0], "gridRelayClosed": 0},
+            "deye_sg04lp1",
+            {"batteryVoltage": 42.0, "batterySoc": 94},
+            {"batteryChemistry": "lfp", "batteryCellCount": 16},
+            "corrupt_frame",
+        ),
+    ],
+)
+def test_lost_events_the_cloud_vetoes(signals, model_id, prev, inverter, reason):
+    event = {"inverterId": "inv-1", "state": "lost", "confirmedAt": "x", "signals": signals}
+    assert pipeline.grid_event_veto(event, {**inverter, "modelId": model_id}, prev) == reason
+
+
+@pytest.mark.parametrize(
+    ("state", "signals", "model_id"),
+    [
+        ("lost", {"phaseVoltages": [0, 0, 0], "gridFrequency": 0, "gridRelayClosed": 0}, None),
+        ("lost", {"phaseVoltages": [228], "gridFrequency": 30}, None),
+        ("lost", {"phaseVoltages": [0], "gridRelayClosed": -1}, "victron_mp2"),
+        ("lost", None, "deye_sg04lp1"),
+        ("restored", {"phaseVoltages": [0], "gridRelayClosed": -1}, "deye_sg04lp1"),
+    ],
+)
+def test_events_the_cloud_trusts(state, signals, model_id):
+    event = {"inverterId": "inv-1", "state": state, "confirmedAt": "x", "signals": signals}
+    prev = {"batteryVoltage": 52.4, "batterySoc": 94}
+    inverter = {"modelId": model_id, "batteryChemistry": "lfp", "batteryCellCount": 16}
+    assert pipeline.grid_event_veto(event, inverter, prev) is None

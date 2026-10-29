@@ -1365,3 +1365,173 @@ async def test_ack_of_another_boxs_command_is_200_unknown(tmp_path):
     )
     assert _json(resp) == {"success": False, "status": "unknown"}
     assert (await queue.async_recent("EC-2"))[0]["state"] == "delivered"
+
+
+# ── Task 7: grid events and the edge-confirmed precedence (svitgrid#1208) ──
+
+
+class _FakeGridStore(_FakeIngestStore):
+    """The ingest fake with the reading store's grid-event table."""
+
+    def __init__(self):
+        super().__init__()
+        self.grid_events: list[dict] = []
+
+    async def add_grid_event(self, event):
+        if any(
+            e["inverterId"] == event["inverterId"] and e["confirmedAt"] == event["confirmedAt"]
+            for e in self.grid_events
+        ):
+            return False
+        self.grid_events.append(event)
+        return True
+
+    async def latest_grid_event(self, inverter_id):
+        events = [e for e in self.grid_events if e["inverterId"] == inverter_id]
+        return max(events, key=lambda e: e["confirmedAt"]) if events else None
+
+
+def _grid_event(state="lost", confirmed_at=None, inverter_id="inv-1", **signals) -> dict:
+    return {
+        "inverterId": inverter_id,
+        "state": state,
+        "confirmedAt": confirmed_at or _server_time_offset(-30),
+        "signals": signals or {"phaseVoltages": [0, 0, 0], "gridRelayClosed": 0},
+    }
+
+
+def _server_time_offset(seconds: int) -> str:
+    from datetime import timedelta
+
+    at = datetime.now(UTC) + timedelta(seconds=seconds)
+    return at.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+@pytest.mark.asyncio
+async def test_grid_event_is_404_without_adopted_boxes():
+    for hass in (_hass(_keystore()), _hass(None)):
+        for api_key in (None, BOX_KEY):
+            resp = await _call(
+                edge_api.EdgeGridEventView, "post", hass, api_key=api_key, body=_grid_event()
+            )
+            assert resp.status == 404
+            assert _json(resp) == {"error": "no_edge_boxes"}
+
+
+@pytest.mark.asyncio
+async def test_grid_event_unknown_key_is_401_not_410():
+    store = _FakeGridStore()
+    hass = _hass_with_store(_keystore(_box(inverters={"inv-1": _INV_1})), store)
+    for api_key in (None, "", "not-a-bound-key"):
+        resp = await _call(
+            edge_api.EdgeGridEventView, "post", hass, api_key=api_key, body=_grid_event()
+        )
+        assert resp.status == 401
+        assert _json(resp) == {"error": "unauthorized"}
+    assert store.grid_events == []
+
+
+def test_grid_event_uses_the_cloud_path_and_is_registered():
+    assert edge_api.EdgeGridEventView.url == "/api/v3/executors/grid-event"
+    assert edge_api.EdgeGridEventView.requires_auth is False
+    hass = MagicMock()
+    hass.data = {}
+    register_views(hass, MagicMock())
+    assert edge_api.EdgeGridEventView in {type(v) for v in _registered(hass)}
+
+
+@pytest.mark.asyncio
+async def test_grid_event_is_stored_and_deduped():
+    store = _FakeGridStore()
+    hass = _hass_with_store(_keystore(_box(inverters={"inv-1": _INV_1})), store)
+    event = _grid_event(confirmed_at="2026-10-28T10:00:00.000Z")
+    first = await _call(edge_api.EdgeGridEventView, "post", hass, api_key=BOX_KEY, body=event)
+    assert first.status == 200
+    assert _json(first) == {"ok": True, "deduped": False}
+    again = await _call(edge_api.EdgeGridEventView, "post", hass, api_key=BOX_KEY, body=event)
+    assert again.status == 200
+    assert _json(again) == {"ok": True, "deduped": True}
+    assert store.grid_events == [event]
+    assert "lastContactAt" in store.box_states["EC-1"]
+
+
+@pytest.mark.asyncio
+async def test_grid_event_for_an_inverter_the_box_does_not_hold_is_403():
+    """As the cloud answers it; the box drops the event on a 403
+    (`grid_event_uploader.c`) instead of retrying."""
+    store = _FakeGridStore()
+    other = _box(device_id="EC-2", api_key="other-key", inverters={"inv-2": _INV_2})
+    hass = _hass_with_store(_keystore(_box(inverters={"inv-1": _INV_1}), other), store)
+    resp = await _call(
+        edge_api.EdgeGridEventView,
+        "post",
+        hass,
+        api_key=BOX_KEY,
+        body=_grid_event(inverter_id="inv-2"),
+    )
+    assert resp.status == 403
+    assert _json(resp) == {"error": "inverter_not_owned"}
+    assert store.grid_events == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("body", "error"),
+    [
+        ("x", "invalid_body"),
+        ({"state": "lost"}, "missing_inverterId"),
+        ({"inverterId": "inv-1", "state": "x"}, "invalid_state"),
+    ],
+)
+async def test_grid_event_with_a_bad_body_is_400_not_410(body, error):
+    store = _FakeGridStore()
+    hass = _hass_with_store(_keystore(_box(inverters={"inv-1": _INV_1})), store)
+    resp = await _call(edge_api.EdgeGridEventView, "post", hass, api_key=BOX_KEY, body=body)
+    assert resp.status == 400
+    assert _json(resp) == {"error": error}
+    assert store.grid_events == []
+
+
+@pytest.mark.asyncio
+async def test_a_lost_event_with_an_energized_grid_is_vetoed_and_not_stored():
+    store = _FakeGridStore()
+    hass = _hass_with_store(_keystore(_box(inverters={"inv-1": _INV_1})), store)
+    event = _grid_event(phaseVoltages=[228, 231, 229], gridFrequency=50, gridRelayClosed=0)
+    resp = await _call(edge_api.EdgeGridEventView, "post", hass, api_key=BOX_KEY, body=event)
+    assert resp.status == 200
+    assert _json(resp) == {"ok": True, "vetoed": True}
+    assert store.grid_events == []
+
+
+@pytest.mark.asyncio
+async def test_a_lost_event_holds_the_grid_down_through_the_next_reading():
+    """The box's confirmed `lost` wins over a reading that cannot see the
+    grid (`shouldKeepEdgeConfirmed`), as on the cloud."""
+    store = _FakeGridStore()
+    hass = _hass_with_store(_keystore(_box(inverters={"inv-1": _INV_1})), store)
+    up = _reading(ts=_server_time_offset(-120))
+    await _call(
+        edge_api.EdgeIngestBatchView, "post", hass, api_key=BOX_KEY, body={"readings": [up]}
+    )
+    assert store.appended[-1]["gridPresent"] is True
+
+    event = _grid_event(confirmed_at=_server_time_offset(-60))
+    await _call(edge_api.EdgeGridEventView, "post", hass, api_key=BOX_KEY, body=event)
+
+    no_grid_signal = {
+        k: v
+        for k, v in _reading(ts=_server_time_offset(-30)).items()
+        if k not in ("gridVoltage", "phaseVoltages", "gridFrequency", "gridRelayClosed")
+    }
+    resp = await _call(
+        edge_api.EdgeIngestBatchView,
+        "post",
+        hass,
+        api_key=BOX_KEY,
+        body={"readings": [no_grid_signal]},
+    )
+    assert _json(resp)["results"] == [{"ok": True, "inverterId": "inv-1"}]
+    stored = store.appended[-1]
+    assert stored["gridPresent"] is False
+    assert stored["gridConfirmedSource"] == "edge"
+    assert stored["gridConfirmedAt"] == event["confirmedAt"]

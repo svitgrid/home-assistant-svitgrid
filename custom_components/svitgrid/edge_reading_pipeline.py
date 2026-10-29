@@ -23,7 +23,9 @@ stored value or refuses a reading, following the phone island's port
 7. `maybeEstimateBatterySoc`: a voltage-derived SOC for an HV pack whose
    BMS reports 0.
 8. `computeStoreOutcome`: the edge-confirmed precedence
-   (`shouldKeepEdgeConfirmed`) and `gridPresentSince`.
+   (`shouldKeepEdgeConfirmed`) and `gridPresentSince`, reading the box's
+   latest grid event (`executor-grid-event.ts`) merged into `prev` by
+   `with_grid_event`.
 
 The stored timestamp is the reading's, canonicalised to millisecond
 precision (`new Date(ts).toISOString()`): a box sends `12:00:00Z`, the cloud
@@ -1595,6 +1597,158 @@ def _should_keep_edge_confirmed(aggregate, stored: dict, now_ms: int) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Grid events (services/api/src/services/grid-event.ts)
+# ---------------------------------------------------------------------------
+
+# `EDGE_LOST_ENERGIZED_VOLTAGE_V`, `EDGE_LOST_HEALTHY_FREQUENCY_HZ` and
+# `EDGE_LOST_USABLE_VOLTAGE_V` in grid-event.ts.
+_EDGE_LOST_ENERGIZED_VOLTAGE_V = 50
+_EDGE_LOST_HEALTHY_FREQUENCY_HZ = 45
+_EDGE_LOST_USABLE_VOLTAGE_V = 80
+
+# `MODELS_WITH_GRID_RELAY_REGISTER` in grid-event.ts.
+_MODELS_WITH_GRID_RELAY_REGISTER = frozenset(
+    {
+        "deye_sg02hp3_80k",
+        "deye_sg01hp3",
+        "deye_sg01hp3_50k",
+        "deye_sg01hp3_30k",
+        "deye_gb_s20k",
+        "deye_sg04lp3",
+        "deye_sg05lp3",
+        "sunsynk_3phase",
+        "sunsynk_3phase_15k",
+        "deye_sg03lp1",
+        "deye_sg01lp1",
+        "deye_sg02lp1",
+        "deye_sun_g3",
+        "deye_sg04lp1",
+        "deye_sg05lp1",
+        "deye_sg01lp1_16k",
+        "sunsynk_1phase",
+        "sunsynk_1phase_12k",
+        "sunsynk_1phase_16k",
+        "deye_sg01lp1_us",
+        "solark_5k",
+        "solark_12k",
+        "solark_15k",
+        "solark_18k",
+        "deye_string",
+        "deye_micro",
+        "deye_sun_60k_g03",
+    }
+)
+
+
+def parse_grid_event(body: Any, *, now: datetime) -> tuple[dict | None, str | None]:
+    """`parseGridEvent`: the event, or the cloud's 400 error code. A missing
+    `confirmedAt` is the server's `now`."""
+    if not isinstance(body, dict):
+        return None, "invalid_body"
+    inverter_id = body.get("inverterId")
+    if not isinstance(inverter_id, str) or not inverter_id:
+        return None, "missing_inverterId"
+    state = body.get("state")
+    if state not in ("lost", "restored"):
+        return None, "invalid_state"
+    confirmed_at = body.get("confirmedAt")
+    if not isinstance(confirmed_at, str):
+        confirmed_at = _iso_ms(math.floor(now.timestamp() * 1000))
+    signals = body.get("signals")
+    return {
+        "inverterId": inverter_id,
+        "state": state,
+        "confirmedAt": confirmed_at,
+        "signals": signals if isinstance(signals, dict) else None,
+    }, None
+
+
+def _lost_contradicted_by_signals(signals: dict) -> bool:
+    """`isEdgeLostContradictedBySignals`: every phase energized, and no
+    reported frequency below 45 Hz."""
+    volts = signals.get("phaseVoltages")
+    if not isinstance(volts, list) or not volts or not all(_finite(v) for v in volts):
+        return False
+    if not all(v >= _EDGE_LOST_ENERGIZED_VOLTAGE_V for v in volts):
+        return False
+    freq = signals.get("gridFrequency")
+    if _finite(freq) and freq > 0:
+        return freq >= _EDGE_LOST_HEALTHY_FREQUENCY_HZ
+    return True
+
+
+def _lost_from_unread_grid_block(signals: dict, model_id) -> bool:
+    """`isEdgeLostFromUnreadGridBlock`: a relay the box did not read and no
+    usable phase voltage, on a model whose map reads the relay."""
+    if model_id not in _MODELS_WITH_GRID_RELAY_REGISTER:
+        return False
+    relay = signals.get("gridRelayClosed")
+    if isinstance(relay, bool) or (_is_num(relay) and relay in (0, 1)):
+        return False
+    volts = signals.get("phaseVoltages")
+    return not (
+        isinstance(volts, list)
+        and any(_finite(v) and v >= _EDGE_LOST_USABLE_VOLTAGE_V for v in volts)
+    )
+
+
+def grid_event_veto(event: dict, inverter: dict | None, prev: dict | None) -> str | None:
+    """Why the cloud's grid-event route would refuse to trust `event`, or
+    None. `inverter` is the inverter's adopt details, `prev` its latest
+    stored reading. Only a `lost` is vetoed, in the route's order:
+    `signals` (the grid is plainly energized), `unread_grid_block` and
+    `corrupt_frame` (the last reading's pack voltage contradicts its SOC)."""
+    if event.get("state") != "lost":
+        return None
+    signals = event.get("signals")
+    if isinstance(signals, dict) and _lost_contradicted_by_signals(signals):
+        return "signals"
+    ctx = InverterContext.from_json(inverter)
+    if isinstance(signals, dict) and _lost_from_unread_grid_block(signals, ctx.model_id):
+        return "unread_grid_block"
+    prev = prev or {}
+    if (
+        _is_num(prev.get("batteryVoltage"))
+        and _is_num(prev.get("batterySoc"))
+        and _battery_reading_contradicts_soc(
+            prev["batteryVoltage"],
+            prev["batterySoc"],
+            ctx.battery_chemistry,
+            ctx.battery_cell_count,
+        )
+    ):
+        return "corrupt_frame"
+    return None
+
+
+def with_grid_event(prev: dict | None, event: dict | None) -> dict | None:
+    """`prev` as the cloud's `current/latest` reads after the edge event's
+    merge (`buildGridEventUpdate`). The cloud merges the event at once and
+    the next reading derives from it; here the event is kept apart and
+    merged into the reading the box took before it. An event no newer than
+    `prev` was already merged into the reading that followed it."""
+    if not isinstance(event, dict) or event.get("state") not in ("lost", "restored"):
+        return prev
+    confirmed_ms = _parse_ms(event.get("confirmedAt"))
+    if confirmed_ms is None:
+        return prev
+    if prev is not None:
+        prev_ms = _parse_ms(prev.get("timestamp"))
+        if prev_ms is not None and confirmed_ms <= prev_ms:
+            return prev
+    present = event["state"] == "restored"
+    merged = {
+        **(prev or {}),
+        "gridPresent": present,
+        "gridConfirmedSource": "edge",
+        "gridConfirmedAt": event["confirmedAt"],
+    }
+    if (prev or {}).get("gridPresent") != present:
+        merged["gridPresentSince"] = event["confirmedAt"]
+    return merged
+
+
+# ---------------------------------------------------------------------------
 # 7. Battery SOC estimate (battery-soc-estimate.ts)
 # ---------------------------------------------------------------------------
 
@@ -1757,7 +1911,9 @@ def process(
     adopt details, or an `InverterContext`), given the previous stored
     reading `prev` (None for the first one). `now` stands in for the
     server clock. `default_source` is the `source` stored for a reading
-    that names none: the cloud stores its sender's principal."""
+    that names none: the cloud stores its sender's principal. A grid
+    event of the box reaches the edge-confirmed precedence through `prev`
+    (`with_grid_event`)."""
     if not isinstance(ctx, InverterContext):
         ctx = InverterContext.from_json(ctx)
     now_ms = math.floor(now.timestamp() * 1000)

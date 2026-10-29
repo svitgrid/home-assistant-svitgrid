@@ -76,6 +76,14 @@ def _create_schema(conn: sqlite3.Connection) -> None:
         );
 
         CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
+
+        CREATE TABLE IF NOT EXISTS grid_events (
+            inverter_id  TEXT NOT NULL,
+            confirmed_at TEXT NOT NULL,
+            state        TEXT NOT NULL,
+            signals_json TEXT,
+            PRIMARY KEY (inverter_id, confirmed_at)
+        );
         """
     )
     conn.commit()
@@ -975,6 +983,54 @@ class ReadingStore:
 
     async def get_edge_box_state(self, device_id: str) -> dict | None:
         return await self._hass.async_add_executor_job(self._get_edge_box_state_sync, device_id)
+
+    # An adopted edge box's grid events (`/api/v3/executors/grid-event`),
+    # which the next reading of the inverter derives `gridPresent` from. The
+    # box retries a post it got no 2xx for, so the same `confirmedAt` twice
+    # is one event.
+    def _add_grid_event_sync(self, event: dict) -> bool:
+        """Store `event`; False when it was already stored."""
+        conn = _connect(self._db_path)
+        try:
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO grid_events "
+                "(inverter_id, confirmed_at, state, signals_json) VALUES (?, ?, ?, ?)",
+                (
+                    event["inverterId"],
+                    event["confirmedAt"],
+                    event["state"],
+                    json.dumps(event.get("signals"), separators=(",", ":")),
+                ),
+            )
+            conn.commit()
+            return cur.rowcount == 1
+        finally:
+            conn.close()
+
+    def _latest_grid_event_sync(self, inverter_id: str) -> dict | None:
+        conn = _connect(self._db_path)
+        try:
+            row = conn.execute(
+                "SELECT inverter_id, confirmed_at, state, signals_json FROM grid_events "
+                "WHERE inverter_id = ? ORDER BY confirmed_at DESC LIMIT 1",
+                (inverter_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+        if row is None:
+            return None
+        return {
+            "inverterId": row["inverter_id"],
+            "state": row["state"],
+            "confirmedAt": row["confirmed_at"],
+            "signals": json.loads(row["signals_json"]) if row["signals_json"] else None,
+        }
+
+    async def add_grid_event(self, event: dict) -> bool:
+        return await self._hass.async_add_executor_job(self._add_grid_event_sync, event)
+
+    async def latest_grid_event(self, inverter_id: str) -> dict | None:
+        return await self._hass.async_add_executor_job(self._latest_grid_event_sync, inverter_id)
 
     _LIFECYCLE_KEYS = ("lifecycle_state", "lifecycle_reason", "lifecycle_since")
 

@@ -591,3 +591,46 @@ async def test_edge_box_state_async_wrappers(tmp_path):
     store = ReadingStore(_Hass(), str(tmp_path / "readings.db"))
     await store.set_edge_box_state("EC-1", {"lastContactAt": "2026-10-28T10:00:00.000Z"})
     assert await store.get_edge_box_state("EC-1") == {"lastContactAt": "2026-10-28T10:00:00.000Z"}
+
+
+def test_grid_events_are_kept_per_inverter_and_deduped_on_confirmed_at(tmp_path):
+    """Edge island, Task 7 (svitgrid#1208): an edge box's grid events, the
+    latest by `confirmedAt` per inverter; the same `confirmedAt` twice is
+    one event."""
+    store = _store(tmp_path)
+    assert store._latest_grid_event_sync("inv-1") is None
+    lost = {
+        "inverterId": "inv-1",
+        "state": "lost",
+        "confirmedAt": "2026-10-28T10:00:00.000Z",
+        "signals": {"phaseVoltages": [0]},
+    }
+    assert store._add_grid_event_sync(lost) is True
+    assert store._add_grid_event_sync({**lost, "state": "restored"}) is False
+    assert store._latest_grid_event_sync("inv-1") == lost
+    restored = {
+        "inverterId": "inv-1",
+        "state": "restored",
+        "confirmedAt": "2026-10-28T10:05:00.000Z",
+        "signals": None,
+    }
+    assert store._add_grid_event_sync(restored) is True
+    assert store._latest_grid_event_sync("inv-1") == restored
+    assert store._latest_grid_event_sync("inv-2") is None
+
+
+@pytest.mark.asyncio
+async def test_grid_event_async_wrappers(tmp_path):
+    class _Hass:
+        async def async_add_executor_job(self, func, *args):
+            return func(*args)
+
+    store = ReadingStore(_Hass(), str(tmp_path / "readings.db"))
+    event = {
+        "inverterId": "inv-1",
+        "state": "lost",
+        "confirmedAt": "2026-10-28T10:00:00.000Z",
+        "signals": None,
+    }
+    assert await store.add_grid_event(event) is True
+    assert await store.latest_grid_event("inv-1") == event
