@@ -322,6 +322,13 @@ async def _previous_reading(store, inverter_id: str) -> dict | None:
     return None
 
 
+async def _latest_grid_event(store, inverter_id: str) -> dict | None:
+    """The box's latest grid event for the inverter, or None. A store that
+    keeps no grid events (`add_grid_event`) has none to give."""
+    latest = getattr(store, "latest_grid_event", None)
+    return await latest(inverter_id) if latest is not None else None
+
+
 async def _ingest_one(store, box: EdgeBoxEntry, reading) -> dict:
     """Store one reading of the box; the per-item result in the cloud's shape."""
     inverter_id = reading.get("inverterId") if isinstance(reading, dict) else None
@@ -343,11 +350,12 @@ async def _ingest_one(store, box: EdgeBoxEntry, reading) -> dict:
             "error": "Inverter not found",
             "status": 404,
         }
-    result = edge_reading_pipeline.process(
-        reading,
-        box.inverters[inverter_id],
+    prev = edge_reading_pipeline.with_grid_event(
         await _previous_reading(store, inverter_id),
-        now=datetime.now(UTC),
+        await _latest_grid_event(store, inverter_id),
+    )
+    result = edge_reading_pipeline.process(
+        reading, box.inverters[inverter_id], prev, now=datetime.now(UTC)
     )
     if result.rejected == "schema":
         # The cloud's schema answers 400, not 422.
@@ -514,6 +522,53 @@ class EdgeCommandAckView(_EdgeView):
         return self.json({"success": True, "status": row["state"]})
 
 
+class EdgeGridEventView(_EdgeView):
+    """The box's confirmed grid loss or return, ahead of its next reading.
+
+    Answered as the cloud's `executor-grid-event.ts` answers it: a body it
+    cannot parse is 400 and an inverter the box does not hold is 403 (the
+    box drops the event on a 403 and retries a 400 three times); a `lost`
+    the cloud would not trust is 200 `vetoed` and not stored. A stored event
+    holds the inverter's `gridPresent` through the readings after it that
+    cannot see the grid, for `EDGE_CONFIRM_STALENESS_MS`.
+    """
+
+    url = "/api/v3/executors/grid-event"
+    name = "svitgrid:edge:grid-event"
+
+    async def post(self, request):
+        box = await self._box(request)
+        if isinstance(box, web.Response):
+            return box
+        event, error = edge_reading_pipeline.parse_grid_event(
+            await _json_body(request), now=datetime.now(UTC)
+        )
+        if error is not None:
+            return self.json({"error": error}, status_code=400)
+        inverter_id = event["inverterId"]
+        if inverter_id not in box.inverter_ids and inverter_id not in box.inverters:
+            return self.json({"error": "inverter_not_owned"}, status_code=403)
+        entry_state = _entry_state(request.app["hass"])
+        if entry_state is None:
+            return self.json({"error": "store_unavailable"}, status_code=503)
+        store = entry_state["store"]
+        veto = edge_reading_pipeline.grid_event_veto(
+            event, box.inverters.get(inverter_id), await _previous_reading(store, inverter_id)
+        )
+        if veto == "signals":
+            answer = {"ok": True, "vetoed": True}
+        elif veto is not None:
+            answer = {"ok": True, "vetoed": True, "reason": veto}
+        else:
+            answer = {"ok": True, "deduped": not await store.add_grid_event(event)}
+        if veto is not None:
+            _LOGGER.info(
+                "Edge box %s: grid event for %s not trusted (%s)", box.device_id, inverter_id, veto
+            )
+        await _stamp_contact(store, box)
+        return self.json(answer)
+
+
 class EdgeFirmwareCheckView(_EdgeView):
     url = "/api/v3/executors/firmware-check"
     name = "svitgrid:edge:firmware-check"
@@ -652,6 +707,7 @@ EDGE_VIEWS = (
     EdgeIngestReadingView,
     EdgeCommandsPollView,
     EdgeCommandAckView,
+    EdgeGridEventView,
     EdgeFirmwareCheckView,
     EdgeMqttTokenView,
     EdgeCoredumpView,
