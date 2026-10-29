@@ -1068,3 +1068,239 @@ async def test_ingest_without_a_reading_store_is_503_so_the_box_keeps_its_readin
         edge_api.EdgeIngestBatchView, "post", hass, api_key=BOX_KEY, body={"readings": [_reading()]}
     )
     assert resp.status == 503
+
+
+# ── Task 4: the command poll and ack views (svitgrid#1206) ──────────────
+
+TASK4_VIEWS = [
+    (edge_api.EdgeCommandsPollView, "get", {}),
+    (edge_api.EdgeCommandAckView, "post", {"command_id": "cmd-1"}),
+]
+
+
+def _hass_with_queue(keystore, queue):
+    hass = _hass(keystore)
+    hass.data[DOMAIN][ENTRY_ID] = {"store": _FakeIngestStore(), "edge_queue": queue}
+    return hass
+
+
+def _real_queue(tmp_path):
+    from custom_components.svitgrid.edge_command_queue import EdgeCommandQueue
+
+    return EdgeCommandQueue(str(tmp_path / "edge_commands.db"), None)
+
+
+async def _poll(hass, *, api_key=BOX_KEY, query=None):
+    view = edge_api.EdgeCommandsPollView()
+    request = _FakeRequest(hass, api_key=api_key)
+    request.query = query or {"wait": "0"}
+    return await view.get(request)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("view_cls", "method", "match_info"), TASK4_VIEWS, ids=lambda v: getattr(v, "__name__", None)
+)
+async def test_poll_and_ack_are_404_without_adopted_boxes(view_cls, method, match_info):
+    for hass in (_hass(_keystore()), _hass(None)):
+        for api_key in (None, BOX_KEY):
+            resp = await _call(view_cls, method, hass, api_key=api_key, match_info=match_info)
+            assert resp.status == 404
+            assert _json(resp) == {"error": "no_edge_boxes"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("view_cls", "method", "match_info"), TASK4_VIEWS, ids=lambda v: getattr(v, "__name__", None)
+)
+async def test_poll_and_ack_unknown_key_is_401_not_410(view_cls, method, match_info, tmp_path):
+    hass = _hass_with_queue(_keystore(_box(inverters={"inv-1": _INV_1})), _real_queue(tmp_path))
+    for api_key in (None, "", "not-a-bound-key"):
+        resp = await _call(view_cls, method, hass, api_key=api_key, match_info=match_info)
+        assert resp.status == 401
+        assert _json(resp) == {"error": "unauthorized"}
+
+
+def test_poll_and_ack_use_the_cloud_paths_and_are_registered():
+    assert edge_api.EdgeCommandsPollView.url == "/api/v3/executors/commands"
+    assert edge_api.EdgeCommandAckView.url == "/api/v3/executors/commands/{command_id}/ack"
+    hass = MagicMock()
+    hass.data = {}
+    register_views(hass, MagicMock())
+    registered = {type(v) for v in _registered(hass)}
+    for view_cls, _method, _match in TASK4_VIEWS:
+        assert view_cls.requires_auth is False
+        assert view_cls in registered
+
+
+@pytest.mark.asyncio
+async def test_poll_returns_one_pending_with_signing_fields(tmp_path):
+    queue = _real_queue(tmp_path)
+    box = _box(inverters={"inv-1": _INV_1})
+    hass = _hass_with_queue(_keystore(box), queue)
+    signing = {"signedEventData": '{"a":1}', "signature": "MEUC", "signingKeyId": "phone-1"}
+    cid = await queue.async_enqueue(
+        "EC-1", "set_work_mode", {"mode": 1}, signing=signing, inverter_id="inv-1", source="t"
+    )
+    await queue.async_enqueue(
+        "EC-1", "read_inverter_settings", {}, signing=None, inverter_id="inv-1", source="t"
+    )
+
+    resp = await _poll(hass)
+    assert resp.status == 200
+    body = _json(resp)
+    assert body["commands"] == [
+        {
+            "id": cid,
+            "command": "set_work_mode",
+            "payload": {"mode": 1},
+            "inverterId": "inv-1",
+            **signing,
+        }
+    ]
+    assert _SERVER_TIME.fullmatch(body["serverTime"])
+    assert body["executorType"] == "edge"
+    assert body["ingestMode"] == "batch"
+    assert body["periodicPollDisabled"] is False
+    assert body["config"] == edge_api.build_edge_config(box)
+
+    unsigned = _json(await _poll(hass))["commands"]
+    assert len(unsigned) == 1
+    assert unsigned[0]["command"] == "read_inverter_settings"
+    assert "signature" not in unsigned[0]
+    assert "signedEventData" not in unsigned[0]
+    assert "signingKeyId" not in unsigned[0]
+
+
+@pytest.mark.asyncio
+async def test_poll_with_nothing_pending_is_200_empty(tmp_path):
+    hass = _hass_with_queue(_keystore(_box(inverters={"inv-1": _INV_1})), _real_queue(tmp_path))
+    resp = await _poll(hass)
+    assert resp.status == 200
+    body = _json(resp)
+    assert body["commands"] == []
+    assert body["pollIntervalMs"] == edge_api.POLL_INTERVAL_IDLE_MS
+
+
+@pytest.mark.asyncio
+async def test_poll_without_a_queue_is_200_empty():
+    """Before the queue is wired into setup (Task 8) the box still gets a 2xx."""
+    hass = _hass(_keystore(_box(inverters={"inv-1": _INV_1})))
+    resp = await _poll(hass)
+    assert resp.status == 200
+    assert _json(resp)["commands"] == []
+
+
+@pytest.mark.asyncio
+async def test_poll_serves_only_the_calling_box(tmp_path):
+    queue = _real_queue(tmp_path)
+    other = _box(device_id="EC-2", api_key="box-api-key-2", inverters={"inv-9": _INV_2})
+    hass = _hass_with_queue(_keystore(_box(inverters={"inv-1": _INV_1}), other), queue)
+    await queue.async_enqueue("EC-2", "a", {}, signing=None, inverter_id="inv-9", source="t")
+    assert _json(await _poll(hass))["commands"] == []
+    assert len(_json(await _poll(hass, api_key="box-api-key-2"))["commands"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_poll_omits_config_on_matching_hash(tmp_path):
+    box = _box(inverters={"inv-1": _INV_1})
+    hass = _hass_with_queue(_keystore(box), _real_queue(tmp_path))
+    config_hash = edge_api.build_edge_config(box)["configHash"]
+    body = _json(await _poll(hass, query={"wait": "0", "configHash": config_hash}))
+    assert "config" not in body
+    stale = _json(await _poll(hass, query={"wait": "0", "configHash": "0000000000000000"}))
+    assert stale["config"]["configHash"] == config_hash
+
+
+@pytest.mark.asyncio
+async def test_poll_interval_5000_while_pending(tmp_path):
+    queue = _real_queue(tmp_path)
+    hass = _hass_with_queue(_keystore(_box(inverters={"inv-1": _INV_1})), queue)
+    for name in ("a", "b"):
+        await queue.async_enqueue("EC-1", name, {}, signing=None, inverter_id=None, source="t")
+    assert _json(await _poll(hass))["pollIntervalMs"] == edge_api.POLL_INTERVAL_PENDING_MS
+    assert _json(await _poll(hass))["pollIntervalMs"] == edge_api.POLL_INTERVAL_IDLE_MS
+
+
+@pytest.mark.asyncio
+async def test_ack_unknown_id_is_200(tmp_path):
+    hass = _hass_with_queue(_keystore(_box(inverters={"inv-1": _INV_1})), _real_queue(tmp_path))
+    resp = await _call(
+        edge_api.EdgeCommandAckView,
+        "post",
+        hass,
+        api_key=BOX_KEY,
+        match_info={"command_id": "no-such-id"},
+        body={"success": True, "executorVersion": "2.172.0"},
+    )
+    assert resp.status == 200
+    assert _json(resp) == {"success": False, "status": "unknown"}
+
+
+@pytest.mark.asyncio
+async def test_ack_without_a_queue_is_200_unknown():
+    hass = _hass(_keystore(_box(inverters={"inv-1": _INV_1})))
+    resp = await _call(
+        edge_api.EdgeCommandAckView,
+        "post",
+        hass,
+        api_key=BOX_KEY,
+        match_info={"command_id": "cmd-1"},
+        body={"success": True},
+    )
+    assert resp.status == 200
+    assert _json(resp) == {"success": False, "status": "unknown"}
+
+
+@pytest.mark.asyncio
+async def test_ack_records_the_outcome(tmp_path):
+    queue = _real_queue(tmp_path)
+    hass = _hass_with_queue(_keystore(_box(inverters={"inv-1": _INV_1})), queue)
+    ok = await queue.async_enqueue("EC-1", "a", {}, signing=None, inverter_id=None, source="t")
+    bad = await queue.async_enqueue("EC-1", "b", {}, signing=None, inverter_id=None, source="t")
+    await _poll(hass)
+    await _poll(hass)
+
+    resp = await _call(
+        edge_api.EdgeCommandAckView,
+        "post",
+        hass,
+        api_key=BOX_KEY,
+        match_info={"command_id": ok},
+        body={"success": True, "result": {"x": 1}, "executorVersion": "2.172.0"},
+    )
+    assert resp.status == 200
+    assert _json(resp) == {"success": True, "status": "success"}
+
+    resp = await _call(
+        edge_api.EdgeCommandAckView,
+        "post",
+        hass,
+        api_key=BOX_KEY,
+        match_info={"command_id": bad},
+        body={"success": False, "rejected": True, "reason": "bad_signature"},
+    )
+    assert resp.status == 200
+    assert _json(resp) == {"success": True, "status": "failed"}
+    rows = {r["id"]: r for r in await queue.async_recent("EC-1")}
+    assert rows[ok]["result"] == {"x": 1}
+    assert rows[bad]["reason"] == "bad_signature"
+
+
+@pytest.mark.asyncio
+async def test_ack_of_another_boxs_command_is_200_unknown(tmp_path):
+    queue = _real_queue(tmp_path)
+    other = _box(device_id="EC-2", api_key="box-api-key-2", inverters={"inv-9": _INV_2})
+    hass = _hass_with_queue(_keystore(_box(inverters={"inv-1": _INV_1}), other), queue)
+    cid = await queue.async_enqueue("EC-2", "a", {}, signing=None, inverter_id=None, source="t")
+    await _poll(hass, api_key="box-api-key-2")
+    resp = await _call(
+        edge_api.EdgeCommandAckView,
+        "post",
+        hass,
+        api_key=BOX_KEY,
+        match_info={"command_id": cid},
+        body={"success": True},
+    )
+    assert _json(resp) == {"success": False, "status": "unknown"}
+    assert (await queue.async_recent("EC-2"))[0]["state"] == "delivered"
