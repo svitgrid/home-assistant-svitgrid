@@ -211,6 +211,14 @@ async def _answer(hass, flow_id: str, answer: str) -> dict:
     return await hass.config_entries.flow.async_configure(flow_id, {"next_step_id": answer})
 
 
+async def _cloud_question(hass, flow_id: str) -> dict:
+    """The dialog asking the owner about a cloud claim."""
+    shown = await _shown(hass, flow_id)
+    assert shown["type"] == "menu", shown
+    assert shown["step_id"] == "pair_cloud_approval"
+    return shown
+
+
 async def _pair(hass, flow_id: str, body) -> object:
     """A LAN claim the owner approves."""
     post = await _claim(hass, body)
@@ -558,7 +566,7 @@ async def test_after_a_cloud_claim_pair_local_is_already_claimed(
     with _cloud(reachable=True, status=AsyncMock(return_value=claimed)):
         await _start_flow(hass)
         session = get_session(hass)
-        await _until(lambda: session.claimed_by == "cloud", "the cloud claim")
+        await _until(lambda: session.cloud_claim is not None, "the cloud claim")
         resp = await _post(hass, _pair_body("CL0UD7"))
 
     assert resp.status == 409
@@ -596,7 +604,7 @@ async def test_a_cloud_claim_during_approval_loses_to_an_approval_and_is_logged(
     )
 
 
-async def test_a_cloud_claim_during_approval_wins_when_the_owner_rejects(
+async def test_a_cloud_claim_during_approval_is_asked_about_when_the_owner_rejects(
     hass: HomeAssistant, enable_custom_integrations
 ) -> None:
     flag: dict = {}
@@ -606,14 +614,100 @@ async def test_a_cloud_claim_during_approval_wins_when_the_owner_rejects(
         flag["claimed"] = True
         session = get_session(hass)
         await _until(lambda: session.cloud_claim is not None, "the cloud claim")
-        after = await _answer(hass, result["flow_id"], "pair_reject")
+        await _answer(hass, result["flow_id"], "pair_reject")
         resp = await post
         await hass.async_block_till_done()
-
         assert resp.status == 403
+        client.finalize.assert_not_awaited()
+
+        await _cloud_question(hass, result["flow_id"])
+        after = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {"next_step_id": "pair_cloud_approve"}
+        )
         client.finalize.assert_awaited_once()
     assert after["type"] == "create_entry"
     assert after["data"]["api_key"] == "cloud-key"
+
+
+# ── a cloud claim needs the owner too (svitgrid#1200) ───────────────────────
+#
+# /hello publishes the code to the whole network, so a stranger's signed-in
+# app can claim it through the cloud as easily as over the LAN. Nothing is
+# finalized until someone at the Home Assistant screen approves the claim.
+
+
+async def test_a_cloud_claim_asks_the_owner_before_anything_is_finalized(
+    hass: HomeAssistant, enable_custom_integrations
+) -> None:
+    claimed = PairingClaimed(household_id="h1", preset_id=None)
+    with _cloud(reachable=True, status=AsyncMock(return_value=claimed)) as client:
+        result = await _start_flow(hass)
+        await _until(lambda: get_session(hass).cloud_claim is not None, "the cloud claim")
+        shown = await _cloud_question(hass, result["flow_id"])
+        await hass.async_block_till_done()
+
+        assert shown["menu_options"] == ["pair_cloud_approve", "pair_cloud_reject"]
+        assert get_session(hass).claimed_by is None
+        client.finalize.assert_not_awaited()
+    assert hass.config_entries.async_entries(DOMAIN) == []
+
+
+async def test_an_approved_cloud_claim_finalizes_and_creates_the_entry(
+    hass: HomeAssistant, enable_custom_integrations
+) -> None:
+    claimed = PairingClaimed(household_id="h1", preset_id=None)
+    with _cloud(reachable=True, status=AsyncMock(return_value=claimed)) as client:
+        result = await _start_flow(hass)
+        await _cloud_question(hass, result["flow_id"])
+        done = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {"next_step_id": "pair_cloud_approve"}
+        )
+        client.finalize.assert_awaited_once()
+
+    assert done["type"] == "create_entry"
+    assert done["data"]["api_key"] == "cloud-key"
+    assert _code(hass) is None
+
+
+async def test_a_rejected_cloud_claim_finalizes_nothing_and_shows_a_new_code(
+    hass: HomeAssistant, enable_custom_integrations
+) -> None:
+    claimed = PairingClaimed(household_id="h1", preset_id=None)
+    with _cloud(reachable=True, status=AsyncMock(return_value=claimed)) as client:
+        result = await _start_flow(hass)
+        await _cloud_question(hass, result["flow_id"])
+        # The cloud spent the first code on the stranger's claim.
+        client.start.return_value = {"secret": "t" * 40, "code": "N3WC0D", "expiresIn": 300}
+        client.get_status.return_value = PairingPending()
+        after = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {"next_step_id": "pair_cloud_reject"}
+        )
+        # Not async_block_till_done: it would wait out the new code's window.
+        await asyncio.sleep(0.05)
+        try:
+            client.finalize.assert_not_awaited()
+            assert client.start.await_count == 2
+            assert after["type"] == "progress"
+            assert after["description_placeholders"]["code"] == "N3WC0D"
+            assert _code(hass) == "N3WC0D"
+            assert get_session(hass).cloud_claim is None
+            assert hass.config_entries.async_entries(DOMAIN) == []
+        finally:
+            hass.config_entries.flow.async_abort(result["flow_id"])
+
+
+async def test_pair_local_while_a_cloud_claim_awaits_the_owner_is_already_claimed(
+    hass: HomeAssistant, enable_custom_integrations
+) -> None:
+    claimed = PairingClaimed(household_id="h1", preset_id=None)
+    with _cloud(reachable=True, status=AsyncMock(return_value=claimed)):
+        result = await _start_flow(hass)
+        await _cloud_question(hass, result["flow_id"])
+        resp = await _post(hass, _pair_body("CL0UD7"))
+
+    assert resp.status == 409
+    assert _body(resp)["error"] == "already_claimed"
+    hass.config_entries.flow.async_abort(result["flow_id"])
 
 
 # ── the cloud failing ───────────────────────────────────────────────────────
@@ -626,8 +720,10 @@ async def test_network_errors_while_polling_do_not_end_the_cloud_path(
     status = AsyncMock(side_effect=[aiohttp.ClientConnectionError("dns"), TimeoutError(), claimed])
     with _cloud(reachable=True, status=status):
         result = await _start_flow(hass)
-        await _until(lambda: get_session(hass).claimed_by == "cloud", "the cloud claim")
-        done = await _shown(hass, result["flow_id"])
+        await _cloud_question(hass, result["flow_id"])
+        done = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {"next_step_id": "pair_cloud_approve"}
+        )
 
     assert done["type"] == "create_entry"
     assert done["data"]["api_key"] == "cloud-key"
@@ -695,8 +791,10 @@ async def test_five_wrong_codes_end_only_the_lan_half(
         assert _code(hass) == "CL0UD7"
 
         flag["claimed"] = True
-        await _until(lambda: get_session(hass).claimed_by == "cloud", "the cloud claim")
-        done = await _shown(hass, result["flow_id"])
+        await _cloud_question(hass, result["flow_id"])
+        done = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {"next_step_id": "pair_cloud_approve"}
+        )
 
     assert done["type"] == "create_entry"
     assert done["data"]["api_key"] == "cloud-key"

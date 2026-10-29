@@ -75,6 +75,14 @@
           "model_id": "Model id"
         }
       },
+      "pair_cloud_approval": {
+        "title": "Connect a Svitgrid account",
+        "description": "A Svitgrid app signed in to an account has entered this pairing code and wants to connect this Home Assistant to that account.\n\nApprove it only if you just entered the code in the Svitgrid app yourself. If you did not, reject it: nothing is connected, and a new code is shown.",
+        "menu_options": {
+          "pair_cloud_approve": "Approve",
+          "pair_cloud_reject": "Reject"
+        }
+      },
       "pair_approval": {
         "title": "Connect a phone",
         "description": "**{device}** wants to connect to this Home Assistant over your home network, without a Svitgrid account.\n\nApprove it if it is your phone, or one you expect. If you do not recognise it, reject it, and nothing is shared.",
