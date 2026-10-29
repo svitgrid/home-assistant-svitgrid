@@ -202,3 +202,22 @@ async def test_queue_survives_a_new_instance(tmp_path, clock):
     row = await _queue(tmp_path).async_next_pending("EC-1")
     assert row["id"] == cid
     assert row["signing"] == SIGNING
+
+
+async def test_forget_device_drops_only_that_box_and_wakes_its_waiters(tmp_path, clock):
+    q = _queue(tmp_path)
+    gone = await q.async_enqueue(
+        "EC-1", "set_work_mode", {}, signing=None, inverter_id="inv-1", source="test"
+    )
+    kept = await q.async_enqueue(
+        "EC-2", "set_work_mode", {}, signing=None, inverter_id="inv-2", source="test"
+    )
+    waiter = asyncio.create_task(q.async_wait(gone, 5))
+    await asyncio.sleep(0.05)
+
+    assert await q.async_forget_device("EC-1") == 1
+
+    assert await asyncio.wait_for(waiter, 1) is None
+    assert await q.async_pending_count("EC-1") == 0
+    assert (await q.async_wait(kept, 0))["state"] == "pending"
+    assert await q.async_forget_device("EC-1") == 0

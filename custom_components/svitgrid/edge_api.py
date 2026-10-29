@@ -186,8 +186,38 @@ def _snapshot_from_settings_body(box: EdgeBoxEntry, body) -> tuple[dict | None, 
 
 
 # Serialises the pairing-code binding: the check and the bind are two
-# keystore round trips.
-_BIND_LOCK = asyncio.Lock()
+# keystore round trips. `/edge/adopt` and `/edge/forget` (island_lan) hold it
+# too, so a box is never bound while it is being replaced or removed.
+EDGE_BOX_LOCK = asyncio.Lock()
+
+# hass.data[DOMAIN] key: deviceId -> the last `pair_code_*` refusal the box
+# was given, `{"error", "at"}`, for `GET /api/svitgrid/edge/status`. In memory
+# only: a box retrying a refused code would otherwise write the keystore on
+# every request.
+_EDGE_REFUSALS_KEY = "edge_pair_code_refusals"
+
+
+def edge_refusals(hass) -> dict[str, dict]:
+    """deviceId -> the box's last pairing-code refusal."""
+    return hass.data.setdefault(DOMAIN, {}).setdefault(_EDGE_REFUSALS_KEY, {})
+
+
+def _refuse_pair_code(hass, error: str, *device_ids: str) -> web.Response:
+    """The 403 for `error`, recorded against each box it is about."""
+    refusals = edge_refusals(hass)
+    for device_id in device_ids:
+        refusals[device_id] = {"error": error, "at": _server_time()}
+    return HomeAssistantView.json({"error": error}, status_code=403)
+
+
+def _invalid_code_boxes(state: KeystoreState, named: str | None) -> list[str]:
+    """The box an invalid code is recorded against: the one the path names,
+    else the only unbound box. With several unbound boxes nothing says which
+    one presented it, so none is blamed."""
+    if named:
+        return [named] if named in state.edge_boxes else []
+    unbound = [b.device_id for b in state.edge_boxes.values() if b.api_key is None]
+    return unbound if len(unbound) == 1 else []
 
 
 class _EdgeView(HomeAssistantView):
@@ -227,11 +257,11 @@ class _EdgeView(HomeAssistantView):
         box = state.edge_box_for_api_key(api_key)
         if box is not None:
             if pair_code and state.edge_box_for_pair_code(pair_code)[1] == "ok":
-                return self.json({"error": "pair_code_invalid"}, status_code=403)
+                return _refuse_pair_code(request.app["hass"], "pair_code_invalid", box.device_id)
             return box
         if not pair_code or not api_key:
             return self.json({"error": "unauthorized"}, status_code=401)
-        async with _BIND_LOCK:
+        async with EDGE_BOX_LOCK:
             return await self._bind(request, api_key, pair_code)
 
     async def _bind(self, request, api_key: str, pair_code: str) -> EdgeBoxEntry | web.Response:
@@ -244,17 +274,22 @@ class _EdgeView(HomeAssistantView):
         box = state.edge_box_for_api_key(api_key)
         if box is not None:
             return box
+        hass = request.app["hass"]
         box, verdict = state.edge_box_for_pair_code(pair_code)
         if verdict == "expired":
-            return self.json({"error": "pair_code_expired"}, status_code=403)
+            issued = state.edge_box_issued_pair_code(pair_code)
+            return _refuse_pair_code(
+                hass, "pair_code_expired", *([issued.device_id] if issued else [])
+            )
         # A path naming a device id must name the box the code was issued for.
         named = request.match_info.get("device_id")
         if box is None or (named and named != box.device_id):
-            return self.json({"error": "pair_code_invalid"}, status_code=403)
+            return _refuse_pair_code(hass, "pair_code_invalid", *_invalid_code_boxes(state, named))
         try:
             await keystore.async_bind_edge_box(box.device_id, api_key)
         except KeyError:
-            return self.json({"error": "pair_code_invalid"}, status_code=403)
+            return _refuse_pair_code(hass, "pair_code_invalid")
+        edge_refusals(hass).pop(box.device_id, None)
         _LOGGER.info("Edge box %s bound its key with a pairing code", box.device_id)
         return replace(box, api_key=api_key, pair_code_hash=None, pair_code_expires_at=None)
 

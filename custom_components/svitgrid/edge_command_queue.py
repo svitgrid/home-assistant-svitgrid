@@ -284,6 +284,21 @@ class EdgeCommandQueue:
         finally:
             conn.close()
 
+    def _forget_device_sync(self, device_id: str) -> list[str]:
+        conn = _connect(self._db_path)
+        try:
+            ids = [
+                r[0]
+                for r in conn.execute(
+                    "SELECT id FROM edge_commands WHERE device_id = ?", (device_id,)
+                ).fetchall()
+            ]
+            conn.execute("DELETE FROM edge_commands WHERE device_id = ?", (device_id,))
+            conn.commit()
+            return ids
+        finally:
+            conn.close()
+
     # ── async wrappers ────────────────────────────────────────────────────────
 
     async def _run(self, func, *args):
@@ -362,3 +377,11 @@ class EdgeCommandQueue:
     async def async_pending_count(self, device_id: str) -> int:
         """Commands waiting for the box's next poll."""
         return await self._run(self._pending_count_sync, device_id)
+
+    async def async_forget_device(self, device_id: str) -> int:
+        """Drop every command of a forgotten box; returns how many. A waiter
+        on one of them wakes and reads it as unknown."""
+        removed = await self._run(self._forget_device_sync, device_id)
+        for command_id in removed:
+            self._wake(command_id)
+        return len(removed)

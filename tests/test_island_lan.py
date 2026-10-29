@@ -569,3 +569,365 @@ async def test_the_views_are_registered_with_the_others(hass: HomeAssistant):
         "/api/svitgrid/keys/revoke",
         "/api/svitgrid/island/status",
     } <= urls
+
+
+# ── edge boxes: adopt, forget, status (edge island plan, Task 15) ───────────
+
+
+_INV_DEYE = {
+    "inverterId": "inv-1",
+    "modelId": "deye_sg04lp3",
+    "protocolId": "solarman_v5",
+    "transport": "solarman",
+    "ipAddress": "192.168.1.50",
+    "loggerSerial": "2712345678",
+    "slaveId": 1,
+    "phases": 1,
+    "hasBattery": True,
+    "pvStrings": 2,
+    "batteryCapacityWh": 10240,
+    "batterySignInverted": False,
+    "powerScaleOverrides": {"pvPower": 10},
+}
+
+
+def _inv(inverter_id: str, **fields) -> dict:
+    return {**_INV_DEYE, "inverterId": inverter_id, **fields}
+
+
+class _EdgeStore:
+    """The parts of the reading store the edge status reads."""
+
+    def __init__(self, box_states=None, snapshots=None) -> None:
+        self.box_states = dict(box_states or {})
+        self.snapshots = dict(snapshots or {})
+
+    async def get_edge_box_state(self, device_id):
+        return self.box_states.get(device_id)
+
+    async def get_settings_snapshot(self, inverter_id):
+        return self.snapshots.get(inverter_id)
+
+
+def _entry_state(hass, entry, *, store=None, queue=None) -> dict:
+    state = {"store": store or _EdgeStore()}
+    if queue is not None:
+        state["edge_queue"] = queue
+    hass.data[DOMAIN][entry.entry_id] = state
+    return state
+
+
+async def _adopt(hass, admin, device_id, *inverters, **fields):
+    from custom_components.svitgrid.island_lan import SvitgridEdgeAdoptView
+
+    return await SvitgridEdgeAdoptView().post(
+        _Req(
+            hass,
+            admin.request(
+                "edge_adopt", deviceId=device_id, inverters=[dict(i) for i in inverters], **fields
+            ),
+        )
+    )
+
+
+async def _forget(hass, admin, device_id):
+    from custom_components.svitgrid.island_lan import SvitgridEdgeForgetView
+
+    return await SvitgridEdgeForgetView().post(
+        _Req(hass, admin.request("edge_forget", deviceId=device_id))
+    )
+
+
+async def _edge_status(hass, **req):
+    from custom_components.svitgrid.island_lan import SvitgridEdgeStatusView
+
+    return await SvitgridEdgeStatusView().get(_Req(hass, **req))
+
+
+async def test_edge_adopt_creates_box_and_issues_code(hass: HomeAssistant):
+    from custom_components.svitgrid.const import PAIRING_CODE_ALPHABET, PAIRING_CODE_LENGTH
+
+    admin = _Admin()
+    ks = await _keystore(hass, admin)
+    _entry(hass)
+
+    resp = await _adopt(hass, admin, "EC-1", _INV_DEYE)
+
+    assert resp.status == 200, _body(resp)
+    body = _body(resp)
+    assert body["ok"] is True
+    code = body["pairCode"]
+    assert len(code) == PAIRING_CODE_LENGTH
+    assert set(code) <= set(PAIRING_CODE_ALPHABET)
+    assert body["expiresAt"].endswith("Z")
+    state = await ks.load()
+    box = state.edge_boxes["EC-1"]
+    assert box.api_key is None
+    assert box.inverter_ids == ["inv-1"]
+    assert box.inverters == {"inv-1": _INV_DEYE}
+    # Only the hash is kept, and the code is the box's live one.
+    assert box.pair_code_hash != code
+    assert state.edge_box_for_pair_code(code) == (box, "ok")
+
+
+async def test_edge_adopt_twice_reissues_code_and_drops_binding(hass: HomeAssistant):
+    admin = _Admin()
+    ks = await _keystore(hass, admin)
+    _entry(hass)
+    first = _body(await _adopt(hass, admin, "EC-1", _INV_DEYE))["pairCode"]
+    await ks.async_bind_edge_box("EC-1", "box-api-key")
+
+    resp = await _adopt(hass, admin, "EC-1", _inv("inv-2"))
+
+    assert resp.status == 200, _body(resp)
+    second = _body(resp)["pairCode"]
+    state = await ks.load()
+    box = state.edge_boxes["EC-1"]
+    assert box.api_key is None
+    assert state.edge_box_for_api_key("box-api-key") is None
+    assert box.inverter_ids == ["inv-2"]
+    assert list(box.inverters) == ["inv-2"]
+    assert state.edge_box_for_pair_code(second) == (box, "ok")
+    if first != second:
+        assert state.edge_box_for_pair_code(first) == (None, "invalid")
+
+
+async def test_edge_adopt_three_boxes(hass: HomeAssistant):
+    admin = _Admin()
+    ks = await _keystore(hass, admin)
+    _entry(hass)
+
+    codes = {}
+    for n in (1, 2, 3):
+        resp = await _adopt(hass, admin, f"EC-{n}", _inv(f"inv-{n}"))
+        assert resp.status == 200, _body(resp)
+        codes[f"EC-{n}"] = _body(resp)["pairCode"]
+
+    state = await ks.load()
+    assert sorted(state.edge_boxes) == ["EC-1", "EC-2", "EC-3"]
+    for device_id, code in codes.items():
+        box, verdict = state.edge_box_for_pair_code(code)
+        assert verdict == "ok"
+        assert box.device_id == device_id
+
+
+async def test_edge_adopt_inverter_held_by_other_box_is_409(hass: HomeAssistant):
+    admin = _Admin()
+    ks = await _keystore(hass, admin)
+    _entry(hass)
+    assert (await _adopt(hass, admin, "EC-1", _INV_DEYE)).status == 200
+    before = await ks.load()
+    code_hash = before.edge_boxes["EC-1"].pair_code_hash
+
+    resp = await _adopt(hass, admin, "EC-2", _inv("inv-9"), _inv("inv-1"))
+
+    assert resp.status == 409
+    assert _body(resp) == {"error": "inverter_held_by_other_box"}
+    state = await ks.load()
+    assert list(state.edge_boxes) == ["EC-1"]
+    assert state.edge_boxes["EC-1"].pair_code_hash == code_hash
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        pytest.param({"deviceId": "", "inverters": [_INV_DEYE]}, id="empty-device-id"),
+        pytest.param({"deviceId": 7, "inverters": [_INV_DEYE]}, id="device-id-not-string"),
+        pytest.param({"deviceId": "EC-1"}, id="no-inverters"),
+        pytest.param({"deviceId": "EC-1", "inverters": {}}, id="inverters-not-a-list"),
+        pytest.param({"deviceId": "EC-1", "inverters": ["inv-1"]}, id="inverter-not-a-dict"),
+        pytest.param(
+            {"deviceId": "EC-1", "inverters": [{"inverterId": "inv-1"}]}, id="no-model-id"
+        ),
+        pytest.param({"deviceId": "EC-1", "inverters": [{"modelId": "m"}]}, id="no-inverter-id"),
+        pytest.param(
+            {"deviceId": "EC-1", "inverters": [_INV_DEYE, _INV_DEYE]}, id="duplicate-inverter"
+        ),
+    ],
+)
+async def test_edge_adopt_with_a_malformed_body_is_bad_request(hass: HomeAssistant, fields):
+    from custom_components.svitgrid.island_lan import SvitgridEdgeAdoptView
+
+    admin = _Admin()
+    ks = await _keystore(hass, admin)
+    _entry(hass)
+    resp = await SvitgridEdgeAdoptView().post(_Req(hass, admin.request("edge_adopt", **fields)))
+    assert resp.status == 400
+    assert _body(resp)["error"] == "bad_request"
+    assert (await ks.load()).edge_boxes == {}
+
+
+async def test_edge_adopt_needs_signature_and_fresh_nonce(hass: HomeAssistant):
+    from custom_components.svitgrid.island_lan import SvitgridEdgeAdoptView
+
+    admin = _Admin()
+    ks = await _keystore(hass, admin)
+    _entry(hass)
+    fields = {"deviceId": "EC-1", "inverters": [_INV_DEYE]}
+
+    no_key = await SvitgridEdgeAdoptView().post(
+        _Req(hass, admin.request("edge_adopt", **fields), island_key=None)
+    )
+    assert no_key.status == 401
+    stranger = _Admin()
+    untrusted = await SvitgridEdgeAdoptView().post(
+        _Req(hass, stranger.request("edge_adopt", **fields))
+    )
+    assert untrusted.status == 403
+    assert _body(untrusted) == {"error": "signature_invalid"}
+    other_action = await SvitgridEdgeAdoptView().post(
+        _Req(hass, admin.request("edge_forget", **fields))
+    )
+    assert other_action.status == 400
+    stale = await SvitgridEdgeAdoptView().post(
+        _Req(hass, admin.signed({"action": "edge_adopt", "nonce": "n-0", "ts": 0, **fields}))
+    )
+    assert _body(stale) == {"error": "stale_request"}
+    assert (await ks.load()).edge_boxes == {}
+
+    signed = admin.request("edge_adopt", **fields)
+    assert (await SvitgridEdgeAdoptView().post(_Req(hass, signed))).status == 200
+    replayed = await SvitgridEdgeAdoptView().post(_Req(hass, signed))
+    assert replayed.status == 403
+    assert _body(replayed) == {"error": "replayed"}
+
+
+async def test_edge_forget_removes_only_that_box(hass: HomeAssistant, tmp_path):
+    from custom_components.svitgrid.edge_command_queue import EdgeCommandQueue
+
+    admin = _Admin()
+    ks = await _keystore(hass, admin)
+    entry = _entry(hass)
+    queue = EdgeCommandQueue(str(tmp_path / "edge_commands.db"), None)
+    _entry_state(hass, entry, queue=queue)
+    await _adopt(hass, admin, "EC-1", _inv("inv-1"))
+    await _adopt(hass, admin, "EC-2", _inv("inv-2"))
+    gone = await queue.async_enqueue(
+        "EC-1", "set_work_mode", {}, signing=None, inverter_id="inv-1", source="test"
+    )
+    kept = await queue.async_enqueue(
+        "EC-2", "set_work_mode", {}, signing=None, inverter_id="inv-2", source="test"
+    )
+
+    resp = await _forget(hass, admin, "EC-1")
+
+    assert resp.status == 200, _body(resp)
+    assert _body(resp) == {"ok": True}
+    assert list((await ks.load()).edge_boxes) == ["EC-2"]
+    assert await queue.async_wait(gone, 0) is None
+    assert (await queue.async_wait(kept, 0))["state"] == "pending"
+    # Idempotent: a box already forgotten is not an error.
+    again = await _forget(hass, admin, "EC-1")
+    assert again.status == 200
+    assert _body(again) == {"ok": True}
+    assert list((await ks.load()).edge_boxes) == ["EC-2"]
+
+
+async def test_edge_forget_needs_a_device_id(hass: HomeAssistant):
+    from custom_components.svitgrid.island_lan import SvitgridEdgeForgetView
+
+    admin = _Admin()
+    await _keystore(hass, admin)
+    _entry(hass)
+    resp = await SvitgridEdgeForgetView().post(_Req(hass, admin.request("edge_forget")))
+    assert resp.status == 400
+
+
+async def test_edge_status_reports_binding_and_last_refusal(hass: HomeAssistant, tmp_path):
+    from custom_components.svitgrid import keystore as keystore_mod
+    from custom_components.svitgrid.edge_api import EdgeMeView
+    from custom_components.svitgrid.edge_command_queue import EdgeCommandQueue
+
+    admin = _Admin()
+    ks = await _keystore(hass, admin)
+    entry = _entry(hass)
+    queue = EdgeCommandQueue(str(tmp_path / "edge_commands.db"), None)
+    store = _EdgeStore(
+        box_states={"EC-1": {"lastContactAt": "2026-10-29T10:05:00.000Z", "version": "2.172.0"}},
+        snapshots={
+            "inv-1": {
+                "inverter_id": "inv-1",
+                "model_id": _INV_DEYE["modelId"],
+                "read_at": "2026-10-29T10:04:00Z",
+            }
+        },
+    )
+    _entry_state(hass, entry, store=store, queue=queue)
+    await _adopt(hass, admin, "EC-1", _inv("inv-1"))
+    code_2 = _body(await _adopt(hass, admin, "EC-2", _inv("inv-2")))["pairCode"]
+    await ks.async_bind_edge_box("EC-1", "box-1-key")
+    await queue.async_enqueue(
+        "EC-1", "set_work_mode", {}, signing=None, inverter_id="inv-1", source="test"
+    )
+
+    # EC-2 presents its code after its ten minutes: the edge view refuses it,
+    # and the status says so.
+    later = keystore_mod._utcnow() + keystore_mod.EDGE_PAIR_CODE_TTL
+    with patch.object(keystore_mod, "_utcnow", return_value=later):
+        me = _Req(hass)
+        me.headers = {"X-API-Key": "box-2-key", "X-Pair-Code": code_2}
+        me.match_info = {}
+        refused = await EdgeMeView().get(me)
+    assert refused.status == 403
+    assert _body(refused) == {"error": "pair_code_expired"}
+
+    resp = await _edge_status(hass)
+
+    assert resp.status == 200, _body(resp)
+    boxes = {b["deviceId"]: b for b in _body(resp)["boxes"]}
+    assert boxes["EC-1"] == {
+        "deviceId": "EC-1",
+        "bound": True,
+        "codeExpiresAt": None,
+        "lastContactAt": "2026-10-29T10:05:00.000Z",
+        "version": "2.172.0",
+        "pendingCommands": 1,
+        "inverterIds": ["inv-1"],
+        "lastSettingsReadAt": "2026-10-29T10:04:00Z",
+        "lastRefusal": None,
+    }
+    ec2 = boxes["EC-2"]
+    assert ec2["bound"] is False
+    assert ec2["codeExpiresAt"].endswith("Z")
+    assert ec2["lastContactAt"] is None
+    assert ec2["version"] is None
+    assert ec2["pendingCommands"] == 0
+    assert ec2["inverterIds"] == ["inv-2"]
+    assert ec2["lastSettingsReadAt"] is None
+    assert ec2["lastRefusal"]["error"] == "pair_code_expired"
+    assert ec2["lastRefusal"]["at"].endswith("Z")
+
+    # Adopting the box again issues a fresh code and clears the refusal.
+    await _adopt(hass, admin, "EC-2", _inv("inv-2"))
+    boxes = {b["deviceId"]: b for b in _body(await _edge_status(hass))["boxes"]}
+    assert boxes["EC-2"]["lastRefusal"] is None
+
+
+async def test_edge_status_with_no_boxes_is_an_empty_list(hass: HomeAssistant):
+    await _keystore(hass, _Admin())
+    _entry(hass)
+    resp = await _edge_status(hass)
+    assert resp.status == 200
+    assert _body(resp) == {"boxes": []}
+
+
+async def test_edge_status_needs_the_island_key(hass: HomeAssistant):
+    await _keystore(hass, _Admin())
+    _entry(hass)
+    assert (await _edge_status(hass, island_key=None)).status == 401
+    assert (await _edge_status(hass, island_key=OTHER_ISLAND_KEY)).status == 401
+
+
+async def test_the_edge_views_are_registered_with_the_others(hass: HomeAssistant):
+    from unittest.mock import MagicMock
+
+    from custom_components.svitgrid.http_views import register_views
+
+    hass.http = MagicMock()
+    register_views(hass, store=MagicMock())
+    urls = {call.args[0].url for call in hass.http.register_view.call_args_list}
+    assert {
+        "/api/svitgrid/edge/adopt",
+        "/api/svitgrid/edge/forget",
+        "/api/svitgrid/edge/status",
+    } <= urls
