@@ -22,6 +22,7 @@ without a 2xx.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -184,6 +185,11 @@ def _snapshot_from_settings_body(box: EdgeBoxEntry, body) -> tuple[dict | None, 
     }, None
 
 
+# Serialises the pairing-code binding: the check and the bind are two
+# keystore round trips.
+_BIND_LOCK = asyncio.Lock()
+
+
 class _EdgeView(HomeAssistantView):
     """Base for the edge views: the no-boxes gate and the box's key."""
 
@@ -205,16 +211,52 @@ class _EdgeView(HomeAssistantView):
     async def _box(self, request) -> EdgeBoxEntry | web.Response:
         """The adopted box the request's `X-API-Key` is bound to, or a refusal.
 
-        The pairing-code binding (`X-Pair-Code`) is Task 11; until then an
-        unknown key is 401 with or without a code.
+        An unknown key with an `X-Pair-Code` binds on the first contact, on
+        any edge path, when the code is the live one of an unbound box: the
+        key is bound to that box and the code is spent. A bound key that
+        still sends its spent code (after a reboot) is let through, but one
+        that presents another box's live code is refused, so a code never
+        rebinds a key. The refusals are 403, never 401 or 410, so the app can
+        tell them from an unknown key.
         """
         state = await self._state(request)
         if isinstance(state, web.Response):
             return state
-        box = state.edge_box_for_api_key(request.headers.get("X-API-Key") or "")
-        if box is None:
+        api_key = request.headers.get("X-API-Key") or ""
+        pair_code = request.headers.get("X-Pair-Code")
+        box = state.edge_box_for_api_key(api_key)
+        if box is not None:
+            if pair_code and state.edge_box_for_pair_code(pair_code)[1] == "ok":
+                return self.json({"error": "pair_code_invalid"}, status_code=403)
+            return box
+        if not pair_code or not api_key:
             return self.json({"error": "unauthorized"}, status_code=401)
-        return box
+        async with _BIND_LOCK:
+            return await self._bind(request, api_key, pair_code)
+
+    async def _bind(self, request, api_key: str, pair_code: str) -> EdgeBoxEntry | web.Response:
+        # Reloaded under the lock: two requests with the same code must not
+        # both bind.
+        keystore = self._keystore(request.app["hass"])
+        state = await keystore.load()
+        if state is None or not state.edge_boxes:
+            return self.json({"error": "no_edge_boxes"}, status_code=404)
+        box = state.edge_box_for_api_key(api_key)
+        if box is not None:
+            return box
+        box, verdict = state.edge_box_for_pair_code(pair_code)
+        if verdict == "expired":
+            return self.json({"error": "pair_code_expired"}, status_code=403)
+        # A path naming a device id must name the box the code was issued for.
+        named = request.match_info.get("device_id")
+        if box is None or (named and named != box.device_id):
+            return self.json({"error": "pair_code_invalid"}, status_code=403)
+        try:
+            await keystore.async_bind_edge_box(box.device_id, api_key)
+        except KeyError:
+            return self.json({"error": "pair_code_invalid"}, status_code=403)
+        _LOGGER.info("Edge box %s bound its key with a pairing code", box.device_id)
+        return replace(box, api_key=api_key, pair_code_hash=None, pair_code_expires_at=None)
 
 
 class EdgeHealthView(_EdgeView):

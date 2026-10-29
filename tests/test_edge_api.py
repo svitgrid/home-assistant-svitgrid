@@ -184,16 +184,180 @@ async def test_missing_api_key_is_401_not_410(view_cls, method, match_info):
         assert _json(resp) == {"error": "unauthorized"}
 
 
+# ── Task 11: the pairing code binds the box's key on first contact ──────
+
+
+async def _me(hass, *, api_key=None, pair_code=None, view_cls=None, method="get", **kwargs):
+    view = (view_cls or edge_api.EdgeMeView)()
+    request = _FakeRequest(hass, api_key=api_key, **kwargs)
+    if pair_code is not None:
+        request.headers["X-Pair-Code"] = pair_code
+    return await getattr(view, method)(request, **request.match_info)
+
+
+async def _bound_keys(keystore) -> dict:
+    state = await keystore.load()
+    return {d: b.api_key for d, b in state.edge_boxes.items()}
+
+
 @pytest.mark.asyncio
-async def test_unknown_key_with_pair_code_is_401_until_task_11():
-    """The pairing-code branch is Task 11; until then a code changes nothing."""
+async def test_matching_code_binds_key_and_is_consumed():
+    ks = _keystore(_box(api_key=None), _box(device_id="EC-2", api_key=None))
+    code = await ks.async_issue_pair_code("EC-2")
+    hass = _hass(ks)
+
+    resp = await _me(hass, api_key="new-key-2", pair_code=code)
+    assert resp.status == 200
+    assert _json(resp)["deviceId"] == "EC-2"
+    assert await _bound_keys(ks) == {"EC-1": None, "EC-2": "new-key-2"}
+    state = await ks.load()
+    assert state.edge_boxes["EC-2"].pair_code_hash is None
+    assert state.edge_boxes["EC-2"].pair_code_expires_at is None
+
+    # Bound: the key alone now works.
+    resp = await _me(hass, api_key="new-key-2")
+    assert resp.status == 200
+    assert _json(resp)["deviceId"] == "EC-2"
+
+    # Single use: the same code with another key binds nothing.
+    resp = await _me(hass, api_key="other-key", pair_code=code)
+    assert resp.status == 403
+    assert _json(resp) == {"error": "pair_code_invalid"}
+    assert await _bound_keys(ks) == {"EC-1": None, "EC-2": "new-key-2"}
+
+
+@pytest.mark.asyncio
+async def test_code_of_another_box_is_refused():
+    """Two boxes switching in the same ten minutes (review focus 1)."""
+    ks = _keystore(_box(api_key=None), _box(device_id="EC-2", api_key=None))
+    code_1 = await ks.async_issue_pair_code("EC-1")
+    await ks.async_issue_pair_code("EC-2")
+    hass = _hass(ks)
+
+    # A box that names itself EC-2 in the path presents EC-1's code.
+    for view_cls, method in (
+        (edge_api.EdgeMqttTokenView, "post"),
+        (edge_api.EdgePairAttemptsView, "post"),
+    ):
+        resp = await _me(
+            hass,
+            api_key="key-of-ec-2",
+            pair_code=code_1,
+            view_cls=view_cls,
+            method=method,
+            match_info={"device_id": "EC-2"},
+        )
+        assert resp.status == 403
+        assert _json(resp) == {"error": "pair_code_invalid"}
+    assert await _bound_keys(ks) == {"EC-1": None, "EC-2": None}
+
+    # A code issued to a box that is already bound is refused too.
+    resp = await _me(hass, api_key="key-of-ec-1", pair_code=code_1)
+    assert resp.status == 200
+    resp = await _me(hass, api_key="key-of-ec-2", pair_code=code_1)
+    assert resp.status == 403
+    assert _json(resp) == {"error": "pair_code_invalid"}
+    assert await _bound_keys(ks) == {"EC-1": "key-of-ec-1", "EC-2": None}
+
+
+@pytest.mark.asyncio
+async def test_bound_key_cannot_be_rebound_by_a_code():
+    ks = _keystore(_box(), _box(device_id="EC-2", api_key=None))
+    code_2 = await ks.async_issue_pair_code("EC-2")
+    hass = _hass(ks)
+
+    resp = await _me(hass, api_key=BOX_KEY, pair_code=code_2)
+    assert resp.status == 403
+    assert _json(resp) == {"error": "pair_code_invalid"}
+    assert await _bound_keys(ks) == {"EC-1": BOX_KEY, "EC-2": None}
+    # The refused code is not consumed: EC-2 still binds with it.
+    state = await ks.load()
+    assert state.edge_boxes["EC-2"].pair_code_hash is not None
+    resp = await _me(hass, api_key="key-of-ec-2", pair_code=code_2)
+    assert resp.status == 200
+    assert _json(resp)["deviceId"] == "EC-2"
+
+
+@pytest.mark.asyncio
+async def test_expired_code_answers_pair_code_expired(monkeypatch):
+    from custom_components.svitgrid import keystore as keystore_mod
+
+    ks = _keystore(_box(api_key=None))
+    code = await ks.async_issue_pair_code("EC-1")
+    later = datetime.now(UTC) + keystore_mod.EDGE_PAIR_CODE_TTL
+    monkeypatch.setattr(keystore_mod, "_utcnow", lambda: later)
+    hass = _hass(ks)
+
+    resp = await _me(hass, api_key="new-key", pair_code=code)
+    assert resp.status == 403
+    assert _json(resp) == {"error": "pair_code_expired"}
+    assert await _bound_keys(ks) == {"EC-1": None}
+
+
+@pytest.mark.asyncio
+async def test_unknown_key_without_code_is_401():
+    ks = _keystore(_box(api_key=None))
+    await ks.async_issue_pair_code("EC-1")
+    hass = _hass(ks)
+    for api_key in (None, "", "unbound"):
+        resp = await _me(hass, api_key=api_key)
+        assert resp.status == 401
+        assert _json(resp) == {"error": "unauthorized"}
+    # A code with no key has nothing to bind.
+    code = await ks.async_issue_pair_code("EC-1")
+    for api_key in (None, ""):
+        resp = await _me(hass, api_key=api_key, pair_code=code)
+        assert resp.status == 401
+        assert _json(resp) == {"error": "unauthorized"}
+    assert await _bound_keys(ks) == {"EC-1": None}
+
+
+@pytest.mark.asyncio
+async def test_unknown_code_answers_pair_code_invalid_never_410():
     hass = _hass(_keystore(_box()))
-    view = edge_api.EdgeMeView()
-    request = _FakeRequest(hass, api_key="unbound")
-    request.headers["X-Pair-Code"] = "ABCDEF"
-    resp = await view.get(request)
-    assert resp.status == 401
-    assert _json(resp) == {"error": "unauthorized"}
+    resp = await _me(hass, api_key="unbound", pair_code="ABCDEF")
+    assert resp.status == 403
+    assert _json(resp) == {"error": "pair_code_invalid"}
+
+
+@pytest.mark.asyncio
+async def test_bound_box_with_stale_header_is_accepted():
+    """A bound box that still sends its spent code after a reboot."""
+    ks = _keystore(_box(api_key=None))
+    code = await ks.async_issue_pair_code("EC-1")
+    hass = _hass(ks)
+    assert (await _me(hass, api_key="new-key", pair_code=code)).status == 200
+
+    resp = await _me(hass, api_key="new-key", pair_code=code)
+    assert resp.status == 200
+    assert _json(resp)["deviceId"] == "EC-1"
+    resp = await _me(hass, api_key="new-key", pair_code="ZZZZZZ")
+    assert resp.status == 200
+    assert await _bound_keys(ks) == {"EC-1": "new-key"}
+
+
+@pytest.mark.asyncio
+async def test_code_on_ingest_binds_too():
+    """A reboot between the `/me` probe and the switch: the first contact is
+    an ingest batch, and it binds and is stored."""
+    ks = _keystore(_box(api_key=None, inverters={"inv-1": _INV_1}))
+    code = await ks.async_issue_pair_code("EC-1")
+    store = _FakeIngestStore()
+    hass = _hass_with_store(ks, store)
+    reading = _reading("inv-1", "2026-10-28T10:00:00.000Z")
+
+    resp = await _me(
+        hass,
+        api_key="new-key",
+        pair_code=code,
+        view_cls=edge_api.EdgeIngestBatchView,
+        method="post",
+        body={"readings": [reading]},
+    )
+    assert resp.status == 200
+    assert _json(resp)["results"] == [{"ok": True, "inverterId": "inv-1"}]
+    assert len(store.appended) == 1
+    assert await _bound_keys(ks) == {"EC-1": "new-key"}
 
 
 @pytest.mark.asyncio
