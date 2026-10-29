@@ -883,8 +883,24 @@ class SvitgridCommandsView(HomeAssistantView):
         if executor is None:
             return self._json_error(404, "unknown_inverter")
 
+        # Only an executor that relays the command to a device which checks
+        # the phone's signature itself gets it; every other executor is
+        # called exactly as before. `type(...) is bool`, because a mock's
+        # attribute is truthy.
+        relays = getattr(executor, "relays_signature", None)
         try:
-            result = await executor.dispatch(signed_command, signed_payload)
+            if type(relays) is bool and relays:
+                result = await executor.dispatch(
+                    signed_command,
+                    signed_payload,
+                    signing={
+                        "signedEventData": signed_event_data,
+                        "signature": signature,
+                        "signingKeyId": signing_key_id,
+                    },
+                )
+            else:
+                result = await executor.dispatch(signed_command, signed_payload)
         except NotImplementedError:
             return self._json_error(422, "unsupported")
         except Exception as exc:  # noqa: BLE001

@@ -209,7 +209,13 @@ class WriteExecutor(BaseExecutor):
     # Generic dispatch
     # ------------------------------------------------------------------
 
-    async def dispatch(self, command_name: str, payload: dict[str, Any]) -> dict[str, Any]:
+    async def dispatch(
+        self,
+        command_name: str,
+        payload: dict[str, Any],
+        *,
+        signing: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Execute *command_name* against the inverter and return the ACK result.
 
         Steps

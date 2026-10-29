@@ -605,3 +605,62 @@ async def test_a_full_word_prior_that_cannot_be_read_writes_nothing():
         await executor.dispatch("set_work_mode", {"workMode": 0})
 
     mock_write.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# dispatch takes the phone's signature as a keyword (edge island, Task 9)
+# ---------------------------------------------------------------------------
+
+_SIGNING = {
+    "signedEventData": {"command": "nope", "payload": {}},
+    "signature": "c2ln",
+    "signingKeyId": "key-1",
+}
+
+
+def _every_executor():
+    """One instance of each executor, built so `nope` is unsupported."""
+    from custom_components.svitgrid.executors.smg_ii import SmgIiExecutor
+    from custom_components.svitgrid.executors.smg_settings_executor import (
+        EybondSmgSettingsExecutor,
+        NoCollectorConnected,
+        SmgSettingsExecutor,
+    )
+    from custom_components.svitgrid.executors.yaml_dispatcher import YamlDispatcher
+    from custom_components.svitgrid.harvest.write_executor import WriteExecutor
+
+    no_collector = SimpleNamespace(session_for=lambda _serial: None)
+    return [
+        (
+            WriteExecutor(object(), SimpleNamespace(spec=_spec_work_mode()), _CFG),
+            NotImplementedError,
+        ),
+        (YamlDispatcher(hass=object(), commands=[], config={}), NotImplementedError),
+        (
+            SmgSettingsExecutor(link=object(), protocol_number=0, nominal_pack_voltage=24),
+            NotImplementedError,
+        ),
+        (
+            EybondSmgSettingsExecutor(hub=no_collector, inverter_serial="S1"),
+            NoCollectorConnected,
+        ),
+        # No dispatch override: BaseExecutor's default.
+        (
+            SmgIiExecutor(hass=object(), hub="hub", slave=1, battery_nominal_voltage=48),
+            NotImplementedError,
+        ),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("index", range(5))
+async def test_dispatch_accepts_signing_keyword(index):
+    executor, expected = _every_executor()[index]
+    # None of them asks SvitgridCommandsView for the signature.
+    assert executor.relays_signature is False
+
+    # The executor fails as it does without the keyword, not with a TypeError.
+    with pytest.raises(expected):
+        await executor.dispatch("nope", {}, signing=_SIGNING)
+    with pytest.raises(expected):
+        await executor.dispatch("nope", {}, signing=None)
