@@ -8,6 +8,14 @@ device keeps its id across boxes and rejoins. A device is stored when it
 joins a box while that box's permit-join window is open (opened by the
 `permit_join` route), and updated by the box's state reports after that.
 
+Its readings are kept here too, as the cloud keeps them under
+`smartDevices/{id}/readings`: a plug's power, voltage, current and energy,
+scaled by its model's profile (`zigbee_device_profiles.json`, vendored from
+the monorepo by `scripts/sync-edge-command-fixtures.sh`), and a sensor's
+temperature, humidity and battery. A 5-minute usage rollup mirrors the
+cloud's `smartUsage_5min`. Home Assistant is one household, so the rollup is
+keyed by slot and box only.
+
 SQLite in `zigbee_devices.db` beside `edge_commands.db`, the
 `edge_command_queue.py` pattern: sync `_*_sync` methods that open, operate and
 close the connection, run in HA's executor pool.
@@ -16,9 +24,13 @@ close the connection, run in HA's executor pool.
 from __future__ import annotations
 
 import asyncio
+import functools
+import json
+import math
 import re
 import sqlite3
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -26,6 +38,9 @@ if TYPE_CHECKING:
 
 # Tracks db_paths whose schema has already been created in this process.
 _INITIALIZED: set[str] = set()
+
+_PROFILES_PATH = Path(__file__).parent / "zigbee_device_profiles.json"
+_FIVE_MIN = timedelta(minutes=5)
 
 # The device fields a state report may set, by the column that holds them.
 _COLUMNS = {
@@ -99,6 +114,35 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             device_id TEXT PRIMARY KEY,
             until     TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS zigbee_socket_readings (
+            zigbee_id TEXT NOT NULL,
+            timestamp TEXT NOT NULL,
+            power     REAL NOT NULL,
+            voltage   REAL NOT NULL,
+            current   REAL NOT NULL,
+            energy    REAL NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_zigbee_socket_readings
+            ON zigbee_socket_readings (zigbee_id, timestamp);
+        CREATE TABLE IF NOT EXISTS zigbee_sensor_readings (
+            zigbee_id   TEXT NOT NULL,
+            captured_at TEXT NOT NULL,
+            received_at TEXT NOT NULL,
+            age_ms      INTEGER NOT NULL,
+            temperature INTEGER,
+            humidity    INTEGER,
+            battery     INTEGER
+        );
+        CREATE INDEX IF NOT EXISTS idx_zigbee_sensor_readings
+            ON zigbee_sensor_readings (zigbee_id, captured_at);
+        CREATE TABLE IF NOT EXISTS zigbee_usage_5min (
+            period_start TEXT NOT NULL,
+            box_id       TEXT NOT NULL,
+            avg_power_w  INTEGER NOT NULL,
+            device_count INTEGER NOT NULL,
+            devices_json TEXT NOT NULL,
+            PRIMARY KEY (period_start, box_id)
+        );
         """
     )
     conn.commit()
@@ -115,6 +159,50 @@ def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
 def _to_columns(fields: dict[str, Any]) -> dict[str, Any]:
     """`fields` with the booleans as SQLite stores them."""
     return {f: int(v) if f in _BOOL_FIELDS and v is not None else v for f, v in fields.items()}
+
+
+@functools.cache
+def load_zigbee_profiles() -> dict[str, Any]:
+    """The vendored `config/zigbeeDeviceProfiles`, by Zigbee model. Read in the
+    executor (`_store_socket_readings_sync`), never on the event loop."""
+    profiles = json.loads(_PROFILES_PATH.read_text())
+    return {k: v for k, v in profiles.items() if isinstance(v, dict)}
+
+
+def resolve_zigbee_profile(
+    profiles: dict[str, Any] | None, model: str | None, manufacturer: str | None
+) -> dict[str, Any] | None:
+    """The profile for one device, with its manufacturer's override applied,
+    as `zigbee-device-profiles.ts` `resolveZigbeeProfile`: one model string can
+    name both a metering and a non-metering relay (#1075)."""
+    if not profiles or not model:
+        return None
+    base = profiles.get(model)
+    if not isinstance(base, dict):
+        return None
+    override = (base.get("manufacturers") or {}).get(manufacturer) if manufacturer else None
+    return {**base, **override} if isinstance(override, dict) else base
+
+
+def _js_round(value: float) -> int:
+    """`Math.round`: halves round up, as the cloud rounds the rollup."""
+    return math.floor(value + 0.5)
+
+
+def _divisor(profile: dict | None, key: str) -> float:
+    """The profile's divisor, or 1 when it has none (or 0), as the cloud's `|| 1`."""
+    value = (profile or {}).get(key)
+    return value if isinstance(value, int | float) and not isinstance(value, bool) and value else 1
+
+
+def _parse_iso(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)
+
+
+def five_min_slot(timestamp: str) -> str:
+    """The start of the timestamp's 5-minute slot (`fiveMinSlotIso`)."""
+    dt = _parse_iso(timestamp)
+    return _iso(dt.replace(minute=dt.minute - dt.minute % 5, second=0, microsecond=0))
 
 
 class ZigbeeDeviceStore:
@@ -219,6 +307,178 @@ class ZigbeeDeviceStore:
         finally:
             conn.close()
 
+    def _store_socket_readings_sync(
+        self, box_id: str, timestamp: str, readings: list[dict], profiles: dict | None
+    ) -> int:
+        """`processSocketReadings` (`socket-readings-ingest.ts`): each reading of
+        a plug the box holds, scaled by its profile, then the box's snapshot in
+        the slot's rollup. A non-metering plug and an unknown address are
+        skipped. Returns how many were stored."""
+        if profiles is None:
+            profiles = load_zigbee_profiles()
+        conn = _connect(self._db_path)
+        try:
+            samples: dict[str, dict] = {}
+            for reading in readings:
+                row = conn.execute(
+                    "SELECT * FROM zigbee_devices WHERE device_id = ? AND addr = ? LIMIT 1",
+                    (box_id, reading["addr"]),
+                ).fetchone()
+                if row is None:
+                    continue
+                device = _row_to_dict(row)
+                model = reading.get("model") or device["model"]
+                profile = resolve_zigbee_profile(profiles, model, device["manufacturer"])
+                if profile is not None and not profile.get("metering"):
+                    continue
+                scaled = {
+                    key: reading[key] / _divisor(profile, f"{key}Divisor")
+                    for key in ("power", "voltage", "current", "energy")
+                }
+                conn.execute(
+                    "INSERT INTO zigbee_socket_readings "
+                    "(zigbee_id, timestamp, power, voltage, current, energy) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (device["id"], timestamp, *scaled.values()),
+                )
+                # A reading proves the plug reachable.
+                update = {"reachable": 1, "unreachable_since": None, "last_seen": _iso(_utcnow())}
+                if reading.get("model") and not device["model"]:
+                    update["model"] = reading["model"]
+                conn.execute(
+                    f"UPDATE zigbee_devices SET {', '.join(f'{c} = ?' for c in update)} "
+                    "WHERE id = ?",
+                    [*update.values(), device["id"]],
+                )
+                samples[device["id"]] = {
+                    "avgPowerW": scaled["power"],
+                    "energyCounterWh": scaled["energy"],
+                }
+            if samples:
+                # Each ingest is a full snapshot of the box's plugs: it
+                # replaces the box's earlier snapshot in the slot.
+                conn.execute(
+                    "INSERT OR REPLACE INTO zigbee_usage_5min "
+                    "(period_start, box_id, avg_power_w, device_count, devices_json) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (
+                        five_min_slot(timestamp),
+                        box_id,
+                        _js_round(sum(s["avgPowerW"] for s in samples.values())),
+                        len(samples),
+                        json.dumps(
+                            {
+                                k: {**v, "avgPowerW": _js_round(v["avgPowerW"])}
+                                for k, v in samples.items()
+                            }
+                        ),
+                    ),
+                )
+            conn.commit()
+            return len(samples)
+        finally:
+            conn.close()
+
+    def _store_sensor_readings_sync(
+        self, box_id: str, readings: list[dict], received_at: datetime
+    ) -> tuple[int, int]:
+        conn = _connect(self._db_path)
+        stored = ignored = 0
+        try:
+            for reading in readings:
+                row = conn.execute(
+                    "SELECT id FROM zigbee_devices WHERE device_id = ? AND addr = ? LIMIT 1",
+                    (box_id, reading["addr"]),
+                ).fetchone()
+                if row is None:
+                    # Never created from a reading: that races pairing and
+                    # resurrects a device the owner removed.
+                    ignored += 1
+                    continue
+                captured_at = received_at - timedelta(milliseconds=reading["ageMs"])
+                conn.execute(
+                    "INSERT INTO zigbee_sensor_readings (zigbee_id, captured_at, received_at, "
+                    "age_ms, temperature, humidity, battery) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        row["id"],
+                        _iso(captured_at),
+                        _iso(received_at),
+                        reading["ageMs"],
+                        reading.get("temperature"),
+                        reading.get("humidity"),
+                        reading.get("battery"),
+                    ),
+                )
+                conn.execute(
+                    "UPDATE zigbee_devices SET last_seen = ? WHERE id = ?",
+                    (_iso(received_at), row["id"]),
+                )
+                stored += 1
+            conn.commit()
+            return stored, ignored
+        finally:
+            conn.close()
+
+    def _socket_readings_sync(self, device_id: str) -> list[dict]:
+        conn = _connect(self._db_path)
+        try:
+            rows = conn.execute(
+                "SELECT timestamp, power, voltage, current, energy FROM zigbee_socket_readings "
+                "WHERE zigbee_id = ? ORDER BY timestamp, rowid",
+                (device_id,),
+            ).fetchall()
+            return [dict(r) for r in rows]
+        finally:
+            conn.close()
+
+    def _sensor_readings_sync(self, device_id: str) -> list[dict]:
+        conn = _connect(self._db_path)
+        try:
+            rows = conn.execute(
+                "SELECT captured_at, received_at, age_ms, temperature, humidity, battery "
+                "FROM zigbee_sensor_readings WHERE zigbee_id = ? ORDER BY captured_at, rowid",
+                (device_id,),
+            ).fetchall()
+            return [
+                {
+                    "capturedAt": r["captured_at"],
+                    "receivedAt": r["received_at"],
+                    "ageMs": r["age_ms"],
+                    "temperature": r["temperature"],
+                    "humidity": r["humidity"],
+                    "battery": r["battery"],
+                }
+                for r in rows
+            ]
+        finally:
+            conn.close()
+
+    def _usage_5min_sync(self, period_start: str) -> dict | None:
+        conn = _connect(self._db_path)
+        try:
+            rows = conn.execute(
+                "SELECT * FROM zigbee_usage_5min WHERE period_start = ? ORDER BY box_id",
+                (period_start,),
+            ).fetchall()
+        finally:
+            conn.close()
+        if not rows:
+            return None
+        devices: dict[str, dict] = {}
+        for r in rows:
+            devices.update(json.loads(r["devices_json"]))
+        return {
+            "avgPowerW": sum(r["avg_power_w"] for r in rows),
+            "deviceCount": sum(r["device_count"] for r in rows),
+            "periodStart": period_start,
+            "periodEnd": _iso(_parse_iso(period_start) + _FIVE_MIN),
+            "boards": {
+                r["box_id"]: {"avgPowerW": r["avg_power_w"], "deviceCount": r["device_count"]}
+                for r in rows
+            },
+            "devices": devices,
+        }
+
     # ── async wrappers ────────────────────────────────────────────────────────
 
     async def _run(self, func, *args):
@@ -264,6 +524,39 @@ class ZigbeeDeviceStore:
         until = _iso(_utcnow() + timedelta(seconds=duration_s))
         await self._run(self._open_permit_join_sync, box_id, until)
         return until
+
+    async def async_store_socket_readings(
+        self, box_id: str, timestamp: str, readings: list[dict], profiles: dict | None = None
+    ) -> int:
+        """Store the box's plug readings taken at `timestamp`, scaled by each
+        plug's profile (the vendored ones unless `profiles` is given), and
+        roll them into the slot. Returns how many were stored."""
+        return await self._run(
+            self._store_socket_readings_sync, box_id, timestamp, readings, profiles
+        )
+
+    async def async_store_sensor_readings(
+        self, box_id: str, readings: list[dict], received_at: datetime | None = None
+    ) -> tuple[int, int]:
+        """Store the box's sensor readings, each captured `ageMs` before
+        `received_at`. Returns (stored, ignored)."""
+        return await self._run(
+            self._store_sensor_readings_sync, box_id, readings, received_at or _utcnow()
+        )
+
+    async def async_socket_readings(self, device_id: str) -> list[dict]:
+        """The plug's stored readings, oldest first."""
+        return await self._run(self._socket_readings_sync, device_id)
+
+    async def async_sensor_readings(self, device_id: str) -> list[dict]:
+        """The sensor's stored readings, oldest first."""
+        return await self._run(self._sensor_readings_sync, device_id)
+
+    async def async_usage_5min(self, period_start: str) -> dict | None:
+        """The slot's usage in `smartUsage_5min`'s shape: each box's latest
+        snapshot under `boards`, their sum at the top, and every plug's
+        sample under `devices`. None for a slot with no metering plug."""
+        return await self._run(self._usage_5min_sync, period_start)
 
     async def async_permit_join_open(self, box_id: str) -> bool:
         """Whether the box's permit-join window is open now."""
