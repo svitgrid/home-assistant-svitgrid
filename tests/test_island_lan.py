@@ -2330,3 +2330,182 @@ async def test_bms_views_need_the_island_key(hass: HomeAssistant, tmp_path):
 
     assert (await BmsPacksView().get(_ZReq(hass, island_key="wrong"))).status == 401
     assert (await BmsReportView().get(_ZReq(hass, island_key=None))).status == 401
+
+
+# ── Battery pack roster and commands over the LAN (edge island plan, Task 45) ─
+
+
+async def _roster_setup(hass, tmp_path):
+    from custom_components.svitgrid.bms_packs import BmsPackStore
+    from custom_components.svitgrid.edge_command_queue import EdgeCommandQueue
+
+    admin = _Admin()
+    await _keystore(hass, admin)
+    entry = _entry(hass)
+    packs = BmsPackStore(str(tmp_path / "bms_packs.db"), None)
+    queue = EdgeCommandQueue(str(tmp_path / "edge_commands.db"), None)
+    _entry_state(hass, entry, queue=queue)["bms_packs"] = packs
+    await _adopt(hass, admin, "EC-1", _inv("inv-1"))
+    await _adopt(hass, admin, "EC-2", _inv("inv-2"))
+    await packs.async_store_report("EC-1", _BMS_REPORT)
+    return admin, packs, queue
+
+
+async def _bms_command(hass, device_id, command, **payload):
+    from custom_components.svitgrid.bms_lan import BmsCommandView
+
+    return await BmsCommandView().post(
+        _ZReq(hass, {"deviceId": device_id, "command": command, "payload": payload})
+    )
+
+
+async def _drain_box(queue, device_id="EC-1") -> list[dict]:
+    rows = []
+    while (row := await queue.async_next_pending(device_id)) is not None:
+        rows.append(row)
+        await queue.async_ack(row["id"], success=True, result=None, rejected=None, reason=None)
+    return rows
+
+
+async def test_adopting_a_pack_sends_bms_sync_with_the_next_generation(
+    hass: HomeAssistant, tmp_path
+):
+    _, _, queue = await _roster_setup(hass, tmp_path)
+
+    resp = await _bms_command(
+        hass, "EC-1", "bms_adopt", packId="c0ffee000004", label="Комора", driver="daly"
+    )
+
+    assert resp.status == 200, _body(resp)
+    [sync] = await _drain_box(queue)
+    assert sync["id"] == _body(resp)["commandId"]
+    assert sync["command"] == "bms_sync"
+    assert sync["signing"] is None
+    payload = sync["payload"]
+    # The box held the cloud's epoch g-7f3a/3; the island's set is the next n
+    # of it, so the H2 does not refuse it as older.
+    assert (payload["generation"], payload["n"]) == ("g-7f3a", 4)
+    assert payload["householdId"] == hass.config_entries.async_entries(DOMAIN)[0].entry_id
+    ids = [p["packId"] for p in payload["packs"]]
+    assert ids == [PACK_ID, "a4c138000002", "c0ffee000004"]
+    adopted = payload["packs"][-1]
+    assert adopted["driver"] == "daly"
+    assert isinstance(adopted["adoptedAt"], int)
+    # Labels stay in Home Assistant (the H2's field is 24 bytes).
+    assert "label" not in adopted
+    # A roster change outlives a box that is offline for a while.
+    created = datetime.fromisoformat(sync["created_at"].replace("Z", "+00:00"))
+    expires = datetime.fromisoformat(sync["expires_at"].replace("Z", "+00:00"))
+    assert (expires - created).total_seconds() == 24 * 3600
+
+    from custom_components.svitgrid.bms_lan import BmsPacksView
+
+    listed = _body(await BmsPacksView().get(_ZReq(hass)))
+    new = next(p for p in listed["packs"] if p["packId"] == "c0ffee000004")
+    assert (new["assignedEdgeId"], new["label"], new["driver"]) == ("EC-1", "Комора", "daly")
+
+    # A second change is the next n again, and supersedes an undelivered sync.
+    await _bms_command(hass, "EC-1", "bms_rename", packId="c0ffee000004", label="Підвал")
+    await _bms_command(hass, "EC-1", "bms_set_driver", packId="c0ffee000004", driver="jk_bd6a")
+    await _bms_command(hass, "EC-1", "bms_move", packId="c0ffee000004", toDeviceId="EC-2")
+    [last] = await _drain_box(queue, "EC-1")
+    assert last["payload"]["n"] == 6
+    assert "c0ffee000004" not in [p["packId"] for p in last["payload"]["packs"]]
+    [moved] = await _drain_box(queue, "EC-2")
+    [pack] = moved["payload"]["packs"]
+    assert (pack["packId"], pack["driver"], pack["driverSource"]) == (
+        "c0ffee000004",
+        "jk_bd6a",
+        "owner",
+    )
+    listed = _body(await BmsPacksView().get(_ZReq(hass)))
+    new = next(p for p in listed["packs"] if p["packId"] == "c0ffee000004")
+    assert (new["assignedEdgeId"], new["label"]) == ("EC-2", "Підвал")
+
+
+async def test_a_pack_another_box_reads_is_not_adopted_twice(hass: HomeAssistant, tmp_path):
+    _, _, queue = await _roster_setup(hass, tmp_path)
+
+    resp = await _bms_command(hass, "EC-2", "bms_adopt", packId=PACK_ID)
+
+    assert resp.status == 409
+    assert _body(resp)["error"] == "PACK_READ_BY_OTHER_BOARD"
+    assert await _drain_box(queue, "EC-2") == []
+
+
+async def test_a_repeated_scan_is_deduplicated(hass: HomeAssistant, tmp_path):
+    _, _, queue = await _roster_setup(hass, tmp_path)
+
+    first = await _bms_command(hass, "EC-1", "bms_scan", durationS=20)
+    second = await _bms_command(hass, "EC-1", "bms_scan", durationS=30)
+    await _bms_command(hass, "EC-1", "bms_read_now")
+    await _bms_command(hass, "EC-1", "bms_read_now")
+    capture = await _bms_command(hass, "EC-1", "bms_capture", packId=PACK_ID)
+
+    assert first.status == second.status == capture.status == 200
+    superseded = await queue.async_get(_body(first)["commandId"])
+    assert (superseded["state"], superseded["reason"]) == ("expired", "superseded")
+    rows = await _drain_box(queue)
+    assert [(r["command"], r["payload"]) for r in rows] == [
+        ("bms_scan", {"durationS": 30}),
+        ("bms_read_now", {}),
+        ("bms_capture", {"packId": PACK_ID}),
+    ]
+
+
+async def test_a_member_cannot_forget_a_pack(hass: HomeAssistant, tmp_path):
+    from custom_components.svitgrid.bms_lan import BmsCommandView
+
+    admin, _, queue = await _roster_setup(hass, tmp_path)
+    member = _Admin()
+
+    unsigned = await _bms_command(hass, "EC-1", "bms_forget", packId=PACK_ID)
+    by_member = await BmsCommandView().post(
+        _ZReq(
+            hass,
+            member.request(
+                "edge_bms_command",
+                deviceId="EC-1",
+                command="bms_forget",
+                payload={"packId": PACK_ID},
+            ),
+        )
+    )
+    assert (unsigned.status, _body(unsigned)) == (403, {"error": "owner_only"})
+    assert by_member.status == 403
+    assert await _drain_box(queue) == []
+
+    by_owner = await BmsCommandView().post(
+        _ZReq(
+            hass,
+            admin.request(
+                "edge_bms_command",
+                deviceId="EC-1",
+                command="bms_forget",
+                payload={"packId": PACK_ID},
+            ),
+        )
+    )
+    assert by_owner.status == 200, _body(by_owner)
+    [sync] = await _drain_box(queue)
+    assert [p["packId"] for p in sync["payload"]["packs"]] == ["a4c138000002"]
+
+
+async def test_bms_commands_answer_no_edge_boxes_before_auth(hass: HomeAssistant, tmp_path):
+    from custom_components.svitgrid.bms_lan import BmsCommandView
+
+    await _bms_setup(hass, tmp_path, adopt=False)
+
+    resp = await BmsCommandView().post(_ZReq(hass, {"deviceId": "EC-1"}, island_key=None))
+    assert (resp.status, _body(resp)) == (404, {"error": "no_edge_boxes"})
+
+
+async def test_the_bms_command_view_is_registered(hass: HomeAssistant):
+    from unittest.mock import MagicMock
+
+    from custom_components.svitgrid.http_views import register_views
+
+    hass.http = MagicMock()
+    register_views(hass, store=MagicMock())
+    urls = {call.args[0].url for call in hass.http.register_view.call_args_list}
+    assert "/api/svitgrid/edge/bms/command" in urls

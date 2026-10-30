@@ -2505,3 +2505,65 @@ async def test_the_day_rollup(tmp_path):
     assert day["iMaxDchg"] == 12500
     assert day["dMax"] == 32
     assert "hourly" not in day
+
+
+# ── Task 45: battery pack roster and commands (svitgrid#1263) ───────────
+
+
+def _hass_with_roster(tmp_path):
+    from custom_components.svitgrid.edge_command_queue import EdgeCommandQueue
+
+    hass, packs = _hass_with_bms(_keystore(_box()), tmp_path)
+    queue = EdgeCommandQueue(str(tmp_path / "edge_commands.db"), None)
+    hass.data[DOMAIN][ENTRY_ID]["edge_queue"] = queue
+    return hass, packs, queue
+
+
+async def _drain(queue, device_id="EC-1") -> list[dict]:
+    rows = []
+    while (row := await queue.async_next_pending(device_id)) is not None:
+        rows.append(row)
+        await queue.async_ack(row["id"], success=True, result=None, rejected=None, reason=None)
+    return rows
+
+
+@pytest.mark.asyncio
+async def test_a_box_behind_the_roster_epoch_gets_bms_sync_again(tmp_path, monkeypatch):
+    from custom_components.svitgrid import bms_roster
+
+    hass, packs, queue = _hass_with_roster(tmp_path)
+    # The box reports the roster the cloud gave it; nothing is sent for a box
+    # whose roster Home Assistant does not manage yet.
+    await _ingest_bms(hass, _bms_report())
+    assert await _drain(queue) == []
+
+    roster = await packs.async_change_roster(
+        "EC-1", lambda ps: [p for p in ps if p["packId"] != _PACK_2]
+    )
+    sent = await bms_roster.async_deliver(packs, queue, ENTRY_ID, "EC-1")
+    [sync] = await _drain(queue)
+    assert sync["id"] == sent
+    assert (roster["generation"], roster["n"]) == ("g-7f3a", 4)
+
+    # The box applied it: converged, nothing more.
+    await _ingest_bms(hass, _bms_report(rosterEpoch={"generation": "g-7f3a", "n": 4}))
+    assert await _drain(queue) == []
+
+    # Still on the old epoch inside the resend window: nothing; after it, the
+    # whole set again.
+    await _ingest_bms(hass, _bms_report())
+    assert await _drain(queue) == []
+    later = bms_roster._now_ms() + bms_roster.SYNC_RESEND_AFTER_MS + 1
+    monkeypatch.setattr(bms_roster, "_now_ms", lambda: later)
+    await _ingest_bms(hass, _bms_report())
+    [again] = await _drain(queue)
+    assert again["command"] == "bms_sync"
+    assert again["signing"] is None
+    assert (again["payload"]["generation"], again["payload"]["n"]) == ("g-7f3a", 4)
+    assert [p["packId"] for p in again["payload"]["packs"]] == [_PACK_1]
+
+    # A box ahead of the roster (a restored Home Assistant) is sent a new
+    # generation, which it accepts whatever its n.
+    await _ingest_bms(hass, _bms_report(rosterEpoch={"generation": "g-7f3a", "n": 9}))
+    [fresh] = await _drain(queue)
+    assert fresh["payload"]["generation"] != "g-7f3a"

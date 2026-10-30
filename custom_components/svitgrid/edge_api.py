@@ -35,7 +35,7 @@ from datetime import UTC, datetime
 from aiohttp import web
 from homeassistant.components.http import HomeAssistantView
 
-from . import edge_reading_pipeline
+from . import bms_roster, edge_reading_pipeline
 from .bms_packs import valid_report as valid_bms_report
 from .const import ADD_TRUSTED_KEY_COMMAND, DOMAIN
 from .keystore import EdgeBoxEntry, KeystoreState
@@ -338,12 +338,11 @@ class EdgeMeView(_EdgeView):
         if isinstance(box, web.Response):
             return box
         hass = request.app["hass"]
-        entries = hass.config_entries.async_entries(DOMAIN)
         return self.json(
             {
                 "executorType": "edge",
                 "deviceId": box.device_id,
-                "householdId": entries[0].entry_id if entries else None,
+                "householdId": _household_id(hass),
             }
         )
 
@@ -523,6 +522,22 @@ async def _store_bms(hass, entry_state: dict, box: EdgeBoxEntry, value) -> None:
         )
     except Exception:  # noqa: BLE001 - battery packs must never fail the ingest
         _LOGGER.warning("Edge box %s: bms report not stored", box.device_id, exc_info=True)
+        return
+    queue = entry_state.get("edge_queue")
+    if queue is None:
+        return
+    try:
+        await bms_roster.async_converge(
+            packs, queue, _household_id(hass), box.device_id, report.get("rosterEpoch")
+        )
+    except Exception:  # noqa: BLE001 - the next report re-drives the roster
+        _LOGGER.warning("Edge box %s: bms roster not sent", box.device_id, exc_info=True)
+
+
+def _household_id(hass) -> str | None:
+    """The id `/api/v3/me` gives the box as its household."""
+    entries = hass.config_entries.async_entries(DOMAIN)
+    return entries[0].entry_id if entries else None
 
 
 class EdgeIngestBatchView(_EdgeView):

@@ -13,7 +13,9 @@ of the cloud. It is kept here as the cloud keeps it:
 - a summary per household-local day, sealed once the day is over
   (`bms-day-summary.ts`, the days of `bmsMonths`), for the battery report.
 
-The desired roster and its commands are not here (plan Task 45).
+It also keeps each box's desired roster, the packs Home Assistant wants it to
+read, with its epoch (`bmsRosters`, `bmsPacks`); `bms_roster.py` sends it to
+the box (plan Task 45).
 
 SQLite in `bms_packs.db` beside `zigbee_devices.db`, the
 `edge_command_queue.py` pattern: sync `_*_sync` methods that open, operate and
@@ -26,6 +28,7 @@ import asyncio
 import json
 import math
 import re
+import secrets
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
@@ -180,6 +183,28 @@ def build_pack_doc(pack: dict) -> dict:
     if result == "ok" and (not pack.get("readWith") or pack.get("readWith") == driver):
         out.pop("suggestedDriver", None)
     return out
+
+
+def new_roster_generation() -> str:
+    """`newRosterGeneration`."""
+    return secrets.token_hex(8)
+
+
+def _desired_of(pack: dict) -> dict:
+    """A reported pack as an entry of the desired roster."""
+    return {
+        "packId": pack["id"],
+        "label": pack.get("label"),
+        "driver": pack.get("driver"),
+        "driverSource": "owner" if pack.get("driverSource") == "owner" else None,
+        "addrType": pack.get("addrType") if pack.get("addrType") in (0, 1) else None,
+        "adoptedAt": pack.get("adoptedAt") if _is_num(pack.get("adoptedAt")) else None,
+    }
+
+
+def _synced(packs: list[dict]) -> list[dict]:
+    """The roster as `bms_sync` carries it: everything but the label."""
+    return [{k: v for k, v in p.items() if k != "label"} for p in packs]
 
 
 def _read_at_ms(pack: dict, received_ms: int) -> int:
@@ -551,6 +576,10 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             box_id     TEXT NOT NULL,
             last_ok_at INTEGER
         );
+        CREATE TABLE IF NOT EXISTS bms_roster (
+            box_id      TEXT PRIMARY KEY,
+            roster_json TEXT NOT NULL
+        );
         """
     )
     conn.commit()
@@ -806,12 +835,114 @@ class BmsPackStore:
             conn.close()
         return {"from": from_date, "to": to_date, "timezone": tz_name or "UTC", "packs": out}
 
+    def _rosters_sync(self) -> dict[str, dict]:
+        conn = _connect(self._db_path)
+        try:
+            rows = conn.execute("SELECT * FROM bms_roster ORDER BY box_id").fetchall()
+            return {r["box_id"]: json.loads(r["roster_json"]) for r in rows}
+        finally:
+            conn.close()
+
+    def _change_rosters_sync(self, change) -> dict[str, dict]:
+        """Apply `change(rosters)` to every box's pack list in one write and
+        bump the epoch of each box whose list changed. A box with no roster
+        yet starts from the packs it last reported, at the next n of the
+        epoch it reported, so the H2 neither drops a pack the cloud gave it
+        nor refuses the set as older. Returns the changed rosters."""
+        conn = _connect(self._db_path)
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            rosters = {
+                r["box_id"]: json.loads(r["roster_json"])
+                for r in conn.execute("SELECT * FROM bms_roster")
+            }
+            states = {
+                r["box_id"]: json.loads(r["state_json"])
+                for r in conn.execute("SELECT * FROM bms_state")
+            }
+            current = {box_id: r["packs"] for box_id, r in rosters.items()}
+            for box_id, state in states.items():
+                current.setdefault(box_id, [_desired_of(p) for p in state.get("packs", [])])
+            wanted = change({k: [dict(p) for p in v] for k, v in current.items()})
+            changed: dict[str, dict] = {}
+            for box_id, packs in wanted.items():
+                if box_id in rosters and packs == rosters[box_id]["packs"]:
+                    continue
+                if box_id not in rosters and packs == current.get(box_id):
+                    continue
+                roster = rosters.get(box_id)
+                if roster is None:
+                    epoch = (states.get(box_id) or {}).get("rosterEpoch")
+                    if isinstance(epoch, dict) and isinstance(epoch.get("generation"), str):
+                        roster = {"generation": epoch["generation"], "n": int(epoch["n"])}
+                    else:
+                        roster = {"generation": new_roster_generation(), "n": 0}
+                    roster["lastSync"] = None
+                # A label is not part of `bms_sync`: changing one alone keeps
+                # the epoch, so the box is not sent a set it already holds.
+                previous = rosters[box_id]["packs"] if box_id in rosters else current.get(box_id)
+                bump = box_id not in rosters or _synced(packs) != _synced(previous or [])
+                roster = {**roster, "n": roster["n"] + (1 if bump else 0), "packs": packs}
+                conn.execute(
+                    "INSERT OR REPLACE INTO bms_roster (box_id, roster_json) VALUES (?, ?)",
+                    (box_id, json.dumps(roster)),
+                )
+                changed[box_id] = roster
+            conn.commit()
+            return changed
+        finally:
+            conn.close()
+
+    def _update_roster_sync(self, box_id: str, fields: dict) -> None:
+        conn = _connect(self._db_path)
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT roster_json FROM bms_roster WHERE box_id = ?", (box_id,)
+            ).fetchone()
+            if row is not None:
+                roster = {**json.loads(row["roster_json"]), **fields}
+                conn.execute(
+                    "UPDATE bms_roster SET roster_json = ? WHERE box_id = ?",
+                    (json.dumps(roster), box_id),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
     # ── async wrappers ────────────────────────────────────────────────────────
 
     async def _run(self, func, *args):
         if self._hass is not None:
             return await self._hass.async_add_executor_job(func, *args)
         return await asyncio.get_running_loop().run_in_executor(None, func, *args)
+
+    async def async_rosters(self) -> dict[str, dict]:
+        """Every box's desired roster, by box id: `{generation, n, packs,
+        lastSync}`. A box Home Assistant never changed has none."""
+        return await self._run(self._rosters_sync)
+
+    async def async_roster(self, box_id: str) -> dict | None:
+        """The box's desired roster, or None while it is not managed here."""
+        return (await self.async_rosters()).get(box_id)
+
+    async def async_change_rosters(self, change) -> dict[str, dict]:
+        """Change several boxes' rosters at once (a move): `change` takes and
+        returns `{box_id: [pack]}`. Returns the rosters that changed."""
+        return await self._run(self._change_rosters_sync, change)
+
+    async def async_change_roster(self, box_id: str, change) -> dict | None:
+        """Change one box's pack list: `change` takes and returns it. Returns
+        the new roster, or None when nothing changed."""
+
+        def one(rosters: dict) -> dict:
+            return {**rosters, box_id: change(rosters.get(box_id, []))}
+
+        return (await self.async_change_rosters(one)).get(box_id)
+
+    async def async_update_roster(self, box_id: str, **fields) -> None:
+        """Store fields beside the box's roster (`lastSync`, a new epoch)."""
+        await self._run(self._update_roster_sync, box_id, fields)
 
     async def async_store_report(
         self,

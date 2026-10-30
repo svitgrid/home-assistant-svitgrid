@@ -14,14 +14,22 @@ key only, shaped like the cloud's:
   (Reports › Батареї, local dates, at most 366 days), with no subscription
   gate on an island (spec 28).
 
+- `POST /api/svitgrid/edge/bms/command`: the app's pack commands (Task 45),
+  island key only (spec 27), except `bms_forget`, which an owner signs. A
+  roster change (adopt, forget, rename, move, driver) changes Home
+  Assistant's desired set and sends it as `bms_sync` (`bms_roster.py`).
+
 While no box is adopted every view answers 404 `{"error":"no_edge_boxes"}`
 before any auth check, so an install without one sees no change.
 """
 
 from __future__ import annotations
 
+import time
+
 from aiohttp import web
 
+from . import bms_roster
 from .bms_packs import (
     HISTORY_MAX_RANGE_MS,
     PACK_ID_RE,
@@ -29,8 +37,21 @@ from .bms_packs import (
     report_range_error,
 )
 from .edge_api import _entry_state as _edge_entry_state
-from .island_lan import _island_key_ok, _json_error
-from .zigbee_lan import _edge_boxes, _no_edge_boxes, _ZigbeeView
+from .edge_api import _household_id
+from .island_lan import _device_id, _island_key_ok, _json_error, signed_lan_request
+from .zigbee_lan import _body, _edge_boxes, _no_edge_boxes, _ZigbeeView
+
+ACTION_BMS_COMMAND = "edge_bms_command"
+
+# Queued for the box as sent; a second pending copy supersedes the first
+# (`DEDUP_EDGE_COMMANDS`, `routes/edge-devices.ts`).
+DEDUP_BMS_COMMANDS = ("bms_scan", "bms_read_now", "bms_refresh")
+BOX_BMS_COMMANDS = (*DEDUP_BMS_COMMANDS, "bms_capture")
+# Change Home Assistant's desired roster, sent to the box as `bms_sync`.
+ROSTER_BMS_COMMANDS = ("bms_adopt", "bms_rename", "bms_move", "bms_set_driver")
+OWNER_BMS_COMMANDS = ("bms_forget",)
+LABEL_MAX = 40
+DRIVER_MAX = 32
 
 
 def _pack_view(pack: dict, box_id: str, last_ok: int | None, roster_error=None) -> dict:
@@ -87,6 +108,21 @@ class BmsPacksView(_BmsView):
         states = await packs.async_states()
         last_ok = await packs.async_last_ok()
         listed: dict[str, dict] = {}
+        # A pack in a roster Home Assistant manages is listed as the roster
+        # holds it, beside the box that should read it.
+        for box_id, roster in (await packs.async_rosters()).items():
+            reported = {p["id"]: p for p in states.get(box_id, {}).get("packs", [])}
+            for entry in roster["packs"]:
+                pack = {
+                    **reported.get(entry["packId"], {}),
+                    "id": entry["packId"],
+                    "label": entry.get("label"),
+                    "driver": entry.get("driver"),
+                    "driverSource": entry.get("driverSource"),
+                    "addrType": entry.get("addrType"),
+                    "adoptedAt": entry.get("adoptedAt"),
+                }
+                listed[entry["packId"]] = _pack_view(pack, box_id, last_ok.get(entry["packId"]))
         for box_id, state in states.items():
             errors = {e.get("packId"): e.get("rosterError") for e in state.get("rosterErrors", [])}
             for pack in state.get("packs", []):
@@ -169,4 +205,227 @@ class BmsReportView(_BmsView):
         return web.json_response(await packs.async_report(from_date, to_date, tz_name))
 
 
-BMS_LAN_VIEWS = (BmsPacksView, BmsPackHistoryView, BmsReportView)
+def _pack_id(payload: dict) -> str | None:
+    pack_id = payload.get("packId")
+    return pack_id if isinstance(pack_id, str) and PACK_ID_RE.match(pack_id) else None
+
+
+def _optional_str(payload: dict, key: str, limit: int) -> tuple[bool, str | None]:
+    """`(ok, value)`: absent or null is `(True, None)`."""
+    value = payload.get(key)
+    if value is None:
+        return True, None
+    if not isinstance(value, str) or not value.strip() or len(value) > limit:
+        return False, None
+    return True, value.strip()
+
+
+class BmsCommandView(_BmsView):
+    """POST /api/svitgrid/edge/bms/command — a battery-pack command for a box.
+
+    `{deviceId, command, payload}` with the island key:
+
+    - `bms_scan {durationS?}`, `bms_read_now`, `bms_refresh` are queued for
+      the box, a newer one superseding a pending one; `bms_capture {packId}`
+      is queued as sent.
+    - `bms_adopt {packId, label?, driver?, addrType?}` adds the pack to the
+      box's set (409 `PACK_READ_BY_OTHER_BOARD`, `BOARD_ROSTER_FULL`);
+      `bms_rename {packId, label}`, `bms_set_driver {packId, driver}` (null
+      lets the box identify it) and `bms_move {packId, toDeviceId}` change it.
+
+    `bms_forget {packId}` is owner-only: a signed request, `signedData`:
+    `{action: "edge_bms_command", deviceId, command: "bms_forget", payload,
+    nonce, ts}`; with the island key alone it is 403 `owner_only`.
+
+    Answers `{success, commandId, status, sent: [{edgeDeviceId, commandId}]}`,
+    `commandId` the box's command (null for a rename, which the box does not
+    hear: labels stay in Home Assistant).
+    """
+
+    url = "/api/svitgrid/edge/bms/command"
+    name = "api:svitgrid:edge:bms:command"
+
+    async def post(self, request) -> web.Response:  # noqa: D102
+        hass = request.app["hass"]
+        boxes = await _edge_boxes(hass)
+        if not boxes:
+            return _no_edge_boxes()
+        body = await _body(request)
+        if body is not None and "signedData" in body:
+            signed, error = await signed_lan_request(request, ACTION_BMS_COMMAND)
+            if error is not None:
+                return error
+            command = signed.get("command")
+            if command not in OWNER_BMS_COMMANDS:
+                return _json_error(400, "bad_request", detail="unknown command")
+            source = signed
+        else:
+            packs = await self._packs(request)
+            if isinstance(packs, web.Response):
+                return packs
+            if body is None:
+                return _json_error(400, "bad_request")
+            command = body.get("command")
+            if command in OWNER_BMS_COMMANDS:
+                return _json_error(403, "owner_only")
+            if command not in BOX_BMS_COMMANDS + ROSTER_BMS_COMMANDS:
+                return _json_error(400, "bad_request", detail="unknown command")
+            source = body
+        box_id = _device_id(source)
+        if box_id is None:
+            return _json_error(400, "bad_request", detail="deviceId must be a string")
+        payload = source.get("payload") if isinstance(source.get("payload"), dict) else {}
+        if box_id not in boxes:
+            return _json_error(404, "unknown_box")
+        packs = (_edge_entry_state(hass) or {}).get("bms_packs")
+        queue = (_edge_entry_state(hass) or {}).get("edge_queue")
+        if packs is None or queue is None:
+            return _json_error(503, "unavailable")
+        if command in BOX_BMS_COMMANDS:
+            return await self._box_command(queue, box_id, command, payload)
+        return await self._roster_command(hass, packs, queue, boxes, box_id, command, payload)
+
+    async def _box_command(self, queue, box_id: str, command: str, payload: dict):
+        if command == "bms_capture":
+            pack_id = _pack_id(payload)
+            if pack_id is None:
+                return _json_error(400, "bad_request", detail="packId")
+            payload = {"packId": pack_id}
+        elif command == "bms_scan":
+            duration = payload.get("durationS")
+            if duration is not None and (type(duration) is not int or duration < 1):
+                return _json_error(400, "bad_request", detail="durationS")
+            payload = {"durationS": duration} if duration is not None else {}
+        else:
+            payload = {}
+        if command in DEDUP_BMS_COMMANDS:
+            await queue.async_supersede(box_id, command)
+        command_id = await queue.async_enqueue(
+            box_id, command, payload, signing=None, inverter_id=None, source="bms"
+        )
+        return _sent({box_id: command_id})
+
+    async def _roster_command(self, hass, packs, queue, boxes, box_id, command, payload):
+        pack_id = _pack_id(payload)
+        if pack_id is None:
+            return _json_error(400, "bad_request", detail="packId")
+        rosters = await packs.async_rosters()
+        states = await packs.async_states()
+        held = {b: [p["packId"] for p in r["packs"]] for b, r in rosters.items()}
+        for b, state in states.items():
+            held.setdefault(b, [p["id"] for p in state.get("packs", [])])
+        owner = next((b for b, ids in held.items() if pack_id in ids), None)
+
+        if command == "bms_adopt":
+            ok_label, label = _optional_str(payload, "label", LABEL_MAX)
+            ok_driver, driver = _optional_str(payload, "driver", DRIVER_MAX)
+            addr_type = payload.get("addrType")
+            if not ok_label or not ok_driver or addr_type not in (None, 0, 1):
+                return _json_error(400, "bad_request", detail="label, driver or addrType")
+            if owner is not None and owner != box_id:
+                return _json_error(409, "PACK_READ_BY_OTHER_BOARD", edgeDeviceId=owner)
+            if owner is None and len(held.get(box_id, [])) >= bms_roster.MAX_PACKS_PER_BOX:
+                return _json_error(409, "BOARD_ROSTER_FULL", maxPacks=bms_roster.MAX_PACKS_PER_BOX)
+            entry = {
+                "packId": pack_id,
+                "label": label,
+                "driver": driver,
+                "driverSource": "owner" if driver else None,
+                "addrType": addr_type,
+                "adoptedAt": int(time.time()),
+            }
+
+            def change(rosters):
+                packs_of_box = [p for p in rosters.get(box_id, []) if p["packId"] != pack_id]
+                kept = next((p for p in rosters.get(box_id, []) if p["packId"] == pack_id), {})
+                adopted = {**entry, "adoptedAt": kept.get("adoptedAt") or entry["adoptedAt"]}
+                return {**rosters, box_id: [*packs_of_box, adopted]}
+
+        else:
+            if owner != box_id:
+                return _json_error(404, "unknown_pack")
+            if command == "bms_forget":
+
+                def change(rosters):
+                    return {
+                        **rosters,
+                        box_id: [p for p in rosters[box_id] if p["packId"] != pack_id],
+                    }
+
+            elif command == "bms_rename":
+                ok, label = _optional_str(payload, "label", LABEL_MAX)
+                if not ok:
+                    return _json_error(400, "bad_request", detail="label")
+
+                def change(rosters):
+                    return {**rosters, box_id: _with(rosters[box_id], pack_id, label=label)}
+
+            elif command == "bms_set_driver":
+                ok, driver = _optional_str(payload, "driver", DRIVER_MAX)
+                if not ok:
+                    return _json_error(400, "bad_request", detail="driver")
+
+                def change(rosters):
+                    return {
+                        **rosters,
+                        box_id: _with(
+                            rosters[box_id],
+                            pack_id,
+                            driver=driver,
+                            driverSource="owner" if driver else None,
+                        ),
+                    }
+
+            else:  # bms_move
+                to_box = payload.get("toDeviceId")
+                if not isinstance(to_box, str) or to_box not in boxes:
+                    return _json_error(404, "unknown_box")
+                if to_box != box_id and (len(held.get(to_box, [])) >= bms_roster.MAX_PACKS_PER_BOX):
+                    return _json_error(
+                        409, "BOARD_ROSTER_FULL", maxPacks=bms_roster.MAX_PACKS_PER_BOX
+                    )
+
+                def change(rosters):
+                    pack = next(p for p in rosters[box_id] if p["packId"] == pack_id)
+                    return {
+                        **rosters,
+                        box_id: [p for p in rosters[box_id] if p["packId"] != pack_id],
+                        to_box: [
+                            *[p for p in rosters.get(to_box, []) if p["packId"] != pack_id],
+                            pack,
+                        ],
+                    }
+
+        changed = await packs.async_change_rosters(change)
+        if command == "bms_rename":
+            # `bms_sync` carries no label: the box has nothing to hear.
+            return _sent({})
+        household = _household_id(hass)
+        sent = {}
+        for changed_box in changed:
+            command_id = await bms_roster.async_deliver(
+                packs, queue, household, changed_box, force=True
+            )
+            if command_id is not None:
+                sent[changed_box] = command_id
+        return _sent(sent)
+
+
+def _with(packs: list[dict], pack_id: str, **fields) -> list[dict]:
+    return [{**p, **fields} if p["packId"] == pack_id else p for p in packs]
+
+
+def _sent(sent: dict[str, str]) -> web.Response:
+    """`{success, commandId, status, sent}`; `commandId` the first box's."""
+    first = next(iter(sent.values()), None)
+    return web.json_response(
+        {
+            "success": True,
+            "commandId": first,
+            "status": "pending" if first is not None else "executed",
+            "sent": [{"edgeDeviceId": b, "commandId": c} for b, c in sent.items()],
+        }
+    )
+
+
+BMS_LAN_VIEWS = (BmsPacksView, BmsPackHistoryView, BmsReportView, BmsCommandView)
