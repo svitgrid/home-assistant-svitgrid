@@ -580,9 +580,18 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             box_id      TEXT PRIMARY KEY,
             roster_json TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS bms_imported (
+            pack_id     TEXT PRIMARY KEY,
+            fields_json TEXT NOT NULL
+        );
         """
     )
     conn.commit()
+
+
+def _imported(conn) -> dict[str, dict]:
+    rows = conn.execute("SELECT * FROM bms_imported").fetchall()
+    return {r["pack_id"]: json.loads(r["fields_json"]) for r in rows}
 
 
 def _samples_between(conn, pack_id: str, from_s: int, to_s: int) -> list[dict]:
@@ -860,9 +869,16 @@ class BmsPackStore:
                 r["box_id"]: json.loads(r["state_json"])
                 for r in conn.execute("SELECT * FROM bms_state")
             }
+            imported = _imported(conn)
             current = {box_id: r["packs"] for box_id, r in rosters.items()}
             for box_id, state in states.items():
-                current.setdefault(box_id, [_desired_of(p) for p in state.get("packs", [])])
+                current.setdefault(
+                    box_id,
+                    [
+                        _desired_of({**p, **imported.get(p["id"], {})})
+                        for p in state.get("packs", [])
+                    ],
+                )
             wanted = change({k: [dict(p) for p in v] for k, v in current.items()})
             changed: dict[str, dict] = {}
             for box_id, packs in wanted.items():
@@ -890,6 +906,27 @@ class BmsPackStore:
                 changed[box_id] = roster
             conn.commit()
             return changed
+        finally:
+            conn.close()
+
+    def _imported_sync(self) -> dict[str, dict]:
+        conn = _connect(self._db_path)
+        try:
+            return _imported(conn)
+        finally:
+            conn.close()
+
+    def _import_sync(self, imported: dict[str, dict]) -> None:
+        conn = _connect(self._db_path)
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            held = _imported(conn)
+            for pack_id, fields in imported.items():
+                conn.execute(
+                    "INSERT OR REPLACE INTO bms_imported (pack_id, fields_json) VALUES (?, ?)",
+                    (pack_id, json.dumps({**held.get(pack_id, {}), **fields})),
+                )
+            conn.commit()
         finally:
             conn.close()
 
@@ -939,6 +976,16 @@ class BmsPackStore:
             return {**rosters, box_id: change(rosters.get(box_id, []))}
 
         return (await self.async_change_rosters(one)).get(box_id)
+
+    async def async_imported(self) -> dict[str, dict]:
+        """The labels and drivers copied in for packs of a box with no roster
+        here (`label`, `driver`, `driverSource`), by pack id."""
+        return await self._run(self._imported_sync)
+
+    async def async_import(self, imported: dict[str, dict]) -> None:
+        """Keep `{pack_id: fields}` copied in from the cloud. They show over
+        what the box reports, and seed the box's roster on its first change."""
+        await self._run(self._import_sync, imported)
 
     async def async_update_roster(self, box_id: str, **fields) -> None:
         """Store fields beside the box's roster (`lastSync`, a new epoch)."""

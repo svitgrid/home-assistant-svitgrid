@@ -14,6 +14,8 @@ key only, shaped like the cloud's:
   (Reports › Батареї, local dates, at most 366 days), with no subscription
   gate on an island (spec 28).
 
+- `POST /api/svitgrid/bms/import`: the labels and drivers the app copies
+  from the cloud after the boxes bind (Task 48), owner-signed.
 - `POST /api/svitgrid/edge/bms/command`: the app's pack commands (Task 45),
   island key only (spec 27), except `bms_forget`, which an owner signs. A
   roster change (adopt, forget, rename, move, driver) changes Home
@@ -42,6 +44,7 @@ from .island_lan import _device_id, _island_key_ok, _json_error, signed_lan_requ
 from .zigbee_lan import _body, _edge_boxes, _no_edge_boxes, _ZigbeeView
 
 ACTION_BMS_COMMAND = "edge_bms_command"
+ACTION_BMS_IMPORT = "bms_import"
 
 # Queued for the box as sent; a second pending copy supersedes the first
 # (`DEDUP_EDGE_COMMANDS`, `routes/edge-devices.ts`).
@@ -107,6 +110,7 @@ class BmsPacksView(_BmsView):
             return packs
         states = await packs.async_states()
         last_ok = await packs.async_last_ok()
+        imported = await packs.async_imported()
         listed: dict[str, dict] = {}
         # A pack in a roster Home Assistant manages is listed as the roster
         # holds it, beside the box that should read it.
@@ -126,6 +130,7 @@ class BmsPacksView(_BmsView):
         for box_id, state in states.items():
             errors = {e.get("packId"): e.get("rosterError") for e in state.get("rosterErrors", [])}
             for pack in state.get("packs", []):
+                pack = {**pack, **imported.get(pack["id"], {})}
                 listed.setdefault(
                     pack["id"],
                     _pack_view(pack, box_id, last_ok.get(pack["id"]), errors.get(pack["id"])),
@@ -411,6 +416,94 @@ class BmsCommandView(_BmsView):
         return _sent(sent)
 
 
+class BmsImportView(_BmsView):
+    """POST /api/svitgrid/bms/import — the labels and drivers of a box's
+    packs, copied from the cloud after the box binds.
+
+    Owner-signed, `signedData`: `{action: "bms_import", deviceId, packs:
+    [{packId, label?, driver?}], nonce, ts}`; with the island key alone it is
+    403 `owner_only`. Answers `{imported: [packId], skipped: [{packId?,
+    reason}]}`: a pack the box has not reported is skipped (`not_reported`),
+    not kept for later, and so is a malformed entry (`bad_request`).
+
+    A box Home Assistant manages has its roster changed (a new driver is sent
+    as `bms_sync`); one it does not keeps no roster, because a box with none
+    is left alone (`bms_roster.async_converge`). Its packs show the copy over
+    what the box reports, and its first roster change starts from it.
+    """
+
+    url = "/api/svitgrid/bms/import"
+    name = "api:svitgrid:bms:import"
+
+    async def post(self, request) -> web.Response:  # noqa: D102
+        hass = request.app["hass"]
+        boxes = await _edge_boxes(hass)
+        if not boxes:
+            return _no_edge_boxes()
+        if not await _island_key_ok(request):
+            return _json_error(401, "unauthorized")
+        body = await _body(request)
+        if body is None or "signedData" not in body:
+            return _json_error(403, "owner_only")
+        signed, error = await signed_lan_request(request, ACTION_BMS_IMPORT)
+        if error is not None:
+            return error
+        box_id = _device_id(signed)
+        if box_id is None or not isinstance(signed.get("packs"), list):
+            return _json_error(400, "bad_request", detail="deviceId and packs")
+        if box_id not in boxes:
+            return _json_error(404, "unknown_box")
+        packs = (_edge_entry_state(hass) or {}).get("bms_packs")
+        queue = (_edge_entry_state(hass) or {}).get("edge_queue")
+        if packs is None or queue is None:
+            return _json_error(503, "unavailable")
+
+        roster = await packs.async_roster(box_id)
+        if roster is not None:
+            held = {p["packId"] for p in roster["packs"]}
+        else:
+            held = {p["id"] for p in ((await packs.async_state(box_id)) or {}).get("packs", [])}
+        wanted: dict[str, dict] = {}
+        skipped: list[dict] = []
+        for item in signed["packs"]:
+            item = item if isinstance(item, dict) else {}
+            pack_id = _pack_id(item)
+            ok_label, label = _optional_str(item, "label", LABEL_MAX)
+            ok_driver, driver = _optional_str(item, "driver", DRIVER_MAX)
+            if pack_id is None or not ok_label or not ok_driver:
+                named = {"packId": item["packId"]} if isinstance(item.get("packId"), str) else {}
+                skipped.append({**named, "reason": "bad_request"})
+                continue
+            if pack_id not in held:
+                skipped.append({"packId": pack_id, "reason": "not_reported"})
+                continue
+            fields = {}
+            if label is not None:
+                fields["label"] = label
+            if driver is not None:
+                fields["driver"] = driver
+                fields["driverSource"] = "owner"
+            wanted[pack_id] = fields
+
+        if roster is None:
+            await packs.async_import(wanted)
+        else:
+
+            def change(rosters):
+                return {
+                    **rosters,
+                    box_id: [{**p, **wanted.get(p["packId"], {})} for p in rosters[box_id]],
+                }
+
+            changed = (await packs.async_change_rosters(change)).get(box_id)
+            # A label is not part of `bms_sync`: only a new driver is sent.
+            if changed is not None and changed["n"] != roster["n"]:
+                await bms_roster.async_deliver(
+                    packs, queue, _household_id(hass), box_id, force=True
+                )
+        return web.json_response({"imported": list(wanted), "skipped": skipped})
+
+
 def _with(packs: list[dict], pack_id: str, **fields) -> list[dict]:
     return [{**p, **fields} if p["packId"] == pack_id else p for p in packs]
 
@@ -428,4 +521,10 @@ def _sent(sent: dict[str, str]) -> web.Response:
     )
 
 
-BMS_LAN_VIEWS = (BmsPacksView, BmsPackHistoryView, BmsReportView, BmsCommandView)
+BMS_LAN_VIEWS = (
+    BmsPacksView,
+    BmsPackHistoryView,
+    BmsReportView,
+    BmsCommandView,
+    BmsImportView,
+)

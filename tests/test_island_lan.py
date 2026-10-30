@@ -14,6 +14,7 @@ to make a test pass.
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -2624,3 +2625,234 @@ async def test_the_bms_command_view_is_registered(hass: HomeAssistant):
     register_views(hass, store=MagicMock())
     urls = {call.args[0].url for call in hass.http.register_view.call_args_list}
     assert "/api/svitgrid/edge/bms/command" in urls
+
+
+# ── Copying the cloud's Zigbee devices and pack labels in (plan Task 48) ──────
+
+
+@pytest.fixture
+def config_dir(hass, tmp_path):
+    """Home Assistant's config folder, where the adopt opens the device store."""
+    hass.config.config_dir = str(tmp_path / "config")
+    os.makedirs(hass.config.config_dir)
+
+
+def _seeded_store(hass):
+    from custom_components.svitgrid.const import READINGS_DB_SUBDIR
+    from custom_components.svitgrid.zigbee_devices import ZigbeeDeviceStore
+
+    folder = hass.config.path(READINGS_DB_SUBDIR)
+    os.makedirs(folder, exist_ok=True)
+    return ZigbeeDeviceStore(os.path.join(folder, "zigbee_devices.db"), None)
+
+
+_CLOUD_PLUG = {
+    "ieee": PLUG_IEEE,
+    "addr": "0x1234",
+    "endpoint": 1,
+    "name": "Бойлер",
+    "room": "Ванна",
+    "caps": 3,
+    "model": "TS011F",
+}
+
+
+async def test_devices_are_in_home_assistant_before_the_box_switches(
+    hass: HomeAssistant, config_dir
+):
+    admin = _Admin()
+    await _keystore(hass, admin)
+    _entry(hass)
+
+    resp = await _adopt(hass, admin, "EC-1", _inv("inv-1"), zigbeeDevices=[_CLOUD_PLUG])
+
+    assert resp.status == 200, _body(resp)
+    assert _body(resp)["zigbeeSkipped"] == []
+    [device] = await _seeded_store(hass).async_list("EC-1")
+    assert device["id"] == PLUG_ID
+    assert (device["ieee"], device["addr"], device["endpoint"]) == (PLUG_IEEE, "0x1234", 1)
+    assert (device["name"], device["room"], device["caps"], device["model"]) == (
+        "Бойлер",
+        "Ванна",
+        3,
+        "TS011F",
+    )
+
+
+async def test_a_seeded_device_rejoining_outside_a_window_is_not_kicked(
+    hass: HomeAssistant, tmp_path, config_dir
+):
+    from custom_components.svitgrid.edge_api import EdgeZigbeeDeviceJoinedView
+    from custom_components.svitgrid.edge_command_queue import EdgeCommandQueue
+
+    admin = _Admin()
+    ks = await _keystore(hass, admin)
+    entry = _entry(hass)
+    await _adopt(hass, admin, "EC-1", _inv("inv-1"), zigbeeDevices=[_CLOUD_PLUG])
+    await ks.async_bind_edge_box("EC-1", "box-api-key")
+    queue = EdgeCommandQueue(str(tmp_path / "edge_commands.db"), None)
+    _entry_state(hass, entry, queue=queue)["zigbee_devices"] = _seeded_store(hass)
+
+    req = _Req(hass, {"addr": "0x9999", "ieee": PLUG_IEEE, "endpoint": 1}, island_key=None)
+    req.headers = {"X-API-Key": "box-api-key"}
+    resp = await EdgeZigbeeDeviceJoinedView().post(req)
+
+    assert resp.status == 200, resp.body
+    assert await queue.async_pending("EC-1", "remove_device") == []
+
+
+async def test_an_adopt_without_zigbee_devices_is_unchanged(hass: HomeAssistant, config_dir):
+    admin = _Admin()
+    await _keystore(hass, admin)
+    _entry(hass)
+
+    resp = await _adopt(hass, admin, "EC-1", _inv("inv-1"))
+
+    assert resp.status == 200
+    assert set(_body(resp)) == {"ok", "pairCode", "expiresAt"}
+    assert await _seeded_store(hass).async_list() == []
+
+
+async def test_a_retried_adopt_does_not_duplicate_a_device(hass: HomeAssistant, config_dir):
+    admin = _Admin()
+    await _keystore(hass, admin)
+    _entry(hass)
+
+    await _adopt(hass, admin, "EC-1", _inv("inv-1"), zigbeeDevices=[_CLOUD_PLUG])
+    resp = await _adopt(
+        hass, admin, "EC-1", _inv("inv-1"), zigbeeDevices=[{**_CLOUD_PLUG, "name": "Бойлер 2"}]
+    )
+
+    assert resp.status == 200, _body(resp)
+    [device] = await _seeded_store(hass).async_list()
+    assert (device["deviceId"], device["name"]) == ("EC-1", "Бойлер 2")
+
+
+async def test_malformed_zigbee_devices_are_skipped_and_named(hass: HomeAssistant, config_dir):
+    admin = _Admin()
+    await _keystore(hass, admin)
+    _entry(hass)
+
+    resp = await _adopt(
+        hass,
+        admin,
+        "EC-1",
+        _inv("inv-1"),
+        zigbeeDevices=[{"ieee": "00:11", "addr": 7}, "plug", _CLOUD_PLUG],
+    )
+
+    assert resp.status == 200, _body(resp)
+    assert _body(resp)["zigbeeSkipped"] == [{"index": 0, "ieee": "00:11"}, {"index": 1}]
+    assert [d["id"] for d in await _seeded_store(hass).async_list("EC-1")] == [PLUG_ID]
+
+
+async def _bms_import(hass, signer, device_id, packs, *, signed=True, **req):
+    from custom_components.svitgrid.bms_lan import BmsImportView
+
+    body = {"deviceId": device_id, "packs": packs}
+    if signed:
+        body = signer.request("bms_import", **body)
+    return await BmsImportView().post(_ZReq(hass, body, **req))
+
+
+async def test_bms_import_sets_label_and_driver(hass: HomeAssistant, tmp_path):
+    from custom_components.svitgrid.bms_lan import BmsPacksView
+
+    admin, _, queue = await _roster_setup(hass, tmp_path)
+
+    resp = await _bms_import(
+        hass,
+        admin,
+        "EC-1",
+        [
+            {"packId": "a4c138000002", "label": "Підвал", "driver": "daly"},
+            {"packId": "c0ffee000009", "label": "Ще не бачив"},
+        ],
+    )
+
+    assert resp.status == 200, _body(resp)
+    assert _body(resp) == {
+        "imported": ["a4c138000002"],
+        "skipped": [{"packId": "c0ffee000009", "reason": "not_reported"}],
+    }
+    listed = _body(await BmsPacksView().get(_ZReq(hass)))
+    pack = next(p for p in listed["packs"] if p["packId"] == "a4c138000002")
+    assert (pack["label"], pack["driver"], pack["driverSource"]) == ("Підвал", "daly", "owner")
+    # The box already reads its packs: an import sends it nothing.
+    assert await _drain_box(queue) == []
+
+    # The first roster change keeps what was imported.
+    await _bms_command(hass, "EC-1", "bms_adopt", packId="c0ffee000004")
+    [sync] = await _drain_box(queue)
+    imported = next(p for p in sync["payload"]["packs"] if p["packId"] == "a4c138000002")
+    assert (imported["driver"], imported["driverSource"]) == ("daly", "owner")
+    listed = _body(await BmsPacksView().get(_ZReq(hass)))
+    pack = next(p for p in listed["packs"] if p["packId"] == "a4c138000002")
+    assert pack["label"] == "Підвал"
+
+
+async def test_bms_import_never_creates_a_roster(hass: HomeAssistant, tmp_path):
+    from custom_components.svitgrid import bms_roster
+
+    admin, packs, queue = await _roster_setup(hass, tmp_path)
+
+    resp = await _bms_import(hass, admin, "EC-1", [{"packId": PACK_ID, "label": "Комора"}])
+
+    assert resp.status == 200, _body(resp)
+    assert await packs.async_rosters() == {}
+    # So the box's reports still leave it alone.
+    epoch = {"generation": "g-old", "n": 1}
+    assert await bms_roster.async_converge(packs, queue, None, "EC-1", epoch) is None
+
+
+async def test_bms_import_on_a_managed_box_changes_its_roster(hass: HomeAssistant, tmp_path):
+    admin, packs, queue = await _roster_setup(hass, tmp_path)
+    await _bms_command(hass, "EC-1", "bms_adopt", packId="c0ffee000004")
+    await _drain_box(queue)
+
+    resp = await _bms_import(
+        hass, admin, "EC-1", [{"packId": "c0ffee000004", "label": "Комора", "driver": "daly"}]
+    )
+
+    assert _body(resp)["imported"] == ["c0ffee000004"]
+    roster = await packs.async_roster("EC-1")
+    entry = next(p for p in roster["packs"] if p["packId"] == "c0ffee000004")
+    assert (entry["label"], entry["driver"], entry["driverSource"]) == ("Комора", "daly", "owner")
+    [sync] = await _drain_box(queue)
+    assert sync["payload"]["n"] == roster["n"]
+
+
+async def test_bms_import_refuses_a_viewer(hass: HomeAssistant, tmp_path):
+    admin, packs, _ = await _roster_setup(hass, tmp_path)
+
+    unsigned = await _bms_import(hass, admin, "EC-1", [{"packId": PACK_ID}], signed=False)
+    no_key = await _bms_import(hass, admin, "EC-1", [{"packId": PACK_ID}], island_key=None)
+    stranger = await _bms_import(hass, _Admin(), "EC-1", [{"packId": PACK_ID, "label": "x"}])
+
+    assert (unsigned.status, _body(unsigned)["error"]) == (403, "owner_only")
+    assert no_key.status == 401
+    assert (stranger.status, _body(stranger)["error"]) == (403, "signature_invalid")
+    listed = (await packs.async_state("EC-1"))["packs"]
+    assert next(p for p in listed if p["id"] == PACK_ID)["label"] == "Гараж"
+
+
+async def test_bms_import_without_an_adopted_box_is_404(hass: HomeAssistant, tmp_path):
+    admin = _Admin()
+    await _bms_setup(hass, tmp_path, adopt=False)
+
+    resp = await _bms_import(hass, admin, "EC-1", [], island_key=None)
+
+    assert (resp.status, _body(resp)["error"]) == (404, "no_edge_boxes")
+
+
+async def test_bms_import_of_labels_alone_sends_a_managed_box_nothing(
+    hass: HomeAssistant, tmp_path
+):
+    admin, packs, queue = await _roster_setup(hass, tmp_path)
+    await _bms_command(hass, "EC-1", "bms_adopt", packId="c0ffee000004")
+    await _drain_box(queue)
+
+    resp = await _bms_import(hass, admin, "EC-1", [{"packId": "c0ffee000004", "label": "Комора"}])
+
+    assert _body(resp)["imported"] == ["c0ffee000004"]
+    assert await _drain_box(queue) == []
