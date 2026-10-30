@@ -131,10 +131,12 @@ class BotApi:
             return SendResult.OK
         if status == 429:
             hint = (body.get("parameters") or {}).get("retry_after")
-            self.retry_after_s = hint if isinstance(hint, int) else None
+            self.retry_after_s = hint if type(hint) is int and hint > 0 else None
             return SendResult.RETRY
         if status >= 500:
             return SendResult.RETRY
+        if status in (401, 404):
+            raise InvalidToken("Telegram rejected the bot token")
         if status == 403:
             return SendResult.BLOCKED
         if status == 400 and "chat not found" in str(body.get("description", "")).lower():

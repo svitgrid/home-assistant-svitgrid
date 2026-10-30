@@ -173,3 +173,27 @@ async def test_token_never_in_exception_text(api, aioclient_mock):
     with pytest.raises(InvalidToken) as err2:
         await api.get_me()
     assert TOKEN not in json.dumps(str(err2.value))
+
+
+@pytest.mark.parametrize("status", [401, 404])
+async def test_send_invalid_token_raises(api, aioclient_mock, status):
+    aioclient_mock.post(f"{BASE}/sendMessage", status=status, json={"ok": False})
+    with pytest.raises(InvalidToken) as err:
+        await api.send(42, "hi", None)
+    assert TOKEN not in str(err.value)
+    assert TOKEN not in repr(err.value)
+
+
+async def test_send_429_without_parameters_has_no_retry_after(api, aioclient_mock):
+    aioclient_mock.post(f"{BASE}/sendMessage", status=429, json={"ok": False})
+    assert await api.send(42, "hi", None) is SendResult.RETRY
+    assert api.retry_after_s is None
+
+
+@pytest.mark.parametrize("hint", [True, 0, -3])
+async def test_send_429_ignores_bad_retry_after(api, aioclient_mock, hint):
+    aioclient_mock.post(
+        f"{BASE}/sendMessage", status=429, json={"parameters": {"retry_after": hint}}
+    )
+    assert await api.send(42, "hi", None) is SendResult.RETRY
+    assert api.retry_after_s is None
