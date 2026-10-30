@@ -598,7 +598,11 @@ class SvitgridPairLocalView(HomeAssistantView):
         # A phone joining an existing station brings no station with it.
         joining = bool(hass.config_entries.async_entries(DOMAIN))
         inverters: list = []
-        if not joining:
+        # An edge move (svitgrid#1223) brings a station whose inverters an
+        # edge box reads: they arrive through /edge/adopt, and Home Assistant
+        # must not start reading them itself, so the claim carries none.
+        edge_move = body.get("edgeMove") is True and not body.get("inverters")
+        if not joining and not edge_move:
             raw_inverters = body.get("inverters")
             if isinstance(raw_inverters, list) and len(raw_inverters) > MAX_INVERTERS:
                 return _json_error(422, "too_many_inverters", maxInverters=MAX_INVERTERS)
@@ -619,6 +623,7 @@ class SvitgridPairLocalView(HomeAssistantView):
             preset_id=identity["preset_id"],
             inverters=inverters,
             paired_at=_utc_now_iso(),
+            edge_move=edge_move,
         )
         # The awaits above gave a cloud claim, a closed LAN half or another
         # candidate a chance to land; request_approval settles it.

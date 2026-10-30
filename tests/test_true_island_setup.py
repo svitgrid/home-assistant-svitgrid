@@ -422,3 +422,59 @@ async def test_after_a_reload_the_adopted_box_has_a_queue_and_an_executor(
     assert isinstance(executor, EdgeBoxExecutor)
     assert executor._queue is state["edge_queue"]
     m["harvest"].assert_not_called()
+
+
+def _edge_move_entry() -> MockConfigEntry:
+    """The local entry an edge move's pairing creates (svitgrid#1223): no
+    inverters of its own, because the boxes read them."""
+    priv, pub = generate_keypair()
+    return MockConfigEntry(
+        domain=DOMAIN,
+        version=2,
+        title="Дім",
+        data={
+            "local_only": True,
+            "cloud_ingest_enabled": False,
+            "edge_move": True,
+            "signing_key_id": "ha-local01",
+            "private_key_pem": serialize_private_key(priv),
+            "public_key_hex": pub,
+            "trusted_keys": [],
+            "inverters": [],
+        },
+        entry_id="e-edge",
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_edge_move_entry_without_a_box_starts_its_store_and_views(
+    hass, enable_custom_integrations
+):
+    """Bench 2026-10-30: the entry set up with 0 inverters, so nothing
+    registered the views and the app's /edge/adopt got Home Assistant's 404."""
+    await _seed_keystore(hass)
+    entry = _edge_move_entry()
+    await _setup(hass, entry)
+
+    assert hass.data[DOMAIN].get("_views_registered") is True
+    assert hass.data[DOMAIN][entry.entry_id]["store"] is not None
+
+
+@pytest.mark.asyncio
+async def test_an_edge_move_entry_reads_its_boxes_inverters_and_keeps_their_readings(
+    hass, enable_custom_integrations
+):
+    from custom_components.svitgrid.executors.edge_box import EdgeBoxExecutor
+    from custom_components.svitgrid.reading_store import ReadingStore
+
+    ks = await _seed_keystore(hass)
+    await _adopt_box(ks, "EC-1", "inv-edge-1")
+    entry = _edge_move_entry()
+    with patch.object(ReadingStore, "prune_inverters_not_in", AsyncMock(return_value=0)) as prune:
+        _, m = await _setup(hass, entry)
+
+    state = hass.data[DOMAIN][entry.entry_id]
+    assert isinstance(state["executors_by_inverter"]["inv-edge-1"], EdgeBoxExecutor)
+    # A prune that did not know the box's inverter would delete its readings.
+    assert "inv-edge-1" in prune.call_args.args[0]
+    assert m["harvest"].call_count == 0

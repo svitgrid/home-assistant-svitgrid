@@ -852,7 +852,7 @@ def test_config_hash_is_stable_for_same_inverters():
 async def test_sync_settings_inflates_a_gzip_body():
     """The box gzips every body of 256 bytes or more
     (`HTTP_WORKER_COMPRESS_MIN_BYTES`), so every Deye settings body arrives
-    gzipped; aiohttp does not inflate a request body by itself."""
+    gzipped. A body that still carries the gzip bytes is inflated here."""
     import gzip
     import json
 
@@ -876,6 +876,35 @@ async def test_sync_settings_inflates_a_gzip_body():
 
     request.read = _read
     request.json = _no_json
+    resp = await edge_api.EdgeSyncSettingsView().post(request)
+    assert _json(resp) == {"ok": True}
+    assert store.snapshots["inv-1"]["registers"] == list(range(77))
+
+
+@pytest.mark.asyncio
+async def test_a_gzip_body_aiohttp_already_inflated_is_read_as_json():
+    """Bench 2026-10-30: Home Assistant's aiohttp inflates a gzip request
+    body itself (`auto_decompress`) and keeps the `Content-Encoding: gzip`
+    header, so the view reads plain JSON under a gzip header. Inflating it
+    again failed, and every reading the box sent got 400."""
+    import json
+
+    store = _FakeReadingStore()
+    hass = _hass_with_store(_keystore(_box(inverters={"inv-1": _INV_1})), store)
+    body = {
+        "inverterId": "inv-1",
+        "modelId": "deye_sg04lp3",
+        "startRegister": 115,
+        "registers": list(range(77)),
+    }
+    request = _FakeRequest(hass, api_key=BOX_KEY)
+    request.headers["Content-Encoding"] = "gzip"
+    raw = json.dumps(body).encode()
+
+    async def _read():
+        return raw
+
+    request.read = _read
     resp = await edge_api.EdgeSyncSettingsView().post(request)
     assert _json(resp) == {"ok": True}
     assert store.snapshots["inv-1"]["registers"] == list(range(77))
