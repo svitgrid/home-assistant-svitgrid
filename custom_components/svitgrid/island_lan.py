@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from collections import OrderedDict
 from collections.abc import Mapping
@@ -56,6 +57,7 @@ from .const import (
     ADD_TRUSTED_KEY_COMMAND,
     CONF_LOCAL_ONLY,
     DOMAIN,
+    READINGS_DB_SUBDIR,
     REVOKE_TRUSTED_KEY_COMMAND,
 )
 from .edge_api import EDGE_BOX_LOCK, edge_refusals
@@ -66,6 +68,7 @@ from .island_auth import island_key_present_and_valid
 from .keystore import EdgeBoxEntry, LastAdminKey
 from .settings_sync import find_edge_settings_snapshot
 from .signing import compute_key_id, public_key_from_hex
+from .zigbee_devices import ZigbeeDeviceStore, device_id_for_ieee
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -568,6 +571,68 @@ def _adopt_inverters(raw) -> list[dict] | None:
     return inverters
 
 
+def _adopt_zigbee_devices(raw) -> tuple[list[dict], list[dict]]:
+    """The adopt body's Zigbee devices, `(devices, skipped)`: an entry needs a
+    string `ieee` and `addr`; `endpoint` (1), `caps`, `name`, `room` and
+    `model` are optional. A malformed entry is skipped and named by its
+    index (and `ieee`, when it has one), never failing the adopt."""
+    if not isinstance(raw, list):
+        return [], []
+    devices: list[dict] = []
+    skipped: list[dict] = []
+    for index, item in enumerate(raw):
+        device = _adopt_zigbee_device(item)
+        if device is not None:
+            devices.append(device)
+            continue
+        named = {"index": index}
+        if isinstance(item, dict) and isinstance(item.get("ieee"), str):
+            named["ieee"] = item["ieee"]
+        skipped.append(named)
+    return devices, skipped
+
+
+def _adopt_zigbee_device(item) -> dict | None:
+    if not isinstance(item, dict):
+        return None
+    ieee, addr, endpoint = item.get("ieee"), item.get("addr"), item.get("endpoint", 1)
+    if not isinstance(ieee, str) or device_id_for_ieee(ieee) == "zb-":
+        return None
+    if not isinstance(addr, str) or not addr:
+        return None
+    if type(endpoint) is not int or not 0 <= endpoint <= 255:
+        return None
+    caps = item.get("caps")
+    if caps is not None and (type(caps) is not int or not 0 <= caps <= 255):
+        return None
+    device = {"ieee": ieee, "addr": addr, "endpoint": endpoint, "caps": caps}
+    for key in ("name", "room", "model"):
+        value = item.get(key)
+        if value is not None and not isinstance(value, str):
+            return None
+        device[key] = value
+    return device
+
+
+async def _seed_zigbee_devices(hass, box_id: str, devices: list[dict]) -> None:
+    """Store the box's Zigbee devices before it switches, so one that rejoins
+    outside a pairing window is known, not kicked off the mesh. No box may be
+    adopted yet, so the store is opened on its path, the file the reload after
+    the adopt opens. A device Home Assistant holds is updated and moved to
+    this box, so a retried adopt duplicates nothing."""
+    folder = hass.config.path(READINGS_DB_SUBDIR)
+    await hass.async_add_executor_job(lambda: os.makedirs(folder, exist_ok=True))
+    store = ZigbeeDeviceStore(os.path.join(folder, "zigbee_devices.db"), hass=hass)
+    for device in devices:
+        known = await store.async_get(device_id_for_ieee(device["ieee"]))
+        if known is None:
+            known = await store.async_add(
+                box_id, device["ieee"], device["addr"], device["endpoint"]
+            )
+        fields = {k: v for k, v in device.items() if v is not None and k != "ieee"}
+        await store.async_update(known["id"], {**fields, "deviceId": box_id})
+
+
 def _edge_entry_states(hass) -> list[dict]:
     """Every config entry's state that holds an edge command queue."""
     return [
@@ -607,12 +672,18 @@ class SvitgridEdgeAdoptView(HomeAssistantView):
     """POST /api/svitgrid/edge/adopt — adopt one edge box and its inverters.
 
     `signedData`: `{action: "edge_adopt", deviceId, inverters: [{inverterId,
-    modelId, ...}], pollIntervalMs?, nonce, ts}`. The box is stored unbound,
+    modelId, ...}], pollIntervalMs?, zigbeeDevices?, nonce, ts}`. The box is
+    stored unbound,
     with a fresh pairing code, which this answer carries in clear and nothing
     else ever does: `{ok, pairCode, expiresAt}`. Adopting the same box again
     replaces its inverters, drops its binding and issues a new code, which is
     the app's retry after `pair_code_expired`. An inverter another box holds
     is 409 `inverter_held_by_other_box`.
+
+    `zigbeeDevices` (`[{ieee, addr, endpoint, name, room, caps, model}]`, the
+    devices the box holds from the cloud) are stored under the box before
+    the answer, and the answer adds `zigbeeSkipped`: the malformed entries,
+    each `{index, ieee?}`.
     """
 
     url = "/api/svitgrid/edge/adopt"
@@ -636,6 +707,7 @@ class SvitgridEdgeAdoptView(HomeAssistantView):
         if keystore is None:
             return _json_error(503, "unavailable")
         inverter_ids = [i["inverterId"] for i in inverters]
+        zigbee_devices, zigbee_skipped = _adopt_zigbee_devices(signed.get("zigbeeDevices"))
         async with EDGE_BOX_LOCK:
             state = await keystore.load()
             if state is None:
@@ -646,6 +718,8 @@ class SvitgridEdgeAdoptView(HomeAssistantView):
                 held = set(other.inverter_ids) | set(other.inverters)
                 if held.intersection(inverter_ids):
                     return _json_error(409, "inverter_held_by_other_box")
+            if zigbee_devices:
+                await _seed_zigbee_devices(hass, device_id, zigbee_devices)
             previous = state.edge_boxes.get(device_id)
             await keystore.async_add_edge_box(
                 EdgeBoxEntry(
@@ -668,9 +742,10 @@ class SvitgridEdgeAdoptView(HomeAssistantView):
             "Edge box %s adopted over the LAN with %d inverter(s)", device_id, len(inverters)
         )
         _schedule_edge_reload(hass)
-        return web.json_response(
-            {"ok": True, "pairCode": code, "expiresAt": _wire_time(expires_at)}
-        )
+        answer = {"ok": True, "pairCode": code, "expiresAt": _wire_time(expires_at)}
+        if "zigbeeDevices" in signed:
+            answer["zigbeeSkipped"] = zigbee_skipped
+        return web.json_response(answer)
 
 
 class SvitgridEdgeForgetView(HomeAssistantView):
