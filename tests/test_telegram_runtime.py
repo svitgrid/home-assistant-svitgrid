@@ -88,7 +88,10 @@ def _chat(state, device_id, chat_id, *, enabled=True, language="uk"):
 
 @pytest.fixture
 async def setup(hass):
-    MockConfigEntry(domain=DOMAIN, title="Дача", data={"household_id": "hh1"}).add_to_hass(hass)
+    # A full island: the cloud copy is off, so the station sends.
+    MockConfigEntry(
+        domain=DOMAIN, title="Дача", data={"household_id": "hh1", "cloud_ingest_enabled": False}
+    ).add_to_hass(hass)
     state = await tv.telegram_state(hass)
     await state.set_bot(TOKEN, "my_bot")
     api = FakeApi()
@@ -539,5 +542,49 @@ async def test_logs_carry_no_token_text_or_chat_id(setup, caplog):
     api.updates = [[_update(1, f"/start {code}", chat_id=765432)]]
     rt.wake()
     await _until(lambda: state.chat_for("phone-3") is not None)
+    # The test harness's mock storage logs every write in full; Home
+    # Assistant's real Store logs only the key and the path.
+    text = "\n".join(
+        r.getMessage()
+        for r in caplog.records
+        if not r.name.startswith("pytest_homeassistant_custom_component")
+    )
     for secret in (TOKEN, "987654", "876543", "765432", code, "Дача"):
-        assert secret not in caplog.text
+        assert secret not in text
+
+
+async def test_queued_alert_is_dropped_when_the_cloud_copy_goes_on(setup, hass):
+    """Decision 8: once the cloud copy is on, the cloud sends this household's
+    alerts, so one still queued here would arrive twice."""
+    rt, state, api, clock, _ = setup
+    _chat(state, "phone-1", 11)
+    await _outage(rt)  # not started: queued, not sent
+    assert len(state.queue()) == 1
+    entry = hass.config_entries.async_entries(DOMAIN)[0]
+    hass.config_entries.async_update_entry(entry, data={**entry.data, "cloud_ingest_enabled": True})
+    await rt.start()
+    await _settle(rt)
+    assert api.sent == []
+    assert state.queue() == []
+    assert "hh1" not in state.detector().get("households", {})
+
+
+async def test_drop_households_removes_their_queue_and_detector_state(setup):
+    rt, state, api, clock, _ = setup
+    _chat(state, "phone-1", 11)
+    await _outage(rt, "hh1")
+    await _outage(rt, "hh2")
+    await rt.drop_households({"hh1"})
+    assert [e["householdId"] for e in state.queue()] == ["hh2"]
+    assert list(state.detector()["households"]) == ["hh2"]
+
+
+async def test_a_queued_outage_is_written_at_once(setup, hass_storage):
+    """HA does not unload entries on shutdown, so a delayed save can be lost
+    to a power cut and the outage told again after the restart."""
+    rt, state, api, clock, _ = setup
+    _chat(state, "phone-1", 11)
+    await _outage(rt)  # the clock never moves, so no delayed save has run
+    saved = hass_storage["svitgrid_telegram"]["data"]
+    assert [e["kind"] for e in saved["queue"]] == ["outage"]
+    assert saved["detector"]["households"]["hh1"]["out"] is True

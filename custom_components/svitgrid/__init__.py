@@ -142,8 +142,10 @@ async def _start_telegram(hass: HomeAssistant, entry: ConfigEntry, store) -> Non
                 lambda: aiohttp_client.async_get_clientsession(hass),
                 lambda: _telegram_now(),
             )
-            domain["telegram"] = runtime
             await runtime.start()
+            # Only a started runtime is kept, so a failed start is retried
+            # at the next setup.
+            domain["telegram"] = runtime
         if store is not None:
             entry.async_on_unload(
                 store.add_reading_listener(lambda reading: _feed_telegram(hass, entry, reading))

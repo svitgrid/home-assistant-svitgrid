@@ -22,7 +22,7 @@ from custom_components.svitgrid.const import DOMAIN
 from custom_components.svitgrid.island_lan import SvitgridIslandLeaveView
 from custom_components.svitgrid.keystore import EdgeBoxEntry, SvitgridKeystore
 from custom_components.svitgrid.telegram import views as tv
-from custom_components.svitgrid.telegram.runtime import household_key
+from custom_components.svitgrid.telegram.runtime import TelegramRuntime, household_key
 from custom_components.svitgrid.telegram.state import Chat
 from tests.test_edge_api import _CASE_0_PAYLOAD, _INV_1
 from tests.test_island_lan import NOW_MS, _Admin, _Req
@@ -328,6 +328,7 @@ async def test_leave_keeps_telegram_while_a_local_only_entry_stays_island(
     cloud.add_to_hass(hass)
     MockConfigEntry(domain=DOMAIN, data={"local_only": True}).add_to_hass(hass)
     state = await tv.telegram_state(hass)
+    await state.set_detector({"households": {"hh1": {"out": True}, "other": {"out": True}}})
     await state.set_queue(
         [
             {"id": "a", "householdId": "hh1", "kind": "outage"},
@@ -345,3 +346,18 @@ async def test_leave_keeps_telegram_while_a_local_only_entry_stays_island(
     assert state.token() == TOKEN
     assert [c.device_id for c in state.chats()] == ["phone-1"]
     assert [e["id"] for e in state.queue()] == ["b"]
+    assert list(state.detector()["households"]) == ["other"]
+
+
+async def test_a_failed_start_is_retried_at_the_next_setup(hass, station, aioclient_mock, clock):
+    await _bot(hass)
+    entry = _entry()
+    with patch.object(TelegramRuntime, "start", AsyncMock(side_effect=RuntimeError("boom"))):
+        await _set_up(hass, entry)
+    assert "telegram" not in hass.data[DOMAIN]
+
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert hass.data[DOMAIN]["telegram"]._running
+    await _outage(hass, entry, clock)
+    assert len(_sends(aioclient_mock)) == 1

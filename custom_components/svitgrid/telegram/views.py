@@ -94,7 +94,7 @@ async def _body_dict(request) -> dict | None:
     return body if isinstance(body, dict) else None
 
 
-def _runtime(hass, state: TelegramState) -> TelegramRuntime:
+def runtime_for(hass, state: TelegramState) -> TelegramRuntime:
     """The install's runtime, or a one-off one for a station that has not started it."""
     runtime = hass.data.get(DOMAIN, {}).get("telegram")
     if isinstance(runtime, TelegramRuntime):
@@ -243,7 +243,7 @@ class SvitgridTelegramTestView(HomeAssistantView):
             return error
         hass = request.app["hass"]
         state = await telegram_state(hass)
-        outcome = await _runtime(hass, state).send_test(device_id)
+        outcome = await runtime_for(hass, state).send_test(device_id)
         if outcome is not TestOutcome.SENT:
             return _json_error(*_TEST_ERRORS[outcome])
         return _json({"ok": True})

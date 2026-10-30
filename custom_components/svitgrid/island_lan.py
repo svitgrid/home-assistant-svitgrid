@@ -66,7 +66,6 @@ from .island_auth import island_key_present_and_valid
 from .keystore import EdgeBoxEntry, LastAdminKey
 from .settings_sync import find_edge_settings_snapshot
 from .signing import compute_key_id, public_key_from_hex
-from .telegram.runtime import household_key
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -332,18 +331,19 @@ async def _hand_telegram_back(hass, left: list) -> None:
     Their readings already feed nothing, since the cloud copy is on. When no
     entry on the install stays a full island, the station changes hands: its
     bot, chats and queue go, as the spec's "When the station changes hands"
-    says. Otherwise only the queued alerts of the entries that left go.
+    says. Otherwise the households that left are forgotten.
     """
+    # The Telegram package imports this module.
+    from .telegram.runtime import household_key
+    from .telegram.views import runtime_for
+
     state = (hass.data.get(DOMAIN) or {}).get("telegram_state")
     if state is None:
         return
     if all(_cloud_copy_of(e) for e in _entries(hass)):
         await state.clear()
         return
-    gone = {household_key(e) for e in left}
-    kept = [q for q in state.queue() if q.get("householdId") not in gone]
-    if kept != state.queue():
-        await state.set_queue(kept)
+    await runtime_for(hass, state).drop_households({household_key(e) for e in left})
 
 
 class SvitgridKeysRevokeView(HomeAssistantView):

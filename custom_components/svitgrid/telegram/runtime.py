@@ -22,6 +22,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from ..const import DOMAIN
+from ..island_lan import _cloud_copy_of
 from . import copy
 from .bot_api import BotApi, BotInUseElsewhere, InvalidToken, SendResult, TelegramUnreachable
 from .detector import evaluate
@@ -166,13 +167,48 @@ class TelegramRuntime:
     def _can_poll(self) -> bool:
         return self._can_send() and self._state.has_pending_codes(self._now())
 
-    def _station(self, household_id: str | None) -> str:
+    def _entry_for(self, household_id: str | None):
+        """The config entry of a household, or None."""
+        if not household_id:
+            return None
         for entry in self._hass.config_entries.async_entries(DOMAIN):
-            if household_id and household_key(entry) == household_id:
-                if entry.title:
-                    return entry.title
-                break
+            if household_key(entry) == household_id:
+                return entry
+        return None
+
+    def _station(self, household_id: str | None) -> str:
+        entry = self._entry_for(household_id)
+        if entry is not None and entry.title:
+            return entry.title
         return station_title(self._hass)
+
+    def _cloud_sends(self, household_id: str | None) -> bool:
+        """Whether the cloud copy is on for this household, so the cloud sends."""
+        entry = self._entry_for(household_id)
+        return entry is not None and _cloud_copy_of(entry)
+
+    async def _drop_households_locked(self, household_ids: set[str]) -> None:
+        queue = [
+            e
+            for e in self._state.queue()
+            if not isinstance(e, dict) or e.get("householdId") not in household_ids
+        ]
+        if queue != self._state.queue():
+            await self._state.set_queue(queue)
+        detector = self._state.detector()
+        households = detector.get("households") if isinstance(detector, dict) else None
+        if isinstance(households, dict) and household_ids & households.keys():
+            kept = {k: v for k, v in households.items() if k not in household_ids}
+            await self._state.set_detector({**detector, "households": kept})
+
+    async def drop_households(self, household_ids: set[str]) -> None:
+        """Forget these households: their queued alerts and their detector state.
+
+        A household that later goes back to island starts fresh, so it never
+        gets the restore of an outage it was told about another way.
+        """
+        async with self._lock:
+            await self._drop_households_locked(set(household_ids))
 
     # Readings
 
@@ -208,6 +244,10 @@ class TelegramRuntime:
             if not added:
                 return
             await self._state.set_queue(_trim([*self._state.queue(), *added], now_ms))
+            if any(alert.type == "outage" for alert in alerts):
+                # HA does not unload entries on shutdown, so a delayed save can
+                # be lost to a power cut and the outage told again.
+                await self._state.flush()
         self._kick_sender()
 
     # Sender
@@ -232,8 +272,19 @@ class TelegramRuntime:
         """Trim the queue and return its first entry in send order.
 
         Drops entries that are malformed or whose chat is gone or switched off.
+        A household whose cloud copy is on is forgotten: the cloud sends its
+        alerts (spec decision 8).
         """
         async with self._lock:
+            cloud = {
+                h
+                for e in self._state.queue()
+                if isinstance(e, dict)
+                and isinstance(h := e.get("householdId"), str)
+                and self._cloud_sends(h)
+            }
+            if cloud:
+                await self._drop_households_locked(cloud)
             queue = _trim(self._state.queue(), self._now_ms())
             live = []
             for entry in queue:
