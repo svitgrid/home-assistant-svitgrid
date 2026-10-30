@@ -119,21 +119,25 @@ async def _json_body(request):
     """The request's JSON body, or None when it is not JSON.
 
     The box gzips every body of 256 bytes or more
-    (`HTTP_WORKER_COMPRESS_MIN_BYTES`) and aiohttp does not inflate a request
-    body by itself.
+    (`HTTP_WORKER_COMPRESS_MIN_BYTES`). Home Assistant's aiohttp inflates such
+    a body itself (`auto_decompress`) and keeps the `Content-Encoding: gzip`
+    header (bench 2026-10-30), so the bytes are inflated here only when they
+    still carry the gzip magic number.
     """
     if "gzip" not in (request.headers.get("Content-Encoding") or "").lower():
         try:
             return await request.json()
         except ValueError:
             return None
-    inflater = zlib.decompressobj(wbits=31)
-    try:
-        raw = inflater.decompress(await request.read(), MAX_INFLATED_BODY_BYTES)
-    except zlib.error:
-        return None
-    if inflater.unconsumed_tail:
-        return None
+    raw = await request.read()
+    if raw[:2] == b"\x1f\x8b":
+        inflater = zlib.decompressobj(wbits=31)
+        try:
+            raw = inflater.decompress(raw, MAX_INFLATED_BODY_BYTES)
+        except zlib.error:
+            return None
+        if inflater.unconsumed_tail:
+            return None
     try:
         return json.loads(raw)
     except ValueError:
