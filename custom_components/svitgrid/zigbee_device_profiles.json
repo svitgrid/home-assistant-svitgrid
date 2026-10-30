@@ -1,0 +1,33 @@
+{
+  "_source": "prod config/zigbeeDeviceProfiles, 2026-10-30",
+  "TS0001": {
+    "protocol": "standard_zcl",
+    "metering": false,
+    "voltageDivisor": 1,
+    "energyDivisor": 1,
+    "name": "Tuya Single Gang Relay",
+    "powerDivisor": 1,
+    "currentDivisor": 1,
+    "manufacturer": "Tuya"
+  },
+  "S60ZBTPF": {
+    "protocol": "standard_zcl",
+    "metering": true,
+    "voltageDivisor": 100,
+    "name": "Sonoff S60 Zigbee Smart Plug",
+    "powerDivisor": 1,
+    "manufacturer": "SONOFF",
+    "energyDivisor": 1,
+    "currentDivisor": 100
+  },
+  "BASIC-ZB1GSP": {
+    "protocol": "standard_zcl",
+    "metering": true,
+    "voltageDivisor": 100,
+    "energyDivisor": 1,
+    "name": "Sonoff BASIC-ZB1GSP",
+    "powerDivisor": 1,
+    "currentDivisor": 100,
+    "manufacturer": "SONOFF"
+  }
+}

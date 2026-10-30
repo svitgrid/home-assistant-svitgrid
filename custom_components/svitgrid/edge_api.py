@@ -15,9 +15,10 @@ Two rules hold on every view here:
   key is 401 `{"error":"unauthorized"}`.
 
 The paths only the cloud can serve (bootstrap, MQTT, firmware offers,
-coredumps, Zigbee sensor readings, EV chargers) get a fixed answer, 2xx wherever the box only needs to hear
+coredumps, EV chargers) get a fixed answer, 2xx wherever the box only needs to hear
 that the call landed: its cloud-contact watchdog restarts it after two hours
-without a 2xx. The box's Zigbee roster is kept here (`zigbee_devices.py`).
+without a 2xx. The box's Zigbee roster and readings are kept here
+(`zigbee_devices.py`).
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import math
 import zlib
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -50,6 +52,11 @@ def _now() -> datetime:
     seam, so a test with fixed reading timestamps cannot age past the
     pipeline's 24-hour window."""
     return datetime.now(UTC)
+
+
+def _iso_now() -> str:
+    """`_now()` as the cloud writes a timestamp (`toISOString`)."""
+    return _now().isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 def _server_time() -> str:
@@ -464,6 +471,42 @@ async def _ingest_one(store, box: EdgeBoxEntry, reading) -> dict:
     return {"ok": True, "inverterId": inverter_id}
 
 
+def _socket_readings(value) -> list[dict]:
+    """The well-formed items of a `socketReadings` list (`SocketReadingSchema`).
+    Sockets never cost the readings beside them, so a bad item is skipped."""
+    if not isinstance(value, list):
+        return []
+
+    def number(v) -> bool:
+        return isinstance(v, int | float) and not isinstance(v, bool) and math.isfinite(v)
+
+    return [
+        item
+        for item in value[:64]
+        if isinstance(item, dict)
+        and isinstance(item.get("addr"), str)
+        and item["addr"]
+        and type(item.get("ep")) is int
+        and all(number(item.get(k)) for k in ("power", "voltage", "current", "energy"))
+        and (item.get("model") is None or isinstance(item["model"], str))
+    ]
+
+
+async def _store_socket_readings(
+    entry_state: dict, box: EdgeBoxEntry, timestamp: str, value
+) -> None:
+    """Store the plug readings that rode an ingest. Best-effort, as the cloud
+    runs them: a failure here never fails the ingest."""
+    devices = entry_state.get("zigbee_devices")
+    readings = _socket_readings(value)
+    if devices is None or not readings:
+        return
+    try:
+        await devices.async_store_socket_readings(box.device_id, timestamp, readings)
+    except Exception:  # noqa: BLE001 - socket power must never fail the ingest
+        _LOGGER.warning("Edge box %s: socket readings not stored", box.device_id, exc_info=True)
+
+
 class EdgeIngestBatchView(_EdgeView):
     """The box's batch upload. Each reading gets its own result, so a reading
     of an inverter the box does not hold fails alone while the rest are
@@ -486,7 +529,16 @@ class EdgeIngestBatchView(_EdgeView):
             return self.json({"error": "Validation error"}, status_code=400)
         store = entry_state["store"]
         results = [await _ingest_one(store, box, reading) for reading in readings]
-        # `bms` and `socketReadings` have no reader on an island.
+        # Sockets ride a reading, taken at its time; a board with no inverter
+        # sends them at the root of an empty batch (`readings.ts`).
+        for reading, result in zip(readings, results, strict=True):
+            if result["ok"]:
+                await _store_socket_readings(
+                    entry_state, box, reading["timestamp"], reading.get("socketReadings")
+                )
+        if not readings:
+            await _store_socket_readings(entry_state, box, _iso_now(), body.get("socketReadings"))
+        # `bms` has no reader on an island.
         await _stamp_contact(store, box, body.get("telemetry"))
         return self.json(
             {
@@ -514,12 +566,16 @@ class EdgeIngestReadingView(_EdgeView):
         if entry_state is None:
             return self.json({"error": "store_unavailable"}, status_code=503)
         store = entry_state["store"]
-        result = await _ingest_one(store, box, await _json_body(request))
+        reading = await _json_body(request)
+        result = await _ingest_one(store, box, reading)
         if not result["ok"]:
             refusal = {"error": result["error"]}
             if result.get("reason") is not None:
                 refusal["reason"] = result["reason"]
             return self.json(refusal, status_code=result["status"])
+        await _store_socket_readings(
+            entry_state, box, reading["timestamp"], reading.get("socketReadings")
+        )
         await _stamp_contact(store, box)
         return self.json(
             {
@@ -909,9 +965,40 @@ class EdgeZigbeeStateUpdateView(_EdgeView):
         return self.json({"success": True})
 
 
+def _sensor_readings(body) -> list[dict] | None:
+    """The `sensorReadings` of a body, or None when the cloud's
+    `SensorReadingsPayloadSchema` would refuse it."""
+    readings = body.get("sensorReadings") if isinstance(body, dict) else None
+    if not isinstance(readings, list) or not 1 <= len(readings) <= 16:
+        return None
+
+    def integer(v, low=None) -> bool:
+        return type(v) is int and (low is None or v >= low)
+
+    for item in readings:
+        if (
+            not isinstance(item, dict)
+            or not isinstance(item.get("addr"), str)
+            or not item["addr"]
+            or not integer(item.get("ep"), 1)
+            or item["ep"] > 240
+            or not integer(item.get("ageMs"), 0)
+        ):
+            return None
+        metrics = {"temperature": None, "humidity": 0, "battery": 0}
+        if all(item.get(k) is None for k in metrics):
+            return None
+        if any(item.get(k) is not None and not integer(item[k], low) for k, low in metrics.items()):
+            return None
+    return readings
+
+
 class EdgeZigbeeSinkView(_EdgeView):
-    """Zigbee sensor readings have no reader on an island yet; the box must
-    not see a 4xx storm."""
+    """The box's Zigbee sensor readings (`smart-devices.ts` sensor-readings):
+    temperature, humidity and battery, stored for each device the box holds.
+    A reading of a device Home Assistant does not hold is counted and dropped,
+    never stored, as the cloud drops it. The path's id is not read: the key
+    names the box."""
 
     url = "/api/v1/edge-devices/{device_id}/sensor-readings"
     name = "svitgrid:edge:zigbee"
@@ -920,7 +1007,14 @@ class EdgeZigbeeSinkView(_EdgeView):
         box = await self._box(request)
         if isinstance(box, web.Response):
             return box
-        return self.json({})
+        devices = (_entry_state(request.app["hass"]) or {}).get("zigbee_devices")
+        if devices is None:
+            return self.json({"error": "store_unavailable"}, status_code=503)
+        readings = _sensor_readings(await _json_body(request))
+        if readings is None:
+            return self.json({"error": "Invalid sensor readings"}, status_code=400)
+        stored, ignored = await devices.async_store_sensor_readings(box.device_id, readings, _now())
+        return self.json({"success": True, "stored": stored, "ignored": ignored})
 
 
 class EdgeChargerSinkView(_EdgeView):

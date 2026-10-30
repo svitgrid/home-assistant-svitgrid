@@ -4,7 +4,9 @@
 # UPDATE_EDGE_COMMAND_PAYLOADS=1 (edge-command-payloads-fixture.test.ts), or
 # firmware_signed_commands.json and edge_paths.json with UPDATE_EDGE_CONTRACT=1
 # (signing-command-parity.test.ts). edge_pair_code.json and
-# island_capability_vocab.json are hand-written there.
+# island_capability_vocab.json are hand-written there. zigbee_device_profiles.json
+# (prod's `config/zigbeeDeviceProfiles`) is read at runtime, so it goes into the
+# integration itself.
 set -euo pipefail
 INVERTER_PROTOCOL_DIR="${1:-$HOME/git/svitgrid/packages/inverter_protocol}"
 FIXTURES_DIR="$(cd "$(dirname "$0")/.." && pwd)/tests/fixtures"
@@ -23,3 +25,9 @@ for SRC_REL in \
   cp "$SRC" "$DEST"
   echo "vendored $SRC -> $DEST"
 done
+
+INTEGRATION_DIR="$(cd "$(dirname "$0")/.." && pwd)/custom_components/svitgrid"
+SRC="$INVERTER_PROTOCOL_DIR/fixtures/zigbee_device_profiles.json"
+[ -f "$SRC" ] || { echo "source not found: $SRC" >&2; exit 1; }
+cp "$SRC" "$INTEGRATION_DIR/zigbee_device_profiles.json"
+echo "vendored $SRC -> $INTEGRATION_DIR/zigbee_device_profiles.json"

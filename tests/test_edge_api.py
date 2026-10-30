@@ -520,14 +520,12 @@ async def test_update_inverter_ip_for_an_unknown_inverter_changes_nothing():
 @pytest.mark.parametrize(
     ("view_cls", "match_info"),
     [
-        (edge_api.EdgeZigbeeSinkView, {}),
-        (edge_api.EdgeZigbeeSinkView, {"device_id": "EC-1"}),
         (edge_api.EdgeChargerSinkView, {}),
         (edge_api.EdgeChargerSinkView, {"command_id": "cmd-1"}),
     ],
-    ids=["zigbee", "sensor-readings", "charger", "charger-ack"],
+    ids=["charger", "charger-ack"],
 )
-async def test_zigbee_and_charger_sinks_answer_empty(view_cls, match_info):
+async def test_charger_sinks_answer_empty(view_cls, match_info):
     hass = _hass(_keystore(_box()))
     resp = await _call(
         view_cls, "post", hass, api_key=BOX_KEY, body={"x": 1}, match_info=match_info
@@ -1989,3 +1987,324 @@ async def test_zigbee_roster_views_keep_the_edge_rules(view_cls, tmp_path):
     hass, _queue, _devices = _hass_with_zigbee(_keystore(_box()), tmp_path)
     resp = await _call(view_cls, "post", hass, api_key="nope", body=dict(_ZIGBEE["resync"]))
     assert resp.status == 401
+
+
+# ── Task 42: Zigbee readings (svitgrid#1268) ────────────────────────────
+
+_PROFILES = json.loads(
+    (
+        Path(__file__).resolve().parent.parent
+        / "custom_components"
+        / "svitgrid"
+        / "zigbee_device_profiles.json"
+    ).read_text()
+)
+_ZB_ID_2 = "zb-a4c1381111460002"
+
+
+async def _two_plugs(hass, devices):
+    """Two plugs on EC-1: a metering Sonoff and a Tuya relay that meters nothing."""
+    await devices.async_open_permit_join("EC-1", 120)
+    await _joined(hass)
+    await _state_update(hass, {**_ZIGBEE["resync"], "model": "S60ZBTPF", "manufacturer": "SONOFF"})
+    await _joined(hass, {"addr": "0x2222", "ieee": "a4:c1:38:11:11:46:00:02", "endpoint": 1})
+    await _state_update(
+        hass,
+        {
+            "addr": "0x2222",
+            "on": True,
+            "ieee": "a4:c1:38:11:11:46:00:02",
+            "model": "TS0001",
+            "manufacturer": "_TZ3000_tqlv4ug4",
+        },
+    )
+
+
+def _socket(addr="0x1234", **extra) -> dict:
+    return {
+        "addr": addr,
+        "ep": 1,
+        "power": 1500,
+        "voltage": 23012,
+        "current": 652,
+        "energy": 4321,
+        **extra,
+    }
+
+
+def test_vendored_zigbee_profiles_are_the_monorepo_fixture():
+    """`scripts/sync-edge-command-fixtures.sh` copies the monorepo's
+    `zigbee_device_profiles.json` into the integration, where it is read."""
+    from custom_components.svitgrid.zigbee_devices import load_zigbee_profiles
+
+    # Every model of the file, without its `_source` note.
+    assert load_zigbee_profiles() == {k: v for k, v in _PROFILES.items() if k != "_source"}
+    assert load_zigbee_profiles()["S60ZBTPF"]["voltageDivisor"] == 100
+
+
+def test_a_profile_resolves_by_model_and_manufacturer():
+    """As `zigbee-device-profiles.ts` `resolveZigbeeProfile`: a manufacturer's
+    override wins, and an unknown model has no profile."""
+    from custom_components.svitgrid.zigbee_devices import resolve_zigbee_profile
+
+    profiles = {
+        "TS0001": {
+            "metering": False,
+            "powerDivisor": 1,
+            "manufacturers": {"_TZ3000_m": {"metering": True, "powerDivisor": 10}},
+        }
+    }
+    assert resolve_zigbee_profile(profiles, "TS0001", None)["metering"] is False
+    assert resolve_zigbee_profile(profiles, "TS0001", "_TZ3000_x")["metering"] is False
+    assert resolve_zigbee_profile(profiles, "TS0001", "_TZ3000_m")["metering"] is True
+    assert resolve_zigbee_profile(profiles, "TS0001", "_TZ3000_m")["powerDivisor"] == 10
+    assert resolve_zigbee_profile(profiles, "UNKNOWN", "SONOFF") is None
+    assert resolve_zigbee_profile(profiles, None, None) is None
+    assert resolve_zigbee_profile(None, "TS0001", None) is None
+
+
+@pytest.mark.asyncio
+async def test_socket_readings_are_stored_scaled_by_the_profile(tmp_path):
+    hass, _queue, devices = _hass_with_zigbee(
+        _keystore(_box(inverters={"inv-1": _INV_1})), tmp_path
+    )
+    await _two_plugs(hass, devices)
+
+    reading = _reading(socketReadings=[_socket(), _socket("0x2222")])
+    resp = await _call(
+        edge_api.EdgeIngestBatchView, "post", hass, api_key=BOX_KEY, body={"readings": [reading]}
+    )
+
+    assert resp.status == 200
+    assert _json(resp)["results"] == [{"ok": True, "inverterId": "inv-1"}]
+    # S60ZBTPF: volts and amps in hundredths, watts and watt-hours as read.
+    assert await devices.async_socket_readings(_ZB_ID) == [
+        {
+            "timestamp": "2026-10-28T10:00:00.000Z",
+            "power": 1500,
+            "voltage": 230.12,
+            "current": 6.52,
+            "energy": 4321,
+        }
+    ]
+    # TS0001 from that maker meters nothing: the cloud skips it.
+    assert await devices.async_socket_readings(_ZB_ID_2) == []
+
+
+@pytest.mark.asyncio
+async def test_a_plug_with_no_profile_is_stored_as_read(tmp_path):
+    hass, _queue, devices = _hass_with_zigbee(_keystore(_box(inverters={})), tmp_path)
+    await devices.async_open_permit_join("EC-1", 120)
+    await _joined(hass)
+
+    # A board with no inverter sends its sockets at the batch's root.
+    resp = await _call(
+        edge_api.EdgeIngestBatchView,
+        "post",
+        hass,
+        api_key=BOX_KEY,
+        body={"readings": [], "socketReadings": [_socket(model="NEW-PLUG")]},
+    )
+
+    assert resp.status == 200
+    [stored] = await devices.async_socket_readings(_ZB_ID)
+    assert (stored["power"], stored["voltage"], stored["current"]) == (1500, 23012, 652)
+    # The model the plug reported is kept, as the cloud keeps it.
+    assert (await devices.async_get(_ZB_ID))["model"] == "NEW-PLUG"
+
+
+@pytest.mark.asyncio
+async def test_a_reading_for_a_device_the_store_does_not_know_is_ignored(tmp_path):
+    other = _box(device_id="EC-2", api_key="box-api-key-2", inverters={})
+    hass, _queue, devices = _hass_with_zigbee(
+        _keystore(_box(inverters={"inv-1": _INV_1}), other), tmp_path
+    )
+    await _two_plugs(hass, devices)
+
+    # 0x7777 is on no box; 0x1234 is EC-1's, and short addresses are per box.
+    resp = await _call(
+        edge_api.EdgeIngestBatchView,
+        "post",
+        hass,
+        api_key="box-api-key-2",
+        body={"readings": [], "socketReadings": [_socket(), _socket("0x7777")]},
+    )
+    assert resp.status == 200
+    sensors = await _call(
+        edge_api.EdgeZigbeeSinkView,
+        "post",
+        hass,
+        api_key=BOX_KEY,
+        match_info={"device_id": "EC-1"},
+        body={"sensorReadings": [{"addr": "0x7777", "ep": 1, "ageMs": 0, "temperature": 215}]},
+    )
+
+    assert sensors.status == 200
+    assert _json(sensors) == {"success": True, "stored": 0, "ignored": 1}
+    assert await devices.async_socket_readings(_ZB_ID) == []
+    assert await devices.async_usage_5min("2026-10-28T10:00:00.000Z") is None
+    assert len(await devices.async_list()) == 2
+
+
+@pytest.mark.asyncio
+async def test_sensor_readings_are_stored(tmp_path):
+    hass, _queue, devices = _hass_with_zigbee(_keystore(_box()), tmp_path)
+    await devices.async_open_permit_join("EC-1", 120)
+    await _joined(hass)
+
+    resp = await _call(
+        edge_api.EdgeZigbeeSinkView,
+        "post",
+        hass,
+        api_key=BOX_KEY,
+        match_info={"device_id": "EC-1"},
+        body={
+            "sensorReadings": [
+                {"addr": "0x1234", "ep": 1, "ageMs": 60000, "temperature": -45, "humidity": 61},
+                {"addr": "0x1234", "ep": 1, "ageMs": 0, "battery": 87},
+            ]
+        },
+    )
+
+    assert resp.status == 200
+    assert _json(resp) == {"success": True, "stored": 2, "ignored": 0}
+    # The capture time is the age against our clock, never the box's.
+    assert await devices.async_sensor_readings(_ZB_ID) == [
+        {
+            "capturedAt": "2026-10-28T10:04:00.000Z",
+            "receivedAt": "2026-10-28T10:05:00.000Z",
+            "ageMs": 60000,
+            "temperature": -45,
+            "humidity": 61,
+            "battery": None,
+        },
+        {
+            "capturedAt": "2026-10-28T10:05:00.000Z",
+            "receivedAt": "2026-10-28T10:05:00.000Z",
+            "ageMs": 0,
+            "temperature": None,
+            "humidity": None,
+            "battery": 87,
+        },
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    [
+        {},
+        {"sensorReadings": []},
+        {"sensorReadings": [{"addr": "0x1234", "ep": 1, "ageMs": 0}]},
+        {"sensorReadings": [{"addr": "0x1234", "ep": 0, "ageMs": 0, "battery": 5}]},
+        {"sensorReadings": [{"addr": "0x1234", "ep": 1, "battery": 5}]},
+    ],
+)
+async def test_sensor_readings_with_a_bad_body_are_400_not_410(body, tmp_path):
+    hass, _queue, devices = _hass_with_zigbee(_keystore(_box()), tmp_path)
+    await devices.async_open_permit_join("EC-1", 120)
+    await _joined(hass)
+
+    resp = await _call(
+        edge_api.EdgeZigbeeSinkView,
+        "post",
+        hass,
+        api_key=BOX_KEY,
+        match_info={"device_id": "EC-1"},
+        body=body,
+    )
+
+    assert resp.status == 400
+    assert await devices.async_sensor_readings(_ZB_ID) == []
+
+
+@pytest.mark.asyncio
+async def test_the_usage_rollup_sums_a_5_minute_slot(tmp_path):
+    """`smartUsage_5min`: each ingest is a full snapshot of one box's plugs.
+    A slot holds the latest snapshot of each box, and its power is their sum."""
+    other = _box(device_id="EC-2", api_key="box-api-key-2", inverters={})
+    hass, _queue, devices = _hass_with_zigbee(
+        _keystore(_box(inverters={"inv-1": _INV_1}), other), tmp_path
+    )
+    await _two_plugs(hass, devices)
+    await devices.async_open_permit_join("EC-2", 120)
+    await _joined(
+        hass, {"addr": "0x3333", "ieee": "a4:c1:38:11:11:46:00:03", "endpoint": 1}, "box-api-key-2"
+    )
+
+    async def ingest(api_key, ts, sockets):
+        reading = {"readings": [], "socketReadings": sockets}
+        if api_key == BOX_KEY:
+            reading = {"readings": [_reading(ts=ts, socketReadings=sockets)]}
+        resp = await _call(
+            edge_api.EdgeIngestBatchView, "post", hass, api_key=api_key, body=reading
+        )
+        assert resp.status == 200
+
+    await ingest(BOX_KEY, "2026-10-28T10:00:10.000Z", [_socket(power=1000), _socket("0x2222")])
+    # The box's next snapshot in the slot replaces its first.
+    await ingest(BOX_KEY, "2026-10-28T10:04:50.000Z", [_socket(power=1200.4, energy=4400)])
+    # Another box: the root path is stamped with the integration's clock (10:05).
+    await ingest("box-api-key-2", None, [_socket("0x3333", power=300)])
+    # The next slot of EC-1 does not touch this one.
+    await ingest(BOX_KEY, "2026-10-28T10:05:00.000Z", [_socket(power=50)])
+
+    first = await devices.async_usage_5min("2026-10-28T10:00:00.000Z")
+    assert first == {
+        "avgPowerW": 1200,
+        "deviceCount": 1,
+        "periodStart": "2026-10-28T10:00:00.000Z",
+        "periodEnd": "2026-10-28T10:05:00.000Z",
+        "boards": {"EC-1": {"avgPowerW": 1200, "deviceCount": 1}},
+        "devices": {_ZB_ID: {"avgPowerW": 1200, "energyCounterWh": 4400}},
+    }
+    second = await devices.async_usage_5min("2026-10-28T10:05:00.000Z")
+    assert second["avgPowerW"] == 350
+    assert second["deviceCount"] == 2
+    assert second["boards"] == {
+        "EC-1": {"avgPowerW": 50, "deviceCount": 1},
+        "EC-2": {"avgPowerW": 300, "deviceCount": 1},
+    }
+    assert set(second["devices"]) == {_ZB_ID, "zb-a4c1381111460003"}
+
+
+@pytest.mark.asyncio
+async def test_a_socket_reading_marks_the_plug_reachable(tmp_path):
+    hass, _queue, devices = _hass_with_zigbee(_keystore(_box(inverters={})), tmp_path)
+    await devices.async_open_permit_join("EC-1", 120)
+    await _joined(hass)
+    await _state_update(hass, _ZIGBEE["reachability"])
+
+    await _call(
+        edge_api.EdgeIngestBatchView,
+        "post",
+        hass,
+        api_key=BOX_KEY,
+        body={"readings": [], "socketReadings": [_socket()]},
+    )
+
+    device = await devices.async_get(_ZB_ID)
+    assert device["reachable"] is True
+    assert device["unreachableSince"] is None
+
+
+@pytest.mark.asyncio
+async def test_bad_socket_readings_never_cost_the_batch(tmp_path):
+    hass, _queue, devices = _hass_with_zigbee(
+        _keystore(_box(inverters={"inv-1": _INV_1})), tmp_path
+    )
+    await devices.async_open_permit_join("EC-1", 120)
+    await _joined(hass)
+
+    reading = _reading(socketReadings=[{"addr": "0x1234", "ep": 1, "power": "x"}, _socket()])
+    resp = await _call(
+        edge_api.EdgeIngestBatchView,
+        "post",
+        hass,
+        api_key=BOX_KEY,
+        body={"readings": [reading], "socketReadings": "nope"},
+    )
+
+    assert resp.status == 200
+    assert _json(resp)["results"] == [{"ok": True, "inverterId": "inv-1"}]
+    assert len(await devices.async_socket_readings(_ZB_ID)) == 1
