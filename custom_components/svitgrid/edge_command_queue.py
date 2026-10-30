@@ -284,6 +284,18 @@ class EdgeCommandQueue:
         finally:
             conn.close()
 
+    def _pending_sync(self, device_id: str, command: str) -> list[dict[str, Any]]:
+        conn = _connect(self._db_path)
+        try:
+            rows = conn.execute(
+                "SELECT * FROM edge_commands WHERE device_id = ? AND command = ? "
+                "AND state = 'pending' AND expires_at > ? ORDER BY created_at, rowid",
+                (device_id, command, _iso(_utcnow())),
+            ).fetchall()
+            return [_row_to_dict(r) for r in rows]
+        finally:
+            conn.close()
+
     def _forget_device_sync(self, device_id: str) -> list[str]:
         conn = _connect(self._db_path)
         try:
@@ -381,6 +393,10 @@ class EdgeCommandQueue:
     async def async_pending_count(self, device_id: str) -> int:
         """Commands waiting for the box's next poll."""
         return await self._run(self._pending_count_sync, device_id)
+
+    async def async_pending(self, device_id: str, command: str) -> list[dict[str, Any]]:
+        """The box's `command` rows still waiting for a poll, oldest first."""
+        return await self._run(self._pending_sync, device_id, command)
 
     async def async_forget_device(self, device_id: str) -> int:
         """Drop every command of a forgotten box; returns how many. A waiter

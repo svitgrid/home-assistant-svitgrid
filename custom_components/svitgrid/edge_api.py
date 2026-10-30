@@ -15,9 +15,9 @@ Two rules hold on every view here:
   key is 401 `{"error":"unauthorized"}`.
 
 The paths only the cloud can serve (bootstrap, MQTT, firmware offers,
-coredumps, Zigbee, EV chargers) get a fixed answer, 2xx wherever the box only needs to hear
+coredumps, Zigbee sensor readings, EV chargers) get a fixed answer, 2xx wherever the box only needs to hear
 that the call landed: its cloud-contact watchdog restarts it after two hours
-without a 2xx.
+without a 2xx. The box's Zigbee roster is kept here (`zigbee_devices.py`).
 """
 
 from __future__ import annotations
@@ -39,6 +39,8 @@ from .keystore import EdgeBoxEntry, KeystoreState
 from .settings_read_plan import settings_snapshot_kind_for
 from .settings_sync import store_edge_settings_snapshot
 from .signing import compute_key_id
+from .zigbee_devices import device_id_for_ieee
+from .zigbee_devices import now_iso as zigbee_now_iso
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -758,14 +760,160 @@ class EdgeUpdateInverterIpView(_EdgeView):
         return self.json({})
 
 
-class EdgeZigbeeSinkView(_EdgeView):
-    """Zigbee is a non-goal on an island; the box must not see a 4xx storm."""
+# A kick for a device that joined outside a permit-join window stays
+# deliverable this long, as the cloud's `ROGUE_KICK_TTL_MS`: one that arrives
+# later could land on a device the owner has meanwhile started pairing.
+ROGUE_KICK_TTL_S = 600
+
+
+def _zigbee_join_body(body) -> dict | None:
+    """`addr`, `ieee` and `endpoint` of a `device-joined` body, or None when
+    the cloud's `ZigbeeDeviceJoinedSchema` would refuse it."""
+    if not isinstance(body, dict):
+        return None
+    addr, ieee, endpoint = body.get("addr"), body.get("ieee"), body.get("endpoint", 1)
+    if not isinstance(addr, str) or not addr or not isinstance(ieee, str) or not ieee:
+        return None
+    if type(endpoint) is not int or not 0 <= endpoint <= 255:
+        return None
+    return {"addr": addr, "ieee": ieee, "endpoint": endpoint}
+
+
+async def _kick_unpaired(queue, box: EdgeBoxEntry, addr: str, ieee: str) -> None:
+    """Queue `remove_device` for a device that joined the box outside its
+    window, unless one for the same IEEE is already waiting."""
+    pending = await queue.async_pending(box.device_id, "remove_device")
+    if any(str(row["payload"].get("ieee", "")).lower() == ieee.lower() for row in pending):
+        return
+    await queue.async_enqueue(
+        box.device_id,
+        "remove_device",
+        {"addr": addr, "ieee": ieee},
+        signing=None,
+        inverter_id=None,
+        source="zigbee_join",
+        ttl_s=ROGUE_KICK_TTL_S,
+    )
+
+
+class EdgeZigbeeDeviceJoinedView(_EdgeView):
+    """A Zigbee device joined the box (`smart-devices.ts` device-joined).
+
+    A device Home Assistant knows updates its address and is reachable again,
+    whichever box it joined. An unknown one is stored only while the box's
+    permit-join window is open; otherwise it is refused with the cloud's 403
+    and a `remove_device` is queued, so a device nobody is pairing does not
+    stay on the mesh.
+    """
 
     url = "/api/v1/edge-devices/zigbee/device-joined"
-    extra_urls = [
-        "/api/v1/edge-devices/zigbee/state-update",
-        "/api/v1/edge-devices/{device_id}/sensor-readings",
-    ]
+    name = "svitgrid:edge:zigbee-device-joined"
+
+    async def post(self, request):
+        box = await self._box(request)
+        if isinstance(box, web.Response):
+            return box
+        entry_state = _entry_state(request.app["hass"]) or {}
+        devices = entry_state.get("zigbee_devices")
+        if devices is None:
+            return self.json({"error": "store_unavailable"}, status_code=503)
+        join = _zigbee_join_body(await _json_body(request))
+        if join is None:
+            return self.json({"error": "Validation error"}, status_code=400)
+        known = await devices.async_get(device_id_for_ieee(join["ieee"]))
+        if known is not None:
+            await devices.async_update(
+                known["id"],
+                {
+                    "deviceId": box.device_id,
+                    "addr": join["addr"],
+                    "endpoint": join["endpoint"],
+                    "reachable": True,
+                    "unreachableSince": None,
+                    "lastSeen": zigbee_now_iso(),
+                },
+            )
+            return self.json({"success": True, "smartDeviceId": known["id"], "isNew": False})
+        if not await devices.async_permit_join_open(box.device_id):
+            _LOGGER.info(
+                "Edge box %s: Zigbee %s joined outside a pairing window, removing it",
+                box.device_id,
+                join["ieee"],
+            )
+            queue = entry_state.get("edge_queue")
+            if queue is not None:
+                await _kick_unpaired(queue, box, join["addr"], join["ieee"])
+            return self.json({"error": "No active pairing window", "isNew": False}, status_code=403)
+        device = await devices.async_add(
+            box.device_id, join["ieee"], join["addr"], join["endpoint"]
+        )
+        return self.json({"success": True, "smartDeviceId": device["id"], "isNew": True})
+
+
+def _zigbee_state_fields(device: dict, body: dict) -> dict:
+    """What a `state-update` body changes on a stored device.
+
+    The three shapes: a state change (`on`, `reachable: true`), reachability
+    (`reachable` alone) and the roster resync (`on`, `caps`, `model`, `ieee`,
+    `manufacturer`). Only `reachable` reflects a live exchange: its absence
+    on a resync is no news and never clears an unreachable verdict.
+    """
+    fields = {}
+    if isinstance(body.get("on"), bool):
+        fields["on"] = body["on"]
+    reachable = body.get("reachable")
+    if isinstance(reachable, bool):
+        fields["reachable"] = reachable
+        if not reachable and device["reachable"] is not False:
+            fields["unreachableSince"] = zigbee_now_iso()
+        elif reachable:
+            fields["unreachableSince"] = None
+    # Liveness is refreshed only while the device answers.
+    answering = reachable if isinstance(reachable, bool) else device["reachable"] is not False
+    if answering:
+        fields["lastSeen"] = zigbee_now_iso()
+    if body["addr"] != device["addr"]:
+        fields["addr"] = body["addr"]
+    if type(body.get("caps")) is int and 0 <= body["caps"] <= 255:
+        fields["caps"] = body["caps"]
+    for key in ("model", "manufacturer"):
+        if isinstance(body.get(key), str) and body[key]:
+            fields[key] = body[key]
+    return fields
+
+
+class EdgeZigbeeStateUpdateView(_EdgeView):
+    """A Zigbee device's state, reachability or roster row (`smart-devices.ts`
+    state-update). A device Home Assistant does not hold on this box is
+    ignored with a 200, as the cloud ignores one with no row, so the box does
+    not retry it."""
+
+    url = "/api/v1/edge-devices/zigbee/state-update"
+    name = "svitgrid:edge:zigbee-state-update"
+
+    async def post(self, request):
+        box = await self._box(request)
+        if isinstance(box, web.Response):
+            return box
+        devices = (_entry_state(request.app["hass"]) or {}).get("zigbee_devices")
+        if devices is None:
+            return self.json({"error": "store_unavailable"}, status_code=503)
+        body = await _json_body(request)
+        if not isinstance(body, dict) or not isinstance(body.get("addr"), str) or not body["addr"]:
+            return self.json({"error": "Validation error"}, status_code=400)
+        ieee = body.get("ieee") if isinstance(body.get("ieee"), str) and body["ieee"] else None
+        device = await devices.async_find_on_box(box.device_id, ieee, body["addr"])
+        if device is None:
+            return self.json({"success": True, "ignored": True})
+        await devices.async_update(device["id"], _zigbee_state_fields(device, body))
+        return self.json({"success": True})
+
+
+class EdgeZigbeeSinkView(_EdgeView):
+    """Zigbee sensor readings have no reader on an island yet; the box must
+    not see a 4xx storm."""
+
+    url = "/api/v1/edge-devices/{device_id}/sensor-readings"
     name = "svitgrid:edge:zigbee"
 
     async def post(self, request, **_match):
@@ -809,6 +957,8 @@ EDGE_VIEWS = (
     EdgeCoredumpView,
     EdgePairAttemptsView,
     EdgeUpdateInverterIpView,
+    EdgeZigbeeDeviceJoinedView,
+    EdgeZigbeeStateUpdateView,
     EdgeZigbeeSinkView,
     EdgeChargerSinkView,
 )
