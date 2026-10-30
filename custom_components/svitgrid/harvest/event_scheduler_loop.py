@@ -120,6 +120,10 @@ def _reason_for(exc: BaseException) -> str:
         return "bad_payload"
     if isinstance(exc, NotImplementedError):
         return "unsupported_field"
+    if isinstance(exc, PermissionError) and str(exc) == "unsigned_write":
+        # An edge box refuses a write without the phone's signature: the
+        # event was stored before 0.26.0 kept it (EdgeBoxExecutor).
+        return "unsigned_write"
     text = str(exc)
     if text.startswith("prior_read_failed"):
         return "prev_read_failed"
@@ -128,23 +132,32 @@ def _reason_for(exc: BaseException) -> str:
     return "write_failed"
 
 
-async def _dispatch_all(executor: object, commands: list) -> tuple[_Failure | None, list]:
+async def _dispatch_all(
+    executor: object, commands: list, signing: dict | None = None
+) -> tuple[_Failure | None, list]:
     """Dispatch every command.
 
     Returns ``(first failure or None, [(command, result), ...])`` for the
     commands that landed. A failed command does not stop the rest: they are
     independent writes, and a retry re-sends the whole list, which is
     idempotent. An empty list has nothing to fail.
+
+    *signing* is the event's stored phone signature. Only an executor that
+    relays the command to a device which checks it (an edge box) gets it, as
+    in SvitgridCommandsView; every other executor is called as before.
+    `type(...) is bool`, because a mock's attribute is truthy.
     """
     if not commands:
         return None, []
     if executor is None:
         return _Failure(commands[0][0], "inverter_not_found", None), []
+    relays = getattr(executor, "relays_signature", None)
+    kwargs = {"signing": signing} if type(relays) is bool and relays else {}
     failure: _Failure | None = None
     results: list = []
     for cmd_name, payload in commands:
         try:
-            results.append((cmd_name, await executor.dispatch(cmd_name, payload)))
+            results.append((cmd_name, await executor.dispatch(cmd_name, payload, **kwargs)))
         except Exception as exc:  # noqa: BLE001
             if failure is None:
                 failure = _Failure(cmd_name, _reason_for(exc), exc)
@@ -355,7 +368,9 @@ async def _tick(
             if retry_at is not None and now_utc < retry_at:
                 continue  # backing off after a failed dispatch; state unchanged
 
-            failure, results = await _dispatch_all(executor_for(inverter_id), decision.commands)
+            failure, results = await _dispatch_all(
+                executor_for(inverter_id), decision.commands, event.get("signing")
+            )
             if failure is None:
                 state = dict(decision.new_state)
                 for key in _RETRY_KEYS:
@@ -457,7 +472,7 @@ async def _settle(
         others = _others({e.get("id"): e for e in events}, event)
         commands, done_state = restore_decision(event, exec_state, now_utc, others=others)
         inverter_id = event.get("inverterId")
-        failure, _ = await _dispatch_all(executor_for(inverter_id), commands)
+        failure, _ = await _dispatch_all(executor_for(inverter_id), commands, event.get("signing"))
         if failure is not None:
             state = _failed_state(exec_state, failure, now_utc)
             _log_failure(event_id, inverter_id, failure, state["dispatchFailures"])

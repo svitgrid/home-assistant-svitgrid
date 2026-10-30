@@ -877,3 +877,150 @@ async def test_disabling_an_active_charge_restores_and_keeps_it_idle():
     assert state["status"] == "idle"
     assert "pendingRemoval" not in state
     assert "prevSlots" not in state
+
+
+# ───────── The phone's signature reaches the box (edge island, svitgrid#1232) ─────────
+
+_SIGNING = {
+    "signedEventData": {"id": "evt-1", "mode": "use_battery"},
+    "signature": "MEUCIQ",
+    "signingKeyId": "phone-1",
+}
+
+
+class _RecordingExecutor:
+    """Records each dispatch and the signing keyword it got."""
+
+    def __init__(self, relays_signature: bool) -> None:
+        self.relays_signature = relays_signature
+        self.calls: list[tuple[str, dict, dict]] = []
+
+    async def dispatch(self, command_name, payload, **kwargs):
+        self.calls.append((command_name, payload, kwargs))
+        return {"written": [], "verified": True}
+
+
+class _RecordingQueue:
+    """An edge command queue that records enqueues and never acks."""
+
+    def __init__(self) -> None:
+        self.enqueued: list = []
+
+    async def async_enqueue(self, *args, **kwargs):
+        self.enqueued.append((args, kwargs))
+        return 1
+
+    async def async_wait(self, command_id, timeout_s):
+        return None
+
+
+@pytest.mark.asyncio
+async def test_tick_passes_event_signing_to_dispatch():
+    """An executor that relays to the box gets the event's stored signature,
+    untouched, on every command of the activation."""
+    from custom_components.svitgrid.harvest.event_scheduler_loop import _tick
+
+    event = {**_make_use_battery_event(), "signing": _SIGNING}
+    executor = _RecordingExecutor(relays_signature=True)
+
+    await _tick(
+        FakeStore([_reading_at()]),
+        FakeEventStore([event]),
+        lambda inv_id: executor if inv_id == "inv-1" else None,
+        "UTC",
+        _NOW_IN_WINDOW,
+    )
+
+    assert executor.calls, "the activation must dispatch"
+    assert all(kwargs == {"signing": _SIGNING} for _, _, kwargs in executor.calls)
+
+
+@pytest.mark.asyncio
+async def test_tick_calls_a_local_executor_as_before():
+    """An executor that writes locally is called without the keyword."""
+    from custom_components.svitgrid.harvest.event_scheduler_loop import _tick
+
+    event = {**_make_use_battery_event(), "signing": _SIGNING}
+    executor = _RecordingExecutor(relays_signature=False)
+
+    await _tick(
+        FakeStore([_reading_at()]),
+        FakeEventStore([event]),
+        lambda inv_id: executor,
+        "UTC",
+        _NOW_IN_WINDOW,
+    )
+
+    assert executor.calls
+    assert all(kwargs == {} for _, _, kwargs in executor.calls)
+
+
+@pytest.mark.asyncio
+async def test_cancel_restore_passes_event_signing_to_dispatch():
+    """The restore of an event the app cancelled carries the event's signature too."""
+    from custom_components.svitgrid.harvest.event_scheduler_loop import (
+        REMOVAL_DELETE,
+        REMOVAL_KEY,
+        _tick,
+    )
+
+    event = {
+        **_make_use_battery_event(
+            exec_state={
+                "status": "active",
+                "lastActivatedAt": "2026-06-29T10:00:00+00:00",
+                "previousWorkMode": 1,
+                "previousTimerEnabled": True,
+                REMOVAL_KEY: REMOVAL_DELETE,
+            }
+        ),
+        "signing": _SIGNING,
+    }
+    executor = _RecordingExecutor(relays_signature=True)
+
+    await _tick(
+        FakeStore([_reading_at()]),
+        FakeEventStore([event]),
+        lambda inv_id: executor,
+        "UTC",
+        _NOW_IN_WINDOW,
+    )
+
+    assert executor.calls, "the cancel must restore"
+    assert all(kwargs == {"signing": _SIGNING} for _, _, kwargs in executor.calls)
+
+
+@pytest.mark.asyncio
+async def test_legacy_event_without_signing_records_unsigned_write_once(caplog):
+    """An event stored before 0.26.0 has no signature. On an edge box its
+    writes are refused before they are queued, the event records
+    `unsigned_write` once, and the backoff keeps the next tick from retrying."""
+    import logging
+
+    from custom_components.svitgrid.executors.edge_box import EdgeBoxExecutor
+    from custom_components.svitgrid.harvest.event_scheduler_loop import _tick
+
+    event = _make_use_battery_event()  # no "signing": written by 0.25.0
+    event_store = FakeEventStore([event])
+    queue = _RecordingQueue()
+    executor = EdgeBoxExecutor(queue, "EC-1", "inv-1")
+
+    with caplog.at_level(logging.ERROR):
+        await _tick(
+            FakeStore([_reading_at()]), event_store, lambda _: executor, "UTC", _NOW_IN_WINDOW
+        )
+        await _tick(
+            FakeStore([_reading_at()]),
+            event_store,
+            lambda _: executor,
+            "UTC",
+            _NOW_IN_WINDOW.replace(second=15),
+        )
+
+    assert queue.enqueued == [], "a write the box would refuse is never queued"
+    state = event_store._events["evt-1"]["executionState"]
+    assert state["lastCommandError"]["reason"] == "unsigned_write"
+    assert state["dispatchFailures"] == 1
+    assert state.get("status") != "active"
+    errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert len(errors) == 1
