@@ -584,6 +584,11 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             pack_id     TEXT PRIMARY KEY,
             fields_json TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS bms_import_pending (
+            pack_id     TEXT PRIMARY KEY,
+            box_id      TEXT NOT NULL,
+            fields_json TEXT NOT NULL
+        );
         """
     )
     conn.commit()
@@ -666,6 +671,7 @@ class BmsPackStore:
                 "INSERT OR REPLACE INTO bms_state (box_id, state_json) VALUES (?, ?)",
                 (box_id, json.dumps(state)),
             )
+            self._apply_pending_imports(conn, box_id, {p["id"] for p in packs})
 
             record = report.get("cycles") is not None and (stored or {}).get(
                 "cycles"
@@ -722,6 +728,39 @@ class BmsPackStore:
             return record
         finally:
             conn.close()
+
+    def _apply_pending_imports(self, conn, box_id: str, reported: set[str]) -> None:
+        """Apply the copies kept for packs this box now reports: into its
+        roster when the roster holds the pack (a new driver bumps the epoch,
+        so the report's converge sends it), otherwise as an import. Never
+        creates a roster."""
+        rows = conn.execute(
+            "SELECT pack_id, fields_json FROM bms_import_pending WHERE box_id = ?", (box_id,)
+        ).fetchall()
+        due = {r["pack_id"]: json.loads(r["fields_json"]) for r in rows if r["pack_id"] in reported}
+        if not due:
+            return
+        row = conn.execute(
+            "SELECT roster_json FROM bms_roster WHERE box_id = ?", (box_id,)
+        ).fetchone()
+        roster = json.loads(row["roster_json"]) if row is not None else None
+        held = {p["packId"] for p in roster["packs"]} if roster is not None else set()
+        if roster is not None and held & set(due):
+            packs = [{**p, **due.get(p["packId"], {})} for p in roster["packs"]]
+            bump = _synced(packs) != _synced(roster["packs"])
+            roster = {**roster, "n": roster["n"] + (1 if bump else 0), "packs": packs}
+            conn.execute(
+                "UPDATE bms_roster SET roster_json = ? WHERE box_id = ?",
+                (json.dumps(roster), box_id),
+            )
+        imported = _imported(conn)
+        for pack_id, fields in due.items():
+            if pack_id not in held:
+                conn.execute(
+                    "INSERT OR REPLACE INTO bms_imported (pack_id, fields_json) VALUES (?, ?)",
+                    (pack_id, json.dumps({**imported.get(pack_id, {}), **fields})),
+                )
+            conn.execute("DELETE FROM bms_import_pending WHERE pack_id = ?", (pack_id,))
 
     def _seal_days(self, conn, pack: dict, now_ms: int, tz_name: str | None) -> None:
         """Seal each local day of the last week that is over and not sealed
@@ -930,6 +969,22 @@ class BmsPackStore:
         finally:
             conn.close()
 
+    def _import_pending_sync(self, box_id: str, pending: dict[str, dict], settled) -> None:
+        conn = _connect(self._db_path)
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            for pack_id in settled:
+                conn.execute("DELETE FROM bms_import_pending WHERE pack_id = ?", (pack_id,))
+            for pack_id, fields in pending.items():
+                conn.execute(
+                    "INSERT OR REPLACE INTO bms_import_pending (pack_id, box_id, fields_json) "
+                    "VALUES (?, ?, ?)",
+                    (pack_id, box_id, json.dumps(fields)),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
     def _update_roster_sync(self, box_id: str, fields: dict) -> None:
         conn = _connect(self._db_path)
         try:
@@ -986,6 +1041,14 @@ class BmsPackStore:
         """Keep `{pack_id: fields}` copied in from the cloud. They show over
         what the box reports, and seed the box's roster on its first change."""
         await self._run(self._import_sync, imported)
+
+    async def async_import_pending(
+        self, box_id: str, pending: dict[str, dict], settled: list[str] = ()
+    ) -> None:
+        """Keep `{pack_id: fields}` copied in for packs `box_id` has not
+        reported yet; each applies when the box first reports the pack. A
+        copy kept for a pack in `settled` (imported now) is dropped."""
+        await self._run(self._import_pending_sync, box_id, pending, list(settled))
 
     async def async_update_roster(self, box_id: str, **fields) -> None:
         """Store fields beside the box's roster (`lastSync`, a new epoch)."""

@@ -2773,7 +2773,8 @@ async def test_bms_import_sets_label_and_driver(hass: HomeAssistant, tmp_path):
     assert resp.status == 200, _body(resp)
     assert _body(resp) == {
         "imported": ["a4c138000002"],
-        "skipped": [{"packId": "c0ffee000009", "reason": "not_reported"}],
+        "pending": ["c0ffee000009"],
+        "skipped": [],
     }
     listed = _body(await BmsPacksView().get(_ZReq(hass)))
     pack = next(p for p in listed["packs"] if p["packId"] == "a4c138000002")
@@ -2789,6 +2790,104 @@ async def test_bms_import_sets_label_and_driver(hass: HomeAssistant, tmp_path):
     listed = _body(await BmsPacksView().get(_ZReq(hass)))
     pack = next(p for p in listed["packs"] if p["packId"] == "a4c138000002")
     assert pack["label"] == "Підвал"
+
+
+def _report_with(*pack_ids):
+    extra = [{**_BMS_REPORT["packs"][1], "id": pack_id} for pack_id in pack_ids]
+    return {**_BMS_REPORT, "packs": [*_BMS_REPORT["packs"], *extra]}
+
+
+async def test_an_import_for_an_unreported_pack_applies_when_the_pack_appears(
+    hass: HomeAssistant, tmp_path
+):
+    from custom_components.svitgrid.bms_lan import BmsPacksView
+
+    admin, packs, _ = await _roster_setup(hass, tmp_path)
+
+    resp = await _bms_import(
+        hass, admin, "EC-1", [{"packId": "c0ffee000009", "label": "Льох", "driver": "daly"}]
+    )
+
+    assert resp.status == 200, _body(resp)
+    assert _body(resp) == {"imported": [], "pending": ["c0ffee000009"], "skipped": []}
+    # Another box reporting the pack does not take the copy meant for EC-1.
+    await packs.async_store_report("EC-2", _report_with("c0ffee000009"))
+    assert "c0ffee000009" not in await packs.async_imported()
+    await packs.async_store_report("EC-2", _BMS_REPORT)
+
+    await packs.async_store_report("EC-1", _report_with("c0ffee000009"))
+
+    listed = _body(await BmsPacksView().get(_ZReq(hass)))
+    pack = next(p for p in listed["packs"] if p["packId"] == "c0ffee000009")
+    assert (pack["assignedEdgeId"], pack["label"], pack["driver"], pack["driverSource"]) == (
+        "EC-1",
+        "Льох",
+        "daly",
+        "owner",
+    )
+
+
+async def test_a_pending_import_never_creates_a_roster(hass: HomeAssistant, tmp_path):
+    from custom_components.svitgrid import bms_roster
+
+    admin, packs, queue = await _roster_setup(hass, tmp_path)
+
+    await _bms_import(hass, admin, "EC-1", [{"packId": "c0ffee000009", "driver": "daly"}])
+    report = _report_with("c0ffee000009")
+    await packs.async_store_report("EC-1", report)
+
+    assert await packs.async_rosters() == {}
+    assert (
+        await bms_roster.async_converge(packs, queue, None, "EC-1", report["rosterEpoch"]) is None
+    )
+    assert await _drain_box(queue) == []
+
+
+async def test_a_pending_copy_reaches_a_managed_box_roster(hass: HomeAssistant, tmp_path):
+    admin, packs, queue = await _roster_setup(hass, tmp_path)
+    await _bms_command(hass, "EC-1", "bms_adopt", packId="c0ffee000009")
+    await _bms_import(hass, admin, "EC-1", [{"packId": "c0ffee000004", "driver": "daly"}])
+    await _bms_command(hass, "EC-1", "bms_adopt", packId="c0ffee000004")
+    n = (await packs.async_roster("EC-1"))["n"]
+
+    await packs.async_store_report("EC-1", _report_with("c0ffee000004"))
+
+    roster = await packs.async_roster("EC-1")
+    entry = next(p for p in roster["packs"] if p["packId"] == "c0ffee000004")
+    assert (entry["driver"], entry["driverSource"]) == ("daly", "owner")
+    # A new driver is a new epoch, which the report's converge sends.
+    assert roster["n"] == n + 1
+
+
+async def test_a_direct_import_drops_an_older_pending_copy(hass: HomeAssistant, tmp_path):
+    admin, packs, _ = await _roster_setup(hass, tmp_path)
+    await _bms_command(hass, "EC-1", "bms_adopt", packId="c0ffee000009")
+    await _bms_import(hass, admin, "EC-1", [{"packId": "c0ffee000004", "label": "Старе"}])
+    await _bms_command(hass, "EC-1", "bms_adopt", packId="c0ffee000004")
+    await _bms_import(hass, admin, "EC-1", [{"packId": "c0ffee000004", "label": "Нове"}])
+
+    await packs.async_store_report("EC-1", _report_with("c0ffee000004"))
+
+    roster = await packs.async_roster("EC-1")
+    assert next(p for p in roster["packs"] if p["packId"] == "c0ffee000004")["label"] == "Нове"
+
+
+async def test_an_app_that_ignores_pending_still_reads_imported_and_skipped(
+    hass: HomeAssistant, tmp_path
+):
+    admin, _, _ = await _roster_setup(hass, tmp_path)
+
+    resp = await _bms_import(
+        hass,
+        admin,
+        "EC-1",
+        [{"packId": PACK_ID, "label": "Гараж 2"}, {"packId": "c0ffee000009"}, {"packId": 7}],
+    )
+
+    body = _body(resp)
+    assert body["imported"] == [PACK_ID]
+    assert body["skipped"] == [{"reason": "bad_request"}]
+    assert body["pending"] == ["c0ffee000009"]
 
 
 async def test_bms_import_never_creates_a_roster(hass: HomeAssistant, tmp_path):
