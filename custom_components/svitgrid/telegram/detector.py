@@ -2,10 +2,12 @@
 
 A pure port of the cloud's `evaluateOutageAlerts` (outage-evaluator.ts) with the
 household rule from the island Telegram spec: one message per household, out
-while any inverter has alerted, restored when the last of them clears, and an
-outage within 60 minutes of the last sent one is suppressed together with its
-restore. The shared cases in `tests/fixtures/island_alert_cases.json` pin the
-behaviour; the Dart twin runs the same file.
+while any inverter has alerted, restored when the last of them clears. The
+60-minute cooldown applies to outage alerts only: an outage within 60 minutes
+of the last sent one is suppressed together with its restore. A sent outage
+always gets its restore, so there is no restore cooldown. The shared cases in
+`tests/fixtures/island_alert_cases.json` pin the behaviour; the Dart twin runs
+the same file.
 
 `state` holds only dict, list, str, int, float, bool and None, so the runtime
 can persist it as JSON.
@@ -16,10 +18,15 @@ from __future__ import annotations
 import math
 from copy import deepcopy
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from typing import Any, Literal
 
-from ..edge_reading_pipeline import _debounce_grid_present, derive_grid_present
+from ..edge_reading_pipeline import (
+    _debounce_grid_present,
+    _iso_ms,
+    _parse_ms,
+    derive_grid_present,
+    js_round,
+)
 
 OUTAGE_DEBOUNCE_MS = 5 * 60 * 1000
 COOLDOWN_MS = 60 * 60 * 1000
@@ -35,29 +42,11 @@ class Alert:
     battery_soc: int | None
 
 
-def _iso(ms: int) -> str:
-    return datetime.fromtimestamp(ms / 1000, UTC).isoformat(timespec="milliseconds")
-
-
-def _parse_ms(value: Any) -> int | None:
-    if not isinstance(value, str):
-        return None
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=UTC)
-    return int(parsed.timestamp() * 1000)
-
-
 def _round(value: Any) -> int | None:
-    """Round half up, as JavaScript's `Math.round` does."""
+    """`js_round` for a finite number; None for anything else."""
     if isinstance(value, bool) or not isinstance(value, int | float):
         return None
-    if not math.isfinite(value):
-        return None
-    return math.floor(value + 0.5)
+    return js_round(value) if math.isfinite(value) else None
 
 
 def _grid_present(inv: dict, reading: dict) -> bool | None:
@@ -89,12 +78,12 @@ def evaluate(
     if grid is False:
         if reading.get("gridConfirmedSource") == "edge" and not inv["outageAlerted"]:
             inv["gridDownSince"] = (
-                reading.get("gridConfirmedAt") or inv["gridDownSince"] or _iso(now_ms)
+                reading.get("gridConfirmedAt") or inv["gridDownSince"] or _iso_ms(now_ms)
             )
             inv["outageAlerted"] = True
             fired = "outage"
         elif not inv["gridDownSince"]:
-            inv["gridDownSince"] = _iso(now_ms)
+            inv["gridDownSince"] = _iso_ms(now_ms)
             inv["outageAlerted"] = False
         else:
             since = _parse_ms(inv["gridDownSince"])

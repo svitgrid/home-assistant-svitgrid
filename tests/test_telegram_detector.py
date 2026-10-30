@@ -81,3 +81,36 @@ def test_restore_uses_reading_timestamp_when_present():
     up = {"gridPresent": True, "batterySoc": 51, "timestamp": "2026-10-28T10:20:00.000Z"}
     _, alerts = evaluate(state, "hh1", "inv1", up, t0 + 25 * MIN_MS)
     assert alerts[0].event_at_ms == _ms("2026-10-28T10:20:00.000Z")
+
+
+def _edge(**extra):
+    return {"gridPresent": False, "gridConfirmedSource": "edge", **extra}
+
+
+def test_restore_without_soc_carries_none():
+    t0 = 1_793_181_600_000
+    state, _ = evaluate({}, "hh1", "inv1", _edge(batterySoc=50), t0)
+    _, alerts = evaluate(state, "hh1", "inv1", {"gridPresent": True}, t0 + MIN_MS)
+    assert [(a.type, a.battery_soc) for a in alerts] == [("grid_restored", None)]
+
+
+@pytest.mark.parametrize("stamp", [None, "not a date", 123])
+def test_restore_event_at_falls_back_to_now(stamp):
+    t0 = 1_793_181_600_000
+    state, _ = evaluate({}, "hh1", "inv1", _edge(batterySoc=50), t0)
+    up = {"gridPresent": True, "batterySoc": 50}
+    if stamp is not None:
+        up["timestamp"] = stamp
+    _, alerts = evaluate(state, "hh1", "inv1", up, t0 + MIN_MS)
+    assert alerts[0].event_at_ms == t0 + MIN_MS
+
+
+def test_edge_without_confirmed_at_uses_down_since_then_now():
+    t0 = 1_793_181_600_000
+    # No gridDownSince yet: falls back to now.
+    _, alerts = evaluate({}, "hh1", "a", _edge(batterySoc=50), t0)
+    assert alerts[0].event_at_ms == t0
+    # A clock already running: gridDownSince wins over now.
+    state, _ = evaluate({}, "hh1", "b", {"gridPresent": False, "batterySoc": 50}, t0)
+    _, alerts = evaluate(state, "hh1", "b", _edge(batterySoc=50), t0 + 2 * MIN_MS)
+    assert alerts[0].event_at_ms == t0
