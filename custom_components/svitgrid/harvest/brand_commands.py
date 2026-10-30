@@ -133,6 +133,52 @@ def edge_inverter(boxes, inverter_id: str) -> dict | None:
     return None
 
 
+# What the island writes for an inverter of each kind, as `GET
+# /api/svitgrid/island/status` advertises it (edge island plan, Task 35). The
+# vocabulary, and what each kind may advertise at most, is
+# tests/fixtures/island_capability_vocab.json.
+_DEYE_WRITABLE_ACTIONS = (
+    "work_mode",
+    "solar_sell",
+    "sell_power_cap",
+    "grid_charge_toggle",
+    "gen_force",
+    "gen_port_mode",
+    "energy_pattern",
+    "tou_slots",
+)
+_DEYE_MODES = ("battery_charge", "use_battery", "sell_to_grid", "gen_force")
+# The modes a priority-profile brand runs, each through the profile
+# profile_for_mode names. sell_to_grid has no profile, so it is not written.
+_PRIORITY_MODES = ("battery_charge", "use_battery")
+
+
+def island_writes(inv: dict) -> dict[str, list[str]]:
+    """The custom actions and writing modes the island writes for an adopted
+    inverter: ``{"writableActions": [...], "modes": [...]}``.
+
+    A priority-profile brand lists a mode only when its protocol has that
+    mode's profile (an SNA has no battery_first), and the thresholds action of
+    its own protocol (PI30 or MUST, svitgrid#1255).
+    """
+    # priority_profile and event_evaluator import this module.
+    from .event_evaluator import _THRESHOLDS
+    from .priority_profile import PROFILES_BY_PROTOCOL
+
+    kind = brand_kind(inv)
+    if kind == "deye":
+        return {"writableActions": list(_DEYE_WRITABLE_ACTIONS), "modes": list(_DEYE_MODES)}
+    if kind == "priority":
+        protocol = priority_profile_protocol(
+            inv.get("modelId"), inv.get("transport"), inv.get("protocolId")
+        )
+        profiles = PROFILES_BY_PROTOCOL.get(protocol or "", ())
+        modes = [m for m in _PRIORITY_MODES if profile_for_mode(m) in profiles]
+        actions = [a for a, t in _THRESHOLDS.items() if t.protocol == protocol]
+        return {"writableActions": actions, "modes": modes}
+    return {"writableActions": [], "modes": []}
+
+
 # ── The owner's threshold voltages (the cloud's settings mirror) ──────────
 
 # A QPIRI reply carries 25 fields; fewer means a truncated frame.

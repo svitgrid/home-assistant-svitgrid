@@ -1,0 +1,49 @@
+{
+  "_comment": "The vocabulary of the `inverters` field of the Home Assistant integration's GET /api/svitgrid/island/status (edge island plan, Task 35). Each inverter reports {host, writableActions, modes}. host is one of `hosts`; writableActions names custom action types from `actionTypes`; modes names writing modes from `writingModes`. `brandKinds` is what each value of the integration's brand_kind (Task 13) advertises; for `priority`, an inverter lists only the thresholds action of its own protocol. The integration vendors this file as tests/fixtures/island_capability_vocab.json. Pinned by apps/mobile/test/features/calendar/data/island_custom_capabilities_test.dart.",
+  "hosts": ["edge", "ha"],
+  "actionTypes": [
+    "work_mode",
+    "solar_sell",
+    "sell_power_cap",
+    "grid_charge_toggle",
+    "gen_force",
+    "gen_port_mode",
+    "tou_slots",
+    "peak_shaving",
+    "grid_charge_current",
+    "energy_pattern",
+    "smart_device",
+    "priority_profile",
+    "ev_charger",
+    "pi30_thresholds",
+    "must_thresholds"
+  ],
+  "writingModes": ["battery_charge", "use_battery", "sell_to_grid", "gen_force"],
+  "brandKinds": {
+    "deye": {
+      "writableActions": [
+        "work_mode",
+        "solar_sell",
+        "sell_power_cap",
+        "grid_charge_toggle",
+        "gen_force",
+        "gen_port_mode",
+        "energy_pattern",
+        "tou_slots"
+      ],
+      "modes": ["battery_charge", "use_battery", "sell_to_grid", "gen_force"]
+    },
+    "priority": {
+      "writableActions": ["pi30_thresholds", "must_thresholds"],
+      "modes": ["battery_charge", "use_battery", "sell_to_grid"]
+    },
+    "solax": {
+      "writableActions": [],
+      "modes": []
+    },
+    "none": {
+      "writableActions": [],
+      "modes": []
+    }
+  }
+}
