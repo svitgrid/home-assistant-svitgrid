@@ -1145,3 +1145,75 @@ async def test_cancelling_a_priority_event_restores_prev():
         {"prev": _PI30_PREV, "cmdId": "cmd-apply-1"},
     )
     assert "evt-1" not in event_store._events
+
+
+_QPIRI = (
+    "230.0 30.4 230.0 50.0 30.4 7000 6200 48.0 48.0 46.0 53.5 52.5 2 30 050 0 2 2 6 01 0 0 51.0 0 1"
+)
+
+
+@pytest.mark.asyncio
+async def test_edge_threshold_event_reads_the_owners_voltages_from_the_box_settings():
+    """A pi30_thresholds rule on an adopted PI30 box takes the owner's voltages
+    from the settings the box posted, and puts them back at the window end
+    (svitgrid#1255)."""
+    from custom_components.svitgrid.harvest.event_scheduler_loop import _tick
+
+    event = {
+        "id": "evt-1",
+        "inverterId": "inv-1",
+        "enabled": True,
+        "mode": "custom",
+        "schedule": {"startTime": "10:00", "endTime": "11:00", "recurrence": "daily"},
+        "config": {
+            "customActions": [
+                {"type": "pi30_thresholds", "backToGridVoltage": 46, "backToBatteryVoltage": 54}
+            ],
+            "customConditions": [{"type": "battery_soc", "op": "lte", "threshold": 60}],
+            "sustainMinutes": 0,
+        },
+        "executionState": {"status": "pending_condition"},
+    }
+    event_store = FakeEventStore([event])
+    store = FakeStore([_reading_at()])
+    mock_executor = AsyncMock()
+    mock_executor.dispatch.return_value = {"commandId": "cmd-1"}
+    asked = []
+
+    async def settings_for(inverter_id):
+        asked.append(inverter_id)
+        body = {"protocol": "pi30", "qpiri": _QPIRI}
+        return {"inverter_id": inverter_id, "kind": "pi30", "body": body}
+
+    await _tick(
+        store,
+        event_store,
+        lambda _i: mock_executor,
+        "UTC",
+        _NOW_IN_WINDOW,
+        _pi30_for,
+        settings_for,
+    )
+    assert asked == ["inv-1"]
+    assert mock_executor.dispatch.call_args.args == (
+        "set_pi30_thresholds",
+        {"backToGridVoltage": 46, "backToBatteryVoltage": 54},
+    )
+    state = event_store._events["evt-1"]["executionState"]
+    assert state["status"] == "active"
+    prior = {"backToGridVoltage": 48.0, "backToBatteryVoltage": 51.0}
+    assert state["customSnapshot"] == {"previousPi30Thresholds": prior}
+
+    mock_executor.dispatch.reset_mock()
+    await _tick(
+        store,
+        event_store,
+        lambda _i: mock_executor,
+        "UTC",
+        _NOW_OUT_WINDOW,
+        _pi30_for,
+        settings_for,
+    )
+    mock_executor.dispatch.assert_awaited_once()
+    assert mock_executor.dispatch.call_args.args == ("restore_pi30_thresholds", prior)
+    assert "customSnapshot" not in event_store._events["evt-1"]["executionState"]
