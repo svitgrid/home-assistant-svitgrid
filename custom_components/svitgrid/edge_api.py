@@ -15,7 +15,7 @@ Two rules hold on every view here:
   key is 401 `{"error":"unauthorized"}`.
 
 The paths only the cloud can serve (bootstrap, MQTT, firmware offers,
-coredumps, Zigbee) get a fixed answer, 2xx wherever the box only needs to hear
+coredumps, Zigbee, EV chargers) get a fixed answer, 2xx wherever the box only needs to hear
 that the call landed: its cloud-contact watchdog restarts it after two hours
 without a 2xx.
 """
@@ -190,6 +190,15 @@ def _snapshot_from_settings_body(box: EdgeBoxEntry, body) -> tuple[dict | None, 
 # too, so a box is never bound while it is being replaced or removed.
 EDGE_BOX_LOCK = asyncio.Lock()
 
+# The header an unbound box presents its pairing code in, and the refusals this
+# side answers for it (`edge_pair_code.json`, `tests/test_edge_contract.py`).
+# A missing code is a 401, never `pair_code_missing`: nothing says the key
+# belongs to a box at all.
+PAIR_CODE_HEADER = "X-Pair-Code"
+PAIR_CODE_INVALID = "pair_code_invalid"
+PAIR_CODE_EXPIRED = "pair_code_expired"
+PAIR_CODE_ERRORS = (PAIR_CODE_INVALID, PAIR_CODE_EXPIRED)
+
 # hass.data[DOMAIN] key: deviceId -> the last `pair_code_*` refusal the box
 # was given, `{"error", "at"}`, for `GET /api/svitgrid/edge/status`. In memory
 # only: a box retrying a refused code would otherwise write the keystore on
@@ -253,11 +262,11 @@ class _EdgeView(HomeAssistantView):
         if isinstance(state, web.Response):
             return state
         api_key = request.headers.get("X-API-Key") or ""
-        pair_code = request.headers.get("X-Pair-Code")
+        pair_code = request.headers.get(PAIR_CODE_HEADER)
         box = state.edge_box_for_api_key(api_key)
         if box is not None:
             if pair_code and state.edge_box_for_pair_code(pair_code)[1] == "ok":
-                return _refuse_pair_code(request.app["hass"], "pair_code_invalid", box.device_id)
+                return _refuse_pair_code(request.app["hass"], PAIR_CODE_INVALID, box.device_id)
             return box
         if not pair_code or not api_key:
             return self.json({"error": "unauthorized"}, status_code=401)
@@ -279,16 +288,16 @@ class _EdgeView(HomeAssistantView):
         if verdict == "expired":
             issued = state.edge_box_issued_pair_code(pair_code)
             return _refuse_pair_code(
-                hass, "pair_code_expired", *([issued.device_id] if issued else [])
+                hass, PAIR_CODE_EXPIRED, *([issued.device_id] if issued else [])
             )
         # A path naming a device id must name the box the code was issued for.
         named = request.match_info.get("device_id")
         if box is None or (named and named != box.device_id):
-            return _refuse_pair_code(hass, "pair_code_invalid", *_invalid_code_boxes(state, named))
+            return _refuse_pair_code(hass, PAIR_CODE_INVALID, *_invalid_code_boxes(state, named))
         try:
             await keystore.async_bind_edge_box(box.device_id, api_key)
         except KeyError:
-            return _refuse_pair_code(hass, "pair_code_invalid")
+            return _refuse_pair_code(hass, PAIR_CODE_INVALID)
         edge_refusals(hass).pop(box.device_id, None)
         _LOGGER.info("Edge box %s bound its key with a pairing code", box.device_id)
         return replace(box, api_key=api_key, pair_code_hash=None, pair_code_expires_at=None)
@@ -336,17 +345,6 @@ class EdgeBootstrapView(_EdgeView):
         if isinstance(state, web.Response):
             return state
         return self.json({"error": "island_no_bootstrap"}, status_code=404)
-
-
-class EdgeConfigView(_EdgeView):
-    url = "/api/v1/edge-devices/config"
-    name = "svitgrid:edge:config"
-
-    async def get(self, request):
-        box = await self._box(request)
-        if isinstance(box, web.Response):
-            return box
-        return self.json(build_edge_config(box))
 
 
 class EdgeSyncSettingsView(_EdgeView):
@@ -758,30 +756,29 @@ class EdgeZigbeeSinkView(_EdgeView):
         return self.json({})
 
 
-class EdgeTrustedKeysView(_EdgeView):
-    url = "/api/v3/executors/trusted-keys"
-    name = "svitgrid:edge:trusted-keys"
+class EdgeChargerSinkView(_EdgeView):
+    """EV chargers are a non-goal on an island and the `config` block lists
+    none, but a box that still holds a charger from an earlier cloud config
+    posts its state, relay and command acks: a 200 keeps it off a 404 storm."""
 
-    async def get(self, request):
+    url = "/api/v3/executors/charger-state"
+    extra_urls = [
+        "/api/v3/executors/charger-relay",
+        "/api/v3/executors/chargers/commands/{command_id}/ack",
+    ]
+    name = "svitgrid:edge:charger"
+
+    async def post(self, request, **_match):
         box = await self._box(request)
         if isinstance(box, web.Response):
             return box
-        state = await self._keystore(request.app["hass"]).load()
-        return self.json(
-            {
-                "trustedKeys": [
-                    {"keyId": key_id, "publicKeyHex": public_key_hex}
-                    for key_id, public_key_hex in state.trusted_public_keys_hex.items()
-                ]
-            }
-        )
+        return self.json({})
 
 
 EDGE_VIEWS = (
     EdgeHealthView,
     EdgeMeView,
     EdgeBootstrapView,
-    EdgeConfigView,
     EdgeSyncSettingsView,
     EdgeIngestBatchView,
     EdgeIngestReadingView,
@@ -794,5 +791,5 @@ EDGE_VIEWS = (
     EdgePairAttemptsView,
     EdgeUpdateInverterIpView,
     EdgeZigbeeSinkView,
-    EdgeTrustedKeysView,
+    EdgeChargerSinkView,
 )

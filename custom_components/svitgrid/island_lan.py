@@ -91,6 +91,8 @@ ACTION_EDGE_ADOPT = "edge_adopt"
 ACTION_EDGE_FORGET = "edge_forget"
 ACTION_EDGE_LEAVE = "edge_leave"
 ACTION_EDGE_KEY_ADD = "edge_key_add"
+# The box command `/edge/leave` queues (`edge_pair_code.json` `commands.clear`).
+EDGE_LEAVE_COMMAND = "clear_island_endpoint"
 
 # The per-inverter keys of an `edge_adopt` body kept on the box's entry: the
 # box's own harvest config, as the cloud holds it. `build_edge_config` serves
@@ -691,7 +693,7 @@ class SvitgridEdgeLeaveView(HomeAssistantView):
         if box_command is None:
             return _json_error(400, "box_signature_required")
         event = box_command["signedEventData"]
-        if event.get("command") != "clear_island_endpoint" or event.get("payload", {}) != {}:
+        if event.get("command") != EDGE_LEAVE_COMMAND or event.get("payload", {}) != {}:
             return _json_error(
                 400,
                 "bad_request",
@@ -710,7 +712,7 @@ class SvitgridEdgeLeaveView(HomeAssistantView):
             return _json_error(503, "unavailable")
         command_id = await queue.async_enqueue(
             device_id,
-            "clear_island_endpoint",
+            EDGE_LEAVE_COMMAND,
             {},
             signing=box_command,
             inverter_id=None,

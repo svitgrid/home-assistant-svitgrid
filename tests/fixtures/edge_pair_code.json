@@ -1,0 +1,26 @@
+{
+  "header": "X-Pair-Code",
+  "payloadKey": "pairCode",
+  "urlKey": "url",
+  "commands": {
+    "set": "set_island_endpoint",
+    "clear": "clear_island_endpoint"
+  },
+  "pattern": "^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{6}$",
+  "errors": ["pair_code_missing", "pair_code_invalid", "pair_code_expired"],
+  "ttlSeconds": 600,
+  "serverTimeExamples": {
+    "accepted": [
+      "2026-10-28T12:00:00.123Z",
+      "2026-10-28T12:00:00Z",
+      "2026-10-28T12:00:00.123456+00:00",
+      "2026-10-28T12:00:00+00:00"
+    ],
+    "refused": [
+      "2026-10-28T12:00:00+02:00",
+      "2026-10-28T12:00:00-00:00",
+      "2026-10-28T12:00:00+0000",
+      "2026-10-28T12:00:00"
+    ]
+  }
+}
