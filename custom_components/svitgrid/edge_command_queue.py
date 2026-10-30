@@ -81,12 +81,17 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             reason       TEXT,
             expires_at   TEXT NOT NULL,
             deliveries   INTEGER NOT NULL DEFAULT 0,
-            rejected     INTEGER
+            rejected     INTEGER,
+            target_json  TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_edge_commands_device_state
             ON edge_commands (device_id, state, created_at);
         """
     )
+    # A database written before `target_json` existed gains it here.
+    columns = {r[1] for r in conn.execute("PRAGMA table_info(edge_commands)")}
+    if "target_json" not in columns:
+        conn.execute("ALTER TABLE edge_commands ADD COLUMN target_json TEXT")
     conn.commit()
 
 
@@ -108,6 +113,7 @@ def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
         "reason": row["reason"],
         "expires_at": row["expires_at"],
         "deliveries": row["deliveries"],
+        "target": json.loads(row["target_json"]) if row["target_json"] else None,
     }
 
 
@@ -172,6 +178,7 @@ class EdgeCommandQueue:
         inverter_id: str | None,
         source: str,
         ttl_s: int,
+        target: dict | None = None,
     ) -> str:
         command_id = str(uuid.uuid4())
         now = _utcnow()
@@ -179,8 +186,8 @@ class EdgeCommandQueue:
         try:
             conn.execute(
                 "INSERT INTO edge_commands (id, device_id, inverter_id, command, "
-                "payload_json, signing_json, state, source, created_at, expires_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)",
+                "payload_json, signing_json, state, source, created_at, expires_at, "
+                "target_json) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)",
                 (
                     command_id,
                     device_id,
@@ -191,6 +198,7 @@ class EdgeCommandQueue:
                     source,
                     _iso(now),
                     _iso(now + timedelta(seconds=ttl_s)),
+                    json.dumps(target, separators=(",", ":")) if target else None,
                 ),
             )
             conn.commit()
@@ -333,11 +341,22 @@ class EdgeCommandQueue:
         inverter_id: str | None,
         source: str,
         ttl_s: int = DEFAULT_TTL_S,
+        target: dict | None = None,
     ) -> str:
         """Queue `command` for the box; returns its id. `signing` holds the
-        phone's `signedEventData`, `signature` and `signingKeyId`, untouched."""
+        phone's `signedEventData`, `signature` and `signingKeyId`, untouched.
+        `target` holds the fields the box reads beside `payload` (a Zigbee
+        `set_state`'s `zigbeeAddr` and `zigbeeEndpoint`)."""
         return await self._run(
-            self._enqueue_sync, device_id, command, payload, signing, inverter_id, source, ttl_s
+            self._enqueue_sync,
+            device_id,
+            command,
+            payload,
+            signing,
+            inverter_id,
+            source,
+            ttl_s,
+            target,
         )
 
     async def async_next_pending(self, device_id: str) -> dict[str, Any] | None:

@@ -603,6 +603,12 @@ def _command_for_box(row: dict) -> dict:
     for key in ("signedEventData", "signature", "signingKeyId", "signerKeyId"):
         if key in signing:
             command[key] = signing[key]
+    # A Zigbee `set_state` names its device beside `payload`, and says how
+    # long the tap has left, as the cloud does (`zigbee_poller.c` set_state).
+    command.update(row.get("target") or {})
+    if row["command"] == "set_state" and row.get("expires_at"):
+        left = datetime.fromisoformat(row["expires_at"].replace("Z", "+00:00")) - _now()
+        command["expiresInMs"] = max(0, int(left.total_seconds() * 1000))
     return command
 
 

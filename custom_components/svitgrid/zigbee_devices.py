@@ -143,6 +143,15 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             devices_json TEXT NOT NULL,
             PRIMARY KEY (period_start, box_id)
         );
+        CREATE TABLE IF NOT EXISTS zigbee_history (
+            zigbee_id  TEXT NOT NULL,
+            timestamp  TEXT NOT NULL,
+            event      TEXT NOT NULL,
+            state_json TEXT,
+            command_id TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_zigbee_history
+            ON zigbee_history (zigbee_id, timestamp);
         """
     )
     conn.commit()
@@ -479,6 +488,71 @@ class ZigbeeDeviceStore:
             "devices": devices,
         }
 
+    def _remove_sync(self, device_id: str) -> None:
+        conn = _connect(self._db_path)
+        try:
+            for table, column in (
+                ("zigbee_devices", "id"),
+                ("zigbee_socket_readings", "zigbee_id"),
+                ("zigbee_sensor_readings", "zigbee_id"),
+                ("zigbee_history", "zigbee_id"),
+            ):
+                conn.execute(f"DELETE FROM {table} WHERE {column} = ?", (device_id,))
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _latest_sync(self, device_id: str) -> tuple[dict | None, dict | None]:
+        conn = _connect(self._db_path)
+        try:
+            socket = conn.execute(
+                "SELECT timestamp, power, voltage, current, energy FROM zigbee_socket_readings "
+                "WHERE zigbee_id = ? ORDER BY timestamp DESC, rowid DESC LIMIT 1",
+                (device_id,),
+            ).fetchone()
+            sensor = conn.execute(
+                "SELECT captured_at, temperature, humidity, battery FROM zigbee_sensor_readings "
+                "WHERE zigbee_id = ? ORDER BY captured_at DESC, rowid DESC LIMIT 1",
+                (device_id,),
+            ).fetchone()
+            return (dict(socket) if socket else None, dict(sensor) if sensor else None)
+        finally:
+            conn.close()
+
+    def _add_history_sync(self, device_id: str, event: str, state: dict, command_id: str) -> None:
+        conn = _connect(self._db_path)
+        try:
+            conn.execute(
+                "INSERT INTO zigbee_history (zigbee_id, timestamp, event, state_json, command_id) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (device_id, _iso(_utcnow()), event, json.dumps(state), command_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _history_sync(self, device_id: str, limit: int) -> list[dict]:
+        conn = _connect(self._db_path)
+        try:
+            rows = conn.execute(
+                "SELECT rowid, * FROM zigbee_history WHERE zigbee_id = ? "
+                "ORDER BY timestamp DESC, rowid DESC LIMIT ?",
+                (device_id, limit),
+            ).fetchall()
+            return [
+                {
+                    "id": str(r["rowid"]),
+                    "timestamp": r["timestamp"],
+                    "event": r["event"],
+                    "state": json.loads(r["state_json"]) if r["state_json"] else None,
+                    "commandId": r["command_id"],
+                    "triggeredBy": None,
+                }
+                for r in rows
+            ]
+        finally:
+            conn.close()
+
     # ── async wrappers ────────────────────────────────────────────────────────
 
     async def _run(self, func, *args):
@@ -557,6 +631,25 @@ class ZigbeeDeviceStore:
         snapshot under `boards`, their sum at the top, and every plug's
         sample under `devices`. None for a slot with no metering plug."""
         return await self._run(self._usage_5min_sync, period_start)
+
+    async def async_remove(self, device_id: str) -> None:
+        """Forget the device, its readings and its history."""
+        await self._run(self._remove_sync, device_id)
+
+    async def async_latest(self, device_id: str) -> tuple[dict | None, dict | None]:
+        """The device's latest plug reading and latest sensor reading."""
+        return await self._run(self._latest_sync, device_id)
+
+    async def async_add_history(
+        self, device_id: str, event: str, state: dict, command_id: str
+    ) -> None:
+        """Record a history event (`command_sent`), as the cloud's
+        `smartDevices/{id}/history`."""
+        await self._run(self._add_history_sync, device_id, event, state, command_id)
+
+    async def async_history(self, device_id: str, limit: int = 50) -> list[dict]:
+        """The device's history, newest first."""
+        return await self._run(self._history_sync, device_id, limit)
 
     async def async_permit_join_open(self, box_id: str) -> bool:
         """Whether the box's permit-join window is open now."""
