@@ -1,0 +1,84 @@
+{
+  "paths": [
+    {
+      "path": "/health",
+      "method": "GET"
+    },
+    {
+      "path": "/api/v3/me",
+      "method": "GET"
+    },
+    {
+      "path": "/api/v1/edge-devices/bootstrap",
+      "method": "POST"
+    },
+    {
+      "path": "/api/v1/ingest/reading",
+      "method": "POST"
+    },
+    {
+      "path": "/api/v1/ingest/readings",
+      "method": "POST"
+    },
+    {
+      "path": "/api/v1/edge-devices/sync-settings",
+      "method": "POST"
+    },
+    {
+      "path": "/api/v1/edge-devices/coredump",
+      "method": "POST"
+    },
+    {
+      "path": "/api/v1/edge-devices/update-inverter-ip",
+      "method": "POST"
+    },
+    {
+      "path": "/api/v1/edge-devices/{device_id}/pair-attempts",
+      "method": "POST"
+    },
+    {
+      "path": "/api/v1/edge-devices/{device_id}/sensor-readings",
+      "method": "POST"
+    },
+    {
+      "path": "/api/v1/edge-devices/zigbee/device-joined",
+      "method": "POST"
+    },
+    {
+      "path": "/api/v1/edge-devices/zigbee/state-update",
+      "method": "POST"
+    },
+    {
+      "path": "/api/v3/edge-devices/{device_id}/mqtt-token",
+      "method": "POST"
+    },
+    {
+      "path": "/api/v3/executors/commands",
+      "method": "GET"
+    },
+    {
+      "path": "/api/v3/executors/commands/{command_id}/ack",
+      "method": "POST"
+    },
+    {
+      "path": "/api/v3/executors/firmware-check",
+      "method": "GET"
+    },
+    {
+      "path": "/api/v3/executors/grid-event",
+      "method": "POST"
+    },
+    {
+      "path": "/api/v3/executors/charger-state",
+      "method": "POST"
+    },
+    {
+      "path": "/api/v3/executors/charger-relay",
+      "method": "POST"
+    },
+    {
+      "path": "/api/v3/executors/chargers/commands/{command_id}/ack",
+      "method": "POST"
+    }
+  ]
+}

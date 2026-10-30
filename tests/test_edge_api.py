@@ -140,7 +140,8 @@ EDGE_VIEWS = [
     (edge_api.EdgeUpdateInverterIpView, "post", {}),
     (edge_api.EdgeZigbeeSinkView, "post", {}),
     (edge_api.EdgeZigbeeSinkView, "post", {"device_id": "EC-1"}),
-    (edge_api.EdgeTrustedKeysView, "get", {}),
+    (edge_api.EdgeChargerSinkView, "post", {}),
+    (edge_api.EdgeChargerSinkView, "post", {"command_id": "cmd-1"}),
 ]
 
 
@@ -521,10 +522,12 @@ async def test_update_inverter_ip_for_an_unknown_inverter_changes_nothing():
     [
         (edge_api.EdgeZigbeeSinkView, {}),
         (edge_api.EdgeZigbeeSinkView, {"device_id": "EC-1"}),
+        (edge_api.EdgeChargerSinkView, {}),
+        (edge_api.EdgeChargerSinkView, {"command_id": "cmd-1"}),
     ],
-    ids=["zigbee", "sensor-readings"],
+    ids=["zigbee", "sensor-readings", "charger", "charger-ack"],
 )
-async def test_zigbee_sinks_answer_empty(view_cls, match_info):
+async def test_zigbee_and_charger_sinks_answer_empty(view_cls, match_info):
     hass = _hass(_keystore(_box()))
     resp = await _call(
         view_cls, "post", hass, api_key=BOX_KEY, body={"x": 1}, match_info=match_info
@@ -542,16 +545,13 @@ def test_zigbee_sinks_cover_every_zigbee_path():
     }
 
 
-@pytest.mark.asyncio
-async def test_trusted_keys_lists_the_keystore_keys():
-    hass = _hass(_keystore(_box(), trusted={"k1": "04aa", "k2": "04bb"}))
-    resp = await _call(edge_api.EdgeTrustedKeysView, "get", hass, api_key=BOX_KEY)
-    assert resp.status == 200
-    keys = _json(resp)["trustedKeys"]
-    assert sorted(keys, key=lambda k: k["keyId"]) == [
-        {"keyId": "k1", "publicKeyHex": "04aa"},
-        {"keyId": "k2", "publicKeyHex": "04bb"},
-    ]
+def test_charger_sinks_cover_every_charger_path():
+    urls = {edge_api.EdgeChargerSinkView.url, *edge_api.EdgeChargerSinkView.extra_urls}
+    assert urls == {
+        "/api/v3/executors/charger-state",
+        "/api/v3/executors/charger-relay",
+        "/api/v3/executors/chargers/commands/{command_id}/ack",
+    }
 
 
 def test_edge_views_use_the_cloud_paths_and_skip_ha_auth():
@@ -564,7 +564,6 @@ def test_edge_views_use_the_cloud_paths_and_skip_ha_auth():
         edge_api.EdgeCoredumpView: "/api/v1/edge-devices/coredump",
         edge_api.EdgePairAttemptsView: "/api/v1/edge-devices/{device_id}/pair-attempts",
         edge_api.EdgeUpdateInverterIpView: "/api/v1/edge-devices/update-inverter-ip",
-        edge_api.EdgeTrustedKeysView: "/api/v3/executors/trusted-keys",
     }
     for view_cls, url in expected.items():
         assert view_cls.url == url
@@ -643,7 +642,6 @@ _INV_1 = {
 _INV_2 = {**_INV_1, "ipAddress": "10.0.0.6", "loggerSerial": "2712345679"}
 
 TASK6_VIEWS = [
-    (edge_api.EdgeConfigView, "get", {}),
     (edge_api.EdgeSyncSettingsView, "post", {}),
 ]
 
@@ -689,7 +687,6 @@ async def test_config_and_sync_settings_unknown_key_is_401_not_410(view_cls, met
 
 
 def test_config_and_sync_settings_use_the_cloud_paths_and_are_registered():
-    assert edge_api.EdgeConfigView.url == "/api/v1/edge-devices/config"
     assert edge_api.EdgeSyncSettingsView.url == "/api/v1/edge-devices/sync-settings"
     hass = MagicMock()
     hass.data = {}
@@ -849,15 +846,6 @@ def test_config_hash_is_stable_for_same_inverters():
         _box(inverters={"inv-1": {**_INV_1, "ipAddress": "10.0.0.9"}, "inv-2": _INV_2})
     )
     assert moved["configHash"] != first["configHash"]
-
-
-@pytest.mark.asyncio
-async def test_config_view_answers_the_box_config():
-    box = _box(inverters={"inv-1": _INV_1})
-    hass = _hass(_keystore(box, _box(device_id="EC-2", api_key="k2", inverters={"x": _INV_2})))
-    resp = await _call(edge_api.EdgeConfigView, "get", hass, api_key=BOX_KEY)
-    assert resp.status == 200
-    assert _json(resp) == edge_api.build_edge_config(box)
 
 
 @pytest.mark.asyncio
