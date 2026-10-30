@@ -24,6 +24,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
+from .brand_commands import brand_kind, profile_for_mode
+
 _LOGGER = logging.getLogger(__name__)
 
 # ─────────────────────────────── Window helpers ───────────────────────────────
@@ -969,6 +971,68 @@ def needs_cloud(event: dict) -> bool:
     return _cloud_skip_reason(event) is not None
 
 
+# skip_reason, and lastCommandError.reason, of an event on an edge inverter
+# whose brand the island cannot write yet (EdgeBoxExecutor's word for it).
+UNSUPPORTED_FIELD = "unsupported_field"
+
+# Custom actions that drive a smart plug or an EV charger, not the inverter.
+_DEVICE_ACTION_TYPES = frozenset({"smart_device", "smart_device_except", "ev_charger"})
+
+# The box's command for a custom action only a non-Deye brand has.
+_BRAND_ACTION_COMMANDS = {
+    "priority_profile": "apply_priority_profile",
+    "pi30_thresholds": "set_pi30_thresholds",
+    "must_thresholds": "set_must_thresholds",
+}
+
+
+def _unsupported_command(event: dict, exec_state: dict, kind: str) -> str | None:
+    """The inverter write *event* needs that an inverter of *kind* cannot get
+    from the island, or None when the event writes nothing to the inverter.
+
+    Only the Deye family is written today. A priority-profile brand's
+    profile and threshold commands come with svitgrid#1254 and #1255; until
+    then the event sends nothing rather than a partial payload.
+    """
+    if kind == "deye":
+        return None
+    if event.get("mode") == "custom":
+        for action in (event.get("config") or {}).get("customActions") or []:
+            kind_ = action.get("type") if isinstance(action, dict) else None
+            if kind_ in _DEVICE_ACTION_TYPES:
+                continue
+            if kind_ in _BRAND_ACTION_COMMANDS:
+                return _BRAND_ACTION_COMMANDS[kind_]
+            command = action.get("command") if isinstance(action, dict) else None
+            return command or (_CUSTOM_ACTIONS.get(kind_) or (kind_,))[0]
+        return None
+    writes = _event_writes(event, exec_state)
+    if not writes:
+        return None
+    if kind == "priority" and profile_for_mode(event.get("mode", "")):
+        return "apply_priority_profile"
+    return writes[0].command
+
+
+def _unsupported(event: dict, exec_state: dict, command: str, now_utc: datetime):
+    """Skip an event the island cannot write, recorded once in lastCommandError.
+
+    No command is dispatched, so the scheduler has nothing to retry; the
+    error keeps the time it was first recorded.
+    """
+    state = copy.deepcopy(exec_state)
+    error = state.get("lastCommandError") or {}
+    if error.get("reason") != UNSUPPORTED_FIELD or error.get("command") != command:
+        state["lastCommandError"] = {
+            "command": command,
+            "reason": UNSUPPORTED_FIELD,
+            "at": now_utc.isoformat(),
+        }
+    return EvaluatorDecision(
+        action="skip", commands=[], new_state=state, skip_reason=UNSUPPORTED_FIELD
+    )
+
+
 def evaluate_event(
     event: dict,
     reading: dict,
@@ -976,12 +1040,23 @@ def evaluate_event(
     now_utc: datetime,
     tz: str,
     others=(),
+    inverter: dict | None = None,
 ) -> EvaluatorDecision:
     """Evaluate a calendar event; see `_evaluate_event`.
 
     Records `skippedReason: "needs_cloud"` on the new state of an event
     skipped for cloud-only inputs, and clears it from any other.
+
+    *inverter* is the brand of an inverter on an adopted edge box
+    (``brand_commands.edge_inverter``: ``modelId``, ``transport``,
+    ``protocolId``), or None for one the integration writes itself, which is
+    evaluated as before. An event that would write to an edge inverter whose
+    brand the island cannot write yet is skipped with ``unsupported_field``.
     """
+    if inverter is not None and _cloud_skip_reason(event) is None:
+        command = _unsupported_command(event, exec_state, brand_kind(inverter))
+        if command is not None:
+            return _unsupported(event, exec_state, command, now_utc)
     decision = _evaluate_event(event, reading, exec_state, now_utc, tz, others)
     state = {k: v for k, v in decision.new_state.items() if k != SKIPPED_REASON_KEY}
     if decision.action == "skip" and decision.skip_reason in _NEEDS_CLOUD_SKIPS:
