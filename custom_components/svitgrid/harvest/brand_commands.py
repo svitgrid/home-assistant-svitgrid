@@ -2,19 +2,25 @@
 
 The cloud evaluator sends a Deye register write to a Deye-family inverter and
 a priority profile or a threshold command to a PI30, MUST, LuxPower SNA,
-SMG II or SRNE. The island evaluator writes the Deye family only: until the
-priority-profile and threshold commands are ported (svitgrid#1254, #1255), an
-event on any other brand writes nothing and records ``unsupported_field``
-rather than sending a partial payload.
+SMG II or SRNE. The island evaluator writes the Deye family, the priority
+profiles (svitgrid#1254) and the PI30 and MUST thresholds (#1255); an event on
+any other brand writes nothing and records ``unsupported_field`` rather than
+sending a partial payload.
 
 TS mapping:
   priorityProfileProtocol      → priority_profile_protocol  (priority-profile.ts)
   profileForMode               → profile_for_mode           (priority-profile.ts)
   DEYE_REGISTER_WRITABLE_MODELS → DEYE_REGISTER_WRITABLE_MODELS (register-mapping.ts)
+  validPi30Thresholds          → valid_pi30_thresholds      (custom-action-catalog.ts)
+  parsePi30Qpiri (fields 9, 23) → pi30_prior_thresholds     (pi30-settings-mapping.ts)
+  validMustThresholds          → valid_must_thresholds      (must-calendar.ts)
+  mustMirrorStopVoltages       → must_prior_thresholds      (must-calendar.ts)
 """
 
 from __future__ import annotations
 
+import math
+import re
 from typing import Literal
 
 BrandKind = Literal["deye", "priority", "solax", "none"]
@@ -152,11 +158,11 @@ def island_writes(inv: dict) -> dict[str, list[str]]:
     inverter: ``{"writableActions": [...], "modes": [...]}``.
 
     A priority-profile brand lists a mode only when its protocol has that
-    mode's profile (an SNA has no battery_first). Its thresholds action is not
-    listed yet: the evaluator refuses it with ``unsupported_field`` until
-    svitgrid#1255.
+    mode's profile (an SNA has no battery_first), and the thresholds action of
+    its own protocol (PI30 or MUST, svitgrid#1255).
     """
-    # priority_profile imports this module.
+    # priority_profile and event_evaluator import this module.
+    from .event_evaluator import _THRESHOLDS
     from .priority_profile import PROFILES_BY_PROTOCOL
 
     kind = brand_kind(inv)
@@ -168,5 +174,111 @@ def island_writes(inv: dict) -> dict[str, list[str]]:
         )
         profiles = PROFILES_BY_PROTOCOL.get(protocol or "", ())
         modes = [m for m in _PRIORITY_MODES if profile_for_mode(m) in profiles]
-        return {"writableActions": [], "modes": modes}
+        actions = [a for a, t in _THRESHOLDS.items() if t.protocol == protocol]
+        return {"writableActions": actions, "modes": modes}
     return {"writableActions": [], "modes": []}
+
+
+# ── The owner's threshold voltages (the cloud's settings mirror) ──────────
+
+# A QPIRI reply carries 25 fields; fewer means a truncated frame.
+_QPIRI_MIN_FIELDS = 25
+# A QPIRI field the cloud reads as a number (pi30-settings-mapping.ts num).
+_QPIRI_NUMBER = re.compile(r"^-?\d+(\.\d+)?$")
+# QPIRI fields, 1-based as the protocol numbers them.
+_QPIRI_BACK_TO_GRID = 9
+_QPIRI_BACK_TO_BATTERY = 23
+
+# must-calendar.ts MUST_STOP_DISCHARGE_REGISTER and MUST_STOP_CHARGE_REGISTER,
+# 0.1 V per count.
+MUST_STOP_DISCHARGE_REGISTER = 20118
+MUST_STOP_CHARGE_REGISTER = 20119
+
+
+def _finite(value) -> bool:
+    return isinstance(value, int | float) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def valid_pi30_thresholds(value) -> dict | None:
+    """Both PI30 switch-over voltages from a stored snapshot, or None."""
+    if not isinstance(value, dict):
+        return None
+    g, b = value.get("backToGridVoltage"), value.get("backToBatteryVoltage")
+    if not _finite(g) or not _finite(b):
+        return None
+    return {"backToGridVoltage": g, "backToBatteryVoltage": b}
+
+
+def valid_must_thresholds(value) -> dict | None:
+    """Both MUST stop voltages from a stored snapshot, or None (0 is never read)."""
+    if not isinstance(value, dict):
+        return None
+    d, c = value.get("stopDischargeV"), value.get("stopChargeV")
+    if not _finite(d) or d <= 0 or not _finite(c) or c <= 0:
+        return None
+    return {"stopDischargeV": d, "stopChargeV": c}
+
+
+def _body(snapshot, protocol: str) -> dict | None:
+    """The brand body of an edge settings snapshot (edge_api), or None."""
+    body = snapshot.get("body") if isinstance(snapshot, dict) else None
+    if not isinstance(body, dict) or body.get("protocol") != protocol:
+        return None
+    return body
+
+
+def _qpiri_number(fields: list[str], one_based: int) -> float | None:
+    field = fields[one_based - 1]
+    return float(field) if _QPIRI_NUMBER.match(field) else None
+
+
+def pi30_prior_thresholds(snapshot) -> dict | None:
+    """The owner's switch-over voltages from the box's QPIRI, or None.
+
+    The cloud reads them from ``globalSettings.pi30``, which parsePi30Qpiri
+    fills from the same reply: ``backToGridVoltage`` is field 9 and
+    ``backToBatteryVoltage`` field 23.
+    """
+    body = _body(snapshot, "pi30")
+    qpiri = body.get("qpiri") if body else None
+    if not isinstance(qpiri, str):
+        return None
+    fields = qpiri.split()
+    if len(fields) < _QPIRI_MIN_FIELDS:
+        return None
+    return valid_pi30_thresholds(
+        {
+            "backToGridVoltage": _qpiri_number(fields, _QPIRI_BACK_TO_GRID),
+            "backToBatteryVoltage": _qpiri_number(fields, _QPIRI_BACK_TO_BATTERY),
+        }
+    )
+
+
+def _must_word(blocks, address: int) -> int | None:
+    for block in blocks:
+        if not isinstance(block, dict):
+            continue
+        start, words = block.get("startRegister"), block.get("registers")
+        if type(start) is not int or not isinstance(words, list):
+            continue
+        if start <= address < start + len(words):
+            word = words[address - start]
+            return word if type(word) is int and word > 0 else None
+    return None
+
+
+def must_prior_thresholds(snapshot) -> dict | None:
+    """The owner's stop voltages from the box's MUST settings, or None.
+
+    mustMirrorStopVoltages: both words of 20118 and 20119, in volts. A word
+    missing or 0 was never read, and one voltage alone is never restored.
+    """
+    body = _body(snapshot, "must")
+    blocks = body.get("blocks") if body else None
+    if not isinstance(blocks, list):
+        return None
+    d = _must_word(blocks, MUST_STOP_DISCHARGE_REGISTER)
+    c = _must_word(blocks, MUST_STOP_CHARGE_REGISTER)
+    if d is None or c is None:
+        return None
+    return {"stopDischargeV": round(d) / 10, "stopChargeV": round(c) / 10}

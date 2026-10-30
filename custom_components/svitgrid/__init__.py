@@ -80,11 +80,18 @@ from .preset_refresh import refresh_entry_inverters
 from .reading_sender import Cadence, run_sender_loop
 from .reading_store import ReadingStore
 from .readings_publisher import run_loop as run_readings_loop
+from .settings_sync import find_edge_settings_snapshot
 from .settings_sync import settings_sync_loop as run_settings_sync_loop
 from .update import SvitgridUpdateCoordinator
 from .updater import read_installed_version
 
 _LOGGER = logging.getLogger(__name__)
+
+
+async def _edge_settings(hass: HomeAssistant, inverter_id: str) -> dict | None:
+    """The settings an adopted edge box posted for ``inverter_id``, or None."""
+    snapshot, _ = await find_edge_settings_snapshot(hass, inverter_id)
+    return snapshot
 
 
 async def _start_local_store(
@@ -1107,6 +1114,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     # The brand of an inverter on an adopted edge box, which
                     # decides the commands its events may send it.
                     inverter_for=lambda inverter_id: edge_inverter(edge_boxes, inverter_id),
+                    # The settings the box posted, which a PI30 or MUST
+                    # threshold rule reads the owner's voltages from.
+                    settings_for=lambda inverter_id: _edge_settings(hass, inverter_id),
                 ),
                 name="svitgrid_event_scheduler",
             )

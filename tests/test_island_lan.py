@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -1718,6 +1719,7 @@ async def test_island_status_advertises_each_edge_inverters_writes(hass: HomeAss
         "EC-1",
         _inv("inv-deye"),
         _inv("inv-pi30", modelId="edecoa_em_624a", transport="pi30_serial", protocolId="pi30"),
+        _inv("inv-must", modelId="must_pv18_3224", transport="modbus_rtu", protocolId="must"),
         _inv(
             "inv-sna",
             modelId="luxpower_sna_5000_wpv",
@@ -1739,12 +1741,17 @@ async def test_island_status_advertises_each_edge_inverters_writes(hass: HomeAss
     assert body["inverters"] == {
         "inv-ha": {"host": "ha"},
         "inv-deye": {"host": "edge", **deye},
-        # Battery charge and use battery run as priority profiles. The
-        # thresholds actions wait on svitgrid#1255, and sell_to_grid has no
-        # profile, so the island writes neither yet.
+        # Battery charge and use battery run as priority profiles, and each
+        # protocol writes its own thresholds (svitgrid#1255). sell_to_grid has
+        # no profile, so the island does not write it.
         "inv-pi30": {
             "host": "edge",
-            "writableActions": [],
+            "writableActions": ["pi30_thresholds"],
+            "modes": ["battery_charge", "use_battery"],
+        },
+        "inv-must": {
+            "host": "edge",
+            "writableActions": ["must_thresholds"],
             "modes": ["battery_charge", "use_battery"],
         },
         # An SNA has no battery_first profile.
@@ -1798,7 +1805,7 @@ async def test_island_status_advert_matches_what_the_evaluator_writes(
     then skips (review focus 5)."""
     from custom_components.svitgrid.edge_command_queue import EdgeCommandQueue
     from custom_components.svitgrid.harvest.brand_commands import brand_kind
-    from custom_components.svitgrid.harvest.event_evaluator import _unsupported_command
+    from custom_components.svitgrid.harvest.event_evaluator import evaluate_event
 
     admin = _Admin()
     await _keystore(hass, admin)
@@ -1814,10 +1821,21 @@ async def test_island_status_advert_matches_what_the_evaluator_writes(
 
     advert = _body(await SvitgridIslandStatusView().get(_Req(hass)))["inverters"]
 
+    now = datetime(2026, 6, 29, 12, 0, tzinfo=UTC)
     for inv in inverters:
         kind = brand_kind(inv)
         listed = set(advert[inv["inverterId"]]["writableActions"])
         for action in _VOCAB["brandKinds"][kind]["writableActions"]:
-            event = {"mode": "custom", "config": {"customActions": [{"type": action}]}}
-            refused = _unsupported_command(event, {}, kind) is not None
+            event = {
+                "id": "evt-1",
+                "inverterId": inv["inverterId"],
+                "enabled": True,
+                "mode": "custom",
+                "schedule": {"recurrence": "daily", "startTime": "00:00", "endTime": "23:59"},
+                "config": {"customActions": [{"type": action}]},
+            }
+            decision = evaluate_event(
+                event, {"batterySoc": 50}, {"status": "idle"}, now, "UTC", inverter=inv
+            )
+            refused = decision.skip_reason == "unsupported_field"
             assert refused is (action not in listed), (inv["inverterId"], action)
