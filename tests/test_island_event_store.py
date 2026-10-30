@@ -187,3 +187,83 @@ async def test_async_set_execution_state(tmp_path):
     await store.async_set_execution_state("evt-1", {"status": "idle"})
     rows = await store.async_list_events()
     assert rows[0]["executionState"] == {"status": "idle"}
+
+
+# ── the phone's signature (edge island, Task 12, svitgrid#1232) ───────────────
+
+SIGNING = {
+    "signedEventData": {"id": "evt-1", "type": "tou"},
+    "signature": "MEUCIQ",
+    "signingKeyId": "phone-1",
+}
+
+
+@pytest.mark.asyncio
+async def test_event_store_round_trips_signing(tmp_path):
+    store = _store(tmp_path)
+    await store.async_upsert_event({"id": "evt-1", "type": "tou"}, signing=SIGNING)
+    await store.async_upsert_event({"id": "evt-2", "type": "tou"})
+
+    by_id = {e["id"]: e for e in await store.async_list_events()}
+    assert by_id["evt-1"]["signing"] == SIGNING
+    assert by_id["evt-2"]["signing"] is None
+    assert (await store.async_get_event("evt-1"))["signing"] == SIGNING
+
+
+@pytest.mark.asyncio
+async def test_set_execution_state_keeps_signing(tmp_path):
+    store = _store(tmp_path)
+    await store.async_upsert_event({"id": "evt-1", "type": "tou"}, signing=SIGNING)
+    await store.async_set_execution_state("evt-1", {"status": "active"})
+
+    event = await store.async_get_event("evt-1")
+    assert event["signing"] == SIGNING
+    assert event["executionState"] == {"status": "active"}
+
+
+@pytest.mark.asyncio
+async def test_table_written_by_0_25_0_opens_and_keeps_every_event(tmp_path):
+    """A database written by 0.25.0 has no signing_json column. It opens, every
+    event and its execution state survive, and the events read as unsigned."""
+    import sqlite3
+
+    db_path = str(tmp_path / "island_events.db")
+    conn = sqlite3.connect(db_path)
+    # The 0.25.0 schema, verbatim.
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS island_events (
+            event_id        TEXT PRIMARY KEY,
+            event_json      TEXT NOT NULL,
+            enabled         INTEGER NOT NULL DEFAULT 1,
+            execution_state TEXT NOT NULL DEFAULT '{}',
+            updated_at      TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_island_events_updated
+            ON island_events (updated_at);
+        """
+    )
+    conn.execute(
+        "INSERT INTO island_events VALUES (?, ?, ?, ?, ?)",
+        ("evt-old", '{"id":"evt-old","type":"tou"}', 1, '{"status":"active"}', "2026-10-01Z"),
+    )
+    conn.execute(
+        "INSERT INTO island_events VALUES (?, ?, ?, ?, ?)",
+        ("evt-off", '{"id":"evt-off","enabled":false}', 0, "{}", "2026-10-02Z"),
+    )
+    conn.commit()
+    conn.close()
+
+    store = IslandEventStore(db_path)
+    events = await store.async_list_events()
+
+    assert [e["id"] for e in events] == ["evt-old", "evt-off"]
+    assert events[0]["executionState"] == {"status": "active"}
+    assert events[1]["enabled"] is False
+    assert all(e["signing"] is None for e in events)
+
+    # The migrated table takes a signed upsert and keeps the execution state.
+    await store.async_upsert_event({"id": "evt-old", "type": "tou"}, signing=SIGNING)
+    event = await store.async_get_event("evt-old")
+    assert event["signing"] == SIGNING
+    assert event["executionState"] == {"status": "active"}

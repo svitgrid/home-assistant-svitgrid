@@ -108,16 +108,18 @@ class _FakeEventStore:
 
         # Track calls for assertions
         self.upsert_calls: list[dict] = []
+        self.signing_calls: list[dict | None] = []
         self.delete_calls: list[str] = []
 
     async def async_list_events(self) -> list:
         return list(self._events.values())
 
-    async def async_upsert_event(self, event: dict) -> None:
+    async def async_upsert_event(self, event: dict, *, signing: dict | None = None) -> None:
         # As the SQLite store: an upsert keeps the stored execution state.
         prior = self._events.get(event["id"], {}).get("executionState")
         self._events[event["id"]] = event if prior is None else {**event, "executionState": prior}
         self.upsert_calls.append(event)
+        self.signing_calls.append(signing)
 
     async def async_get_event(self, event_id: str) -> dict | None:
         event = self._events.get(event_id)
@@ -938,3 +940,72 @@ async def test_put_keeping_an_active_event_enabled_writes_nothing(hass):
     await hass.async_block_till_done()
 
     executor.dispatch.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# The phone's signature is stored with the event (edge island, svitgrid#1232)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_events_post_stores_signing_fields(hass):
+    """POST stores exactly what the phone signed, untouched, beside the event."""
+    private_key, pub_hex = generate_keypair()
+    key_id = "admin-key-1"
+    _install_keystore(hass, trusted_public_keys_hex={key_id: pub_hex})
+    event_store = _install_event_store(hass)
+
+    body = _make_signed_write_body(private_key, key_id, _make_event())
+    resp = await SvitgridEventsView().post(
+        _FakeRequest(hass, island_key_header=ISLAND_KEY, body=body)
+    )
+
+    assert resp.status == 200
+    assert event_store.signing_calls == [
+        {
+            "signedEventData": body["signedEventData"],
+            "signature": body["signature"],
+            "signingKeyId": key_id,
+        }
+    ]
+    assert "signing" not in json.loads(resp.body)["event"]
+
+
+@pytest.mark.asyncio
+async def test_events_put_stores_signing_fields(hass):
+    private_key, pub_hex = generate_keypair()
+    key_id = "admin-key-1"
+    _install_keystore(hass, trusted_public_keys_hex={key_id: pub_hex})
+    event = _make_event()
+    event_store = _install_event_store(hass, initial_events=[event])
+
+    body = _make_signed_write_body(private_key, key_id, {**event, "chargeW": 5000})
+    resp = await SvitgridEventDetailView().put(
+        _FakeRequest(hass, island_key_header=ISLAND_KEY, body=body), event_id=EVENT_ID
+    )
+
+    assert resp.status == 200
+    assert event_store.signing_calls == [
+        {
+            "signedEventData": body["signedEventData"],
+            "signature": body["signature"],
+            "signingKeyId": key_id,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_events_get_does_not_echo_signing(hass):
+    """The list the app reads is unchanged: the stored signature stays local."""
+    _install_keystore(hass)
+    _install_event_store(
+        hass,
+        initial_events=[{**_make_event(), "signing": {"signature": "MEUC"}}],
+    )
+
+    resp = await SvitgridEventsView().get(_FakeRequest(hass, island_key_header=ISLAND_KEY))
+
+    assert resp.status == 200
+    events = json.loads(resp.body)["events"]
+    assert [e["id"] for e in events] == [EVENT_ID]
+    assert "signing" not in events[0]

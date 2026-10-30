@@ -45,12 +45,17 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             event_json      TEXT NOT NULL,
             enabled         INTEGER NOT NULL DEFAULT 1,
             execution_state TEXT NOT NULL DEFAULT '{}',
-            updated_at      TEXT NOT NULL
+            updated_at      TEXT NOT NULL,
+            signing_json    TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_island_events_updated
             ON island_events (updated_at);
         """
     )
+    # A table written by 0.25.0 has no signing_json: its events read as unsigned.
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(island_events)")}
+    if "signing_json" not in columns:
+        conn.execute("ALTER TABLE island_events ADD COLUMN signing_json TEXT")
     conn.commit()
 
 
@@ -59,10 +64,15 @@ def _now_iso() -> str:
 
 
 def _row_to_event(row: sqlite3.Row) -> dict[str, Any]:
-    """Merge stored event JSON with executionState into a single dict."""
+    """Merge stored event JSON with executionState and signing into a single dict.
+
+    ``signing`` is the phone's ``{signedEventData, signature, signingKeyId}``
+    as it reached ``/events``, or None for an event stored before 0.26.0.
+    """
     event = json.loads(row["event_json"])
     state = json.loads(row["execution_state"]) if row["execution_state"] else {}
     event["executionState"] = state
+    event["signing"] = json.loads(row["signing_json"]) if row["signing_json"] else None
     return event
 
 
@@ -81,10 +91,14 @@ class IslandEventStore:
 
     # ── sync core ─────────────────────────────────────────────────────────────
 
-    def _upsert_event_sync(self, event: dict[str, Any]) -> None:
+    def _upsert_event_sync(
+        self, event: dict[str, Any], signing: dict[str, Any] | None = None
+    ) -> None:
         """INSERT OR REPLACE the event keyed on event['id'].
 
         ``enabled`` is stored as 1 if event['enabled'] is truthy (default 1).
+        ``signing`` is what the phone sent with the event, kept untouched so
+        the box can check it; it replaces the stored one.
         """
         event_id: str = event["id"]
         enabled: int = 1 if event.get("enabled", True) else 0
@@ -92,17 +106,18 @@ class IslandEventStore:
         try:
             conn.execute(
                 "INSERT OR REPLACE INTO island_events "
-                "(event_id, event_json, enabled, execution_state, updated_at) "
+                "(event_id, event_json, enabled, execution_state, updated_at, signing_json) "
                 "VALUES (?, ?, ?, COALESCE("
                 "    (SELECT execution_state FROM island_events WHERE event_id = ?),"
                 "    '{}'"
-                "), ?)",
+                "), ?, ?)",
                 (
                     event_id,
                     json.dumps(event, separators=(",", ":")),
                     enabled,
                     event_id,
                     _now_iso(),
+                    json.dumps(signing, separators=(",", ":")) if signing is not None else None,
                 ),
             )
             conn.commit()
@@ -124,7 +139,7 @@ class IslandEventStore:
         conn = _connect(self._db_path)
         try:
             cur = conn.execute(
-                "SELECT event_id, event_json, execution_state "
+                "SELECT event_id, event_json, execution_state, signing_json "
                 "FROM island_events ORDER BY updated_at ASC"
             )
             return [_row_to_event(r) for r in cur.fetchall()]
@@ -136,7 +151,7 @@ class IslandEventStore:
         conn = _connect(self._db_path)
         try:
             row = conn.execute(
-                "SELECT event_id, event_json, execution_state "
+                "SELECT event_id, event_json, execution_state, signing_json "
                 "FROM island_events WHERE event_id = ?",
                 (event_id,),
             ).fetchone()
@@ -158,11 +173,15 @@ class IslandEventStore:
 
     # ── async wrappers ────────────────────────────────────────────────────────
 
-    async def async_upsert_event(self, event: dict[str, Any]) -> None:
+    async def async_upsert_event(
+        self, event: dict[str, Any], *, signing: dict[str, Any] | None = None
+    ) -> None:
         if self._hass is not None:
-            await self._hass.async_add_executor_job(self._upsert_event_sync, event)
+            await self._hass.async_add_executor_job(self._upsert_event_sync, event, signing)
         else:
-            await asyncio.get_running_loop().run_in_executor(None, self._upsert_event_sync, event)
+            await asyncio.get_running_loop().run_in_executor(
+                None, self._upsert_event_sync, event, signing
+            )
 
     async def async_delete_event(self, event_id: str) -> bool:
         if self._hass is not None:

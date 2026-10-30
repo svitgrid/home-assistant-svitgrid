@@ -1068,8 +1068,11 @@ class SvitgridEventsView(_IslandEventViewMixin, HomeAssistantView):
         events = await event_store.async_list_events()
         # An event the app deleted while it was active stays stored until its
         # restore lands; to the app it is already gone.
+        # The stored signature is for the box, not the app: the list is as before.
         events = [
-            e for e in events if (e.get("executionState") or {}).get(REMOVAL_KEY) != REMOVAL_DELETE
+            {k: v for k, v in e.items() if k != "signing"}
+            for e in events
+            if (e.get("executionState") or {}).get(REMOVAL_KEY) != REMOVAL_DELETE
         ]
         return self.json({"events": events})
 
@@ -1121,7 +1124,16 @@ class SvitgridEventsView(_IslandEventViewMixin, HomeAssistantView):
         if event_store is None:
             return self._json_error(503, "event_store_unavailable")
 
-        await event_store.async_upsert_event(signed_event_data)
+        # The phone's signature is kept untouched beside the event: on an edge
+        # box the scheduler hands it on with the event's commands.
+        await event_store.async_upsert_event(
+            signed_event_data,
+            signing={
+                "signedEventData": signed_event_data,
+                "signature": signature,
+                "signingKeyId": signing_key_id,
+            },
+        )
         return self.json({"ok": True, "event": signed_event_data})
 
 
@@ -1208,7 +1220,16 @@ class SvitgridEventDetailView(_IslandEventViewMixin, HomeAssistantView):
         if event_store is None:
             return self._json_error(503, "event_store_unavailable")
 
-        await event_store.async_upsert_event(signed_event_data)
+        # The phone's signature is kept untouched beside the event: on an edge
+        # box the scheduler hands it on with the event's commands.
+        await event_store.async_upsert_event(
+            signed_event_data,
+            signing={
+                "signedEventData": signed_event_data,
+                "signature": signature,
+                "signingKeyId": signing_key_id,
+            },
+        )
         # Disabling an event that is running must undo it at the inverter: the
         # scheduler skips a disabled event, so nothing else would.
         if signed_event_data.get("enabled", True) is False:
