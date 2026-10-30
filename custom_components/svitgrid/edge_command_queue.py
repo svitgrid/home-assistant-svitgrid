@@ -304,6 +304,27 @@ class EdgeCommandQueue:
         finally:
             conn.close()
 
+    def _supersede_sync(self, device_id: str, command: str) -> list[str]:
+        conn = _connect(self._db_path)
+        try:
+            ids = [
+                r[0]
+                for r in conn.execute(
+                    "SELECT id FROM edge_commands WHERE device_id = ? AND command = ? "
+                    "AND state = 'pending'",
+                    (device_id, command),
+                ).fetchall()
+            ]
+            conn.execute(
+                "UPDATE edge_commands SET state = 'expired', reason = 'superseded' "
+                "WHERE device_id = ? AND command = ? AND state = 'pending'",
+                (device_id, command),
+            )
+            conn.commit()
+            return ids
+        finally:
+            conn.close()
+
     def _forget_device_sync(self, device_id: str) -> list[str]:
         conn = _connect(self._db_path)
         try:
@@ -416,6 +437,15 @@ class EdgeCommandQueue:
     async def async_pending(self, device_id: str, command: str) -> list[dict[str, Any]]:
         """The box's `command` rows still waiting for a poll, oldest first."""
         return await self._run(self._pending_sync, device_id, command)
+
+    async def async_supersede(self, device_id: str, command: str) -> int:
+        """Expire the box's pending `command` rows as `superseded`, so the
+        copy queued next is the only one it runs; returns how many. A waiter
+        on one of them wakes and reads it expired."""
+        superseded = await self._run(self._supersede_sync, device_id, command)
+        for command_id in superseded:
+            self._wake(command_id)
+        return len(superseded)
 
     async def async_forget_device(self, device_id: str) -> int:
         """Drop every command of a forgotten box; returns how many. A waiter
