@@ -19,7 +19,10 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 import custom_components.svitgrid as svitgrid
 from custom_components.svitgrid import edge_api
 from custom_components.svitgrid.const import DOMAIN
-from custom_components.svitgrid.island_lan import SvitgridIslandLeaveView
+from custom_components.svitgrid.island_lan import (
+    SvitgridIslandCloudCopyView,
+    SvitgridIslandLeaveView,
+)
 from custom_components.svitgrid.keystore import EdgeBoxEntry, SvitgridKeystore
 from custom_components.svitgrid.telegram import views as tv
 from custom_components.svitgrid.telegram.runtime import TelegramRuntime, household_key
@@ -361,3 +364,100 @@ async def test_a_failed_start_is_retried_at_the_next_setup(hass, station, aiocli
     assert hass.data[DOMAIN]["telegram"]._running
     await _outage(hass, entry, clock)
     assert len(_sends(aioclient_mock)) == 1
+
+
+async def _admin_keystore(hass) -> _Admin:
+    admin = _Admin()
+    keystore = SvitgridKeystore(hass)
+    await keystore.save(
+        api_key="k",
+        public_key_hex="pub",
+        private_key_pem="pem",
+        signing_key_id="sk",
+        trusted_key_ids=[admin.key_id],
+        trusted_public_keys_hex={admin.key_id: admin.pub},
+    )
+    await keystore.async_add_island_key("phone-1", "p" * 43, label="Pixel 8")
+    hass.data.setdefault(DOMAIN, {})["keystore"] = keystore
+    return admin
+
+
+async def test_cloud_copy_on_forgets_the_households_it_covers(hass, station, aioclient_mock, clock):
+    """A household the cloud copy covers starts fresh when it returns to island,
+    so it never gets a second restore of an outage the cloud already closed."""
+    await _bot(hass)
+    admin = await _admin_keystore(hass)
+    entry = _entry(trusted_keys=[{"keyId": admin.key_id, "publicKeyHex": admin.pub}])
+    entry.add_to_hass(hass)
+    state = await tv.telegram_state(hass)
+    await state.set_detector({"households": {"hh1": {"out": True}, "other": {"out": True}}})
+    await state.set_queue(
+        [
+            {"id": "a", "householdId": "hh1", "kind": "outage"},
+            {"id": "b", "householdId": "other", "kind": "outage"},
+        ]
+    )
+
+    with (
+        patch("custom_components.svitgrid.island_lan._now_ms", return_value=NOW_MS),
+        patch.object(hass.config_entries, "async_reload", AsyncMock(return_value=True)),
+    ):
+        resp = await SvitgridIslandCloudCopyView().post(
+            _Req(hass, admin.request("set_cloud_copy", enabled=True))
+        )
+    assert resp.status == 200
+    assert list(state.detector()["households"]) == ["other"]
+    assert [e["id"] for e in state.queue()] == ["b"]
+    assert state.token() == TOKEN  # the cloud copy is not leaving the island
+
+
+async def test_cloud_copy_off_keeps_the_detector(hass, station, aioclient_mock, clock):
+    await _bot(hass)
+    admin = await _admin_keystore(hass)
+    entry = _entry(
+        cloud_copy=True, trusted_keys=[{"keyId": admin.key_id, "publicKeyHex": admin.pub}]
+    )
+    entry.add_to_hass(hass)
+    state = await tv.telegram_state(hass)
+    await state.set_detector({"households": {"hh1": {"out": True}}})
+
+    with (
+        patch("custom_components.svitgrid.island_lan._now_ms", return_value=NOW_MS),
+        patch.object(hass.config_entries, "async_reload", AsyncMock(return_value=True)),
+    ):
+        resp = await SvitgridIslandCloudCopyView().post(
+            _Req(hass, admin.request("set_cloud_copy", enabled=False))
+        )
+    assert resp.status == 200
+    assert list(state.detector()["households"]) == ["hh1"]
+
+
+async def test_removing_the_last_entry_clears_telegram_state(hass, station, aioclient_mock, clock):
+    """The station changes hands: its bot, chats, codes, queue and detector go."""
+    await _bot(hass)
+    state = await tv.telegram_state(hass)
+    await state.issue_code("phone-2", "uk", clock.now)
+    await state.set_queue([{"id": "a", "householdId": "hh1", "kind": "outage"}])
+    await state.set_detector({"households": {"hh1": {"out": True}}})
+    entry = _entry()
+    entry.add_to_hass(hass)
+    await hass.config_entries.async_remove(entry.entry_id)
+    await hass.async_block_till_done()
+    assert state.token() is None
+    assert state.chats() == []
+    assert not state.has_pending_codes(clock.now)
+    assert state.queue() == [] and state.detector() == {}
+
+
+async def test_removing_one_of_two_entries_keeps_telegram_state(
+    hass, station, aioclient_mock, clock
+):
+    await _bot(hass)
+    state = await tv.telegram_state(hass)
+    MockConfigEntry(domain=DOMAIN, data={"local_only": True}).add_to_hass(hass)
+    entry = _entry()
+    entry.add_to_hass(hass)
+    await hass.config_entries.async_remove(entry.entry_id)
+    await hass.async_block_till_done()
+    assert state.token() == TOKEN
+    assert [c.device_id for c in state.chats()] == ["phone-1"]

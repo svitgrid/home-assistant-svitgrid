@@ -51,7 +51,8 @@ class TelegramState:
     """Loads and saves the island Telegram state."""
 
     def __init__(self, hass: HomeAssistant) -> None:
-        self._store: Store[dict[str, Any]] = Store(hass, STORAGE_VERSION, STORAGE_KEY)
+        # Private: the file holds the bot token, so it is written 0600.
+        self._store: Store[dict[str, Any]] = Store(hass, STORAGE_VERSION, STORAGE_KEY, private=True)
         self._lock = asyncio.Lock()
         self._reset()
 
@@ -224,6 +225,14 @@ class TelegramState:
             )
             self._chats[device_id] = chat
             return chat
+
+    async def drop_codes_for(self, device_id: str) -> None:
+        """Drop a device's pending link codes, as when its island access is revoked."""
+        async with self._lock:
+            kept = {h: c for h, c in self._codes.items() if c.get("device_id") != device_id}
+            if len(kept) != len(self._codes):
+                self._codes = kept
+                self._save_later()
 
     def has_pending_codes(self, now: datetime) -> bool:
         return any(_expires(c) > now for c in self._codes.values())

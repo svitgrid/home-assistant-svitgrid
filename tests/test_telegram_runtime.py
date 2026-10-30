@@ -411,12 +411,12 @@ async def test_poller_idle_without_codes(setup):
     assert rt._poller is None or rt._poller.done()
 
 
-def _update(update_id, text, chat_id=555, username="ann"):
+def _update(update_id, text, chat_id=555, username="ann", chat_type="private"):
     return {
         "update_id": update_id,
         "message": {
             "text": text,
-            "chat": {"id": chat_id},
+            "chat": {"id": chat_id, "type": chat_type},
             "from": {"username": username},
         },
     }
@@ -588,3 +588,50 @@ async def test_a_queued_outage_is_written_at_once(setup, hass_storage):
     saved = hass_storage["svitgrid_telegram"]["data"]
     assert [e["kind"] for e in saved["queue"]] == ["outage"]
     assert saved["detector"]["households"]["hh1"]["out"] is True
+
+
+async def test_start_from_a_group_chat_links_nothing(setup):
+    """Only a private chat links: a code posted in a group stays unclaimed."""
+    rt, state, api, clock, _ = setup
+    await rt.start()
+    code = await state.issue_code("phone-1", "uk", clock.now)
+    api.updates = [
+        [
+            _update(5, f"/start {code}", chat_id=-100, chat_type="group"),
+            _update(6, f"/start {code}", chat_id=-101, chat_type="supergroup"),
+            _update(7, f"/start {code}", chat_id=-102, chat_type="channel"),
+        ]
+    ]
+    rt.wake()
+    await _until(lambda: len(api.update_calls) >= 2)
+    assert state.chats() == []
+    assert api.sent == []
+    assert state.has_pending_codes(clock.now)
+
+
+async def test_a_sent_alert_clears_bot_in_use_elsewhere(setup):
+    """A good send proves the bot works, so the status does not stick."""
+    rt, state, api, _, _ = setup
+    _chat(state, "phone-1", 11)
+    await state.set_status("bot_in_use_elsewhere")
+    await rt.start()
+    await _outage(rt)
+    await _settle(rt)
+    assert [c for c, _, _ in api.sent] == [11]
+    assert state.status is None
+
+
+async def test_a_sent_test_clears_bot_in_use_elsewhere(setup):
+    rt, state, api, _, _ = setup
+    _chat(state, "phone-1", 11)
+    await state.set_status("bot_in_use_elsewhere")
+    assert await rt.send_test("phone-1") is Outcome.SENT
+    assert state.status is None
+
+
+async def test_send_test_maps_an_unexpected_error_to_unreachable(setup):
+    rt, state, api, _, _ = setup
+    _chat(state, "phone-1", 11)
+    api.results[11] = [RuntimeError("boom")]
+    assert await rt.send_test("phone-1") is Outcome.UNREACHABLE
+    assert state.chat_for("phone-1") is not None

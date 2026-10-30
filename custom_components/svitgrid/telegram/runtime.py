@@ -263,6 +263,15 @@ class TelegramRuntime:
             self._send_loop(), "svitgrid_telegram_sender"
         )
 
+    async def _clear_in_use(self) -> None:
+        """A good Telegram call proves the bot works: clear `bot_in_use_elsewhere`.
+
+        Otherwise the status sticks until the next link poll, which runs only
+        while a code is pending.
+        """
+        if self._state.status == STATUS_IN_USE:
+            await self._state.set_status(None)
+
     async def _drop(self, field: str, value: str) -> None:
         """Remove every queue entry whose `field` equals `value`."""
         async with self._lock:
@@ -346,6 +355,7 @@ class TelegramRuntime:
             _LOGGER.exception("A queued %s alert could not be sent; it is dropped", entry["kind"])
             result = SendResult.REJECTED
         if result is SendResult.OK:
+            await self._clear_in_use()
             await self._drop("id", entry["id"])
         elif result is SendResult.BLOCKED:
             device_id = entry["chatDeviceId"]
@@ -372,7 +382,11 @@ class TelegramRuntime:
         except InvalidToken:
             await self._state.set_status(STATUS_INVALID_TOKEN)
             return TestOutcome.INVALID_TOKEN
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception("The Telegram test message could not be sent")
+            return TestOutcome.UNREACHABLE
         if result is SendResult.OK:
+            await self._clear_in_use()
             return TestOutcome.SENT
         if result is SendResult.BLOCKED:
             await self._state.unlink(device_id)
@@ -409,8 +423,7 @@ class TelegramRuntime:
         except TelegramUnreachable:
             await self._sleep(POLL_ERROR_S)
             return True
-        if self._state.status == STATUS_IN_USE:
-            await self._state.set_status(None)
+        await self._clear_in_use()
         await self._handle_updates(api, updates)
         return True
 
@@ -423,8 +436,13 @@ class TelegramRuntime:
             if not isinstance(message, dict):
                 continue
             text = message.get("text")
-            chat_id = (message.get("chat") or {}).get("id")
+            chat_info = message.get("chat") or {}
+            chat_id = chat_info.get("id")
             if not isinstance(text, str) or not isinstance(chat_id, int):
+                continue
+            # Only a private chat links: alerts go to one person, and a code
+            # posted in a group must stay unclaimed.
+            if chat_info.get("type") != "private":
                 continue
             match = _START_RE.fullmatch(text.strip())
             if match is None:

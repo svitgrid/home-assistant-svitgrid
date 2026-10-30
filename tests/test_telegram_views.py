@@ -319,3 +319,17 @@ async def test_entry_removal_unlinks_revoked_phones(hass):
     assert state.chat_for("phone-2") is None
     assert state.chat_for(LEGACY_ISLAND_DEVICE_ID) is None
     assert state.chat_for("phone-1") is not None
+
+
+async def test_revoking_device_drops_its_pending_link_code(hass):
+    admin, other, ks, state = await _setup(hass, token=True)
+    state_ks = await ks.load()
+    state_ks.key_devices[other.key_id] = "phone-2"
+    await ks._write(state_ks)
+    code = await state.issue_code("phone-2", "uk", datetime.now(UTC))
+    resp = await SvitgridKeysRevokeView().post(
+        _Req(hass, admin.request("revoke_key", keyId=other.key_id))
+    )
+    assert resp.status == 200
+    assert await state.claim_code(code, 88, None, datetime.now(UTC)) is None
+    assert state.chat_for("phone-2") is None

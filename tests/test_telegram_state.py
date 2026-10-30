@@ -144,3 +144,17 @@ async def test_state_survives_reload(hass, state):
     assert other.queue() == [{"text": "hi"}]
     assert other.status == "bot_in_use_elsewhere"
     assert other.has_pending_codes(NOW)
+
+
+async def test_drop_codes_for_a_device(state):
+    """A revoked phone's pending code stops working at once."""
+    code = await state.issue_code("dev1", "uk", NOW)
+    await state.issue_code("dev2", "uk", NOW)
+    await state.drop_codes_for("dev1")
+    assert await state.claim_code(code, 42, None, NOW) is None
+    assert state.has_pending_codes(NOW)  # dev2's code stays
+
+
+def test_the_store_file_is_private(hass):
+    """The bot token's file is written 0600."""
+    assert TelegramState(hass)._store._private is True

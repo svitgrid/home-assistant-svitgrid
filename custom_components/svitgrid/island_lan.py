@@ -290,6 +290,8 @@ class SvitgridIslandCloudCopyView(HomeAssistantView):
         if enabled and not cloud_entries:
             return _json_error(409, "no_cloud_identity")
         changed = _set_cloud_copy(hass, cloud_entries, enabled)
+        if enabled:
+            await _forget_telegram_households(hass, cloud_entries)
         _LOGGER.info("Cloud copy set to %s over the LAN (%d entry/ies reloaded)", enabled, changed)
         return web.json_response({"ok": True, "cloudCopy": enabled})
 
@@ -323,6 +325,23 @@ class SvitgridIslandLeaveView(HomeAssistantView):
         await _hand_telegram_back(hass, cloud_entries)
         _LOGGER.info("Left island mode over the LAN (%d entry/ies reloaded)", changed)
         return web.json_response({"ok": True})
+
+
+async def _forget_telegram_households(hass, entries: list) -> None:
+    """Forget the island Telegram state of households the cloud copy now covers.
+
+    The cloud sends their alerts from now on (spec decision 8). Dropping the
+    detector state means a later return to island starts fresh, so it never
+    sends a second restore for an outage the cloud already closed.
+    """
+    # The Telegram package imports this module.
+    from .telegram.runtime import household_key
+    from .telegram.views import runtime_for
+
+    state = (hass.data.get(DOMAIN) or {}).get("telegram_state")
+    if state is None:
+        return
+    await runtime_for(hass, state).drop_households({household_key(e) for e in entries})
 
 
 async def _hand_telegram_back(hass, left: list) -> None:

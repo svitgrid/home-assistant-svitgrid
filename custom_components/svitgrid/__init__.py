@@ -1534,8 +1534,25 @@ async def _untrust_entry_signing_keys(hass: HomeAssistant, entry: ConfigEntry) -
         _LOGGER.exception("Could not untrust the signing keys of config entry %s", entry.entry_id)
 
 
+async def _clear_telegram_if_last(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Clear the island Telegram state once the last Svitgrid entry is deleted.
+
+    The station changes hands (spec, "When the station changes hands"): the
+    bot token, chats, link codes, queue and detector state all go, so the
+    next owner starts with no bot. Never raises.
+    """
+    try:
+        if any(e.entry_id != entry.entry_id for e in hass.config_entries.async_entries(DOMAIN)):
+            return
+        await (await telegram_state(hass)).clear()
+    except Exception:  # noqa: BLE001
+        _LOGGER.exception("Could not clear the island Telegram state")
+
+
 async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """The entry is being deleted: revoke the island keys it adopted, and for
-    a LAN pairing, untrust the app's signing key."""
+    a LAN pairing, untrust the app's signing key. Deleting the last entry
+    also clears the island Telegram state."""
     await _revoke_entry_island_keys(hass, entry)
     await _untrust_entry_signing_keys(hass, entry)
+    await _clear_telegram_if_last(hass, entry)

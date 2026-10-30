@@ -43,10 +43,12 @@ async def telegram_state(hass) -> TelegramState:
 
 
 async def unlink_device(hass, device_id: str | None) -> None:
-    """Drop the chat of a device whose island access was revoked."""
+    """Drop the chat and the pending link codes of a device whose island access
+    was revoked, so a code it already holds cannot link a chat afterwards."""
     state = hass.data.get(DOMAIN, {}).get("telegram_state")
     if state is not None and device_id:
         await state.unlink(device_id)
+        await state.drop_codes_for(device_id)
 
 
 def _json(body: dict[str, Any], status: int = 200) -> web.Response:
