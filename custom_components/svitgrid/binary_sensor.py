@@ -13,6 +13,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .activity import ActivityTracker
 from .const import DOMAIN
+from .edge_entities import async_setup_platform_entities
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -75,3 +76,5 @@ async def async_setup_entry(
         label = f"{inv.get('brand') or 'Svitgrid'} {inv.get('model') or ''}".strip()
         entities.append(SvitgridProblemBinarySensor(activity, entry.entry_id, inverter_id, label))
     async_add_entities(entities)
+    # An adopted edge box's Zigbee plugs.
+    async_setup_platform_entities(hass, entry, "binary_sensor", async_add_entities)

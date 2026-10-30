@@ -50,6 +50,7 @@ from .const import (
     ROLLUP_INTERVAL_S,
 )
 from .edge_command_queue import EdgeCommandQueue
+from .edge_entities import EdgeEntitiesCoordinator
 from .entry_reload import consume_listener_reload_skip
 from .executors import create_executor
 from .executors.edge_box import EdgeBoxExecutor
@@ -1294,6 +1295,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     edge_queue = None
     zigbee_devices = None
     bms_packs = None
+    edge_entities = None
     if edge_boxes:
         # The commands each box drains on its poll (edge_api). Added to the
         # SAME dict the scheduler holds by reference, so it sees them.
@@ -1308,6 +1310,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         bms_packs = BmsPackStore(
             os.path.join(hass.config.path(READINGS_DB_SUBDIR), "bms_packs.db"), hass=hass
         )
+        # Their entities in Home Assistant (sensor, binary_sensor).
+        edge_entities = EdgeEntitiesCoordinator(hass, zigbee_devices, bms_packs)
+        await edge_entities.async_refresh()
         for box in edge_boxes:
             for inverter_id in box.inverter_ids:
                 executors_by_inverter[inverter_id] = EdgeBoxExecutor(
@@ -1343,6 +1348,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "edge_queue": edge_queue,
         "zigbee_devices": zigbee_devices,
         "bms_packs": bms_packs,
+        "edge_entities": edge_entities,
         "edge_boxes": [box.device_id for box in edge_boxes],
     }
     await _start_telegram(hass, entry, store)
