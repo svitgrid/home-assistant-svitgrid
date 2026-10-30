@@ -1,0 +1,46 @@
+{
+  "_comment": "A BmsReport (services/api/src/models/schemas.ts BmsReportSchema) as an edge box sends it on the ingest batch's `bms`. Written from the schema: the API keeps no JSON example.",
+  "cycles": 41,
+  "source": "edge",
+  "rosterEpoch": {"generation": "g-7f3a", "n": 3},
+  "rosterErrors": [{"packId": "c0ffee000003", "rosterError": "unknown_driver"}],
+  "packs": [
+    {
+      "id": "a4c138000001",
+      "label": "Гараж",
+      "adoptedAt": 1761800000,
+      "result": "ok",
+      "everRead": true,
+      "ageMs": 2000,
+      "driver": "jk_bd6a",
+      "driverSource": "owner",
+      "name": "JK_B2A24S",
+      "rssi": -61,
+      "attempts": 12,
+      "okAttempts": 12,
+      "state": "discharge",
+      "packMv": 53120,
+      "currentMa": 12500,
+      "powerW": 664,
+      "soc": 81,
+      "soh": 100,
+      "remainingMah": 230000,
+      "nominalMah": 280000,
+      "cycles": 57,
+      "cellsMv": [3320, 3321, 3319, 3322, 3320, 3318, 3321, 3320, 3320, 3319, 3322, 3321, 3320, 3319, 3320, 3318],
+      "tempsC": [24, 25],
+      "mosCharge": 1,
+      "mosDischarge": 1,
+      "balancer": 0
+    },
+    {
+      "id": "a4c138000002",
+      "adoptedAt": 1761800100,
+      "result": "no_link",
+      "everRead": false,
+      "driver": null,
+      "attempts": 12,
+      "okAttempts": 0
+    }
+  ]
+}

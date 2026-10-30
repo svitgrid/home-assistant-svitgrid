@@ -29,6 +29,7 @@ from homeassistant.helpers.typing import ConfigType
 from .activity import ActivityTracker
 from .api_client import SvitgridApiClient, async_integration_version
 from .battery_sign import preset_is_discharge_positive
+from .bms_packs import BmsPackStore
 from .bootstrap import run_first_time
 from .cloud_endpoint_handler import probe_endpoint_auth
 from .command_poller import run_loop as run_command_loop
@@ -1207,6 +1208,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     edge_queue = None
     zigbee_devices = None
+    bms_packs = None
     if edge_boxes:
         # The commands each box drains on its poll (edge_api). Added to the
         # SAME dict the scheduler holds by reference, so it sees them.
@@ -1216,6 +1218,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # The Zigbee devices the boxes report (edge_api).
         zigbee_devices = ZigbeeDeviceStore(
             os.path.join(hass.config.path(READINGS_DB_SUBDIR), "zigbee_devices.db"), hass=hass
+        )
+        # The battery packs the boxes report (edge_api).
+        bms_packs = BmsPackStore(
+            os.path.join(hass.config.path(READINGS_DB_SUBDIR), "bms_packs.db"), hass=hass
         )
         for box in edge_boxes:
             for inverter_id in box.inverter_ids:
@@ -1251,6 +1257,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "settings_snapshots": settings_snapshots,
         "edge_queue": edge_queue,
         "zigbee_devices": zigbee_devices,
+        "bms_packs": bms_packs,
         "edge_boxes": [box.device_id for box in edge_boxes],
     }
     await hass.config_entries.async_forward_entry_setups(

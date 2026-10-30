@@ -32,6 +32,7 @@ from homeassistant.core import HomeAssistant
 
 from . import local_pairing
 from .api_client import async_integration_version
+from .bms_lan import BMS_LAN_VIEWS
 from .bundled_presets import list_bundled_presets
 from .command_auth import verify_signed_command
 from .const import (
@@ -1521,6 +1522,7 @@ def register_views(hass: HomeAssistant, store) -> None:
         # The edge box's views answer 404 until a box is adopted.
         *(view_cls() for view_cls in EDGE_VIEWS),
         *(view_cls() for view_cls in ZIGBEE_LAN_VIEWS),
+        *(view_cls() for view_cls in BMS_LAN_VIEWS),
     ):
         # View routes are GLOBAL to hass.http and PERSIST across config-entry
         # reloads, but the _views_registered guard in hass.data[DOMAIN] is

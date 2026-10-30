@@ -2308,3 +2308,161 @@ async def test_bad_socket_readings_never_cost_the_batch(tmp_path):
     assert resp.status == 200
     assert _json(resp)["results"] == [{"ok": True, "inverterId": "inv-1"}]
     assert len(await devices.async_socket_readings(_ZB_ID)) == 1
+
+
+# ── Task 44: battery packs from the box (svitgrid#1262) ─────────────────
+
+_BMS = json.loads((Path(__file__).parent / "fixtures" / "bms_report.json").read_text())
+_PACK_1 = "a4c138000001"
+_PACK_2 = "a4c138000002"
+
+
+def _bms_report(**extra) -> dict:
+    report = {k: v for k, v in _BMS.items() if not k.startswith("_")}
+    return json.loads(json.dumps({**report, **extra}))
+
+
+def _hass_with_bms(keystore, tmp_path):
+    from custom_components.svitgrid.bms_packs import BmsPackStore
+
+    packs = BmsPackStore(str(tmp_path / "bms_packs.db"), None)
+    hass = _hass(keystore)
+    hass.config.time_zone = "Europe/Kyiv"
+    hass.data[DOMAIN][ENTRY_ID] = {"store": _FakeIngestStore(), "bms_packs": packs}
+    return hass, packs
+
+
+async def _ingest_bms(hass, bms, readings=None):
+    return await _call(
+        edge_api.EdgeIngestBatchView,
+        "post",
+        hass,
+        api_key=BOX_KEY,
+        body={"readings": readings or [], "bms": bms},
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_bms_report_stores_each_pack_and_a_history_row(tmp_path):
+    hass, packs = _hass_with_bms(_keystore(_box(inverters={"inv-1": _INV_1})), tmp_path)
+
+    resp = await _ingest_bms(hass, _bms_report(), readings=[_reading()])
+
+    assert resp.status == 200
+    assert _json(resp)["results"] == [{"ok": True, "inverterId": "inv-1"}]
+    state = await packs.async_state("EC-1")
+    assert [p["id"] for p in state["packs"]] == [_PACK_1, _PACK_2]
+    assert state["packCount"] == 2
+    assert state["cycles"] == 41
+    assert state["rosterEpoch"] == {"generation": "g-7f3a", "n": 3}
+    assert state["rosterErrors"] == [{"packId": "c0ffee000003", "rosterError": "unknown_driver"}]
+    good, unread = state["packs"]
+    assert (good["result"], good["soc"], good["packMv"]) == ("ok", 81, 53120)
+    assert "residualMv" in good
+    # Absent means absent: a pack never read carries no measurement, and a
+    # null driver is not stored.
+    assert unread == {
+        "id": _PACK_2,
+        "result": "no_link",
+        "everRead": False,
+        "adoptedAt": 1761800100,
+        "attempts": 12,
+        "okAttempts": 0,
+    }
+    assert state["lastGoodAt"] is not None
+    [row] = await packs.async_history_rows("EC-1")
+    assert row["cycles"] == 41
+    assert [p["id"] for p in row["packs"]] == [_PACK_1, _PACK_2]
+    assert "cellsMv" not in row["packs"][0]
+    # One 5-minute sample, for the pack that was read.
+    history = await packs.async_pack_history(_PACK_1, 0, 4_102_444_800_000)
+    [point] = history["points"]
+    assert (point["soc"], point["v"], point["i"], point["src"]) == (81, 53120, 12500, "hub")
+    assert (await packs.async_pack_history(_PACK_2, 0, 4_102_444_800_000))["points"] == []
+
+    # The box re-sends the same cycle with every ingest: no second history
+    # row, and no second sample of the same read.
+    await _ingest_bms(hass, _bms_report())
+    assert len(await packs.async_history_rows("EC-1")) == 1
+    assert len((await packs.async_pack_history(_PACK_1, 0, 4_102_444_800_000))["points"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_bms_report_replaces_the_boxs_packs(tmp_path):
+    hass, packs = _hass_with_bms(_keystore(_box()), tmp_path)
+    await _ingest_bms(hass, _bms_report())
+
+    report = _bms_report(cycles=42)
+    report["packs"] = [report["packs"][0]]
+    del report["packs"][0]["soc"]
+    await _ingest_bms(hass, report)
+
+    [pack] = (await packs.async_state("EC-1"))["packs"]
+    assert pack["id"] == _PACK_1
+    assert "soc" not in pack
+    assert len(await packs.async_history_rows("EC-1")) == 2
+
+
+@pytest.mark.asyncio
+async def test_a_bad_bms_report_never_costs_the_batch(tmp_path):
+    hass, packs = _hass_with_bms(_keystore(_box(inverters={"inv-1": _INV_1})), tmp_path)
+
+    bad = _bms_report()
+    bad["packs"][0]["id"] = "not-a-mac"
+    resp = await _ingest_bms(hass, bad, readings=[_reading()])
+
+    assert resp.status == 200
+    assert _json(resp)["results"] == [{"ok": True, "inverterId": "inv-1"}]
+    assert await packs.async_state("EC-1") is None
+
+
+@pytest.mark.asyncio
+async def test_the_day_rollup(tmp_path):
+    from custom_components.svitgrid.bms_packs import BmsPackStore
+
+    packs = BmsPackStore(str(tmp_path / "bms_packs.db"), None)
+    tz = "Europe/Kyiv"
+    # 2026-10-27 in Kyiv (UTC+2) runs 22:00Z on the 26th to 22:00Z on the 27th.
+    start = datetime(2026, 10, 26, 22, 0, tzinfo=UTC)
+    socs = [90, 85, 80, 75]
+    for k, soc in enumerate(socs):
+        pack = {**_bms_report()["packs"][0], "soc": soc, "ageMs": 0}
+        pack["cellsMv"] = [3300 - 2 * k, 3310, 3320 + 2 * k]
+        pack["packMv"] = sum(pack["cellsMv"])
+        report = _bms_report(cycles=100 + k, packs=[pack])
+        await packs.async_store_report(
+            "EC-1", report, received_at=start + timedelta(minutes=10 * k), tz_name=tz
+        )
+    # The next morning's report seals the day.
+    later = {**_bms_report()["packs"][0], "ageMs": 0}
+    await packs.async_store_report(
+        "EC-1",
+        _bms_report(cycles=200, packs=[later]),
+        received_at=datetime(2026, 10, 28, 7, 0, tzinfo=UTC),
+        tz_name=tz,
+    )
+
+    report = await packs.async_report(
+        "2026-10-27",
+        "2026-10-27",
+        tz,
+        now_ms=int(datetime(2026, 11, 20, 12, 0, tzinfo=UTC).timestamp() * 1000),
+    )
+
+    assert report["from"] == report["to"] == "2026-10-27"
+    assert report["timezone"] == tz
+    [pack] = report["packs"]
+    assert (pack["packId"], pack["title"], pack["driver"]) == (_PACK_1, "Гараж", "jk_bd6a")
+    assert pack["nominalAh"] == 280
+    assert pack["cellCount"] == 3
+    [day] = pack["days"]
+    assert day["date"] == "2026-10-27"
+    assert day["live"] is False
+    assert (day["n"], day["gaps"]) == (4, 0)
+    assert (day["socMin"], day["socMax"], day["socEnd"]) == (75, 90, 75)
+    # 12.5 A discharging for three 10-minute steps: 6.25 Ah.
+    assert day["dchgAh"] == 6.25
+    assert day["chgAh"] == 0
+    assert day["iMaxDchg"] == 12500
+    assert day["dMax"] == 32
+    assert "hourly" not in day
