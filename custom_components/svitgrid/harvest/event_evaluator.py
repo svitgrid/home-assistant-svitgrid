@@ -25,7 +25,15 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from . import priority_profile as pp
-from .brand_commands import brand_kind, priority_profile_protocol, profile_for_mode
+from .brand_commands import (
+    brand_kind,
+    must_prior_thresholds,
+    pi30_prior_thresholds,
+    priority_profile_protocol,
+    profile_for_mode,
+    valid_must_thresholds,
+    valid_pi30_thresholds,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -929,10 +937,12 @@ def restore_decision(
     landed_only = exec_state.get("status") != "active"
     if _priority_controlled(exec_state):
         commands, missing = _priority_restore_plan(exec_state, landed_only)
+    elif CUSTOM_SNAPSHOT_KEY in exec_state:
+        commands, missing = _threshold_restore_plan(event, exec_state)
     else:
         commands, missing = _restore_plan(event, exec_state, reading, others, landed_only)
     new_state = copy.deepcopy(exec_state)
-    for key in _PRIORITY_RUN_KEYS:
+    for key in (*_PRIORITY_RUN_KEYS, CUSTOM_SNAPSHOT_KEY):
         new_state.pop(key, None)
     new_state["status"] = "idle"
     _drop_run_state(new_state)
@@ -1025,9 +1035,9 @@ def _unsupported_command(event: dict, exec_state: dict, kind: str) -> str | None
     from the island, or None when the event writes nothing to the inverter.
 
     The Deye family is written, and a priority-profile brand's profile modes
-    and rules (``_evaluate_priority``). Its threshold commands come with
-    svitgrid#1255; until then the event sends nothing rather than a partial
-    payload.
+    and rules (``_evaluate_priority``) and its own threshold rules
+    (``_evaluate_thresholds``). Anything else sends nothing rather than a
+    partial payload.
     """
     if kind == "deye":
         return None
@@ -1076,6 +1086,7 @@ def evaluate_event(
     tz: str,
     others=(),
     inverter: dict | None = None,
+    settings: dict | None = None,
 ) -> EvaluatorDecision:
     """Evaluate a calendar event; see `_evaluate_event`.
 
@@ -1088,16 +1099,23 @@ def evaluate_event(
     evaluated as before. An event that would write to an edge inverter whose
     brand the island cannot write yet is skipped with ``unsupported_field``.
     A priority-profile mode or rule on a PI30, MUST, LuxPower SNA, SMG II or
-    SRNE runs through ``_evaluate_priority``.
+    SRNE runs through ``_evaluate_priority``, and a PI30 or MUST threshold
+    rule through ``_evaluate_thresholds``.
+
+    *settings* is the edge settings snapshot the box posted for the inverter
+    (``settings_sync.find_edge_settings_snapshot``): a threshold rule reads
+    the owner's voltages from it when it activates.
     """
     decision = None
     if inverter is not None and _cloud_skip_reason(event) is None:
         kind = brand_kind(inverter)
+        protocol = priority_profile_protocol(
+            inverter.get("modelId"), inverter.get("transport"), inverter.get("protocolId")
+        )
         if kind == "priority" and _runs_on_priority_profile(event):
-            protocol = priority_profile_protocol(
-                inverter.get("modelId"), inverter.get("transport"), inverter.get("protocolId")
-            )
             decision = _evaluate_priority(event, reading, exec_state, now_utc, tz, others, protocol)
+        elif kind == "priority" and _runs_on_thresholds(event, protocol):
+            decision = _evaluate_thresholds(event, reading, exec_state, now_utc, tz, settings)
         else:
             command = _unsupported_command(event, exec_state, kind)
             if command is not None:
@@ -2189,4 +2207,183 @@ def _eval_priority_rule(
                 commands=[(pp.APPLY_COMMAND, payload)],
                 new_state=decision.new_state,
             )
+    return decision
+
+
+# ─────────────────── Threshold rules (custom-action-catalog.ts) ──────────────
+
+
+@dataclass(frozen=True)
+class _Threshold:
+    """A threshold action: the protocol that has it, the box's two commands,
+    the ``customSnapshot`` key of the owner's values, how those are read from
+    the box's settings and from a stored snapshot, the skip reason without
+    them, and the restore payload."""
+
+    protocol: str
+    activate: str
+    restore: str
+    key: str
+    from_settings: object
+    valid: object
+    no_prior: str
+    restore_payload: object
+
+
+_THRESHOLDS = {
+    "pi30_thresholds": _Threshold(
+        protocol="pi30",
+        activate="set_pi30_thresholds",
+        restore="restore_pi30_thresholds",
+        key="previousPi30Thresholds",
+        from_settings=pi30_prior_thresholds,
+        valid=valid_pi30_thresholds,
+        no_prior="no_prior_pi30_thresholds",
+        restore_payload=lambda prev: dict(prev),
+    ),
+    "must_thresholds": _Threshold(
+        protocol="must",
+        activate="set_must_thresholds",
+        restore="restore_must_thresholds",
+        key="previousMustThresholds",
+        from_settings=must_prior_thresholds,
+        valid=valid_must_thresholds,
+        no_prior="no_prior_must_thresholds",
+        restore_payload=lambda prev: {"prev": dict(prev)},
+    ),
+}
+
+# The execution-state key of the owner's values a threshold rule set over
+# (the cloud's executionState.customSnapshot).
+CUSTOM_SNAPSHOT_KEY = "customSnapshot"
+
+_NO_PRIOR_SKIPS = frozenset(t.no_prior for t in _THRESHOLDS.values())
+
+# The box's local deadline after the window end (withMustThresholdsRevert).
+_MUST_REVERT_MARGIN_MS = 15 * 60_000
+
+
+def _runs_on_thresholds(event: dict, protocol: str | None) -> bool:
+    """A custom event whose inverter actions are all this protocol's thresholds."""
+    if event.get("mode") != "custom":
+        return False
+    actions = _priority_actions(event)
+    return bool(actions) and all(
+        isinstance(a, dict)
+        and a.get("type") in _THRESHOLDS
+        and _THRESHOLDS[a["type"]].protocol == protocol
+        for a in actions
+    )
+
+
+def _threshold_activate_payload(action: dict, event: dict, now_utc: datetime, tz: str) -> dict:
+    """buildActivatePayload, and withMustThresholdsRevert for a MUST: the
+    window end plus 15 minutes, none for a rule with no window end."""
+    if action["type"] == "pi30_thresholds":
+        return {
+            "backToGridVoltage": action.get("backToGridVoltage"),
+            "backToBatteryVoltage": action.get("backToBatteryVoltage"),
+        }
+    payload = {
+        "stopDischargeV": action.get("stopDischargeV"),
+        "stopChargeV": action.get("stopChargeV"),
+    }
+    schedule = event.get("schedule") or {}
+    if schedule.get("recurrence") != "always":
+        bounds = pp.occurrence_bounds(schedule, now_utc, tz)
+        if bounds is not None:
+            payload["revertAtMs"] = int(bounds[1]) + _MUST_REVERT_MARGIN_MS
+    return payload
+
+
+def needs_settings(event: dict) -> bool:
+    """True for an event with a threshold action, which reads the owner's
+    voltages from the box's settings when it activates."""
+    actions = (event.get("config") or {}).get("customActions") or []
+    return event.get("mode") == "custom" and any(
+        isinstance(a, dict) and a.get("type") in _THRESHOLDS for a in actions
+    )
+
+
+def _threshold_restore_plan(event: dict, exec_state: dict) -> tuple[list, list]:
+    """buildRestorePayload: the owner's values held since the activation. A
+    value never held is not made up: its restore is reported missing."""
+    held = exec_state.get(CUSTOM_SNAPSHOT_KEY) or {}
+    commands, missing = [], []
+    for action in _priority_actions(event):
+        spec = _THRESHOLDS.get(action.get("type")) if isinstance(action, dict) else None
+        if spec is None:
+            continue
+        prev = spec.valid(held.get(spec.key))
+        if prev is None:
+            missing.append(spec.restore)
+        else:
+            commands.append((spec.restore, spec.restore_payload(prev)))
+    return commands, missing
+
+
+def _threshold_restore(event: dict, exec_state: dict, new_state: dict, now_utc: datetime):
+    """End the run: send back the owner's values, and tell the app of any
+    that were never held."""
+    commands, missing = _threshold_restore_plan(event, exec_state)
+    new_state.pop(CUSTOM_SNAPSHOT_KEY, None)
+    new_state["status"] = "idle"
+    new_state["conditionLostSince"] = None
+    _report_missing(event, new_state, missing, now_utc)
+    return EvaluatorDecision(action="deactivate", commands=commands, new_state=new_state)
+
+
+def _no_prior(exec_state: dict, reason: str) -> EvaluatorDecision:
+    """Skip an activation whose restore could not run (no_prior_*_thresholds).
+
+    The state is left as it was, with the reason, so the next tick that still
+    finds no values records nothing new.
+    """
+    state = copy.deepcopy(exec_state)
+    state["skipReason"] = reason
+    return EvaluatorDecision(action="skip", commands=[], new_state=state, skip_reason=reason)
+
+
+def _evaluate_thresholds(
+    event: dict,
+    reading: dict,
+    exec_state: dict,
+    now_utc: datetime,
+    tz: str,
+    settings: dict | None,
+) -> EvaluatorDecision:
+    """A PI30 or MUST threshold rule on an edge box (the cloud's activateCustom).
+
+    The owner's voltages are read from the box's own settings when the rule
+    activates and kept in ``customSnapshot``: by its restore the box may have
+    synced the rule's own voltages. Without them the rule does not activate,
+    because nothing could put the owner's back.
+    """
+    new_state = copy.deepcopy(exec_state)
+    if not is_event_in_window(event.get("schedule") or {}, now_utc, tz):
+        if exec_state.get("status") == "active" or exec_state.get(CUSTOM_SNAPSHOT_KEY):
+            return _threshold_restore(event, exec_state, new_state, now_utc)
+        if new_state.get("status") == "pending_condition":
+            new_state["status"] = "idle"
+            new_state.pop("conditionMetSince", None)
+        return EvaluatorDecision(action="hold", commands=[], new_state=new_state)
+
+    decision = _eval_custom(event, reading, exec_state, new_state, now_utc)
+    if decision.action == "deactivate":
+        return _threshold_restore(event, exec_state, new_state, now_utc)
+    if decision.action != "activate":
+        return decision
+
+    snapshot, commands = {}, []
+    for action in _priority_actions(event):
+        spec = _THRESHOLDS[action["type"]]
+        prev = spec.from_settings(settings)
+        if prev is None:
+            return _no_prior(exec_state, spec.no_prior)
+        snapshot[spec.key] = prev
+        commands.append((spec.activate, _threshold_activate_payload(action, event, now_utc, tz)))
+    decision.new_state[CUSTOM_SNAPSHOT_KEY] = snapshot
+    if decision.new_state.get("skipReason") in _NO_PRIOR_SKIPS:
+        decision.new_state.pop("skipReason")
+    decision.commands = commands
     return decision
