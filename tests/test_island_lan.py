@@ -18,6 +18,7 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
+from zoneinfo import ZoneInfo
 
 import pytest
 from homeassistant.core import HomeAssistant
@@ -2202,3 +2203,130 @@ async def test_the_zigbee_views_are_registered(hass: HomeAssistant):
         "/api/svitgrid/edge/zigbee/command",
         "/api/svitgrid/edge/permit-join",
     } <= urls
+
+
+# ── Battery packs over the LAN for the app (edge island plan, Task 44) ─────
+
+
+_BMS_REPORT = json.loads((Path(__file__).parent / "fixtures" / "bms_report.json").read_text())
+_BMS_REPORT.pop("_comment")
+PACK_ID = "a4c138000001"
+
+
+async def _bms_setup(hass, tmp_path, *, adopt=True):
+    from custom_components.svitgrid.bms_packs import BmsPackStore
+
+    admin = _Admin()
+    await _keystore(hass, admin)
+    entry = _entry(hass)
+    packs = BmsPackStore(str(tmp_path / "bms_packs.db"), None)
+    _entry_state(hass, entry)["bms_packs"] = packs
+    if adopt:
+        await _adopt(hass, admin, "EC-1", _inv("inv-1"))
+    return packs
+
+
+async def test_packs_read_back_in_the_clouds_shape(hass: HomeAssistant, tmp_path):
+    from custom_components.svitgrid.bms_lan import (
+        BmsPackHistoryView,
+        BmsPacksView,
+        BmsReportView,
+    )
+
+    packs = await _bms_setup(hass, tmp_path)
+    received = datetime.now(UTC)
+    await packs.async_store_report("EC-1", _BMS_REPORT, received_at=received)
+
+    listed = await BmsPacksView().get(_ZReq(hass))
+
+    assert listed.status == 200, _body(listed)
+    body = _body(listed)
+    good, unread, refused = body["packs"]
+    assert good == {
+        "packId": PACK_ID,
+        "assignedEdgeId": "EC-1",
+        "driver": "jk_bd6a",
+        "driverSource": "owner",
+        "driverSetAt": None,
+        "suggestedDriver": None,
+        "addrType": None,
+        "label": "Гараж",
+        "nominalMah": 280000,
+        "adoptedAt": 1761800000,
+        "lastOkAt": int(received.timestamp() * 1000),
+        "rosterError": None,
+        "move": None,
+    }
+    assert (unread["packId"], unread["lastOkAt"], unread["driver"]) == (
+        "a4c138000002",
+        None,
+        None,
+    )
+    # A pack the box refused to adopt is listed with the reason.
+    assert (refused["packId"], refused["assignedEdgeId"], refused["rosterError"]) == (
+        "c0ffee000003",
+        "EC-1",
+        "unknown_driver",
+    )
+    board = body["boards"]["EC-1"]
+    assert board["lastReportAt"] is not None
+    assert "reportIntervalMs" in board
+    # The box's live report, as the cloud keeps it on `edgeDevices/{id}.bms`.
+    assert [p["id"] for p in board["bms"]["packs"]] == [PACK_ID, "a4c138000002"]
+
+    now_ms = int(received.timestamp() * 1000)
+    history = await BmsPackHistoryView().get(
+        _ZReq(hass, query={"from": str(now_ms - 3_600_000), "to": str(now_ms + 60_000)}), PACK_ID
+    )
+    assert history.status == 200, _body(history)
+    hbody = _body(history)
+    assert (hbody["packId"], hbody["cells"]) == (PACK_ID, True)
+    [point] = hbody["points"]
+    assert point["soc"] == 81
+    assert point["spread"] == max(point["c"]) - min(point["c"])
+
+    bad = await BmsPackHistoryView().get(_ZReq(hass, query={"from": "5", "to": "1"}), PACK_ID)
+    assert bad.status == 400
+
+    today = received.astimezone(ZoneInfo(hass.config.time_zone)).date().isoformat()
+    report = await BmsReportView().get(_ZReq(hass, query={"from": today, "to": today}))
+    assert report.status == 200, _body(report)
+    rbody = _body(report)
+    assert (rbody["from"], rbody["to"]) == (today, today)
+    [rpack, _unread] = rbody["packs"]
+    assert rpack["packId"] == PACK_ID
+    [day] = rpack["days"]
+    assert (day["date"], day["live"], day["socEnd"]) == (today, True, 81)
+
+    too_long = await BmsReportView().get(
+        _ZReq(hass, query={"from": "2024-01-01", "to": "2026-01-01"})
+    )
+    assert too_long.status == 400
+    assert _body(too_long)["error"] == "range_too_long"
+
+
+async def test_bms_views_answer_no_edge_boxes_before_auth(hass: HomeAssistant, tmp_path):
+    from custom_components.svitgrid.bms_lan import (
+        BmsPackHistoryView,
+        BmsPacksView,
+        BmsReportView,
+    )
+
+    await _bms_setup(hass, tmp_path, adopt=False)
+
+    for resp in (
+        await BmsPacksView().get(_ZReq(hass, island_key=None)),
+        await BmsPackHistoryView().get(_ZReq(hass, island_key=None), PACK_ID),
+        await BmsReportView().get(_ZReq(hass, island_key=None)),
+    ):
+        assert resp.status == 404
+        assert _body(resp) == {"error": "no_edge_boxes"}
+
+
+async def test_bms_views_need_the_island_key(hass: HomeAssistant, tmp_path):
+    from custom_components.svitgrid.bms_lan import BmsPacksView, BmsReportView
+
+    await _bms_setup(hass, tmp_path)
+
+    assert (await BmsPacksView().get(_ZReq(hass, island_key="wrong"))).status == 401
+    assert (await BmsReportView().get(_ZReq(hass, island_key=None))).status == 401

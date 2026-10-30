@@ -18,7 +18,7 @@ The paths only the cloud can serve (bootstrap, MQTT, firmware offers,
 coredumps, EV chargers) get a fixed answer, 2xx wherever the box only needs to hear
 that the call landed: its cloud-contact watchdog restarts it after two hours
 without a 2xx. The box's Zigbee roster and readings are kept here
-(`zigbee_devices.py`).
+(`zigbee_devices.py`), and its battery-pack reports (`bms_packs.py`).
 """
 
 from __future__ import annotations
@@ -36,6 +36,7 @@ from aiohttp import web
 from homeassistant.components.http import HomeAssistantView
 
 from . import edge_reading_pipeline
+from .bms_packs import valid_report as valid_bms_report
 from .const import ADD_TRUSTED_KEY_COMMAND, DOMAIN
 from .keystore import EdgeBoxEntry, KeystoreState
 from .settings_read_plan import settings_snapshot_kind_for
@@ -507,6 +508,23 @@ async def _store_socket_readings(
         _LOGGER.warning("Edge box %s: socket readings not stored", box.device_id, exc_info=True)
 
 
+async def _store_bms(hass, entry_state: dict, box: EdgeBoxEntry, value) -> None:
+    """Store the battery-pack report that rode an ingest batch. Best-effort,
+    as the cloud runs it: a bad or failed report never fails the ingest."""
+    packs = entry_state.get("bms_packs")
+    report = valid_bms_report(value)
+    if value is not None and report is None:
+        _LOGGER.info("Edge box %s: bms report dropped (bad shape)", box.device_id)
+    if packs is None or report is None:
+        return
+    try:
+        await packs.async_store_report(
+            box.device_id, report, received_at=_now(), tz_name=hass.config.time_zone
+        )
+    except Exception:  # noqa: BLE001 - battery packs must never fail the ingest
+        _LOGGER.warning("Edge box %s: bms report not stored", box.device_id, exc_info=True)
+
+
 class EdgeIngestBatchView(_EdgeView):
     """The box's batch upload. Each reading gets its own result, so a reading
     of an inverter the box does not hold fails alone while the rest are
@@ -538,7 +556,7 @@ class EdgeIngestBatchView(_EdgeView):
                 )
         if not readings:
             await _store_socket_readings(entry_state, box, _iso_now(), body.get("socketReadings"))
-        # `bms` has no reader on an island.
+        await _store_bms(request.app["hass"], entry_state, box, body.get("bms"))
         await _stamp_contact(store, box, body.get("telemetry"))
         return self.json(
             {
