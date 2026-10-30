@@ -1026,30 +1026,122 @@ async def test_legacy_event_without_signing_records_unsigned_write_once(caplog):
     assert len(errors) == 1
 
 
+_PI30_EDGE = {"modelId": "edecoa_em_624a", "transport": "pi30_serial", "protocolId": "pi30"}
+_PI30_PREV = {"protocol": "pi30", "outputPriority": 2, "chargerPriority": 3}
+
+
+def _pi30_for(inv_id):
+    return _PI30_EDGE if inv_id == "inv-1" else None
+
+
 @pytest.mark.asyncio
-async def test_edge_priority_brand_event_records_unsupported_field_once():
-    """A use_battery event on an adopted PI30 box sends the box nothing until
-    the priority-profile commands land (svitgrid#1254), and says so once."""
+async def test_edge_priority_brand_event_applies_the_profile():
+    """A use_battery event on an adopted PI30 box applies battery_first until
+    the window end plus the margin, once per occurrence (svitgrid#1254)."""
     from custom_components.svitgrid.harvest.event_scheduler_loop import _tick
 
     event_store = FakeEventStore([_make_use_battery_event()])
     store = FakeStore([_reading_at()])
     mock_executor = AsyncMock()
-    pi30 = {"modelId": "edecoa_em_624a", "transport": "pi30_serial", "protocolId": "pi30"}
+    mock_executor.dispatch.return_value = {"prev": _PI30_PREV, "commandId": "cmd-apply-1"}
 
-    def inverter_for(inv_id):
-        return pi30 if inv_id == "inv-1" else None
-
-    await _tick(store, event_store, lambda _i: mock_executor, "UTC", _NOW_IN_WINDOW, inverter_for)
+    await _tick(store, event_store, lambda _i: mock_executor, "UTC", _NOW_IN_WINDOW, _pi30_for)
     later = datetime(2026, 6, 29, 10, 31, 0, tzinfo=UTC)
-    await _tick(store, event_store, lambda _i: mock_executor, "UTC", later, inverter_for)
+    await _tick(store, event_store, lambda _i: mock_executor, "UTC", later, _pi30_for)
 
-    assert mock_executor.dispatch.call_count == 0
-    first, second = (state for _id, state in event_store.state_calls)
-    assert first["lastCommandError"] == {
-        "command": "apply_priority_profile",
-        "reason": "unsupported_field",
-        "at": _NOW_IN_WINDOW.isoformat(),
+    window_end_s = int(datetime(2026, 6, 29, 11, 0, 0, tzinfo=UTC).timestamp())
+    mock_executor.dispatch.assert_awaited_once()
+    assert mock_executor.dispatch.call_args.args == (
+        "apply_priority_profile",
+        {"profile": "battery_first", "revertAt": window_end_s + 600},
+    )
+    state = event_store._events["evt-1"]["executionState"]
+    assert state["status"] == "active"
+    assert state["priorityRevertAt"] == window_end_s + 600
+
+
+@pytest.mark.asyncio
+async def test_restore_carries_prev_and_cmd_id_from_the_apply_ack():
+    """The apply's ack stores the owner's values and the queued command's id,
+    and the window end sends both back to the box (svitgrid#1254)."""
+    from custom_components.svitgrid.harvest.event_scheduler_loop import _tick
+
+    event_store = FakeEventStore([_make_use_battery_event()])
+    store = FakeStore([_reading_at()])
+    mock_executor = AsyncMock()
+    mock_executor.dispatch.return_value = {"prev": _PI30_PREV, "commandId": "cmd-apply-1"}
+
+    await _tick(store, event_store, lambda _i: mock_executor, "UTC", _NOW_IN_WINDOW, _pi30_for)
+    state = event_store._events["evt-1"]["executionState"]
+    assert state["priorityProfilePrev"] == _PI30_PREV
+    assert state["priorityApplyCmdId"] == "cmd-apply-1"
+
+    mock_executor.dispatch.reset_mock()
+    mock_executor.dispatch.return_value = {"commandId": "cmd-restore-1"}
+    await _tick(store, event_store, lambda _i: mock_executor, "UTC", _NOW_OUT_WINDOW, _pi30_for)
+
+    mock_executor.dispatch.assert_awaited_once()
+    assert mock_executor.dispatch.call_args.args == (
+        "restore_priority_profile",
+        {"prev": _PI30_PREV, "cmdId": "cmd-apply-1"},
+    )
+    state = event_store._events["evt-1"]["executionState"]
+    assert state["status"] == "idle"
+    assert "priorityProfilePrev" not in state
+    assert "priorityApplyCmdId" not in state
+
+
+@pytest.mark.asyncio
+async def test_no_stored_prev_sends_no_restore():
+    """An apply whose ack carried no prev leaves nothing true to restore: the
+    window end sends nothing and records why (svitgrid#1254)."""
+    from custom_components.svitgrid.harvest.event_scheduler_loop import _tick
+
+    event_store = FakeEventStore([_make_use_battery_event()])
+    store = FakeStore([_reading_at()])
+    mock_executor = AsyncMock()
+    mock_executor.dispatch.return_value = {"commandId": "cmd-apply-1"}
+
+    await _tick(store, event_store, lambda _i: mock_executor, "UTC", _NOW_IN_WINDOW, _pi30_for)
+    assert "priorityProfilePrev" not in event_store._events["evt-1"]["executionState"]
+
+    mock_executor.dispatch.reset_mock()
+    await _tick(store, event_store, lambda _i: mock_executor, "UTC", _NOW_OUT_WINDOW, _pi30_for)
+
+    mock_executor.dispatch.assert_not_awaited()
+    state = event_store._events["evt-1"]["executionState"]
+    assert state["status"] == "idle"
+    assert state["lastCommandError"] == {
+        "command": "restore_priority_profile",
+        "reason": "prev_read_failed",
+        "at": _NOW_OUT_WINDOW.isoformat(),
     }
-    assert "dispatchRetryAt" not in first
-    assert second == first
+
+
+@pytest.mark.asyncio
+async def test_cancelling_a_priority_event_restores_prev():
+    """Deleting an active priority-profile event hands the owner's values back
+    with restore_priority_profile, never a Deye restore (svitgrid#1254)."""
+    from custom_components.svitgrid.harvest.event_scheduler_loop import (
+        request_removal,
+        settle_removal,
+    )
+
+    state = {
+        "status": "active",
+        "priorityProfileControlled": True,
+        "priorityProfilePrev": _PI30_PREV,
+        "priorityApplyCmdId": "cmd-apply-1",
+    }
+    event_store = FakeEventStore([_make_use_battery_event(exec_state=state)])
+    mock_executor = AsyncMock()
+
+    assert await request_removal(event_store, "evt-1", "delete") == "pending"
+    await settle_removal(event_store, lambda _i: mock_executor, "evt-1", _NOW_IN_WINDOW)
+
+    mock_executor.dispatch.assert_awaited_once()
+    assert mock_executor.dispatch.call_args.args == (
+        "restore_priority_profile",
+        {"prev": _PI30_PREV, "cmdId": "cmd-apply-1"},
+    )
+    assert "evt-1" not in event_store._events

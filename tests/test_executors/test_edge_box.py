@@ -61,12 +61,14 @@ async def test_success_ack_returns_result(tmp_path):
     queue = await _queue(tmp_path)
     executor = EdgeBoxExecutor(queue, "EC-1", "inv-1")
 
-    result, _ = await asyncio.gather(
+    result, row = await asyncio.gather(
         executor.dispatch("set_work_mode", {"mode": 1}, signing=SIGNING),
         _box_acks(queue, "EC-1", success=True, result={"written": 1}, rejected=None, reason=None),
     )
 
-    assert result == {"written": 1}
+    # The ack's result, plus the queued command's id (svitgrid#1254): a
+    # restore_priority_profile names the apply it undoes.
+    assert result == {"written": 1, "commandId": row["id"]}
 
 
 async def test_unsupported_ack_raises_not_implemented(tmp_path):
@@ -137,5 +139,5 @@ async def test_unsigned_read_command_is_allowed(tmp_path):
         _box_acks(queue, "EC-1", success=True, result={"settings": {}}, rejected=None, reason=None),
     )
 
-    assert result == {"settings": {}}
+    assert result == {"settings": {}, "commandId": row["id"]}
     assert row["signing"] is None

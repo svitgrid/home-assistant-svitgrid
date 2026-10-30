@@ -25,9 +25,9 @@ _FIXTURES = Path(__file__).resolve().parent.parent / "fixtures"
 _RESOLUTION = json.loads((_FIXTURES / "priority_profile_resolution.json").read_text())
 _PAYLOADS = json.loads((_FIXTURES / "edge_command_payloads.json").read_text())
 
-# The fixture's commands this task emits. The priority-profile commands are
-# svitgrid#1254 and the threshold commands #1255; each adds its own here.
-_EMITTED = frozenset()
+# The fixture's commands the island emits. The priority-profile commands are
+# svitgrid#1254; the threshold commands #1255 add their own here.
+_EMITTED = frozenset({"apply_priority_profile", "restore_priority_profile"})
 
 TZ = "Europe/Kyiv"
 _NOW = datetime(2026, 6, 29, 12, 0, 0, tzinfo=UTC)  # 15:00 Kyiv
@@ -156,7 +156,7 @@ def test_solax_custom_action_is_unsupported_once():
     assert second.new_state == first.new_state
 
 
-@pytest.mark.parametrize("mode", ["battery_charge", "use_battery", "sell_to_grid", "gen_force"])
+@pytest.mark.parametrize("mode", ["sell_to_grid", "gen_force"])
 def test_priority_brand_mode_event_is_unsupported(mode):
     event = {
         "id": "evt-1",
@@ -177,7 +177,6 @@ def test_priority_brand_mode_event_is_unsupported(mode):
     "action",
     [
         {"type": "pi30_thresholds", "backToGridVoltage": 46, "backToBatteryVoltage": 54},
-        {"type": "priority_profile", "profile": "grid_charge"},
     ],
 )
 def test_priority_brand_custom_action_is_unsupported(action):
