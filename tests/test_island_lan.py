@@ -1357,3 +1357,295 @@ async def test_adopt_reloads_only_entries_that_are_set_up(hass: HomeAssistant, s
     await asyncio.sleep(0)
 
     schedule_reload.assert_called_once_with(loaded.entry_id)
+
+
+# ── trusted keys reach the box (edge island plan, Task 17) ─────────────────
+
+
+def _box_key_command(signer: _Admin, public_key_hex: str) -> dict:
+    """The phone-signed `add_trusted_key` the box verifies: the signature
+    covers the canonical `payload`, by a key the box already trusts."""
+    payload = {"publicKeyHex": public_key_hex}
+    return {
+        "payload": payload,
+        "signature": sign_payload(payload, signer.priv),
+        "signerKeyId": signer.key_id,
+    }
+
+
+async def _key_add(hass, admin, new: _Admin, **fields):
+    from custom_components.svitgrid.island_lan import SvitgridEdgeKeyAddView
+
+    fields.setdefault("keyId", new.key_id)
+    fields.setdefault("boxCommand", _box_key_command(admin, new.pub))
+    return await SvitgridEdgeKeyAddView().post(_Req(hass, admin.request("edge_key_add", **fields)))
+
+
+async def _trust_over_lan(hass, admin, new: _Admin):
+    from custom_components.svitgrid.http_views import SvitgridTrustKeyView
+
+    return await SvitgridTrustKeyView().post(
+        _Req(hass, admin.request("trust_key", keyId=new.key_id, publicKeyHex=new.pub))
+    )
+
+
+async def _box_ack(hass, command_id, *, api_key, success=True, **body):
+    from custom_components.svitgrid.edge_api import EdgeCommandAckView
+
+    req = _Req(hass, {"success": success, **body})
+    req.headers["X-API-Key"] = api_key
+    return await EdgeCommandAckView().post(req, command_id)
+
+
+async def _drain(queue, device_id) -> list[dict]:
+    rows = []
+    while (row := await queue.async_next_pending(device_id)) is not None:
+        rows.append(row)
+    return rows
+
+
+async def test_edge_key_add_enqueues_add_trusted_key_with_box_signature(
+    hass: HomeAssistant, tmp_path
+):
+    from custom_components.svitgrid.edge_api import _command_for_box
+
+    admin, queue = await _leave_setup(hass, tmp_path)
+    phone = _Admin()
+    await _trust_over_lan(hass, admin, phone)
+    box_command = _box_key_command(admin, phone.pub)
+
+    resp = await _key_add(hass, admin, phone, boxCommand=box_command)
+
+    assert resp.status == 200, _body(resp)
+    command_ids = _body(resp)["commandIds"]
+    assert set(command_ids) == {"EC-1", "EC-2"}
+    for device_id in ("EC-1", "EC-2"):
+        [row] = await _drain(queue, device_id)
+        assert row["id"] == command_ids[device_id]
+        assert row["command"] == "add_trusted_key"
+        assert row["payload"] == {"publicKeyHex": phone.pub}
+        assert row["inverter_id"] is None
+        # The box reads the signature and its signer at the top level of the
+        # command (`zigbee_poller.c` handle_key_management_command), not
+        # under `signedEventData`.
+        sent = _command_for_box(row)
+        assert sent["command"] == "add_trusted_key"
+        assert sent["payload"] == box_command["payload"]
+        assert sent["signature"] == box_command["signature"]
+        assert sent["signerKeyId"] == admin.key_id
+        assert "signedEventData" not in sent
+
+
+async def test_edge_key_add_success_clears_pending(hass: HomeAssistant, tmp_path):
+    admin, queue = await _leave_setup(hass, tmp_path)
+    ks = hass.data[DOMAIN]["keystore"]
+    await ks.async_bind_edge_box("EC-1", "box-key-1")
+    await ks.async_bind_edge_box("EC-2", "box-key-2")
+    phone = _Admin()
+    await _trust_over_lan(hass, admin, phone)
+    assert [k["keyId"] for k in await ks.async_list_pending_box_keys()] == [phone.key_id]
+
+    command_ids = _body(await _key_add(hass, admin, phone))["commandIds"]
+    await _drain(queue, "EC-1")
+    await _drain(queue, "EC-2")
+
+    # A refusal leaves the key pending.
+    await _box_ack(
+        hass,
+        command_ids["EC-1"],
+        api_key="box-key-1",
+        success=False,
+        rejected=True,
+        reason="unknown_signer_key",
+    )
+    assert [k["keyId"] for k in await ks.async_list_pending_box_keys()] == [phone.key_id]
+
+    # One box of two holding it is not enough.
+    await _box_ack(hass, command_ids["EC-2"], api_key="box-key-2", result={"keyAdded": True})
+    assert [k["keyId"] for k in await ks.async_list_pending_box_keys()] == [phone.key_id]
+
+    await _box_ack(hass, command_ids["EC-1"], api_key="box-key-1", result={"keyAdded": True})
+    # The first answer stands for a command (`async_ack`), so re-add for EC-1.
+    retry = _body(await _key_add(hass, admin, phone))["commandIds"]
+    await _drain(queue, "EC-1")
+    await _box_ack(hass, retry["EC-1"], api_key="box-key-1", result={"keyAdded": True})
+    assert await ks.async_list_pending_box_keys() == []
+
+
+async def test_pending_box_keys_list_each_keys_public_key_hex(hass: HomeAssistant, tmp_path):
+    admin, _ = await _leave_setup(hass, tmp_path)
+    phone = _Admin()
+    await _trust_over_lan(hass, admin, phone)
+
+    expected = [{"keyId": phone.key_id, "label": None, "publicKeyHex": phone.pub}]
+    edge = _body(await _edge_status(hass))
+    assert edge["pendingBoxKeys"] == expected
+    island = _body(await SvitgridIslandStatusView().get(_Req(hass)))
+    assert island["pendingBoxKeys"] == expected
+
+
+async def test_pending_box_keys_name_the_phone_a_key_is_linked_to(hass: HomeAssistant, tmp_path):
+    admin, _ = await _leave_setup(hass, tmp_path)
+    ks = hass.data[DOMAIN]["keystore"]
+    phone = _Admin()
+    await ks.async_add_island_key("phone-2", OTHER_ISLAND_KEY, label="Pixel 9")
+    await ks.async_link_signing_key(phone.key_id, "phone-2")
+    await _trust_over_lan(hass, admin, phone)
+
+    [pending] = await ks.async_list_pending_box_keys()
+    assert pending["label"] == "Pixel 9"
+
+
+async def test_a_revoked_key_is_no_longer_pending(hass: HomeAssistant, tmp_path):
+    admin, _ = await _leave_setup(hass, tmp_path)
+    phone = _Admin()
+    await _trust_over_lan(hass, admin, phone)
+
+    await SvitgridKeysRevokeView().post(_Req(hass, admin.request("revoke_key", keyId=phone.key_id)))
+
+    assert _body(await _edge_status(hass))["pendingBoxKeys"] == []
+
+
+async def test_revoke_enqueues_revoke_trusted_key_for_each_box(hass: HomeAssistant, tmp_path):
+    admin, queue = await _leave_setup(hass, tmp_path)
+    phone = _Admin()
+    await _trust_over_lan(hass, admin, phone)
+
+    resp = await SvitgridKeysRevokeView().post(
+        _Req(hass, admin.request("revoke_key", keyId=phone.key_id))
+    )
+
+    assert resp.status == 200, _body(resp)
+    for device_id in ("EC-1", "EC-2"):
+        [row] = await _drain(queue, device_id)
+        assert row["command"] == "revoke_trusted_key"
+        assert row["payload"] == {"keyIdToRevoke": phone.key_id}
+        # The box takes a revocation without a signature (`command_auth.c`).
+        assert row["signing"] is None
+
+
+async def test_a_refused_revoke_enqueues_nothing(hass: HomeAssistant, tmp_path):
+    admin, queue = await _leave_setup(hass, tmp_path)
+
+    resp = await SvitgridKeysRevokeView().post(
+        _Req(hass, admin.request("revoke_key", keyId=admin.key_id))
+    )
+
+    assert resp.status == 409
+    assert await queue.async_pending_count("EC-1") == 0
+    assert await queue.async_pending_count("EC-2") == 0
+
+
+async def test_without_an_adopted_box_trust_and_revoke_enqueue_nothing(
+    hass: HomeAssistant, tmp_path
+):
+    from custom_components.svitgrid.edge_command_queue import EdgeCommandQueue
+
+    admin = _Admin()
+    ks = await _keystore(hass, admin)
+    entry = _entry(hass)
+    queue = EdgeCommandQueue(str(tmp_path / "edge_commands.db"), None)
+    _entry_state(hass, entry, queue=queue)
+    phone = _Admin()
+
+    assert (await _trust_over_lan(hass, admin, phone)).status == 200
+    assert await ks.async_list_pending_box_keys() == []
+    state = await ks.load()
+    assert state.box_pending_keys == {}
+    resp = await SvitgridKeysRevokeView().post(
+        _Req(hass, admin.request("revoke_key", keyId=phone.key_id))
+    )
+    assert resp.status == 200
+    assert await queue.async_recent("EC-1") == []
+    status = _body(await SvitgridIslandStatusView().get(_Req(hass)))
+    assert "pendingBoxKeys" not in status
+
+
+async def test_edge_key_add_without_an_adopted_box_is_404(hass: HomeAssistant):
+    admin = _Admin()
+    await _keystore(hass, admin)
+    _entry(hass)
+    phone = _Admin()
+
+    resp = await _key_add(hass, admin, phone)
+
+    assert resp.status == 404
+    assert _body(resp) == {"error": "no_edge_boxes"}
+
+
+@pytest.mark.parametrize(
+    "box_command",
+    [
+        pytest.param(None, id="absent"),
+        pytest.param("signed", id="not-a-dict"),
+        pytest.param({"signature": "s", "signerKeyId": "k"}, id="no-payload"),
+        pytest.param({"payload": {"publicKeyHex": "04"}, "signerKeyId": "k"}, id="no-signature"),
+        pytest.param({"payload": {"publicKeyHex": "04"}, "signature": "s"}, id="no-signer"),
+    ],
+)
+async def test_edge_key_add_without_box_signature_is_400(
+    hass: HomeAssistant, tmp_path, box_command
+):
+    from custom_components.svitgrid.island_lan import SvitgridEdgeKeyAddView
+
+    admin, queue = await _leave_setup(hass, tmp_path)
+    phone = _Admin()
+    fields = {"keyId": phone.key_id}
+    if box_command is not None:
+        fields["boxCommand"] = box_command
+    resp = await SvitgridEdgeKeyAddView().post(_Req(hass, admin.request("edge_key_add", **fields)))
+
+    assert resp.status == 400
+    assert _body(resp) == {"error": "box_signature_required"}
+    assert await queue.async_pending_count("EC-1") == 0
+
+
+async def test_edge_key_add_payload_must_be_the_key_named(hass: HomeAssistant, tmp_path):
+    admin, queue = await _leave_setup(hass, tmp_path)
+    phone, other = _Admin(), _Admin()
+
+    mismatch = await _key_add(hass, admin, phone, boxCommand=_box_key_command(admin, other.pub))
+    assert mismatch.status == 400
+    assert _body(mismatch)["error"] == "key_id_mismatch"
+
+    not_a_key = await _key_add(hass, admin, phone, boxCommand=_box_key_command(admin, "zz"))
+    assert not_a_key.status == 400
+    assert _body(not_a_key)["error"] == "bad_public_key"
+
+    extra = _box_key_command(admin, phone.pub)
+    extra["payload"] = {**extra["payload"], "keyId": phone.key_id}
+    assert (await _key_add(hass, admin, phone, boxCommand=extra)).status == 400
+    assert await queue.async_pending_count("EC-1") == 0
+
+
+async def test_edge_key_add_needs_signature_and_island_key(hass: HomeAssistant, tmp_path):
+    from custom_components.svitgrid.island_lan import SvitgridEdgeKeyAddView
+
+    admin, queue = await _leave_setup(hass, tmp_path)
+    phone, stranger = _Admin(), _Admin()
+    body = admin.request(
+        "edge_key_add", keyId=phone.key_id, boxCommand=_box_key_command(admin, phone.pub)
+    )
+
+    no_key = await SvitgridEdgeKeyAddView().post(_Req(hass, body, island_key=None))
+    assert no_key.status == 401
+    untrusted = stranger.request(
+        "edge_key_add", keyId=phone.key_id, boxCommand=_box_key_command(admin, phone.pub)
+    )
+    assert (await SvitgridEdgeKeyAddView().post(_Req(hass, untrusted))).status == 403
+    wrong_action = admin.request(
+        "edge_leave", keyId=phone.key_id, boxCommand=_box_key_command(admin, phone.pub)
+    )
+    assert (await SvitgridEdgeKeyAddView().post(_Req(hass, wrong_action))).status == 400
+    assert await queue.async_pending_count("EC-1") == 0
+
+
+async def test_the_edge_key_add_view_is_registered_with_the_others(hass: HomeAssistant):
+    from unittest.mock import MagicMock
+
+    from custom_components.svitgrid.http_views import register_views
+
+    hass.http = MagicMock()
+    register_views(hass, store=MagicMock())
+    urls = {call.args[0].url for call in hass.http.register_view.call_args_list}
+    assert "/api/svitgrid/edge/keys/add" in urls

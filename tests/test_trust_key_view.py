@@ -12,6 +12,11 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import os
+from unittest.mock import patch
+
+from custom_components.svitgrid.const import DOMAIN
+from custom_components.svitgrid.http_views import SvitgridTrustKeyView
+from tests.test_island_lan import NOW_MS, _Admin, _body, _leave_setup, _Req
 
 BASE = os.path.join(os.path.dirname(__file__), "..", "custom_components", "svitgrid")
 
@@ -49,3 +54,24 @@ def test_compute_key_id_golden_vector_matches_mobile():
     )
     expected_key_id = "843f39e4beba1b7faefca63aaf2ce743de4fdc3d24c78107de115b2471aab1aa"
     assert signing.compute_key_id(public_key_hex) == expected_key_id
+
+
+# ── a key trusted while a box is adopted waits for the box (Task 17) ──────
+
+
+async def test_trust_key_with_adopted_box_marks_pending(hass, tmp_path):
+    with patch("custom_components.svitgrid.island_lan._now_ms", return_value=NOW_MS):
+        admin, queue = await _leave_setup(hass, tmp_path)
+        phone = _Admin()
+
+        resp = await SvitgridTrustKeyView().post(
+            _Req(hass, admin.request("trust_key", keyId=phone.key_id, publicKeyHex=phone.pub))
+        )
+
+    assert resp.status == 200, _body(resp)
+    ks = hass.data[DOMAIN]["keystore"]
+    state = await ks.load()
+    assert phone.key_id in state.trusted_public_keys_hex
+    assert sorted(state.box_pending_keys[phone.key_id]) == ["EC-1", "EC-2"]
+    # Trusting puts nothing on the queue: only a phone the box trusts can.
+    assert await queue.async_pending_count("EC-1") == 0
