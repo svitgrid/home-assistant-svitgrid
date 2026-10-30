@@ -687,6 +687,16 @@ class EdgeCommandAckView(_EdgeView):
             body = {}
         queue = (_entry_state(request.app["hass"]) or {}).get("edge_queue")
         row = None
+        if queue is not None and body.get("transition") == "written":
+            # A write the box issued but has not read back yet (TOU, battery
+            # charge): it sends `success: false` on purpose, and the verdict
+            # follows after the settle. Like the cloud, never close on it.
+            row = await queue.async_get(command_id)
+            if row is not None and row.get("device_id") not in (None, box.device_id):
+                row = None
+            if row is None:
+                return self.json({"success": False, "status": "unknown"})
+            return self.json({"success": True, "status": row["state"]})
         if queue is not None:
             row = await queue.async_ack(
                 command_id,
