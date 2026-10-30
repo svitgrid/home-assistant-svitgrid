@@ -1171,3 +1171,70 @@ async def test_the_edge_leave_views_are_registered_with_the_others(hass: HomeAss
         "/api/svitgrid/edge/leave",
         "/api/svitgrid/edge/commands/{command_id}",
     } <= urls
+
+
+# ── island status lists edge boxes (edge island plan, Task 8) ──────────────
+
+
+async def test_island_status_lists_edge_boxes(hass: HomeAssistant, tmp_path):
+    from custom_components.svitgrid.edge_command_queue import EdgeCommandQueue
+
+    admin = _Admin()
+    await _keystore(hass, admin)
+    entry = _entry(hass, cloud_ingest=False)
+    queue = EdgeCommandQueue(str(tmp_path / "edge_commands.db"), None)
+    store = _EdgeStore(
+        box_states={"EC-1": {"lastContactAt": "2026-10-29T10:05:00.000Z", "version": "2.172.0"}}
+    )
+    _entry_state(hass, entry, store=store, queue=queue)
+    await _adopt(hass, admin, "EC-1", _inv("inv-1"), _inv("inv-2"))
+    await _adopt(hass, admin, "EC-2", _inv("inv-3"))
+    await queue.async_enqueue(
+        "EC-1", "set_work_mode", {}, signing=None, inverter_id="inv-1", source="test"
+    )
+
+    resp = await SvitgridIslandStatusView().get(_Req(hass))
+
+    assert resp.status == 200, _body(resp)
+    body = _body(resp)
+    assert sorted(body["edgeBoxes"], key=lambda b: b["deviceId"]) == [
+        {
+            "deviceId": "EC-1",
+            "lastContactAt": "2026-10-29T10:05:00.000Z",
+            "version": "2.172.0",
+            "pendingCommands": 1,
+            "inverterIds": ["inv-1", "inv-2"],
+        },
+        {
+            "deviceId": "EC-2",
+            "lastContactAt": None,
+            "version": None,
+            "pendingCommands": 0,
+            "inverterIds": ["inv-3"],
+        },
+    ]
+
+
+async def test_island_status_without_edge_boxes_is_unchanged(hass: HomeAssistant):
+    """An install that never adopted a box sees exactly the status it saw on
+    0.25.0: the same capabilities and no `edgeBoxes` key."""
+    await _keystore(hass, _Admin())
+    _entry(hass, cloud_ingest=False)
+    resp = await SvitgridIslandStatusView().get(_Req(hass))
+    assert resp.status == 200
+    manifest = Path(__file__).parents[1] / "custom_components" / "svitgrid" / "manifest.json"
+    version = json.loads(manifest.read_text())["version"]
+    assert _body(resp) == {
+        "cloudCopy": False,
+        "localOnly": False,
+        "trueIsland": True,
+        "version": version,
+        "capabilities": [
+            "cloud_copy_lan",
+            "leave_lan",
+            "revoke_lan",
+            "pair_extra_phone",
+            "rules",
+            "settings_lan",
+        ],
+    }

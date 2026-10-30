@@ -47,8 +47,10 @@ from .const import (
     REQUIRED_FIELDS,
     ROLLUP_INTERVAL_S,
 )
+from .edge_command_queue import EdgeCommandQueue
 from .entry_reload import consume_listener_reload_skip
 from .executors import create_executor
+from .executors.edge_box import EdgeBoxExecutor
 from .executors.smg_settings_executor import EybondSmgSettingsExecutor
 from .executors.yaml_dispatcher import YamlDispatcher
 from .eybond_at.setup import is_eybond_harvest, start_eybond_hub
@@ -892,11 +894,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     scheduler_task = None
     settings_sync_task = None
 
+    # Edge boxes adopted over the LAN (edge island mode). An install that never
+    # adopted one sets up exactly as before: no queue, no edge executors.
+    _ks_state = await keystore.load()
+    edge_boxes = list(_ks_state.edge_boxes.values()) if _ks_state is not None else []
+    edge_inverter_ids = {i for box in edge_boxes for i in box.inverter_ids}
+
     if loops_active:
         spec_store = RegisterSpecStore(hass)
         for inv in inverters:
             inverter_id = inv["inverter_id"]
             harvest_config = inv.get("harvest_config")
+            if inverter_id in edge_inverter_ids:
+                # Its box reads it and runs its commands (EdgeBoxExecutor
+                # below); a second reader would collide with the box.
+                continue
             if is_eybond_harvest(harvest_config):
                 # EyBond/SmartESS collectors share ONE listener: they dial us,
                 # and a listener per inverter would collide on port 8899. They
@@ -1171,6 +1183,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 "EyBond hub failed to start for %d inverter(s)", len(eybond_inverters)
             )
 
+    edge_queue = None
+    if edge_boxes:
+        # The commands each box drains on its poll (edge_api). Added to the
+        # SAME dict the scheduler holds by reference, so it sees them.
+        edge_queue = EdgeCommandQueue(
+            os.path.join(hass.config.path(READINGS_DB_SUBDIR), "edge_commands.db"), hass=hass
+        )
+        for box in edge_boxes:
+            for inverter_id in box.inverter_ids:
+                executors_by_inverter[inverter_id] = EdgeBoxExecutor(
+                    edge_queue, box.device_id, inverter_id
+                )
+        _LOGGER.info(
+            "Edge queue started for %d adopted edge box(es) with %d inverter(s)",
+            len(edge_boxes),
+            len(edge_inverter_ids),
+        )
+
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = {
         "api_client": api_client,
@@ -1192,6 +1222,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "read_now": read_now_triggers,
         "true_island": true_island,
         "settings_snapshots": settings_snapshots,
+        "edge_queue": edge_queue,
+        "edge_boxes": [box.device_id for box in edge_boxes],
     }
     await hass.config_entries.async_forward_entry_setups(
         entry, ["sensor", "binary_sensor", "update", "button"]
