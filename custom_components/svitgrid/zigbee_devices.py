@@ -56,6 +56,7 @@ _COLUMNS = {
     "manufacturer": "manufacturer",
     "name": "name",
     "room": "room",
+    "applianceType": "appliance_type",
     "addedAt": "added_at",
     "lastSeen": "last_seen",
 }
@@ -105,6 +106,7 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             manufacturer      TEXT,
             name              TEXT,
             room              TEXT,
+            appliance_type    TEXT,
             added_at          TEXT NOT NULL,
             last_seen         TEXT
         );
@@ -154,6 +156,10 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             ON zigbee_history (zigbee_id, timestamp);
         """
     )
+    # A database written before `appliance_type` existed gains it here.
+    columns = {r[1] for r in conn.execute("PRAGMA table_info(zigbee_devices)")}
+    if "appliance_type" not in columns:
+        conn.execute("ALTER TABLE zigbee_devices ADD COLUMN appliance_type TEXT")
     conn.commit()
 
 

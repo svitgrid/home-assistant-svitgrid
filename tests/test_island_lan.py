@@ -2186,6 +2186,121 @@ async def test_box_commands_with_the_island_key_and_owner_only_ones(hass: HomeAs
     assert commands == ["list_devices", "zigbee_restart"]
 
 
+async def test_appliance_type_is_stored_and_served_back(hass: HomeAssistant, tmp_path):
+    from custom_components.svitgrid.zigbee_lan import ZigbeeDevicesView, ZigbeeDeviceView
+
+    _, _, devices = await _zigbee_setup(hass, tmp_path)
+    fresh = await ZigbeeDeviceView().get(_ZReq(hass), PLUG_ID)
+
+    set_ = await ZigbeeDeviceView().patch(_ZReq(hass, {"applianceType": "water_heater"}), PLUG_ID)
+    one = await ZigbeeDeviceView().get(_ZReq(hass), PLUG_ID)
+    [listed] = _body(await ZigbeeDevicesView().get(_ZReq(hass)))["smartDevices"]
+    cleared = await ZigbeeDeviceView().patch(_ZReq(hass, {"applianceType": None}), PLUG_ID)
+
+    assert _body(fresh)["applianceType"] is None
+    assert set_.status == 200, _body(set_)
+    assert _body(one)["applianceType"] == "water_heater"
+    assert listed["applianceType"] == "water_heater"
+    assert cleared.status == 200, _body(cleared)
+    assert (await devices.async_get(PLUG_ID))["applianceType"] is None
+
+
+async def test_a_bad_appliance_type_is_refused(hass: HomeAssistant, tmp_path):
+    from custom_components.svitgrid.zigbee_lan import ZigbeeDeviceView
+
+    _, _, devices = await _zigbee_setup(hass, tmp_path)
+    await devices.async_update(PLUG_ID, {"applianceType": "oven"})
+
+    for bad in ("", "Fridge", "space ship", 3, "x" * 65):
+        resp = await ZigbeeDeviceView().patch(_ZReq(hass, {"applianceType": bad}), PLUG_ID)
+        assert resp.status == 400, bad
+
+    assert (await devices.async_get(PLUG_ID))["applianceType"] == "oven"
+
+
+async def test_a_sensor_has_no_appliance_type(hass: HomeAssistant, tmp_path):
+    from custom_components.svitgrid.zigbee_lan import ZigbeeDeviceView
+
+    _, _, devices = await _zigbee_setup(hass, tmp_path)
+    await devices.async_store_sensor_readings(
+        "EC-1", [{"addr": "0x1234", "ep": 1, "ageMs": 0, "temperature": 2150}], datetime.now(UTC)
+    )
+
+    given = await ZigbeeDeviceView().patch(_ZReq(hass, {"applianceType": "fridge"}), PLUG_ID)
+    cleared = await ZigbeeDeviceView().patch(_ZReq(hass, {"applianceType": None}), PLUG_ID)
+
+    assert given.status == 400
+    assert cleared.status == 200, _body(cleared)
+    assert (await devices.async_get(PLUG_ID))["applianceType"] is None
+
+
+async def test_a_store_written_before_appliance_type_gains_it(tmp_path):
+    import sqlite3
+
+    from custom_components.svitgrid import zigbee_devices
+    from custom_components.svitgrid.zigbee_devices import ZigbeeDeviceStore
+
+    db = tmp_path / "zigbee_devices.db"
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "CREATE TABLE zigbee_devices (id TEXT PRIMARY KEY, ieee TEXT NOT NULL,"
+        " addr TEXT NOT NULL, endpoint INTEGER NOT NULL, device_id TEXT NOT NULL,"
+        " on_state INTEGER, reachable INTEGER NOT NULL DEFAULT 1, unreachable_since TEXT,"
+        " caps INTEGER, model TEXT, manufacturer TEXT, name TEXT, room TEXT,"
+        " added_at TEXT NOT NULL, last_seen TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO zigbee_devices (id, ieee, addr, endpoint, device_id, added_at)"
+        " VALUES (?, ?, '0x1234', 1, 'EC-1', '2026-10-30T10:00:00.000Z')",
+        (PLUG_ID, PLUG_IEEE),
+    )
+    conn.commit()
+    conn.close()
+    zigbee_devices._INITIALIZED.discard(str(db))
+    devices = ZigbeeDeviceStore(str(db), None)
+
+    assert (await devices.async_get(PLUG_ID))["applianceType"] is None
+    await devices.async_update(PLUG_ID, {"applianceType": "fridge"})
+    assert (await devices.async_get(PLUG_ID))["applianceType"] == "fridge"
+
+
+async def test_set_startup_state_is_queued_with_the_address_and_endpoint(
+    hass: HomeAssistant, tmp_path
+):
+    from custom_components.svitgrid.zigbee_lan import ZigbeeDeviceCommandView
+
+    _, queue, _ = await _zigbee_setup(hass, tmp_path)
+
+    resp = await ZigbeeDeviceCommandView().post(
+        _ZReq(hass, {"command": "set_startup_state", "payload": {"mode": "off"}}), PLUG_ID
+    )
+
+    assert resp.status == 200, _body(resp)
+    row = await queue.async_next_pending("EC-1")
+    # `zigbee_poller.c` reads addr, ep and mode from the payload.
+    assert (row["command"], row["payload"]) == (
+        "set_startup_state",
+        {"mode": "off", "addr": "0x1234", "ep": 1},
+    )
+    # The firmware does not require a signature for it (`command_auth.c`).
+    assert row["signing"] is None
+
+
+async def test_set_startup_state_needs_a_mode_the_box_knows(hass: HomeAssistant, tmp_path):
+    from custom_components.svitgrid.zigbee_lan import ZigbeeDeviceCommandView
+
+    _, queue, _ = await _zigbee_setup(hass, tmp_path)
+
+    for payload in (None, {}, {"mode": "Restore"}, {"mode": "toggle"}, {"mode": 1}):
+        body = {"command": "set_startup_state"}
+        if payload is not None:
+            body["payload"] = payload
+        resp = await ZigbeeDeviceCommandView().post(_ZReq(hass, body), PLUG_ID)
+        assert resp.status == 400, payload
+
+    assert await queue.async_pending_count("EC-1") == 0
+
+
 async def test_the_zigbee_views_are_registered(hass: HomeAssistant):
     from unittest.mock import MagicMock
 

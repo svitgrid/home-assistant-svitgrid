@@ -8,12 +8,13 @@ relay its commands to the box:
   `/zigbee/devices/{id}/readings` and `/history` read, island key only,
   shaped like the cloud's `/households/:id/smart-devices`,
   `/smart-devices/:id`, `/readings` and `/history` so the app's models parse
-  them. `PATCH /zigbee/devices/{id}` renames a device or moves it to a room.
+  them. `PATCH /zigbee/devices/{id}` renames a device, moves it to a room or
+  sets what it powers.
 - `POST /api/svitgrid/edge/zigbee/{id}/command` sends `set_state` signed by a
   trusted (owner or admin) key, and the phone's signature for the box rides
   untouched in `boxCommand`: the integration holds no key the box trusts. The
-  unsigned `identify`, `get_device_status` and `remove_device` need the
-  island key only (spec 27).
+  unsigned `identify`, `get_device_status`, `set_startup_state` and
+  `remove_device` need the island key only (spec 27).
 - `POST /api/svitgrid/edge/zigbee/command` sends a box-wide command:
   `list_devices`, `neighbors`, `routes`, `mesh_snapshot` with the island key,
   `zigbee_restart` and `zigbee_factory_reset` signed by a trusted key only.
@@ -29,6 +30,7 @@ before any auth check, so an install without one sees no change.
 from __future__ import annotations
 
 import logging
+import re
 from datetime import UTC, datetime, timedelta
 
 from aiohttp import web
@@ -53,8 +55,16 @@ PERMIT_JOIN_MAX_S = 254
 SENSOR_BUCKET = timedelta(minutes=10)
 SENSOR_HISTORY_MAX_HOURS = 168
 
-# Per-device commands the island key may send (spec 27).
-UNSIGNED_DEVICE_COMMANDS = ("identify", "get_device_status", "remove_device")
+# Per-device commands the island key may send (spec 27). The box asks no
+# signature for any of them (`command_requires_signature`, `command_auth.c`).
+UNSIGNED_DEVICE_COMMANDS = ("identify", "get_device_status", "set_startup_state", "remove_device")
+# The H2 compares `set_startup_state`'s mode literally
+# (`uart_bridge_startup_mode_is_valid`).
+STARTUP_MODES = ("restore", "off", "on")
+# A key of the API's `ApplianceTypeEnum` (`schemas.ts`), checked by shape
+# only: the app's list is append-only, and a newer build's key must not
+# revert here.
+APPLIANCE_TYPE_RE = re.compile(r"[a-z][a-z0-9_]{0,63}")
 # Box-wide commands the island key may send, and those a trusted key must sign.
 UNSIGNED_BOX_COMMANDS = ("list_devices", "neighbors", "routes", "mesh_snapshot")
 OWNER_BOX_COMMANDS = ("zigbee_restart", "zigbee_factory_reset")
@@ -113,6 +123,7 @@ def _device_body(device: dict, socket: dict | None, sensor: dict | None) -> dict
         "model": device["model"],
         "manufacturer": device["manufacturer"],
         "roomId": device["room"],
+        "applianceType": device["applianceType"],
         "capabilities": device["caps"],
         "state": state,
         "lastReading": last_reading,
@@ -163,8 +174,10 @@ class ZigbeeDevicesView(_ZigbeeView):
 
 
 class ZigbeeDeviceView(_ZigbeeView):
-    """GET or PATCH /api/svitgrid/zigbee/devices/{id}. PATCH takes `name`
-    and `roomId` (a string, or null to clear the room), island key only."""
+    """GET or PATCH /api/svitgrid/zigbee/devices/{id}. PATCH takes `name`,
+    `roomId` (a string, or null to clear the room) and `applianceType` (a key,
+    or null to clear it; a sensor powers nothing, so it may only clear),
+    island key only."""
 
     url = "/api/svitgrid/zigbee/devices/{device_id}"
     name = "api:svitgrid:zigbee:device"
@@ -185,8 +198,8 @@ class ZigbeeDeviceView(_ZigbeeView):
             return gate
         devices, _ = gate
         body = await _body(request)
-        if body is None or not body.keys() & {"name", "roomId"}:
-            return _json_error(400, "bad_request", detail="name or roomId")
+        if body is None or not body.keys() & {"name", "roomId", "applianceType"}:
+            return _json_error(400, "bad_request", detail="name, roomId or applianceType")
         fields = {}
         if "name" in body:
             name = body["name"]
@@ -198,8 +211,19 @@ class ZigbeeDeviceView(_ZigbeeView):
             if room is not None and (not isinstance(room, str) or not room or len(room) > 100):
                 return _json_error(400, "bad_request", detail="roomId must be a string or null")
             fields["room"] = room
+        if "applianceType" in body:
+            appliance = body["applianceType"]
+            if appliance is not None and (
+                not isinstance(appliance, str) or not APPLIANCE_TYPE_RE.fullmatch(appliance)
+            ):
+                return _json_error(400, "bad_request", detail="applianceType must be a key or null")
+            fields["applianceType"] = appliance
         if await devices.async_get(device_id) is None:
             return _json_error(404, "unknown_device")
+        if fields.get("applianceType") is not None:
+            _, sensor = await devices.async_latest(device_id)
+            if sensor is not None:
+                return _json_error(400, "bad_request", detail="a sensor has no appliance type")
         await devices.async_update(device_id, fields)
         return web.json_response({"success": True})
 
@@ -321,8 +345,10 @@ class ZigbeeDeviceCommandView(_ZigbeeView):
     `boxCommand` it is 400 `box_signature_required`, and a request that is not
     signed by a trusted key is refused (`signed_lan_request`).
 
-    `{command: "identify" | "get_device_status" | "remove_device", payload?}`
-    needs the island key only. `remove_device` also forgets the device here.
+    `{command: "identify" | "get_device_status" | "set_startup_state" |
+    "remove_device", payload?}` needs the island key only. `set_startup_state`
+    takes `payload: {mode: "restore" | "off" | "on"}`. `remove_device` also
+    forgets the device here.
     Answers `{success, commandId, status}`.
     """
 
@@ -348,6 +374,9 @@ class ZigbeeDeviceCommandView(_ZigbeeView):
             return _json_error(400, "box_signature_required")
         if command not in UNSIGNED_DEVICE_COMMANDS:
             return _json_error(400, "bad_request", detail="unknown command")
+        extra = body.get("payload") if isinstance(body.get("payload"), dict) else {}
+        if command == "set_startup_state" and extra.get("mode") not in STARTUP_MODES:
+            return _json_error(400, "bad_request", detail="mode must be restore, off or on")
         device = await devices.async_get(device_id)
         if device is None:
             return _json_error(404, "unknown_device")
@@ -356,7 +385,6 @@ class ZigbeeDeviceCommandView(_ZigbeeView):
         if command == "remove_device":
             payload = {"addr": device["addr"], "ieee": device["ieee"]}
         else:
-            extra = body.get("payload") if isinstance(body.get("payload"), dict) else {}
             payload = {**extra, "addr": device["addr"], "ep": device["endpoint"]}
         command_id = await queue.async_enqueue(
             device["deviceId"], command, payload, signing=None, inverter_id=None, source="zigbee"
