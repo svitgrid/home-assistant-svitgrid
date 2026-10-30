@@ -61,6 +61,7 @@ from .const import (
 from .edge_api import EDGE_BOX_LOCK, edge_refusals
 from .edge_api import _entry_state as _edge_poll_state
 from .entry_reload import update_entry_skipping_listener_reload
+from .harvest.brand_commands import island_writes
 from .island_auth import island_key_present_and_valid
 from .keystore import EdgeBoxEntry, LastAdminKey
 from .settings_sync import find_edge_settings_snapshot
@@ -451,7 +452,31 @@ class SvitgridIslandStatusView(HomeAssistantView):
                 for status in [await _box_status(hass, box) for box in boxes]
             ]
             body["pendingBoxKeys"] = await keystore.async_list_pending_box_keys()
+        inverters = _inverter_adverts(hass, boxes)
+        if inverters:
+            body["inverters"] = inverters
         return web.json_response(body)
+
+
+def _inverter_adverts(hass, boxes: list[EdgeBoxEntry]) -> dict[str, dict]:
+    """What the island writes for each inverter, keyed by inverter id.
+
+    An edge box's inverter lists `writableActions` and `modes` from its brand
+    (`island_writes`). One Home Assistant harvests names only its host: with
+    no `writableActions` the app keeps the rule it has always applied, so an
+    install without a box sees no change.
+    """
+    adverts: dict[str, dict] = {}
+    for entry in _entries(hass):
+        for inverter in entry.data.get("inverters") or []:
+            inverter_id = inverter.get("inverter_id") if isinstance(inverter, dict) else None
+            if isinstance(inverter_id, str) and inverter_id:
+                adverts[inverter_id] = {"host": "ha"}
+    for box in boxes:
+        for inverter_id in box.inverter_ids:
+            adopted = box.inverters.get(inverter_id) or {}
+            adverts[inverter_id] = {"host": "edge", **island_writes(adopted)}
+    return adverts
 
 
 # What `/island/status` says of each edge box; `/edge/status` says more.

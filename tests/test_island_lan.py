@@ -1649,3 +1649,175 @@ async def test_the_edge_key_add_view_is_registered_with_the_others(hass: HomeAss
     register_views(hass, store=MagicMock())
     urls = {call.args[0].url for call in hass.http.register_view.call_args_list}
     assert "/api/svitgrid/edge/keys/add" in urls
+
+
+# ── island status advertises each inverter's writes (edge island plan, Task 35) ─
+
+_VOCAB = json.loads(
+    (Path(__file__).parent / "fixtures" / "island_capability_vocab.json").read_text()
+)
+
+
+def _ha_entry(hass, *inverter_ids) -> MockConfigEntry:
+    """A cloud-paired true island whose inverters Home Assistant harvests."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        version=2,
+        data={
+            "api_key": "k",
+            "edge_device_id": "ed-1",
+            "cloud_ingest_enabled": False,
+            "inverters": [
+                {"inverter_id": i, "harvest_config": {"model_id": "deye_sg04lp3"}}
+                for i in inverter_ids
+            ],
+        },
+    )
+    entry.add_to_hass(hass)
+    return entry
+
+
+async def test_island_status_without_edge_boxes_lists_ha_inverters_only(hass: HomeAssistant):
+    """An install that never adopted a box keeps its 0.25.0 status body, plus
+    `inverters`. A Home Assistant inverter names only its host: with no
+    `writableActions` the app keeps today's rule for it."""
+    await _keystore(hass, _Admin())
+    _ha_entry(hass, "inv-ha-1", "inv-ha-2")
+    resp = await SvitgridIslandStatusView().get(_Req(hass))
+    assert resp.status == 200
+    manifest = Path(__file__).parents[1] / "custom_components" / "svitgrid" / "manifest.json"
+    version = json.loads(manifest.read_text())["version"]
+    assert _body(resp) == {
+        "cloudCopy": False,
+        "localOnly": False,
+        "trueIsland": True,
+        "version": version,
+        "capabilities": [
+            "cloud_copy_lan",
+            "leave_lan",
+            "revoke_lan",
+            "pair_extra_phone",
+            "rules",
+            "settings_lan",
+        ],
+        "inverters": {"inv-ha-1": {"host": "ha"}, "inv-ha-2": {"host": "ha"}},
+    }
+
+
+async def test_island_status_advertises_each_edge_inverters_writes(hass: HomeAssistant, tmp_path):
+    from custom_components.svitgrid.edge_command_queue import EdgeCommandQueue
+
+    admin = _Admin()
+    await _keystore(hass, admin)
+    entry = _ha_entry(hass, "inv-ha")
+    queue = EdgeCommandQueue(str(tmp_path / "edge_commands.db"), None)
+    _entry_state(hass, entry, queue=queue)
+    await _adopt(
+        hass,
+        admin,
+        "EC-1",
+        _inv("inv-deye"),
+        _inv("inv-pi30", modelId="edecoa_em_624a", transport="pi30_serial", protocolId="pi30"),
+        _inv(
+            "inv-sna",
+            modelId="luxpower_sna_5000_wpv",
+            transport="modbus_rtu",
+            protocolId="modbus_rtu",
+        ),
+    )
+    await _adopt(
+        hass,
+        admin,
+        "EC-2",
+        _inv("inv-solax", modelId="solax_x3_hybrid_g4", transport="modbus_tcp"),
+        _inv("inv-solis", modelId="solis_30k_5g"),
+    )
+
+    body = _body(await SvitgridIslandStatusView().get(_Req(hass)))
+
+    deye = _VOCAB["brandKinds"]["deye"]
+    assert body["inverters"] == {
+        "inv-ha": {"host": "ha"},
+        "inv-deye": {"host": "edge", **deye},
+        # Battery charge and use battery run as priority profiles. The
+        # thresholds actions wait on svitgrid#1255, and sell_to_grid has no
+        # profile, so the island writes neither yet.
+        "inv-pi30": {
+            "host": "edge",
+            "writableActions": [],
+            "modes": ["battery_charge", "use_battery"],
+        },
+        # An SNA has no battery_first profile.
+        "inv-sna": {"host": "edge", "writableActions": [], "modes": ["battery_charge"]},
+        # Review focus 5: SolaX on an edge island offers no writable action.
+        "inv-solax": {"host": "edge", "writableActions": [], "modes": []},
+        "inv-solis": {"host": "edge", "writableActions": [], "modes": []},
+    }
+
+
+async def test_island_status_advert_stays_inside_the_vocabulary(hass: HomeAssistant, tmp_path):
+    """Every host, action and mode the advert names is in the vocabulary the
+    app is built against, and within what that brand kind may advertise."""
+    from custom_components.svitgrid.edge_command_queue import EdgeCommandQueue
+    from custom_components.svitgrid.harvest.brand_commands import brand_kind
+
+    admin = _Admin()
+    await _keystore(hass, admin)
+    entry = _ha_entry(hass, "inv-ha")
+    _entry_state(hass, entry, queue=EdgeCommandQueue(str(tmp_path / "q.db"), None))
+    inverters = [
+        _inv("i-deye"),
+        _inv("i-pi30", modelId="edecoa_em_624a", transport="pi30_serial", protocolId="pi30"),
+        _inv("i-must", modelId="must_pv18_3224", transport="modbus_rtu", protocolId="must"),
+        _inv("i-smg2", modelId="anenji_anj_4200", transport=None, protocolId="eybond_at"),
+        _inv("i-srne", modelId="srne_hsi_1500", transport=None, protocolId=None),
+        _inv("i-solax", modelId="solax_x3_hybrid_g4", transport="modbus_tcp"),
+        _inv("i-victron", modelId="victron_multiplus_ii", transport="modbus_tcp"),
+    ]
+    await _adopt(hass, admin, "EC-1", *inverters)
+
+    advert = _body(await SvitgridIslandStatusView().get(_Req(hass)))["inverters"]
+
+    for inv in inverters:
+        item = advert[inv["inverterId"]]
+        assert item["host"] in _VOCAB["hosts"]
+        ceiling = _VOCAB["brandKinds"][brand_kind(inv)]
+        assert set(item["writableActions"]) <= set(ceiling["writableActions"])
+        assert set(item["writableActions"]) <= set(_VOCAB["actionTypes"])
+        assert set(item["modes"]) <= set(ceiling["modes"])
+        assert set(item["modes"]) <= set(_VOCAB["writingModes"])
+    assert advert["inv-ha"]["host"] in _VOCAB["hosts"]
+
+
+async def test_island_status_advert_matches_what_the_evaluator_writes(
+    hass: HomeAssistant, tmp_path
+):
+    """An action the advert lists is one the island evaluator writes for that
+    inverter, and a vocabulary action it leaves out is one the evaluator
+    refuses with unsupported_field: the app never offers what the scheduler
+    then skips (review focus 5)."""
+    from custom_components.svitgrid.edge_command_queue import EdgeCommandQueue
+    from custom_components.svitgrid.harvest.brand_commands import brand_kind
+    from custom_components.svitgrid.harvest.event_evaluator import _unsupported_command
+
+    admin = _Admin()
+    await _keystore(hass, admin)
+    entry = _entry(hass, cloud_ingest=False)
+    _entry_state(hass, entry, queue=EdgeCommandQueue(str(tmp_path / "q.db"), None))
+    inverters = [
+        _inv("i-deye"),
+        _inv("i-pi30", modelId="edecoa_em_624a", transport="pi30_serial", protocolId="pi30"),
+        _inv("i-must", modelId="must_pv18_3224", transport="modbus_rtu", protocolId="must"),
+        _inv("i-solax", modelId="solax_x3_hybrid_g4", transport="modbus_tcp"),
+    ]
+    await _adopt(hass, admin, "EC-1", *inverters)
+
+    advert = _body(await SvitgridIslandStatusView().get(_Req(hass)))["inverters"]
+
+    for inv in inverters:
+        kind = brand_kind(inv)
+        listed = set(advert[inv["inverterId"]]["writableActions"])
+        for action in _VOCAB["brandKinds"][kind]["writableActions"]:
+            event = {"mode": "custom", "config": {"customActions": [{"type": action}]}}
+            refused = _unsupported_command(event, {}, kind) is not None
+            assert refused is (action not in listed), (inv["inverterId"], action)

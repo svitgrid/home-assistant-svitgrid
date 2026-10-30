@@ -125,3 +125,48 @@ def edge_inverter(boxes, inverter_id: str) -> dict | None:
             adopted = box.inverters.get(inverter_id) or {}
             return {k: adopted.get(k) for k in ("modelId", "transport", "protocolId")}
     return None
+
+
+# What the island writes for an inverter of each kind, as `GET
+# /api/svitgrid/island/status` advertises it (edge island plan, Task 35). The
+# vocabulary, and what each kind may advertise at most, is
+# tests/fixtures/island_capability_vocab.json.
+_DEYE_WRITABLE_ACTIONS = (
+    "work_mode",
+    "solar_sell",
+    "sell_power_cap",
+    "grid_charge_toggle",
+    "gen_force",
+    "gen_port_mode",
+    "energy_pattern",
+    "tou_slots",
+)
+_DEYE_MODES = ("battery_charge", "use_battery", "sell_to_grid", "gen_force")
+# The modes a priority-profile brand runs, each through the profile
+# profile_for_mode names. sell_to_grid has no profile, so it is not written.
+_PRIORITY_MODES = ("battery_charge", "use_battery")
+
+
+def island_writes(inv: dict) -> dict[str, list[str]]:
+    """The custom actions and writing modes the island writes for an adopted
+    inverter: ``{"writableActions": [...], "modes": [...]}``.
+
+    A priority-profile brand lists a mode only when its protocol has that
+    mode's profile (an SNA has no battery_first). Its thresholds action is not
+    listed yet: the evaluator refuses it with ``unsupported_field`` until
+    svitgrid#1255.
+    """
+    # priority_profile imports this module.
+    from .priority_profile import PROFILES_BY_PROTOCOL
+
+    kind = brand_kind(inv)
+    if kind == "deye":
+        return {"writableActions": list(_DEYE_WRITABLE_ACTIONS), "modes": list(_DEYE_MODES)}
+    if kind == "priority":
+        protocol = priority_profile_protocol(
+            inv.get("modelId"), inv.get("transport"), inv.get("protocolId")
+        )
+        profiles = PROFILES_BY_PROTOCOL.get(protocol or "", ())
+        modes = [m for m in _PRIORITY_MODES if profile_for_mode(m) in profiles]
+        return {"writableActions": [], "modes": modes}
+    return {"writableActions": [], "modes": []}
