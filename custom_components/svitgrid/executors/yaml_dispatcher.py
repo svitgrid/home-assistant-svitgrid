@@ -83,7 +83,13 @@ class YamlDispatcher(BaseExecutor):
                 _LOGGER.warning("Preset command missing id; skipping: %s", cmd)
         self._config = dict(config)
 
-    async def dispatch(self, command_name: str, payload: dict[str, Any]) -> dict[str, Any]:
+    async def dispatch(
+        self,
+        command_name: str,
+        payload: dict[str, Any],
+        *,
+        signing: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Look up the command recipe, evaluate args, call the HA service.
 
         Returns a result dict the caller includes in the signed ACK so the

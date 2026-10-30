@@ -423,7 +423,13 @@ class SmgSettingsExecutor(BaseExecutor):
         # entry point; it only serves the two commands below.
         raise NotImplementedError("SmgSettingsExecutor does not support set_battery_charge")
 
-    async def dispatch(self, command_name: str, payload: dict[str, Any]) -> dict[str, Any]:
+    async def dispatch(
+        self,
+        command_name: str,
+        payload: dict[str, Any],
+        *,
+        signing: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         if command_name == "read_inverter_settings":
             result = await self.read()
             return {
@@ -541,7 +547,13 @@ class EybondSmgSettingsExecutor(BaseExecutor):
             )
         return await read_smg_sync_body(session, timeout_s=self._timeout_s)
 
-    async def dispatch(self, command_name: str, payload: dict[str, Any]) -> dict[str, Any]:
+    async def dispatch(
+        self,
+        command_name: str,
+        payload: dict[str, Any],
+        *,
+        signing: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         session = self._hub.session_for(self._inverter_serial)
         if session is None:
             raise NoCollectorConnected(

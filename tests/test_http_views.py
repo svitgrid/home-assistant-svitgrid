@@ -245,3 +245,92 @@ async def test_history_view_daily_path_unchanged_with_granularity_absent(hass):
     assert b"days" in resp.body
     # hourly_range must not have been called
     assert store.hourly_args is None
+
+
+class _RecordingExecutor:
+    """Records the `signing` keyword each dispatch receives."""
+
+    def __init__(self, relays_signature: bool):
+        self.relays_signature = relays_signature
+        self.calls: list[tuple[str, dict, dict | None]] = []
+
+    async def dispatch(self, command_name, payload, *, signing=None):
+        self.calls.append((command_name, payload, signing))
+        return {"applied": True}
+
+
+@pytest.mark.asyncio
+async def test_commands_view_passes_signing_to_executor(hass):
+    from custom_components.svitgrid.http_views import SvitgridCommandsView
+    from custom_components.svitgrid.signing import generate_keypair
+    from tests.test_commands_endpoint import (
+        INVERTER_ID,
+        ISLAND_KEY,
+        _install_executor,
+        _install_keystore,
+        _make_signed_body,
+    )
+    from tests.test_commands_endpoint import _FakeRequest as _CommandRequest
+
+    private_key, public_key_hex = generate_keypair()
+    _install_keystore(hass, trusted_public_keys_hex={"key-1": public_key_hex})
+    executor = _RecordingExecutor(relays_signature=True)
+    _install_executor(hass, INVERTER_ID, executor)
+    payload = {"inverterId": INVERTER_ID, "workMode": 1}
+    body = _make_signed_body(private_key, "key-1", "set_work_mode", payload)
+
+    resp = await SvitgridCommandsView().post(
+        _CommandRequest(hass, island_key_header=ISLAND_KEY, body=body)
+    )
+
+    assert resp.status == 200
+    assert executor.calls == [
+        (
+            "set_work_mode",
+            payload,
+            {
+                "signedEventData": body["signedEventData"],
+                "signature": body["signature"],
+                "signingKeyId": "key-1",
+            },
+        )
+    ]
+
+
+class _LegacyExecutor:
+    """A dispatch without the `signing` keyword, as at v0.25.0."""
+
+    def __init__(self):
+        self.calls: list[tuple] = []
+
+    async def dispatch(self, *args, **kwargs):
+        self.calls.append((args, kwargs))
+        return {"applied": True}
+
+
+@pytest.mark.asyncio
+async def test_an_executor_that_does_not_relay_the_signature_is_called_without_signing(hass):
+    from custom_components.svitgrid.http_views import SvitgridCommandsView
+    from custom_components.svitgrid.signing import generate_keypair
+    from tests.test_commands_endpoint import (
+        INVERTER_ID,
+        ISLAND_KEY,
+        _install_executor,
+        _install_keystore,
+        _make_signed_body,
+    )
+    from tests.test_commands_endpoint import _FakeRequest as _CommandRequest
+
+    private_key, public_key_hex = generate_keypair()
+    _install_keystore(hass, trusted_public_keys_hex={"key-1": public_key_hex})
+    executor = _LegacyExecutor()
+    _install_executor(hass, INVERTER_ID, executor)
+    payload = {"inverterId": INVERTER_ID, "workMode": 1}
+    body = _make_signed_body(private_key, "key-1", "set_work_mode", payload)
+
+    resp = await SvitgridCommandsView().post(
+        _CommandRequest(hass, island_key_header=ISLAND_KEY, body=body)
+    )
+
+    assert resp.status == 200
+    assert executor.calls == [(("set_work_mode", payload), {})]
