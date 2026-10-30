@@ -110,9 +110,7 @@ class BotApi:
         )
         return result if isinstance(result, list) else []
 
-    async def send(
-        self, chat_id: int, html: str, button: tuple[str, str] | None
-    ) -> SendResult:
+    async def send(self, chat_id: int, html: str, button: tuple[str, str] | None) -> SendResult:
         self.retry_after_s = None
         payload: dict[str, Any] = {
             "chat_id": chat_id,
