@@ -269,7 +269,14 @@ async def async_ensure_telegram_views(hass) -> None:
     Routes are global to `hass.http` and outlive a config-entry reload, so a
     second registration is swallowed. Never raises.
     """
-    await telegram_state(hass)
+    try:
+        await telegram_state(hass)
+    except Exception:  # noqa: BLE001
+        # A corrupt Telegram store must not take the integration down. The
+        # routes build an empty state on first use.
+        _LOGGER.exception("Could not load the Telegram state")
+        hass.data.setdefault(DOMAIN, {})["telegram_state"] = TelegramState(hass)
+        hass.data[DOMAIN].setdefault("telegram_wake", lambda: None)
     http = getattr(hass, "http", None)
     if http is None:
         return

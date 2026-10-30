@@ -40,6 +40,7 @@ from .const import (
     DEFAULT_API_BASE,
     DOMAIN,
     HOURLY_RETENTION_S,
+    LEGACY_ISLAND_DEVICE_ID,
     LOCAL_PAIRING_GRANT,
     RAW_RETENTION_S,
     READINGS_DB_FILE,
@@ -83,7 +84,7 @@ from .reading_store import ReadingStore
 from .readings_publisher import run_loop as run_readings_loop
 from .settings_sync import find_edge_settings_snapshot
 from .settings_sync import settings_sync_loop as run_settings_sync_loop
-from .telegram.views import async_ensure_telegram_views
+from .telegram.views import async_ensure_telegram_views, unlink_device
 from .update import SvitgridUpdateCoordinator
 from .updater import read_installed_version
 from .zigbee_devices import ZigbeeDeviceStore
@@ -1400,7 +1401,17 @@ async def _revoke_entry_island_keys(hass: HomeAssistant, entry: ConfigEntry) -> 
             }
         if not device_ids and not key:
             return
+        before = await keystore.load()
+        had_scalar = bool(before and before.island_key)
         removed = await keystore.async_revoke_island_keys(sorted(device_ids), key=key)
+        # A phone that lost its island key can no longer stop its alerts, so
+        # its Telegram chat goes with it. The legacy scalar maps to its own id.
+        after = await keystore.load()
+        gone = list(removed)
+        if had_scalar and after is not None and not after.island_key:
+            gone.append(LEGACY_ISLAND_DEVICE_ID)
+        for did in gone:
+            await unlink_device(hass, did)
         if removed:
             _LOGGER.info(
                 "Revoked %d island key(s) adopted by config entry %s", len(removed), entry.entry_id

@@ -145,8 +145,9 @@ async def test_put_bot_unsigned_is_401_or_403(hass):
     await _setup(hass)
     resp = await tv.SvitgridTelegramBotView().put(_Req(hass, {"token": TOKEN}, island_key=None))
     assert resp.status in (401, 403)
+    assert (_body(resp)["error"]) == "unauthorized"
     resp = await tv.SvitgridTelegramBotView().put(_Req(hass, {"token": TOKEN}))
-    assert resp.status in (400, 401, 403)
+    assert (resp.status, _body(resp)["error"]) == (400, "bad_request")
 
 
 async def test_put_bot_stores_token(hass, aioclient_mock):
@@ -296,3 +297,25 @@ async def test_device_for_island_key(hass):
     assert state.device_for_island_key(OTHER_ISLAND_KEY) == "phone-2"
     assert state.device_for_island_key("nope") is None
     assert state.device_for_island_key("") is None
+
+
+async def test_entry_removal_unlinks_revoked_phones(hass):
+    from custom_components.svitgrid import _revoke_entry_island_keys
+    from custom_components.svitgrid.const import LEGACY_ISLAND_DEVICE_ID
+
+    _, _, ks, state = await _setup(hass, token=True)
+    cur = await ks.load()
+    cur.island_key = "s" * 43
+    await ks._write(cur)
+    _link(state, "phone-2", 88)
+    _link(state, "phone-1", 77)
+    _link(state, LEGACY_ISLAND_DEVICE_ID, 99)
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={"island_key": "s" * 43, "island_device_ids": ["phone-2"]},
+    )
+    entry.add_to_hass(hass)
+    await _revoke_entry_island_keys(hass, entry)
+    assert state.chat_for("phone-2") is None
+    assert state.chat_for(LEGACY_ISLAND_DEVICE_ID) is None
+    assert state.chat_for("phone-1") is not None
