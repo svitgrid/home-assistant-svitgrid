@@ -378,6 +378,10 @@ async def revoke_signed_key(
         outcome["untrusted"],
         outcome["deviceId"],
     )
+    # A revoked phone's Telegram chat goes with its island key.
+    from .telegram.views import unlink_device
+
+    await unlink_device(hass, outcome["deviceId"])
     # The box takes a revocation without a signature (`command_auth.c`). A box
     # that never held the key acks it as a no-op.
     await _enqueue_for_every_box(

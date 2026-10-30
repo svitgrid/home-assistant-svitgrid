@@ -83,6 +83,7 @@ from .reading_store import ReadingStore
 from .readings_publisher import run_loop as run_readings_loop
 from .settings_sync import find_edge_settings_snapshot
 from .settings_sync import settings_sync_loop as run_settings_sync_loop
+from .telegram.views import async_ensure_telegram_views
 from .update import SvitgridUpdateCoordinator
 from .updater import read_installed_version
 from .zigbee_devices import ZigbeeDeviceStore
@@ -498,6 +499,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     # config entry is never set up, so this never runs on the install the view
     # is for; the config flow registers it as well.
     ensure_hello_view(hass)
+    await async_ensure_telegram_views(hass)
 
     conf = config.get(DOMAIN)
     if not conf:

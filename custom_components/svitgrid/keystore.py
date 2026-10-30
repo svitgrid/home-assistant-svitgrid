@@ -82,6 +82,13 @@ def _normalise_island_entry(value: Any) -> dict[str, Any] | None:
 EDGE_PAIR_CODE_TTL = timedelta(seconds=600)
 
 
+def _same_key(a: str, b: str) -> bool:
+    try:
+        return hmac.compare_digest(a, b)
+    except (TypeError, ValueError):
+        return False
+
+
 def _utcnow() -> datetime:
     return datetime.now(UTC)
 
@@ -251,6 +258,24 @@ class KeystoreState:
         if self.island_key and self.island_key not in keys:
             keys.append(self.island_key)
         return keys
+
+    def device_for_island_key(self, key: str) -> str | None:
+        """The roster device id that holds `key`, or None.
+
+        Compares every stored key with `hmac.compare_digest` and never stops at
+        the first match, as `island_auth.island_key_present_and_valid` does. The
+        legacy scalar maps to `LEGACY_ISLAND_DEVICE_ID`.
+        """
+        if not key:
+            return None
+        found: str | None = None
+        for device_id, entry in self.island_keys.items():
+            value = entry.get("key") if isinstance(entry, dict) else None
+            if value and _same_key(key, value) and found is None:
+                found = device_id
+        if self.island_key and _same_key(key, self.island_key) and found is None:
+            found = LEGACY_ISLAND_DEVICE_ID
+        return found
 
     def lan_paired_trusted_keys(self) -> dict[str, str]:
         """The trusted keys of phones paired over the LAN.

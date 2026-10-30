@@ -1492,6 +1492,10 @@ class SvitgridIslandDeviceRevokeView(_BaseView):
             return self.json({"error": "unavailable"}, status_code=503)
 
         removed = await keystore.async_revoke_island_key(device_id)
+        # A revoked phone's Telegram chat goes with its island key.
+        from .telegram.views import unlink_device
+
+        await unlink_device(hass, device_id)
         # Idempotent: `removed=False` means it was already gone, which is a
         # success from the caller's point of view.
         return self.json({"removed": removed})
