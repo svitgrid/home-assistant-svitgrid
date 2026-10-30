@@ -221,3 +221,44 @@ async def test_forget_device_drops_only_that_box_and_wakes_its_waiters(tmp_path,
     assert await q.async_pending_count("EC-1") == 0
     assert (await q.async_wait(kept, 0))["state"] == "pending"
     assert await q.async_forget_device("EC-1") == 0
+
+
+async def test_a_queue_written_before_target_gains_it(tmp_path):
+    """A database from an earlier version has no `target_json`: it is added,
+    and the rows already queued read back with no target."""
+    import sqlite3
+
+    db = str(tmp_path / "edge_commands.db")
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "CREATE TABLE edge_commands (id TEXT PRIMARY KEY, device_id TEXT NOT NULL, "
+        "inverter_id TEXT, command TEXT NOT NULL, payload_json TEXT NOT NULL, "
+        "signing_json TEXT, state TEXT NOT NULL, source TEXT NOT NULL, "
+        "created_at TEXT NOT NULL, delivered_at TEXT, acked_at TEXT, result_json TEXT, "
+        "reason TEXT, expires_at TEXT NOT NULL, deliveries INTEGER NOT NULL DEFAULT 0, "
+        "rejected INTEGER)"
+    )
+    conn.execute(
+        "INSERT INTO edge_commands (id, device_id, command, payload_json, state, source, "
+        "created_at, expires_at) VALUES ('old', 'EC-1', 'list_devices', '{}', 'pending', "
+        "'zigbee', '2026-10-30T10:00:00.000Z', '2999-01-01T00:00:00.000Z')"
+    )
+    conn.commit()
+    conn.close()
+    queue = EdgeCommandQueue(db, None)
+
+    new_id = await queue.async_enqueue(
+        "EC-1",
+        "set_state",
+        {"on": True},
+        signing=None,
+        inverter_id=None,
+        source="zigbee",
+        target={"zigbeeAddr": "0x1234", "zigbeeEndpoint": 1},
+    )
+
+    assert (await queue.async_get("old"))["target"] is None
+    assert (await queue.async_get(new_id))["target"] == {
+        "zigbeeAddr": "0x1234",
+        "zigbeeEndpoint": 1,
+    }

@@ -1839,3 +1839,366 @@ async def test_island_status_advert_matches_what_the_evaluator_writes(
             )
             refused = decision.skip_reason == "unsupported_field"
             assert refused is (action not in listed), (inv["inverterId"], action)
+
+
+# ── Zigbee over the LAN for the app (edge island plan, Task 43) ─────────────
+
+
+PLUG_IEEE = "A4:C1:38:11:11:46:FF:FF"
+PLUG_ID = "zb-a4c138111146ffff"
+
+
+class _ZReq(_Req):
+    def __init__(self, hass, body=None, *, query=None, **kwargs):
+        super().__init__(hass, body, **kwargs)
+        self.query = dict(query or {})
+
+
+async def _zigbee_setup(hass, tmp_path, *, adopt=True):
+    from custom_components.svitgrid.edge_command_queue import EdgeCommandQueue
+    from custom_components.svitgrid.zigbee_devices import ZigbeeDeviceStore
+
+    admin = _Admin()
+    await _keystore(hass, admin)
+    entry = _entry(hass)
+    queue = EdgeCommandQueue(str(tmp_path / "edge_commands.db"), None)
+    devices = ZigbeeDeviceStore(str(tmp_path / "zigbee_devices.db"), None)
+    _entry_state(hass, entry, queue=queue)["zigbee_devices"] = devices
+    if adopt:
+        await _adopt(hass, admin, "EC-1", _inv("inv-1"))
+        await devices.async_add("EC-1", PLUG_IEEE, "0x1234", 1)
+    return admin, queue, devices
+
+
+def _set_state_box_command(signer: _Admin, on: bool = True) -> dict:
+    """The phone-signed `set_state` the box verifies, naming HA's device id."""
+    signed = {
+        "command": "set_state",
+        "payload": {"on": on},
+        "smartDeviceId": PLUG_ID,
+        "validUntil": "2026-10-30T10:20:00.000Z",
+    }
+    return {
+        "signedEventData": signed,
+        "signature": sign_payload(signed, signer.priv),
+        "signingKeyId": signer.key_id,
+    }
+
+
+async def _switch(hass, signer: _Admin, box_command, device_id=PLUG_ID, **req):
+    from custom_components.svitgrid.zigbee_lan import ZigbeeDeviceCommandView
+
+    body = signer.request("edge_zigbee_command", command="set_state", boxCommand=box_command)
+    return await ZigbeeDeviceCommandView().post(_ZReq(hass, body, **req), device_id)
+
+
+async def test_set_state_reaches_the_box_with_address_endpoint_and_expiry(
+    hass: HomeAssistant, tmp_path
+):
+    from custom_components.svitgrid.edge_api import _command_for_box
+
+    admin, queue, devices = await _zigbee_setup(hass, tmp_path)
+    box_command = _set_state_box_command(admin)
+
+    resp = await _switch(hass, admin, box_command)
+
+    assert resp.status == 200, _body(resp)
+    command_id = _body(resp)["commandId"]
+    row = await queue.async_next_pending("EC-1")
+    assert row["id"] == command_id
+    sent = _command_for_box(row)
+    assert sent["command"] == "set_state"
+    assert sent["payload"] == {"on": True}
+    # `zigbee_poller.c` reads these beside `payload`, not inside it.
+    assert sent["zigbeeAddr"] == "0x1234"
+    assert sent["zigbeeEndpoint"] == 1
+    assert 0 < sent["expiresInMs"] <= 60_000
+    # The phone's signature reaches the box untouched.
+    assert sent["signedEventData"] == box_command["signedEventData"]
+    assert sent["signature"] == box_command["signature"]
+    assert sent["signingKeyId"] == box_command["signingKeyId"]
+    history = await devices.async_history(PLUG_ID)
+    assert [(h["event"], h["state"], h["commandId"]) for h in history] == [
+        ("command_sent", {"on": True}, command_id)
+    ]
+
+
+async def test_an_unsigned_set_state_is_refused(hass: HomeAssistant, tmp_path):
+    from custom_components.svitgrid.zigbee_lan import ZigbeeDeviceCommandView
+
+    admin, queue, _ = await _zigbee_setup(hass, tmp_path)
+
+    # The island key alone, no signature at all.
+    plain = await ZigbeeDeviceCommandView().post(
+        _ZReq(hass, {"command": "set_state", "payload": {"on": True}}), PLUG_ID
+    )
+    # A trusted request that carries no phone signature for the box.
+    no_box = await _switch(hass, admin, None)
+
+    assert plain.status == 400
+    assert _body(plain) == {"error": "box_signature_required"}
+    assert no_box.status == 400
+    assert _body(no_box) == {"error": "box_signature_required"}
+    assert await queue.async_pending_count("EC-1") == 0
+
+
+async def test_a_member_may_rename_but_not_switch(hass: HomeAssistant, tmp_path):
+    from custom_components.svitgrid.zigbee_lan import ZigbeeDeviceView
+
+    _, queue, devices = await _zigbee_setup(hass, tmp_path)
+    # A view-only phone: an island key, and a signing key HA does not trust.
+    member = _Admin()
+
+    switched = await _switch(hass, member, _set_state_box_command(member))
+    renamed = await ZigbeeDeviceView().patch(
+        _ZReq(hass, {"name": "Бойлер", "roomId": "kitchen"}), PLUG_ID
+    )
+
+    assert switched.status == 403
+    assert _body(switched) == {"error": "signature_invalid"}
+    assert await queue.async_pending_count("EC-1") == 0
+    assert renamed.status == 200, _body(renamed)
+    device = await devices.async_get(PLUG_ID)
+    assert (device["name"], device["room"]) == ("Бойлер", "kitchen")
+
+
+async def test_permit_join_opens_the_window_task_41_reads(hass: HomeAssistant, tmp_path):
+    from custom_components.svitgrid.zigbee_lan import ZigbeePermitJoinView
+
+    admin, queue, devices = await _zigbee_setup(hass, tmp_path)
+    signed = {
+        "command": "permit_join",
+        "payload": {"duration": 120},
+        "hardwareId": "EC-1",
+        "validUntil": "2026-10-30T10:20:00.000Z",
+    }
+    box_command = {
+        "signedEventData": signed,
+        "signature": sign_payload(signed, admin.priv),
+        "signingKeyId": admin.key_id,
+    }
+    assert not await devices.async_permit_join_open("EC-1")
+
+    resp = await ZigbeePermitJoinView().post(
+        _ZReq(hass, admin.request("edge_permit_join", deviceId="EC-1", boxCommand=box_command))
+    )
+
+    assert resp.status == 200, _body(resp)
+    assert await devices.async_permit_join_open("EC-1")
+    row = await queue.async_next_pending("EC-1")
+    assert row["command"] == "permit_join"
+    assert row["payload"] == {"duration": 120}
+    assert row["signing"] == box_command
+
+
+async def test_a_member_cannot_open_pairing(hass: HomeAssistant, tmp_path):
+    from custom_components.svitgrid.zigbee_lan import ZigbeePermitJoinView
+
+    _, queue, devices = await _zigbee_setup(hass, tmp_path)
+    member = _Admin()
+    signed = {"command": "permit_join", "payload": {"duration": 120}}
+    box_command = {
+        "signedEventData": signed,
+        "signature": sign_payload(signed, member.priv),
+        "signingKeyId": member.key_id,
+    }
+
+    resp = await ZigbeePermitJoinView().post(
+        _ZReq(hass, member.request("edge_permit_join", deviceId="EC-1", boxCommand=box_command))
+    )
+
+    assert resp.status == 403
+    assert not await devices.async_permit_join_open("EC-1")
+    assert await queue.async_pending_count("EC-1") == 0
+
+
+async def test_zigbee_devices_read_back_in_the_cloud_shape(hass: HomeAssistant, tmp_path):
+    from custom_components.svitgrid.zigbee_lan import (
+        ZigbeeDeviceHistoryView,
+        ZigbeeDevicesView,
+        ZigbeeDeviceView,
+    )
+
+    _, _, devices = await _zigbee_setup(hass, tmp_path)
+    await devices.async_update(PLUG_ID, {"on": True, "model": "TS011F", "name": "Бойлер"})
+    await devices.async_store_socket_readings(
+        "EC-1",
+        "2026-10-30T10:00:00.000Z",
+        [{"addr": "0x1234", "power": 1500, "voltage": 230, "current": 6.5, "energy": 1200}],
+        profiles={},
+    )
+
+    listed = await ZigbeeDevicesView().get(_ZReq(hass))
+    one = await ZigbeeDeviceView().get(_ZReq(hass), PLUG_ID)
+    history = await ZigbeeDeviceHistoryView().get(_ZReq(hass), PLUG_ID)
+    unknown = await ZigbeeDeviceView().get(_ZReq(hass), "zb-0000")
+
+    assert listed.status == 200
+    [plug] = _body(listed)["smartDevices"]
+    assert _body(one) == plug
+    assert plug["id"] == PLUG_ID
+    assert plug["edgeDeviceId"] == "EC-1"
+    assert plug["type"] == "switch"
+    assert plug["protocol"] == "zigbee"
+    assert (plug["zigbeeAddr"], plug["zigbeeIeee"], plug["zigbeeEndpoint"]) == (
+        "0x1234",
+        PLUG_IEEE,
+        1,
+    )
+    assert plug["name"] == "Бойлер"
+    assert plug["status"] == "online"
+    assert plug["state"]["on"] is True
+    assert plug["state"]["power"] == 1500
+    assert plug["state"]["powerAt"] == "2026-10-30T10:00:00.000Z"
+    assert _body(history) == {"history": []}
+    assert unknown.status == 404
+
+
+async def test_sensor_readings_come_back_in_ten_minute_slots(hass: HomeAssistant, tmp_path):
+    from custom_components.svitgrid.zigbee_lan import ZigbeeDeviceReadingsView
+
+    _, _, devices = await _zigbee_setup(hass, tmp_path)
+    now = datetime.now(UTC)
+    await devices.async_store_sensor_readings(
+        "EC-1",
+        [
+            {"addr": "0x1234", "ep": 1, "ageMs": 0, "temperature": 2150, "humidity": 4000},
+            {"addr": "0x1234", "ep": 1, "ageMs": 1000, "temperature": 2160, "battery": 90},
+        ],
+        now,
+    )
+
+    resp = await ZigbeeDeviceReadingsView().get(_ZReq(hass, query={"hours": "2"}), PLUG_ID)
+
+    assert resp.status == 200, _body(resp)
+    body = _body(resp)
+    assert (body["hours"], body["bucketMinutes"]) == (2, 10)
+    [point] = body["points"]
+    assert (point["temperature"], point["humidity"], point["battery"]) == (2155, 4000, 90)
+
+
+async def test_zigbee_views_answer_no_edge_boxes_before_auth(hass: HomeAssistant, tmp_path):
+    from custom_components.svitgrid.zigbee_lan import (
+        ZigbeeBoxCommandView,
+        ZigbeeDeviceCommandView,
+        ZigbeeDevicesView,
+        ZigbeePermitJoinView,
+    )
+
+    await _zigbee_setup(hass, tmp_path, adopt=False)
+
+    for resp in (
+        await ZigbeeDevicesView().get(_ZReq(hass, island_key=None)),
+        await ZigbeeDeviceCommandView().post(
+            _ZReq(hass, {"command": "identify"}, island_key=None), PLUG_ID
+        ),
+        await ZigbeeBoxCommandView().post(_ZReq(hass, {}, island_key=None)),
+        await ZigbeePermitJoinView().post(_ZReq(hass, {}, island_key=None)),
+    ):
+        assert resp.status == 404
+        assert _body(resp) == {"error": "no_edge_boxes"}
+
+
+async def test_the_zigbee_reads_need_the_island_key(hass: HomeAssistant, tmp_path):
+    from custom_components.svitgrid.zigbee_lan import ZigbeeDevicesView
+
+    await _zigbee_setup(hass, tmp_path)
+
+    resp = await ZigbeeDevicesView().get(_ZReq(hass, island_key=OTHER_ISLAND_KEY))
+
+    assert resp.status == 401
+
+
+async def test_remove_device_queues_the_leave_and_forgets_the_device(hass: HomeAssistant, tmp_path):
+    from custom_components.svitgrid.zigbee_lan import ZigbeeDeviceCommandView
+
+    _, queue, devices = await _zigbee_setup(hass, tmp_path)
+
+    resp = await ZigbeeDeviceCommandView().post(_ZReq(hass, {"command": "remove_device"}), PLUG_ID)
+
+    assert resp.status == 200, _body(resp)
+    row = await queue.async_next_pending("EC-1")
+    assert (row["command"], row["payload"]) == (
+        "remove_device",
+        {"addr": "0x1234", "ieee": PLUG_IEEE},
+    )
+    assert row["signing"] is None
+    assert await devices.async_get(PLUG_ID) is None
+
+
+async def test_identify_carries_the_address_and_endpoint(hass: HomeAssistant, tmp_path):
+    from custom_components.svitgrid.zigbee_lan import ZigbeeDeviceCommandView
+
+    _, queue, _ = await _zigbee_setup(hass, tmp_path)
+
+    resp = await ZigbeeDeviceCommandView().post(
+        _ZReq(hass, {"command": "identify", "payload": {"seconds": 5}}), PLUG_ID
+    )
+
+    assert resp.status == 200, _body(resp)
+    row = await queue.async_next_pending("EC-1")
+    assert (row["command"], row["payload"]) == (
+        "identify",
+        {"seconds": 5, "addr": "0x1234", "ep": 1},
+    )
+
+
+async def test_box_commands_with_the_island_key_and_owner_only_ones(hass: HomeAssistant, tmp_path):
+    from custom_components.svitgrid.zigbee_lan import ZigbeeBoxCommandView
+
+    admin, queue, _ = await _zigbee_setup(hass, tmp_path)
+    member = _Admin()
+
+    listed = await ZigbeeBoxCommandView().post(
+        _ZReq(hass, {"deviceId": "EC-1", "command": "list_devices"})
+    )
+    unsigned_reset = await ZigbeeBoxCommandView().post(
+        _ZReq(hass, {"deviceId": "EC-1", "command": "zigbee_factory_reset"})
+    )
+    member_reset = await ZigbeeBoxCommandView().post(
+        _ZReq(
+            hass,
+            member.request(
+                "edge_zigbee_box_command", deviceId="EC-1", command="zigbee_factory_reset"
+            ),
+        )
+    )
+    owner_restart = await ZigbeeBoxCommandView().post(
+        _ZReq(
+            hass,
+            admin.request("edge_zigbee_box_command", deviceId="EC-1", command="zigbee_restart"),
+        )
+    )
+    unknown_box = await ZigbeeBoxCommandView().post(
+        _ZReq(hass, {"deviceId": "EC-9", "command": "mesh_snapshot"})
+    )
+
+    assert listed.status == 200, _body(listed)
+    assert (unsigned_reset.status, _body(unsigned_reset)) == (403, {"error": "owner_only"})
+    assert member_reset.status == 403
+    assert owner_restart.status == 200, _body(owner_restart)
+    assert unknown_box.status == 404
+    commands = []
+    while (row := await queue.async_next_pending("EC-1")) is not None:
+        commands.append(row["command"])
+        await queue.async_ack(row["id"], success=True, result=None, rejected=None, reason=None)
+    assert commands == ["list_devices", "zigbee_restart"]
+
+
+async def test_the_zigbee_views_are_registered(hass: HomeAssistant):
+    from unittest.mock import MagicMock
+
+    from custom_components.svitgrid.http_views import register_views
+
+    hass.http = MagicMock()
+    register_views(hass, store=MagicMock())
+    urls = {call.args[0].url for call in hass.http.register_view.call_args_list}
+    assert {
+        "/api/svitgrid/zigbee/devices",
+        "/api/svitgrid/zigbee/devices/{device_id}",
+        "/api/svitgrid/zigbee/devices/{device_id}/readings",
+        "/api/svitgrid/zigbee/devices/{device_id}/history",
+        "/api/svitgrid/edge/zigbee/{device_id}/command",
+        "/api/svitgrid/edge/zigbee/command",
+        "/api/svitgrid/edge/permit-join",
+    } <= urls

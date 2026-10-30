@@ -68,6 +68,7 @@ from .settings_sync import (
     settings_snapshot_response,
 )
 from .signing import compute_key_id, public_key_from_hex, verify_payload
+from .zigbee_lan import ZIGBEE_LAN_VIEWS
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -1519,6 +1520,7 @@ def register_views(hass: HomeAssistant, store) -> None:
         *(view_cls() for view_cls in ISLAND_LAN_VIEWS),
         # The edge box's views answer 404 until a box is adopted.
         *(view_cls() for view_cls in EDGE_VIEWS),
+        *(view_cls() for view_cls in ZIGBEE_LAN_VIEWS),
     ):
         # View routes are GLOBAL to hass.http and PERSIST across config-entry
         # reloads, but the _views_registered guard in hass.data[DOMAIN] is
