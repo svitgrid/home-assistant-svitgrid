@@ -31,6 +31,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .activity import ActivityTracker
 from .const import DOMAIN
+from .edge_entities import async_setup_platform_entities
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -70,6 +71,8 @@ async def async_setup_entry(
             ]
         )
     async_add_entities(entities)
+    # An adopted edge box's Zigbee devices and battery packs.
+    async_setup_platform_entities(hass, entry, "sensor", async_add_entities)
 
 
 class _SvitgridSensorBase(SensorEntity):
