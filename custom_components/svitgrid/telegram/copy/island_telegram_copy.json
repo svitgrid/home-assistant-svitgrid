@@ -1,0 +1,128 @@
+{
+  "languages": [
+    "uk",
+    "en",
+    "es",
+    "pt",
+    "de",
+    "tr",
+    "nl",
+    "pl",
+    "fr",
+    "it",
+    "ar"
+  ],
+  "fallback": "en",
+  "copy": {
+    "uk": {
+      "outage_title": "Відключення електроенергії",
+      "outage_body": "{inverterName} працює від батареї ({batterySoc}%)",
+      "grid_restored_title": "Мережу відновлено",
+      "grid_restored_body": "{inverterName} знову підключений до мережі",
+      "open_button": "Відкрити в Svitgrid",
+      "linked": "Готово: сповіщення станції приходитимуть сюди.",
+      "test_title": "Тестове сповіщення",
+      "test_body": "Telegram підключено. Так виглядатимуть сповіщення Svitgrid."
+    },
+    "en": {
+      "outage_title": "Power Outage",
+      "outage_body": "{inverterName} is on battery power ({batterySoc}%)",
+      "grid_restored_title": "Grid Power Restored",
+      "grid_restored_body": "{inverterName} is back on grid power",
+      "open_button": "Open in Svitgrid",
+      "linked": "Done: this station's alerts will arrive here.",
+      "test_title": "Test notification",
+      "test_body": "Telegram is connected. This is how Svitgrid notifications will look."
+    },
+    "es": {
+      "outage_title": "Corte de energía",
+      "outage_body": "{inverterName} funciona con batería ({batterySoc}%)",
+      "grid_restored_title": "Red eléctrica restaurada",
+      "grid_restored_body": "{inverterName} está de nuevo en la red eléctrica",
+      "open_button": "Abrir en Svitgrid",
+      "linked": "Done: this station's alerts will arrive here.",
+      "test_title": "Test notification",
+      "test_body": "Telegram is connected. This is how Svitgrid notifications will look."
+    },
+    "pt": {
+      "outage_title": "Falta de energia",
+      "outage_body": "{inverterName} está operando com bateria ({batterySoc}%)",
+      "grid_restored_title": "Rede elétrica restaurada",
+      "grid_restored_body": "{inverterName} está de volta à rede elétrica",
+      "open_button": "Abrir no Svitgrid",
+      "linked": "Done: this station's alerts will arrive here.",
+      "test_title": "Test notification",
+      "test_body": "Telegram is connected. This is how Svitgrid notifications will look."
+    },
+    "de": {
+      "outage_title": "Stromausfall",
+      "outage_body": "{inverterName} läuft mit Akkustrom ({batterySoc}%)",
+      "grid_restored_title": "Netzstrom wiederhergestellt",
+      "grid_restored_body": "{inverterName} ist wieder am Netz",
+      "open_button": "In Svitgrid öffnen",
+      "linked": "Done: this station's alerts will arrive here.",
+      "test_title": "Test notification",
+      "test_body": "Telegram is connected. This is how Svitgrid notifications will look."
+    },
+    "tr": {
+      "outage_title": "Elektrik Kesintisi",
+      "outage_body": "{inverterName} batarya gücüyle çalışıyor (%{batterySoc})",
+      "grid_restored_title": "Şebeke Gücü Geri Geldi",
+      "grid_restored_body": "{inverterName} tekrar şebekeye bağlı",
+      "open_button": "Svitgrid'de aç",
+      "linked": "Done: this station's alerts will arrive here.",
+      "test_title": "Test notification",
+      "test_body": "Telegram is connected. This is how Svitgrid notifications will look."
+    },
+    "nl": {
+      "outage_title": "Stroomuitval",
+      "outage_body": "{inverterName} werkt op batterijstroom ({batterySoc}%)",
+      "grid_restored_title": "Netstroom hersteld",
+      "grid_restored_body": "{inverterName} is weer op het net aangesloten",
+      "open_button": "Openen in Svitgrid",
+      "linked": "Done: this station's alerts will arrive here.",
+      "test_title": "Test notification",
+      "test_body": "Telegram is connected. This is how Svitgrid notifications will look."
+    },
+    "pl": {
+      "outage_title": "Przerwa w dostawie prądu",
+      "outage_body": "{inverterName} pracuje na baterii ({batterySoc}%)",
+      "grid_restored_title": "Sieć energetyczna przywrócona",
+      "grid_restored_body": "{inverterName} jest ponownie podłączony do sieci",
+      "open_button": "Otwórz w Svitgrid",
+      "linked": "Done: this station's alerts will arrive here.",
+      "test_title": "Test notification",
+      "test_body": "Telegram is connected. This is how Svitgrid notifications will look."
+    },
+    "fr": {
+      "outage_title": "Coupure de courant",
+      "outage_body": "{inverterName} fonctionne sur batterie ({batterySoc}%)",
+      "grid_restored_title": "Réseau électrique rétabli",
+      "grid_restored_body": "{inverterName} est de nouveau connecté au réseau",
+      "open_button": "Ouvrir dans Svitgrid",
+      "linked": "Done: this station's alerts will arrive here.",
+      "test_title": "Test notification",
+      "test_body": "Telegram is connected. This is how Svitgrid notifications will look."
+    },
+    "it": {
+      "outage_title": "Interruzione di corrente",
+      "outage_body": "{inverterName} funziona con la batteria ({batterySoc}%)",
+      "grid_restored_title": "Rete elettrica ripristinata",
+      "grid_restored_body": "{inverterName} è di nuovo connesso alla rete",
+      "open_button": "Apri in Svitgrid",
+      "linked": "Done: this station's alerts will arrive here.",
+      "test_title": "Test notification",
+      "test_body": "Telegram is connected. This is how Svitgrid notifications will look."
+    },
+    "ar": {
+      "outage_title": "انقطاع الكهرباء",
+      "outage_body": "{inverterName} يعمل على طاقة البطارية ({batterySoc}%)",
+      "grid_restored_title": "استُعيدت طاقة الشبكة",
+      "grid_restored_body": "{inverterName} متصل بالشبكة مجددًا",
+      "open_button": "فتح في Svitgrid",
+      "linked": "Done: this station's alerts will arrive here.",
+      "test_title": "Test notification",
+      "test_body": "Telegram is connected. This is how Svitgrid notifications will look."
+    }
+  }
+}

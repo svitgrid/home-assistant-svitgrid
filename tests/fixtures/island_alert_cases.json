@@ -1,0 +1,666 @@
+[
+  {
+    "name": "single_outage_after_5_min",
+    "description": "The grid stays down for 5 minutes: one outage, then one restore.",
+    "steps": [
+      {
+        "atMs": 1793181600000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 80
+          }
+        }
+      },
+      {
+        "atMs": 1793181660000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": false,
+            "batterySoc": 78
+          }
+        }
+      },
+      {
+        "atMs": 1793181780000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": false,
+            "batterySoc": 77
+          }
+        }
+      },
+      {
+        "atMs": 1793181960000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": false,
+            "batterySoc": 75
+          }
+        }
+      },
+      {
+        "atMs": 1793183400000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 60
+          }
+        }
+      }
+    ],
+    "expect": [
+      {
+        "atStep": 3,
+        "type": "outage",
+        "eventAt": "2026-10-28T10:01:00.000Z",
+        "batterySoc": 75
+      },
+      {
+        "atStep": 4,
+        "type": "grid_restored",
+        "eventAt": "2026-10-28T10:30:00.000Z",
+        "batterySoc": 60
+      }
+    ]
+  },
+  {
+    "name": "short_dip_under_5_min_sends_nothing",
+    "description": "The grid returns after 4 minutes: no outage and no restore.",
+    "steps": [
+      {
+        "atMs": 1793181600000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 80
+          }
+        }
+      },
+      {
+        "atMs": 1793181660000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": false,
+            "batterySoc": 80
+          }
+        }
+      },
+      {
+        "atMs": 1793181840000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": false,
+            "batterySoc": 80
+          }
+        }
+      },
+      {
+        "atMs": 1793181900000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 80
+          }
+        }
+      },
+      {
+        "atMs": 1793182200000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 80
+          }
+        }
+      }
+    ],
+    "expect": []
+  },
+  {
+    "name": "edge_confirmed_fires_at_once",
+    "description": "An edge-confirmed outage fires on the first reading, timed at gridConfirmedAt.",
+    "steps": [
+      {
+        "atMs": 1793181600000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 90
+          }
+        }
+      },
+      {
+        "atMs": 1793181720000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": false,
+            "gridConfirmedSource": "edge",
+            "gridConfirmedAt": "2026-10-28T10:01:20.000Z",
+            "batterySoc": 87.66
+          }
+        }
+      },
+      {
+        "atMs": 1793182800000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 80
+          }
+        }
+      }
+    ],
+    "expect": [
+      {
+        "atStep": 1,
+        "type": "outage",
+        "eventAt": "2026-10-28T10:01:20.000Z",
+        "batterySoc": 88
+      },
+      {
+        "atStep": 2,
+        "type": "grid_restored",
+        "eventAt": "2026-10-28T10:20:00.000Z",
+        "batterySoc": 80
+      }
+    ]
+  },
+  {
+    "name": "restore_only_after_outage_sent",
+    "description": "A dip that never alerted sends no restore; a later real outage sends exactly one.",
+    "steps": [
+      {
+        "atMs": 1793181600000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 70
+          }
+        }
+      },
+      {
+        "atMs": 1793181660000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": false,
+            "batterySoc": 70
+          }
+        }
+      },
+      {
+        "atMs": 1793181780000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 70
+          }
+        }
+      },
+      {
+        "atMs": 1793182200000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 70
+          }
+        }
+      },
+      {
+        "atMs": 1793182260000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": false,
+            "batterySoc": 68
+          }
+        }
+      },
+      {
+        "atMs": 1793182620000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": false,
+            "batterySoc": 66
+          }
+        }
+      },
+      {
+        "atMs": 1793183100000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 64
+          }
+        }
+      },
+      {
+        "atMs": 1793183160000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 64
+          }
+        }
+      }
+    ],
+    "expect": [
+      {
+        "atStep": 5,
+        "type": "outage",
+        "eventAt": "2026-10-28T10:11:00.000Z",
+        "batterySoc": 66
+      },
+      {
+        "atStep": 6,
+        "type": "grid_restored",
+        "eventAt": "2026-10-28T10:25:00.000Z",
+        "batterySoc": 64
+      }
+    ]
+  },
+  {
+    "name": "flap_within_cooldown_sends_once",
+    "description": "A second outage 20 minutes after the first is suppressed, and so is its restore.",
+    "steps": [
+      {
+        "atMs": 1793181600000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": false,
+            "batterySoc": 80
+          }
+        }
+      },
+      {
+        "atMs": 1793181900000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": false,
+            "batterySoc": 79
+          }
+        }
+      },
+      {
+        "atMs": 1793182200000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 78
+          }
+        }
+      },
+      {
+        "atMs": 1793182800000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": false,
+            "batterySoc": 77
+          }
+        }
+      },
+      {
+        "atMs": 1793183100000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": false,
+            "batterySoc": 76
+          }
+        }
+      },
+      {
+        "atMs": 1793183400000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 75
+          }
+        }
+      }
+    ],
+    "expect": [
+      {
+        "atStep": 1,
+        "type": "outage",
+        "eventAt": "2026-10-28T10:00:00.000Z",
+        "batterySoc": 79
+      },
+      {
+        "atStep": 2,
+        "type": "grid_restored",
+        "eventAt": "2026-10-28T10:10:00.000Z",
+        "batterySoc": 78
+      }
+    ]
+  },
+  {
+    "name": "two_inverters_one_out_is_outage",
+    "description": "One of two inverters loses the grid: one household outage; the second inverter going out adds nothing.",
+    "steps": [
+      {
+        "atMs": 1793181600000,
+        "inverters": {
+          "invA": {
+            "gridPresent": true,
+            "batterySoc": 90
+          },
+          "invB": {
+            "gridPresent": true,
+            "batterySoc": 50
+          }
+        }
+      },
+      {
+        "atMs": 1793181660000,
+        "inverters": {
+          "invA": {
+            "gridPresent": true,
+            "batterySoc": 90
+          },
+          "invB": {
+            "gridPresent": false,
+            "batterySoc": 50
+          }
+        }
+      },
+      {
+        "atMs": 1793182020000,
+        "inverters": {
+          "invA": {
+            "gridPresent": true,
+            "batterySoc": 89
+          },
+          "invB": {
+            "gridPresent": false,
+            "batterySoc": 48
+          }
+        }
+      },
+      {
+        "atMs": 1793182200000,
+        "inverters": {
+          "invA": {
+            "gridPresent": false,
+            "batterySoc": 88
+          },
+          "invB": {
+            "gridPresent": false,
+            "batterySoc": 47
+          }
+        }
+      },
+      {
+        "atMs": 1793182560000,
+        "inverters": {
+          "invA": {
+            "gridPresent": false,
+            "batterySoc": 86
+          },
+          "invB": {
+            "gridPresent": false,
+            "batterySoc": 45
+          }
+        }
+      }
+    ],
+    "expect": [
+      {
+        "atStep": 2,
+        "type": "outage",
+        "eventAt": "2026-10-28T10:01:00.000Z",
+        "batterySoc": 48
+      }
+    ]
+  },
+  {
+    "name": "two_inverters_restore_when_last_returns",
+    "description": "Both inverters are out; restore is sent only when the last one is back.",
+    "steps": [
+      {
+        "atMs": 1793181600000,
+        "inverters": {
+          "invA": {
+            "gridPresent": true,
+            "batterySoc": 90
+          },
+          "invB": {
+            "gridPresent": true,
+            "batterySoc": 50
+          }
+        }
+      },
+      {
+        "atMs": 1793181660000,
+        "inverters": {
+          "invA": {
+            "gridPresent": false,
+            "batterySoc": 90
+          },
+          "invB": {
+            "gridPresent": true,
+            "batterySoc": 50
+          }
+        }
+      },
+      {
+        "atMs": 1793181720000,
+        "inverters": {
+          "invA": {
+            "gridPresent": false,
+            "batterySoc": 89
+          },
+          "invB": {
+            "gridPresent": false,
+            "batterySoc": 50
+          }
+        }
+      },
+      {
+        "atMs": 1793182020000,
+        "inverters": {
+          "invA": {
+            "gridPresent": false,
+            "batterySoc": 85
+          },
+          "invB": {
+            "gridPresent": false,
+            "batterySoc": 48
+          }
+        }
+      },
+      {
+        "atMs": 1793182080000,
+        "inverters": {
+          "invA": {
+            "gridPresent": false,
+            "batterySoc": 84
+          },
+          "invB": {
+            "gridPresent": false,
+            "batterySoc": 47
+          }
+        }
+      },
+      {
+        "atMs": 1793182800000,
+        "inverters": {
+          "invA": {
+            "gridPresent": true,
+            "batterySoc": 80
+          },
+          "invB": {
+            "gridPresent": false,
+            "batterySoc": 40
+          }
+        }
+      },
+      {
+        "atMs": 1793183400000,
+        "inverters": {
+          "invA": {
+            "gridPresent": true,
+            "batterySoc": 82
+          },
+          "invB": {
+            "gridPresent": true,
+            "batterySoc": 41
+          }
+        }
+      }
+    ],
+    "expect": [
+      {
+        "atStep": 3,
+        "type": "outage",
+        "eventAt": "2026-10-28T10:01:00.000Z",
+        "batterySoc": 85
+      },
+      {
+        "atStep": 6,
+        "type": "grid_restored",
+        "eventAt": "2026-10-28T10:30:00.000Z",
+        "batterySoc": 41
+      }
+    ]
+  },
+  {
+    "name": "unknown_grid_holds_state",
+    "description": "A reading with an unknown grid state neither starts the clock, nor ends an outage.",
+    "steps": [
+      {
+        "atMs": 1793181600000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 80
+          }
+        }
+      },
+      {
+        "atMs": 1793181660000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": false,
+            "batterySoc": 80
+          }
+        }
+      },
+      {
+        "atMs": 1793181840000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": null,
+            "batterySoc": 79
+          }
+        }
+      },
+      {
+        "atMs": 1793182080000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": false,
+            "batterySoc": 78
+          }
+        }
+      },
+      {
+        "atMs": 1793182320000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": null,
+            "batterySoc": 77
+          }
+        }
+      },
+      {
+        "atMs": 1793182500000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": null,
+            "batterySoc": 76
+          }
+        }
+      },
+      {
+        "atMs": 1793182800000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 75
+          }
+        }
+      }
+    ],
+    "expect": [
+      {
+        "atStep": 3,
+        "type": "outage",
+        "eventAt": "2026-10-28T10:01:00.000Z",
+        "batterySoc": 78
+      },
+      {
+        "atStep": 6,
+        "type": "grid_restored",
+        "eventAt": "2026-10-28T10:20:00.000Z",
+        "batterySoc": 75
+      }
+    ]
+  },
+  {
+    "name": "event_time_is_first_seen_down",
+    "description": "The outage is timed at the first reading with the grid down, not when 5 minutes ran out.",
+    "steps": [
+      {
+        "atMs": 1793181600000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 95
+          }
+        }
+      },
+      {
+        "atMs": 1793181720000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": false,
+            "batterySoc": 94
+          }
+        }
+      },
+      {
+        "atMs": 1793181840000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": false,
+            "batterySoc": 93
+          }
+        }
+      },
+      {
+        "atMs": 1793182140000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": false,
+            "batterySoc": 91.4
+          }
+        }
+      },
+      {
+        "atMs": 1793182320000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": false,
+            "batterySoc": 90
+          }
+        }
+      }
+    ],
+    "expect": [
+      {
+        "atStep": 3,
+        "type": "outage",
+        "eventAt": "2026-10-28T10:02:00.000Z",
+        "batterySoc": 91
+      }
+    ]
+  }
+]
