@@ -1,0 +1,14 @@
+{
+  "_source": "The bodies an edge box posts for its Zigbee roster, as zigbee_poller.c builds them (zigbee_poller_report_device_joined, _report_state_change, _report_reachability, _sync_device_states); the shapes in spec 2026-10-27-edge-island-mode-design.md, 'The paths'.",
+  "device_joined": {"addr": "0x1234", "ieee": "a4:c1:38:11:11:46:ff:ff", "endpoint": 1},
+  "state": {"addr": "0x1234", "on": true, "reachable": true},
+  "reachability": {"addr": "0x1234", "reachable": false},
+  "resync": {
+    "addr": "0x1234",
+    "on": false,
+    "caps": 3,
+    "model": "TS011F",
+    "ieee": "a4:c1:38:11:11:46:ff:ff",
+    "manufacturer": "_TZ3000_okaz9tjs"
+  }
+}

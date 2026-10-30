@@ -84,6 +84,7 @@ from .settings_sync import find_edge_settings_snapshot
 from .settings_sync import settings_sync_loop as run_settings_sync_loop
 from .update import SvitgridUpdateCoordinator
 from .updater import read_installed_version
+from .zigbee_devices import ZigbeeDeviceStore
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -1205,11 +1206,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             )
 
     edge_queue = None
+    zigbee_devices = None
     if edge_boxes:
         # The commands each box drains on its poll (edge_api). Added to the
         # SAME dict the scheduler holds by reference, so it sees them.
         edge_queue = EdgeCommandQueue(
             os.path.join(hass.config.path(READINGS_DB_SUBDIR), "edge_commands.db"), hass=hass
+        )
+        # The Zigbee devices the boxes report (edge_api).
+        zigbee_devices = ZigbeeDeviceStore(
+            os.path.join(hass.config.path(READINGS_DB_SUBDIR), "zigbee_devices.db"), hass=hass
         )
         for box in edge_boxes:
             for inverter_id in box.inverter_ids:
@@ -1244,6 +1250,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "true_island": true_island,
         "settings_snapshots": settings_snapshots,
         "edge_queue": edge_queue,
+        "zigbee_devices": zigbee_devices,
         "edge_boxes": [box.device_id for box in edge_boxes],
     }
     await hass.config_entries.async_forward_entry_setups(

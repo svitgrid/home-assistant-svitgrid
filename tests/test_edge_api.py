@@ -537,7 +537,12 @@ async def test_zigbee_and_charger_sinks_answer_empty(view_cls, match_info):
 
 
 def test_zigbee_sinks_cover_every_zigbee_path():
-    urls = {edge_api.EdgeZigbeeSinkView.url, *edge_api.EdgeZigbeeSinkView.extra_urls}
+    views = (
+        edge_api.EdgeZigbeeDeviceJoinedView,
+        edge_api.EdgeZigbeeStateUpdateView,
+        edge_api.EdgeZigbeeSinkView,
+    )
+    urls = {url for v in views for url in (v.url, *getattr(v, "extra_urls", []))}
     assert urls == {
         "/api/v1/edge-devices/zigbee/device-joined",
         "/api/v1/edge-devices/zigbee/state-update",
@@ -1769,3 +1774,218 @@ async def test_binding_clears_the_box_refusal():
     code = await ks.async_issue_pair_code("EC-1")
     assert (await _me(hass, api_key="new-key", pair_code=code)).status == 200
     assert edge_api.edge_refusals(hass) == {}
+
+
+# ── Task 41: the Zigbee roster from the box (svitgrid#1259) ─────────────
+
+_ZIGBEE = json.loads((Path(__file__).parent / "fixtures" / "zigbee_reports.json").read_text())
+_ZB_ID = "zb-a4c138111146ffff"
+
+
+def _hass_with_zigbee(keystore, tmp_path):
+    from custom_components.svitgrid.zigbee_devices import ZigbeeDeviceStore
+
+    queue = _real_queue(tmp_path)
+    devices = ZigbeeDeviceStore(str(tmp_path / "zigbee_devices.db"), None)
+    hass = _hass(keystore)
+    hass.data[DOMAIN][ENTRY_ID] = {
+        "store": _FakeIngestStore(),
+        "edge_queue": queue,
+        "zigbee_devices": devices,
+    }
+    return hass, queue, devices
+
+
+async def _joined(hass, body=None, api_key=BOX_KEY):
+    return await _call(
+        edge_api.EdgeZigbeeDeviceJoinedView,
+        "post",
+        hass,
+        api_key=api_key,
+        body=body if body is not None else dict(_ZIGBEE["device_joined"]),
+    )
+
+
+async def _state_update(hass, body, api_key=BOX_KEY):
+    return await _call(
+        edge_api.EdgeZigbeeStateUpdateView, "post", hass, api_key=api_key, body=dict(body)
+    )
+
+
+async def _pending(queue, device_id="EC-1"):
+    rows = []
+    while (row := await queue.async_next_pending(device_id)) is not None:
+        rows.append(row)
+    return rows
+
+
+def test_zigbee_device_id_is_the_ieee_lowercased_without_separators():
+    from custom_components.svitgrid.zigbee_devices import device_id_for_ieee
+
+    assert device_id_for_ieee("A4:C1:38:11:11:46:FF:FF") == _ZB_ID
+    assert device_id_for_ieee("a4c138111146ffff") == _ZB_ID
+    assert device_id_for_ieee("0xA4C138111146FFFF") == _ZB_ID
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_join_inside_the_window_is_stored(tmp_path):
+    hass, queue, devices = _hass_with_zigbee(_keystore(_box()), tmp_path)
+    await devices.async_open_permit_join("EC-1", 120)
+
+    resp = await _joined(hass)
+
+    assert resp.status == 200
+    assert _json(resp) == {"success": True, "smartDeviceId": _ZB_ID, "isNew": True}
+    device = await devices.async_get(_ZB_ID)
+    assert device["ieee"] == "a4:c1:38:11:11:46:ff:ff"
+    assert device["addr"] == "0x1234"
+    assert device["endpoint"] == 1
+    assert device["deviceId"] == "EC-1"
+    assert device["reachable"] is True
+    assert device["unreachableSince"] is None
+    assert device["addedAt"]
+    assert await _pending(queue) == []
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_join_outside_the_window_queues_remove_device(tmp_path):
+    hass, queue, devices = _hass_with_zigbee(_keystore(_box()), tmp_path)
+
+    resp = await _joined(hass)
+    # The device re-announces; one kick is enough.
+    await _joined(hass)
+
+    assert resp.status == 403
+    assert _json(resp) == {"error": "No active pairing window", "isNew": False}
+    assert await devices.async_get(_ZB_ID) is None
+    kicks = await _pending(queue)
+    assert [(k["command"], k["payload"], k["signing"]) for k in kicks] == [
+        ("remove_device", {"addr": "0x1234", "ieee": "a4:c1:38:11:11:46:ff:ff"}, None)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_window_on_another_box_does_not_admit_a_join(tmp_path):
+    other = _box(device_id="EC-2", api_key="box-api-key-2", inverters={})
+    hass, queue, devices = _hass_with_zigbee(_keystore(_box(), other), tmp_path)
+    await devices.async_open_permit_join("EC-2", 120)
+
+    resp = await _joined(hass)
+
+    assert resp.status == 403
+    assert await devices.async_get(_ZB_ID) is None
+
+
+@pytest.mark.asyncio
+async def test_a_known_device_rejoining_updates_its_address(tmp_path):
+    hass, queue, devices = _hass_with_zigbee(_keystore(_box()), tmp_path)
+    await devices.async_open_permit_join("EC-1", 120)
+    await _joined(hass)
+    await _state_update(hass, _ZIGBEE["reachability"])
+    assert (await devices.async_get(_ZB_ID))["unreachableSince"] is not None
+    # The window closed long ago; a known device is never kicked.
+    await devices.async_open_permit_join("EC-1", -1)
+
+    resp = await _joined(hass, {**_ZIGBEE["device_joined"], "addr": "0x5678", "endpoint": 2})
+
+    assert resp.status == 200
+    assert _json(resp) == {"success": True, "smartDeviceId": _ZB_ID, "isNew": False}
+    device = await devices.async_get(_ZB_ID)
+    assert device["addr"] == "0x5678"
+    assert device["endpoint"] == 2
+    assert device["reachable"] is True
+    assert device["unreachableSince"] is None
+    assert await _pending(queue) == []
+
+
+@pytest.mark.asyncio
+async def test_a_join_with_a_bad_body_is_400_and_stores_nothing(tmp_path):
+    hass, queue, devices = _hass_with_zigbee(_keystore(_box()), tmp_path)
+    await devices.async_open_permit_join("EC-1", 120)
+
+    resp = await _joined(hass, {"addr": "0x1234"})
+
+    assert resp.status == 400
+    assert await devices.async_list() == []
+
+
+@pytest.mark.asyncio
+async def test_state_reachability_and_resync_updates(tmp_path):
+    hass, queue, devices = _hass_with_zigbee(_keystore(_box()), tmp_path)
+    await devices.async_open_permit_join("EC-1", 120)
+    await _joined(hass)
+
+    # A button press: the state and proof the device answers.
+    resp = await _state_update(hass, _ZIGBEE["state"])
+    assert resp.status == 200
+    assert _json(resp) == {"success": True}
+    device = await devices.async_get(_ZB_ID)
+    assert device["on"] is True
+    assert device["reachable"] is True
+
+    # Reachability: no `on`, so the state stays; the flip is stamped once.
+    await _state_update(hass, _ZIGBEE["reachability"])
+    device = await devices.async_get(_ZB_ID)
+    assert device["on"] is True
+    assert device["reachable"] is False
+    since = device["unreachableSince"]
+    assert since is not None
+    await _state_update(hass, _ZIGBEE["reachability"])
+    assert (await devices.async_get(_ZB_ID))["unreachableSince"] == since
+
+    # The roster resync: state, caps, model and maker, but no `reachable`, so
+    # it never clears a standing unreachable verdict.
+    await _state_update(hass, {**_ZIGBEE["resync"], "addr": "0x9999"})
+    device = await devices.async_get(_ZB_ID)
+    assert device["on"] is False
+    assert device["addr"] == "0x9999"
+    assert device["caps"] == 3
+    assert device["model"] == "TS011F"
+    assert device["manufacturer"] == "_TZ3000_okaz9tjs"
+    assert device["reachable"] is False
+    assert device["unreachableSince"] == since
+
+    # A reachable report clears the verdict and its stamp.
+    await _state_update(hass, {**_ZIGBEE["state"], "addr": "0x9999"})
+    device = await devices.async_get(_ZB_ID)
+    assert device["reachable"] is True
+    assert device["unreachableSince"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_state_update_for_an_unknown_device_is_ignored(tmp_path):
+    hass, queue, devices = _hass_with_zigbee(_keystore(_box()), tmp_path)
+
+    resp = await _state_update(hass, _ZIGBEE["resync"])
+
+    assert resp.status == 200
+    assert _json(resp) == {"success": True, "ignored": True}
+    assert await devices.async_list() == []
+    assert await _pending(queue) == []
+
+
+@pytest.mark.asyncio
+async def test_a_state_update_from_another_box_does_not_touch_the_device(tmp_path):
+    other = _box(device_id="EC-2", api_key="box-api-key-2", inverters={})
+    hass, queue, devices = _hass_with_zigbee(_keystore(_box(), other), tmp_path)
+    await devices.async_open_permit_join("EC-1", 120)
+    await _joined(hass)
+
+    resp = await _state_update(hass, _ZIGBEE["resync"], api_key="box-api-key-2")
+
+    assert _json(resp) == {"success": True, "ignored": True}
+    assert (await devices.async_get(_ZB_ID))["on"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "view_cls", [edge_api.EdgeZigbeeDeviceJoinedView, edge_api.EdgeZigbeeStateUpdateView]
+)
+async def test_zigbee_roster_views_keep_the_edge_rules(view_cls, tmp_path):
+    """No box adopted: 404 before auth. An unknown key: 401, never 410."""
+    resp = await _call(view_cls, "post", _hass(_keystore()), api_key=BOX_KEY, body={})
+    assert resp.status == 404
+    assert _json(resp) == {"error": "no_edge_boxes"}
+    hass, _queue, _devices = _hass_with_zigbee(_keystore(_box()), tmp_path)
+    resp = await _call(view_cls, "post", hass, api_key="nope", body=dict(_ZIGBEE["resync"]))
+    assert resp.status == 401
