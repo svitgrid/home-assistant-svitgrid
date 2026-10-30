@@ -1024,3 +1024,32 @@ async def test_legacy_event_without_signing_records_unsigned_write_once(caplog):
     assert state.get("status") != "active"
     errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
     assert len(errors) == 1
+
+
+@pytest.mark.asyncio
+async def test_edge_priority_brand_event_records_unsupported_field_once():
+    """A use_battery event on an adopted PI30 box sends the box nothing until
+    the priority-profile commands land (svitgrid#1254), and says so once."""
+    from custom_components.svitgrid.harvest.event_scheduler_loop import _tick
+
+    event_store = FakeEventStore([_make_use_battery_event()])
+    store = FakeStore([_reading_at()])
+    mock_executor = AsyncMock()
+    pi30 = {"modelId": "edecoa_em_624a", "transport": "pi30_serial", "protocolId": "pi30"}
+
+    def inverter_for(inv_id):
+        return pi30 if inv_id == "inv-1" else None
+
+    await _tick(store, event_store, lambda _i: mock_executor, "UTC", _NOW_IN_WINDOW, inverter_for)
+    later = datetime(2026, 6, 29, 10, 31, 0, tzinfo=UTC)
+    await _tick(store, event_store, lambda _i: mock_executor, "UTC", later, inverter_for)
+
+    assert mock_executor.dispatch.call_count == 0
+    first, second = (state for _id, state in event_store.state_calls)
+    assert first["lastCommandError"] == {
+        "command": "apply_priority_profile",
+        "reason": "unsupported_field",
+        "at": _NOW_IN_WINDOW.isoformat(),
+    }
+    assert "dispatchRetryAt" not in first
+    assert second == first

@@ -54,6 +54,7 @@ from .executors.edge_box import EdgeBoxExecutor
 from .executors.smg_settings_executor import EybondSmgSettingsExecutor
 from .executors.yaml_dispatcher import YamlDispatcher
 from .eybond_at.setup import is_eybond_harvest, start_eybond_hub
+from .harvest.brand_commands import edge_inverter
 from .harvest.engine import run_direct_harvest_loop
 from .harvest.event_scheduler_loop import run_event_scheduler_loop
 from .harvest.read_now import ReadNowTrigger
@@ -1103,6 +1104,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     # during setup are visible to the running loop.
                     executor_for=executors_by_inverter.get,
                     tz=hass.config.time_zone,
+                    # The brand of an inverter on an adopted edge box, which
+                    # decides the commands its events may send it.
+                    inverter_for=lambda inverter_id: edge_inverter(edge_boxes, inverter_id),
                 ),
                 name="svitgrid_event_scheduler",
             )

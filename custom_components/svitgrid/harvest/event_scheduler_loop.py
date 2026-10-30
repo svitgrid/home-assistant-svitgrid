@@ -292,6 +292,7 @@ async def _tick(
     executor_for: object,
     tz: str,
     now_utc: datetime,
+    inverter_for: object = None,
 ) -> None:
     """Single scheduler tick.
 
@@ -302,6 +303,9 @@ async def _tick(
     executor_for : callable(inverter_id: str) -> executor | None.
     tz           : IANA timezone string.
     now_utc      : Current UTC time (injectable for testing).
+    inverter_for : callable(inverter_id: str) -> dict | None, the brand of an
+                   inverter on an adopted edge box (brand_commands.edge_inverter);
+                   None evaluates every inverter as one the integration writes.
     """
     # 1. List events; finish any cancel the app asked for first
     all_events = await event_store.async_list_events()
@@ -346,6 +350,10 @@ async def _tick(
             continue
 
         others = _others(latest, event)
+        # Only an inverter on an adopted edge box has a brand to pass; every
+        # other one is evaluated with the same call as before.
+        inverter = inverter_for(inverter_id) if inverter_for is not None else None
+        brand = {"inverter": inverter} if inverter is not None else {}
         try:
             decision = evaluate_event(
                 event,
@@ -354,6 +362,7 @@ async def _tick(
                 now_utc,
                 tz,
                 others,
+                **brand,
             )
 
             if decision.action not in ("activate", "update", "deactivate"):
@@ -497,6 +506,7 @@ async def run_event_scheduler_loop(
     executor_for: object,
     tz: str,
     interval_s: int = _DEFAULT_INTERVAL_S,
+    inverter_for: object = None,
 ) -> None:
     """Island-mode event scheduler loop.
 
@@ -517,6 +527,7 @@ async def run_event_scheduler_loop(
                    ~1-2× interval_s.  Lower interval_s (e.g. 15 s, the
                    default) for responsive gen-force/outage handling.  This is
                    the knob to tune if local automations feel sluggish.
+    inverter_for : callable(inverter_id: str) -> dict | None, see ``_tick``.
 
     GATED: spawned ONLY when cloud_ingest_enabled=False.  With cloud-sync ON
     the cloud engine handles events; double-fire must not occur.
@@ -525,7 +536,7 @@ async def run_event_scheduler_loop(
 
     while not hass.is_stopping:
         try:
-            await _tick(store, event_store, executor_for, tz, datetime.now(UTC))
+            await _tick(store, event_store, executor_for, tz, datetime.now(UTC), inverter_for)
         except Exception:  # noqa: BLE001
             _LOGGER.exception(
                 "Island event scheduler tick failed unexpectedly; will retry next interval"

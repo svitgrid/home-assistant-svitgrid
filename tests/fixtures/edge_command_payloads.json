@@ -1,0 +1,478 @@
+[
+  {
+    "command": "apply_priority_profile",
+    "inverter": {
+      "modelId": "edecoa_em_624a",
+      "transport": "pi30_serial",
+      "protocolId": "pi30"
+    },
+    "event": {
+      "id": "priority-battery_charge",
+      "inverterId": "inv-1",
+      "mode": "battery_charge",
+      "enabled": true,
+      "schedule": {
+        "startTime": "10:00",
+        "endTime": "14:00",
+        "recurrence": "daily"
+      },
+      "config": {
+        "targetSoc": 100,
+        "chargeSource": "grid"
+      },
+      "executionState": {
+        "status": "idle",
+        "activeCommandIds": []
+      }
+    },
+    "reading": {
+      "inverterId": "inv-1",
+      "batterySoc": 50
+    },
+    "now": "2026-09-14T09:00:00.000Z",
+    "timezone": "Europe/Kyiv",
+    "payload": {
+      "inverterId": "inv-1",
+      "profile": "grid_charge",
+      "revertAt": 1789384200
+    }
+  },
+  {
+    "command": "apply_priority_profile",
+    "inverter": {
+      "modelId": "anenji_anj_4200",
+      "transport": null,
+      "protocolId": "eybond_at"
+    },
+    "event": {
+      "id": "priority-use_battery",
+      "inverterId": "inv-1",
+      "mode": "use_battery",
+      "enabled": true,
+      "schedule": {
+        "startTime": "10:00",
+        "endTime": "14:00",
+        "recurrence": "daily"
+      },
+      "config": {},
+      "executionState": {
+        "status": "idle",
+        "activeCommandIds": []
+      }
+    },
+    "reading": {
+      "inverterId": "inv-1",
+      "batterySoc": 50
+    },
+    "now": "2026-09-14T09:00:00.000Z",
+    "timezone": "Europe/Kyiv",
+    "payload": {
+      "inverterId": "inv-1",
+      "profile": "battery_first",
+      "revertAt": 1789384200
+    }
+  },
+  {
+    "command": "apply_priority_profile",
+    "inverter": {
+      "modelId": "luxpower_sna_5000_wpv",
+      "transport": "modbus_rtu",
+      "protocolId": "modbus_rtu"
+    },
+    "event": {
+      "id": "priority-battery_charge",
+      "inverterId": "inv-1",
+      "mode": "battery_charge",
+      "enabled": true,
+      "schedule": {
+        "startTime": "10:00",
+        "endTime": "14:00",
+        "recurrence": "daily"
+      },
+      "config": {
+        "targetSoc": 100,
+        "chargeSource": "grid"
+      },
+      "executionState": {
+        "status": "idle",
+        "activeCommandIds": []
+      }
+    },
+    "reading": {
+      "inverterId": "inv-1",
+      "batterySoc": 50
+    },
+    "now": "2026-09-14T09:00:00.000Z",
+    "timezone": "Europe/Kyiv",
+    "payload": {
+      "inverterId": "inv-1",
+      "profile": "grid_charge",
+      "revertAt": 1789384200,
+      "window": {
+        "start": "10:00",
+        "end": "14:00"
+      }
+    }
+  },
+  {
+    "command": "apply_priority_profile",
+    "inverter": {
+      "modelId": "must_pv18_3224",
+      "transport": "modbus_rtu",
+      "protocolId": "must"
+    },
+    "event": {
+      "id": "priority-battery_charge",
+      "inverterId": "inv-1",
+      "mode": "battery_charge",
+      "enabled": true,
+      "schedule": {
+        "startTime": "10:00",
+        "endTime": "14:00",
+        "recurrence": "daily"
+      },
+      "config": {
+        "targetSoc": 100,
+        "chargeSource": "grid"
+      },
+      "executionState": {
+        "status": "idle",
+        "activeCommandIds": []
+      }
+    },
+    "reading": {
+      "inverterId": "inv-1",
+      "batterySoc": 50
+    },
+    "now": "2026-09-14T09:00:00.000Z",
+    "timezone": "Europe/Kyiv",
+    "payload": {
+      "inverterId": "inv-1",
+      "profile": "grid_charge",
+      "revertAt": 1789384200
+    }
+  },
+  {
+    "command": "restore_priority_profile",
+    "inverter": {
+      "modelId": "edecoa_em_624a",
+      "transport": "pi30_serial",
+      "protocolId": "pi30"
+    },
+    "event": {
+      "id": "priority-battery_charge",
+      "inverterId": "inv-1",
+      "mode": "battery_charge",
+      "enabled": true,
+      "schedule": {
+        "startTime": "10:00",
+        "endTime": "14:00",
+        "recurrence": "daily"
+      },
+      "config": {
+        "targetSoc": 100,
+        "chargeSource": "grid"
+      },
+      "executionState": {
+        "status": "active",
+        "activeCommandIds": [],
+        "priorityProfilePrev": {
+          "protocol": "pi30",
+          "outputPriority": 2,
+          "chargerPriority": 3
+        },
+        "priorityApplyCmdId": "cmd-apply-1"
+      }
+    },
+    "reading": {
+      "inverterId": "inv-1",
+      "batterySoc": 80
+    },
+    "now": "2026-09-14T11:05:00.000Z",
+    "timezone": "Europe/Kyiv",
+    "payload": {
+      "inverterId": "inv-1",
+      "prev": {
+        "protocol": "pi30",
+        "outputPriority": 2,
+        "chargerPriority": 3
+      },
+      "cmdId": "cmd-apply-1"
+    }
+  },
+  {
+    "command": "set_pi30_thresholds",
+    "inverter": {
+      "modelId": "edecoa_em_624a",
+      "transport": "pi30_serial",
+      "protocolId": "pi30"
+    },
+    "event": {
+      "id": "custom-pi30_thresholds-daily",
+      "inverterId": "inv-1",
+      "mode": "custom",
+      "enabled": true,
+      "schedule": {
+        "startTime": "10:00",
+        "endTime": "14:00",
+        "recurrence": "daily"
+      },
+      "config": {
+        "customActions": [
+          {
+            "type": "pi30_thresholds",
+            "backToGridVoltage": 46,
+            "backToBatteryVoltage": 54
+          }
+        ],
+        "customConditions": [
+          {
+            "type": "battery_soc",
+            "op": "lte",
+            "threshold": 60,
+            "releaseThreshold": 90
+          }
+        ],
+        "sustainMinutes": 0
+      },
+      "executionState": {
+        "status": "pending_condition",
+        "activeCommandIds": []
+      }
+    },
+    "reading": {
+      "inverterId": "inv-1",
+      "batterySoc": 50
+    },
+    "now": "2026-09-14T09:00:00.000Z",
+    "timezone": "Europe/Kyiv",
+    "payload": {
+      "inverterId": "inv-1",
+      "backToGridVoltage": 46,
+      "backToBatteryVoltage": 54
+    }
+  },
+  {
+    "command": "restore_pi30_thresholds",
+    "inverter": {
+      "modelId": "edecoa_em_624a",
+      "transport": "pi30_serial",
+      "protocolId": "pi30"
+    },
+    "event": {
+      "id": "custom-pi30_thresholds-daily",
+      "inverterId": "inv-1",
+      "mode": "custom",
+      "enabled": true,
+      "schedule": {
+        "startTime": "10:00",
+        "endTime": "14:00",
+        "recurrence": "daily"
+      },
+      "config": {
+        "customActions": [
+          {
+            "type": "pi30_thresholds",
+            "backToGridVoltage": 46,
+            "backToBatteryVoltage": 54
+          }
+        ],
+        "customConditions": [
+          {
+            "type": "battery_soc",
+            "op": "lte",
+            "threshold": 60,
+            "releaseThreshold": 90
+          }
+        ],
+        "sustainMinutes": 0
+      },
+      "executionState": {
+        "status": "active",
+        "activeCommandIds": [],
+        "customSnapshot": {
+          "previousPi30Thresholds": {
+            "backToGridVoltage": 45,
+            "backToBatteryVoltage": 52
+          }
+        }
+      }
+    },
+    "reading": {
+      "inverterId": "inv-1",
+      "batterySoc": 95
+    },
+    "now": "2026-09-14T11:05:00.000Z",
+    "timezone": "Europe/Kyiv",
+    "payload": {
+      "inverterId": "inv-1",
+      "backToGridVoltage": 45,
+      "backToBatteryVoltage": 52
+    }
+  },
+  {
+    "command": "set_must_thresholds",
+    "inverter": {
+      "modelId": "must_pv18_3224",
+      "transport": "modbus_rtu",
+      "protocolId": "must"
+    },
+    "event": {
+      "id": "custom-must_thresholds-daily",
+      "inverterId": "inv-1",
+      "mode": "custom",
+      "enabled": true,
+      "schedule": {
+        "startTime": "10:00",
+        "endTime": "14:00",
+        "recurrence": "daily"
+      },
+      "config": {
+        "customActions": [
+          {
+            "type": "must_thresholds",
+            "stopDischargeV": 48,
+            "stopChargeV": 54
+          }
+        ],
+        "customConditions": [
+          {
+            "type": "battery_soc",
+            "op": "lte",
+            "threshold": 60,
+            "releaseThreshold": 90
+          }
+        ],
+        "sustainMinutes": 0
+      },
+      "executionState": {
+        "status": "pending_condition",
+        "activeCommandIds": []
+      }
+    },
+    "reading": {
+      "inverterId": "inv-1",
+      "batterySoc": 50
+    },
+    "now": "2026-09-14T09:00:00.000Z",
+    "timezone": "Europe/Kyiv",
+    "payload": {
+      "inverterId": "inv-1",
+      "stopDischargeV": 48,
+      "stopChargeV": 54,
+      "revertAtMs": 1789384500000
+    }
+  },
+  {
+    "command": "set_must_thresholds",
+    "inverter": {
+      "modelId": "must_pv18_3224",
+      "transport": "modbus_rtu",
+      "protocolId": "must"
+    },
+    "event": {
+      "id": "custom-must_thresholds-always",
+      "inverterId": "inv-1",
+      "mode": "custom",
+      "enabled": true,
+      "schedule": {
+        "startTime": "00:00",
+        "endTime": "23:59",
+        "recurrence": "always"
+      },
+      "config": {
+        "customActions": [
+          {
+            "type": "must_thresholds",
+            "stopDischargeV": 48,
+            "stopChargeV": 54
+          }
+        ],
+        "customConditions": [
+          {
+            "type": "battery_soc",
+            "op": "lte",
+            "threshold": 60,
+            "releaseThreshold": 90
+          }
+        ],
+        "sustainMinutes": 0
+      },
+      "executionState": {
+        "status": "pending_condition",
+        "activeCommandIds": []
+      }
+    },
+    "reading": {
+      "inverterId": "inv-1",
+      "batterySoc": 50
+    },
+    "now": "2026-09-14T09:00:00.000Z",
+    "timezone": "Europe/Kyiv",
+    "payload": {
+      "inverterId": "inv-1",
+      "stopDischargeV": 48,
+      "stopChargeV": 54
+    }
+  },
+  {
+    "command": "restore_must_thresholds",
+    "inverter": {
+      "modelId": "must_pv18_3224",
+      "transport": "modbus_rtu",
+      "protocolId": "must"
+    },
+    "event": {
+      "id": "custom-must_thresholds-daily",
+      "inverterId": "inv-1",
+      "mode": "custom",
+      "enabled": true,
+      "schedule": {
+        "startTime": "10:00",
+        "endTime": "14:00",
+        "recurrence": "daily"
+      },
+      "config": {
+        "customActions": [
+          {
+            "type": "must_thresholds",
+            "stopDischargeV": 48,
+            "stopChargeV": 54
+          }
+        ],
+        "customConditions": [
+          {
+            "type": "battery_soc",
+            "op": "lte",
+            "threshold": 60,
+            "releaseThreshold": 90
+          }
+        ],
+        "sustainMinutes": 0
+      },
+      "executionState": {
+        "status": "active",
+        "activeCommandIds": [],
+        "customSnapshot": {
+          "previousMustThresholds": {
+            "stopDischargeV": 46,
+            "stopChargeV": 56
+          }
+        }
+      }
+    },
+    "reading": {
+      "inverterId": "inv-1",
+      "batterySoc": 95
+    },
+    "now": "2026-09-14T11:05:00.000Z",
+    "timezone": "Europe/Kyiv",
+    "payload": {
+      "inverterId": "inv-1",
+      "prev": {
+        "stopDischargeV": 46,
+        "stopChargeV": 56
+      }
+    }
+  }
+]
