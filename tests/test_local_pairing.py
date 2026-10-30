@@ -336,6 +336,42 @@ async def test_an_approved_claim_creates_a_local_only_entry(
     assert data["public_key_hex"].startswith("04")
 
 
+async def test_an_edge_move_claim_with_no_inverters_creates_an_empty_station(
+    hass: HomeAssistant, enable_custom_integrations
+) -> None:
+    """The Move to Home Assistant flow (svitgrid#1223) pairs a phone whose
+    inverters an edge box reads. They arrive later through /edge/adopt, so the
+    claim carries none, and Home Assistant must not start reading them itself."""
+    body = _pair_body("X", edgeMove=True)
+    body.pop("inverters")
+    body.pop("presetId")
+    with _cloud(reachable=False):
+        result = await _start_flow(hass)
+        body["code"] = _code(hass)
+        resp = await _pair(hass, result["flow_id"], body)
+
+    assert resp.status == 200, _body(resp)
+    assert _body(resp)["inverters"] == []
+    entries = hass.config_entries.async_entries(DOMAIN)
+    assert len(entries) == 1
+    assert entries[0].data["inverters"] == []
+    assert entries[0].data["local_only"] is True
+
+
+async def test_a_claim_with_no_inverters_that_is_not_an_edge_move_is_still_400(
+    hass: HomeAssistant, enable_custom_integrations
+) -> None:
+    body = _pair_body("X")
+    body.pop("inverters")
+    with _cloud(reachable=False):
+        await _start_flow(hass)
+        body["code"] = _code(hass)
+        resp = await _post(hass, body)
+
+    assert resp.status == 400
+    assert hass.config_entries.async_entries(DOMAIN) == []
+
+
 async def test_the_entry_carries_the_grant_and_the_inverters_by_app_id(
     hass: HomeAssistant, enable_custom_integrations
 ) -> None:
