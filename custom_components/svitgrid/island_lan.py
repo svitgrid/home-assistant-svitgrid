@@ -390,17 +390,28 @@ class SvitgridIslandStatusView(HomeAssistantView):
         entry = entries[0]
         keystore = hass.data.get(DOMAIN, {}).get("keystore")
         has_island_key = bool(await keystore.async_get_island_keys()) if keystore else False
-        return web.json_response(
-            {
-                "cloudCopy": _cloud_copy_of(entry),
-                "localOnly": bool(entry.data.get(CONF_LOCAL_ONLY)),
-                "trueIsland": is_true_island(
-                    entry.data, options=entry.options, has_island_key=has_island_key
-                ),
-                "version": await async_integration_version(hass),
-                "capabilities": list(CAPABILITIES),
-            }
-        )
+        body = {
+            "cloudCopy": _cloud_copy_of(entry),
+            "localOnly": bool(entry.data.get(CONF_LOCAL_ONLY)),
+            "trueIsland": is_true_island(
+                entry.data, options=entry.options, has_island_key=has_island_key
+            ),
+            "version": await async_integration_version(hass),
+            "capabilities": list(CAPABILITIES),
+        }
+        state = await keystore.load() if keystore is not None else None
+        boxes = list(state.edge_boxes.values()) if state is not None else []
+        if boxes:
+            # Only once a box is adopted: an install without one answers as before.
+            body["edgeBoxes"] = [
+                {k: status[k] for k in _ISLAND_STATUS_BOX_KEYS}
+                for status in [await _box_status(hass, box) for box in boxes]
+            ]
+        return web.json_response(body)
+
+
+# What `/island/status` says of each edge box; `/edge/status` says more.
+_ISLAND_STATUS_BOX_KEYS = ("deviceId", "lastContactAt", "version", "pendingCommands", "inverterIds")
 
 
 def _wire_time(iso: str | None) -> str | None:

@@ -283,3 +283,89 @@ async def test_a_local_only_entry_reads_presets_and_specs_from_the_public_endpoi
     assert hass.data[DOMAIN][entry.entry_id]["true_island"] is True
     # Nothing else may hold a client that carries no key.
     assert hass.data[DOMAIN][entry.entry_id]["api_client"] is None
+
+
+# ── edge boxes (edge island plan, Task 8) ───────────────────────────────────
+
+
+async def _adopt_box(ks: SvitgridKeystore, device_id: str, *inverter_ids: str) -> None:
+    from custom_components.svitgrid.keystore import EdgeBoxEntry
+
+    await ks.async_add_edge_box(
+        EdgeBoxEntry(
+            device_id=device_id,
+            api_key=None,
+            inverter_ids=list(inverter_ids),
+            inverters={i: {"inverterId": i, "modelId": "deye_sg04lp3"} for i in inverter_ids},
+            added_at="2026-10-29T10:00:00+00:00",
+            pair_code_hash=None,
+            pair_code_expires_at=None,
+        )
+    )
+
+
+@pytest.mark.asyncio
+async def test_entry_with_edge_box_has_queue_and_executors(hass, enable_custom_integrations):
+    from custom_components.svitgrid.edge_command_queue import EdgeCommandQueue
+    from custom_components.svitgrid.executors.edge_box import EdgeBoxExecutor
+
+    ks = await _seed_keystore(hass)
+    await _adopt_box(ks, "EC-1", "inv-edge-1", "inv-edge-2")
+    await _adopt_box(ks, "EC-2", "inv-edge-3")
+    entry = _cloud_entry(cloud_ingest=False)
+    _, m = await _setup(hass, entry)
+
+    state = hass.data[DOMAIN][entry.entry_id]
+    assert isinstance(state["edge_queue"], EdgeCommandQueue)
+    assert sorted(state["edge_boxes"]) == ["EC-1", "EC-2"]
+    executors = state["executors_by_inverter"]
+    for inverter_id, device_id in (
+        ("inv-edge-1", "EC-1"),
+        ("inv-edge-2", "EC-1"),
+        ("inv-edge-3", "EC-2"),
+    ):
+        executor = executors[inverter_id]
+        assert isinstance(executor, EdgeBoxExecutor)
+        assert executor._device_id == device_id
+        assert executor._inverter_id == inverter_id
+        assert executor._queue is state["edge_queue"]
+    # The entry's own inverter is untouched, and the scheduler sees the box's.
+    assert not isinstance(executors["inv-direct"], EdgeBoxExecutor)
+    assert m["harvest"].call_count == 1
+    executor_for = m["scheduler"].call_args.kwargs["executor_for"]
+    assert isinstance(executor_for("inv-edge-3"), EdgeBoxExecutor)
+
+
+@pytest.mark.asyncio
+async def test_an_inverter_held_by_an_edge_box_is_not_also_harvested(
+    hass, enable_custom_integrations
+):
+    """The box reads it and takes its commands; a second reader on the same
+    logger would collide with the box."""
+    from custom_components.svitgrid.executors.edge_box import EdgeBoxExecutor
+
+    ks = await _seed_keystore(hass)
+    await _adopt_box(ks, "EC-1", "inv-direct")
+    entry = _cloud_entry(cloud_ingest=False)
+    _, m = await _setup(hass, entry)
+
+    m["harvest"].assert_not_called()
+    executor = hass.data[DOMAIN][entry.entry_id]["executors_by_inverter"]["inv-direct"]
+    assert isinstance(executor, EdgeBoxExecutor)
+
+
+@pytest.mark.asyncio
+async def test_entry_without_edge_box_sets_up_as_before(hass, enable_custom_integrations):
+    """No adopted box: no queue and no edge executors."""
+    from custom_components.svitgrid.executors.edge_box import EdgeBoxExecutor
+
+    await _seed_keystore(hass)
+    entry = _cloud_entry(cloud_ingest=False)
+    _, m = await _setup(hass, entry)
+
+    state = hass.data[DOMAIN][entry.entry_id]
+    assert state.get("edge_queue") is None
+    assert not state.get("edge_boxes")
+    assert list(state["executors_by_inverter"]) == ["inv-direct"]
+    assert not any(isinstance(e, EdgeBoxExecutor) for e in state["executors_by_inverter"].values())
+    assert m["harvest"].call_count == 1
