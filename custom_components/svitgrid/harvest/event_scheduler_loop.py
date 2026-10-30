@@ -63,6 +63,7 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+from . import priority_profile as pp
 from .event_evaluator import (
     NEEDS_CLOUD,
     SKIPPED_REASON_KEY,
@@ -231,8 +232,11 @@ def capture_priors(state: dict, results: list, others=()) -> None:
     partial failure, reads the event's own setting back. A value another event
     in *others* holds is the owner's and wins over the read.
     """
-    for _name, result in results:
+    for name, result in results:
         if not isinstance(result, dict):
+            continue
+        if name == pp.APPLY_COMMAND:
+            _capture_priority_ack(state, result)
             continue
         for ack_key, state_key, parse in _PRIOR_CAPTURES:
             if state.get(state_key) is not None:
@@ -242,6 +246,25 @@ def capture_priors(state: dict, results: list, others=()) -> None:
                 continue
             handed = _handed_over(state_key, others)
             state[state_key] = value if handed is None else handed
+
+
+def _capture_priority_ack(state: dict, result: dict) -> None:
+    """Keep what an apply_priority_profile ack reports (buildPriorityProfileAckPatch).
+
+    The box reads the owner's output and charger priority before it writes and
+    returns them as ``prev``; they are kept only when nothing is held, since a
+    repeated apply reads the profile's own write. The queued command's id
+    (EdgeBoxExecutor's ``commandId``) always moves: the box now holds this
+    apply, and the restore names it.
+    """
+    command_id = result.get("commandId")
+    if isinstance(command_id, str) and command_id:
+        state[pp.APPLY_CMD_ID_KEY] = command_id
+    if pp.is_held(state.get(pp.PREV_KEY)):
+        return
+    prev = pp.parse_prev(result.get("prev"))
+    if prev is not None:
+        state[pp.PREV_KEY] = prev
 
 
 def _failed_state(exec_state: dict, failure: _Failure, now_utc: datetime) -> dict:

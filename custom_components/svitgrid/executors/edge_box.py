@@ -88,7 +88,8 @@ class EdgeBoxExecutor(BaseExecutor):
     ) -> dict[str, Any]:
         """Queue the command and wait for the box's ack.
 
-        Returns the ack's `result`. Raises `PermissionError("unsigned_write")`
+        Returns the ack's `result` plus `commandId`, the queued command's id: a
+        `restore_priority_profile` names the apply it undoes by it. Raises `PermissionError("unsigned_write")`
         for a signed-only command without a signature (the box would refuse it,
         so it is never queued), `NotImplementedError(reason)` when the box
         rejects it as unsupported, `RuntimeError(reason)` on any other failure
@@ -109,7 +110,7 @@ class EdgeBoxExecutor(BaseExecutor):
             # The box was forgotten while the command waited.
             raise RuntimeError("edge_box_forgotten")
         if row["state"] == "success":
-            return row["result"] or {}
+            return {**(row["result"] or {}), "commandId": command_id}
         if row["state"] == "failed":
             reason = row["reason"] or "edge_command_failed"
             if row["rejected"] and reason.startswith("unsupported"):

@@ -24,7 +24,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from .brand_commands import brand_kind, profile_for_mode
+from . import priority_profile as pp
+from .brand_commands import brand_kind, priority_profile_protocol, profile_for_mode
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -683,6 +684,9 @@ def _custom_write(action: dict) -> _Write | None:
             (command, dict(restore)) if restore else None,
         )
     kind = action.get("type")
+    if kind == "priority_profile":
+        # Written through the box's priority profile, never a register.
+        return None
     try:
         if kind == "tou_slots":
             return _Write("prevSlots", "set_battery_charge", _tou_slot_payload(action))
@@ -741,8 +745,10 @@ def has_landed_writes(exec_state: dict) -> bool:
     """
     if exec_state.get(RELEASED_KEY):
         return False
-    return exec_state.get("status") == "active" or any(
-        exec_state.get(k) is not None for k in PRIOR_KEYS
+    return (
+        exec_state.get("status") == "active"
+        or any(exec_state.get(k) is not None for k in PRIOR_KEYS)
+        or pp.is_held(exec_state.get(pp.PREV_KEY))
     )
 
 
@@ -881,6 +887,29 @@ def _drop_run_state(state: dict) -> None:
         state.pop(key, None)
 
 
+# A run's priority-profile keys, dropped by its restore. The owner's values
+# (priorityProfilePrev) go with it: they are back on the inverter.
+_PRIORITY_RUN_KEYS = (pp.PREV_KEY, pp.APPLY_CMD_ID_KEY, pp.REVERT_AT_KEY, pp.CONTROLLED_KEY)
+
+
+def _priority_controlled(exec_state: dict) -> bool:
+    """A run that went through apply_priority_profile ends with
+    restore_priority_profile, never a Deye restore."""
+    return exec_state.get(pp.CONTROLLED_KEY) is True or pp.is_held(exec_state.get(pp.PREV_KEY))
+
+
+def _priority_restore_plan(exec_state: dict, landed_only: bool = False) -> tuple[list, list]:
+    """The priority-profile restore: the owner's values the apply's ack held.
+
+    With no held ``prev`` (the apply never acked one) nothing is sent: a
+    restore without ``prev`` has nothing true to write back.
+    """
+    prev = exec_state.get(pp.PREV_KEY)
+    if pp.is_held(prev):
+        return [(pp.RESTORE_COMMAND, pp.priority_restore_payload(prev, exec_state))], []
+    return [], ([] if landed_only else [pp.RESTORE_COMMAND])
+
+
 def restore_decision(
     event: dict,
     exec_state: dict,
@@ -898,8 +927,13 @@ def restore_decision(
     other events, whose held registers are handed back to them.
     """
     landed_only = exec_state.get("status") != "active"
-    commands, missing = _restore_plan(event, exec_state, reading, others, landed_only)
+    if _priority_controlled(exec_state):
+        commands, missing = _priority_restore_plan(exec_state, landed_only)
+    else:
+        commands, missing = _restore_plan(event, exec_state, reading, others, landed_only)
     new_state = copy.deepcopy(exec_state)
+    for key in _PRIORITY_RUN_KEYS:
+        new_state.pop(key, None)
     new_state["status"] = "idle"
     _drop_run_state(new_state)
     new_state[LAST_DEACTIVATED_KEY] = now_utc.isoformat()
@@ -990,9 +1024,10 @@ def _unsupported_command(event: dict, exec_state: dict, kind: str) -> str | None
     """The inverter write *event* needs that an inverter of *kind* cannot get
     from the island, or None when the event writes nothing to the inverter.
 
-    Only the Deye family is written today. A priority-profile brand's
-    profile and threshold commands come with svitgrid#1254 and #1255; until
-    then the event sends nothing rather than a partial payload.
+    The Deye family is written, and a priority-profile brand's profile modes
+    and rules (``_evaluate_priority``). Its threshold commands come with
+    svitgrid#1255; until then the event sends nothing rather than a partial
+    payload.
     """
     if kind == "deye":
         return None
@@ -1052,12 +1087,23 @@ def evaluate_event(
     ``protocolId``), or None for one the integration writes itself, which is
     evaluated as before. An event that would write to an edge inverter whose
     brand the island cannot write yet is skipped with ``unsupported_field``.
+    A priority-profile mode or rule on a PI30, MUST, LuxPower SNA, SMG II or
+    SRNE runs through ``_evaluate_priority``.
     """
+    decision = None
     if inverter is not None and _cloud_skip_reason(event) is None:
-        command = _unsupported_command(event, exec_state, brand_kind(inverter))
-        if command is not None:
-            return _unsupported(event, exec_state, command, now_utc)
-    decision = _evaluate_event(event, reading, exec_state, now_utc, tz, others)
+        kind = brand_kind(inverter)
+        if kind == "priority" and _runs_on_priority_profile(event):
+            protocol = priority_profile_protocol(
+                inverter.get("modelId"), inverter.get("transport"), inverter.get("protocolId")
+            )
+            decision = _evaluate_priority(event, reading, exec_state, now_utc, tz, others, protocol)
+        else:
+            command = _unsupported_command(event, exec_state, kind)
+            if command is not None:
+                return _unsupported(event, exec_state, command, now_utc)
+    if decision is None:
+        decision = _evaluate_event(event, reading, exec_state, now_utc, tz, others)
     state = {k: v for k, v in decision.new_state.items() if k != SKIPPED_REASON_KEY}
     if decision.action == "skip" and decision.skip_reason in _NEEDS_CLOUD_SKIPS:
         state[SKIPPED_REASON_KEY] = NEEDS_CLOUD
@@ -1873,21 +1919,7 @@ def _eval_custom(
             _LOGGER.debug("Event %s: stale reading, deferring", event.get("id"))
             return EvaluatorDecision(action="hold", commands=[], new_state=new_state)
 
-    grid_present = _derive_grid_present(reading)
-    voltages = _usable_grid_voltages(reading)
-
-    signals = {
-        "batterySoc": reading.get("batterySoc"),
-        "pvPowerW": float(reading.get("pvPower") or 0),
-        "loadPowerW": float(reading.get("loadPower") or 0),
-        "gridPresent": grid_present,
-        "gridVoltageMinV": min(voltages) if voltages else None,
-        "gridVoltageMaxV": max(voltages) if voltages else None,
-        # Cloud-only fields unavailable locally; skip guard already fired
-        "outageHourNow": False,
-        "forecastTodayKwh": None,
-        "damPriceUahKwh": None,
-    }
+    signals = _custom_signals(reading)
 
     state_view = {
         "status": exec_state.get("status", "idle"),
@@ -1934,3 +1966,227 @@ def _eval_custom(
     ):
         new_state["conditionLostSince"] = now_utc.isoformat()
     return EvaluatorDecision(action="hold", commands=[], new_state=new_state)
+
+
+def _custom_signals(reading: dict) -> dict:
+    """The live signals a custom event's conditions read."""
+    grid_present = _derive_grid_present(reading)
+    voltages = _usable_grid_voltages(reading)
+
+    return {
+        "batterySoc": reading.get("batterySoc"),
+        "pvPowerW": float(reading.get("pvPower") or 0),
+        "loadPowerW": float(reading.get("loadPower") or 0),
+        "gridPresent": grid_present,
+        "gridVoltageMinV": min(voltages) if voltages else None,
+        "gridVoltageMaxV": max(voltages) if voltages else None,
+        # Cloud-only fields unavailable locally; skip guard already fired
+        "outageHourNow": False,
+        "forecastTodayKwh": None,
+        "damPriceUahKwh": None,
+    }
+
+
+# ─────────────────── Priority profile (priority-profile-dispatch.ts) ─────────
+
+# battery_charge grid-charges only when the Deye path would (ruling R7).
+_GRID_CHARGE_SOURCES = frozenset({"grid", "both", "solar_surplus_grid"})
+
+
+def _priority_actions(event: dict) -> list:
+    """The event's inverter actions: every custom action but a plug or a charger."""
+    actions = (event.get("config") or {}).get("customActions") or []
+    return [
+        a for a in actions if not (isinstance(a, dict) and a.get("type") in _DEVICE_ACTION_TYPES)
+    ]
+
+
+def _runs_on_priority_profile(event: dict) -> bool:
+    """A profile mode, or a custom event whose only inverter action is a profile."""
+    mode = event.get("mode", "")
+    if mode in pp.PRIORITY_PROFILE_MODES:
+        return True
+    if mode != "custom":
+        return False
+    actions = _priority_actions(event)
+    return bool(actions) and all(
+        isinstance(a, dict) and a.get("type") == "priority_profile" for a in actions
+    )
+
+
+def _priority_restore(event: dict, exec_state: dict, new_state: dict, now_utc: datetime):
+    """End the run: restore the held prev, or send nothing and record why."""
+    commands, missing = _priority_restore_plan(exec_state)
+    for key in _PRIORITY_RUN_KEYS:
+        new_state.pop(key, None)
+    new_state["status"] = "idle"
+    _report_missing(event, new_state, missing, now_utc)
+    return EvaluatorDecision(action="deactivate", commands=commands, new_state=new_state)
+
+
+def _priority_unsupported(new_state: dict) -> EvaluatorDecision:
+    # An SNA has no battery_first: the box would report success and do nothing.
+    return EvaluatorDecision(
+        action="skip", commands=[], new_state=new_state, skip_reason="profile_unsupported"
+    )
+
+
+def _evaluate_priority(
+    event: dict,
+    reading: dict,
+    exec_state: dict,
+    now_utc: datetime,
+    tz: str,
+    others,
+    protocol: str | None,
+) -> EvaluatorDecision:
+    """An event on a priority-profile inverter of an edge box.
+
+    The box's ack is final (the dispatch waits for it), so an apply that
+    acked is not re-sent in the same occurrence (ruling R13); a failed one is
+    retried by the scheduler's backoff.
+    """
+    new_state = copy.deepcopy(exec_state)
+    schedule = event.get("schedule") or {}
+    if not is_event_in_window(schedule, now_utc, tz):
+        if has_landed_writes(exec_state):
+            return _priority_restore(event, exec_state, new_state, now_utc)
+        if new_state.get("status") == "pending_condition":
+            new_state["status"] = "idle"
+            new_state.pop("conditionMetSince", None)
+        return EvaluatorDecision(action="hold", commands=[], new_state=new_state)
+    if event.get("mode") == "custom":
+        return _eval_priority_rule(event, reading, exec_state, new_state, now_utc, tz, protocol)
+    return _eval_priority_mode(event, reading, exec_state, new_state, now_utc, tz, protocol)
+
+
+def _eval_priority_mode(
+    event: dict,
+    reading: dict,
+    exec_state: dict,
+    new_state: dict,
+    now_utc: datetime,
+    tz: str,
+    protocol: str | None,
+) -> EvaluatorDecision:
+    """In-window battery_charge, maintenance fill or use_battery (runPriorityProfileMode)."""
+    hold = EvaluatorDecision(action="hold", commands=[], new_state=new_state)
+    mode = event.get("mode", "")
+    config = event.get("config") or {}
+    bounds = pp.occurrence_bounds(event.get("schedule") or {}, now_utc, tz)
+    if bounds is None:
+        return hold
+    start_ms, end_ms = bounds
+    prev = exec_state.get(pp.PREV_KEY)
+
+    if mode == "battery_charge" and (config.get("chargeSource") or "solar") not in (
+        _GRID_CHARGE_SOURCES
+    ):
+        # Nothing a profile can do. A prev still held from an earlier config goes back.
+        return (
+            _priority_restore(event, exec_state, new_state, now_utc) if pp.is_held(prev) else hold
+        )
+
+    if mode == "battery_charge":
+        target_soc = config.get("targetSoc", 100)
+    elif mode == "battery_maintenance_charge":
+        target_soc = pp.MAINTENANCE_PRIORITY_TARGET_SOC
+    else:
+        target_soc = None
+    soc = reading.get("batterySoc")
+    if isinstance(soc, bool) or not isinstance(soc, int | float) or not math.isfinite(soc):
+        soc = None
+    reached_at = exec_state.get(pp.TARGET_REACHED_AT_KEY)
+    if isinstance(reached_at, bool) or not isinstance(reached_at, int | float):
+        reached_at = None
+
+    decision = pp.decide_priority_profile(
+        mode, True, end_ms, soc, target_soc, prev, reached_at, start_ms
+    )
+    now_ms = _now_ms(now_utc)
+
+    if decision["kind"] == "restore":
+        out = _priority_restore(event, exec_state, new_state, now_utc)
+        if reached_at is None or reached_at < start_ms:
+            out.new_state[pp.TARGET_REACHED_AT_KEY] = now_ms
+        return out
+
+    if decision["kind"] == "idle":
+        if decision.get("targetReached"):
+            new_state[pp.TARGET_REACHED_AT_KEY] = now_ms
+            new_state["status"] = "idle"
+        return hold
+
+    # Ruling R13: one apply per occurrence; the box reverts at revertAt.
+    if exec_state.get("status") == "active":
+        return hold
+    profile = decision["profile"]
+    if profile not in pp.PROFILES_BY_PROTOCOL.get(protocol or "", ()):
+        return _priority_unsupported(new_state)
+    payload = pp.priority_apply_payload(
+        profile, decision["revertAt"], protocol, (start_ms, end_ms, tz)
+    )
+    _mark_applied(new_state, decision["revertAt"], now_utc)
+    return EvaluatorDecision(
+        action="activate", commands=[(pp.APPLY_COMMAND, payload)], new_state=new_state
+    )
+
+
+def _mark_applied(new_state: dict, revert_at: int, now_utc: datetime) -> None:
+    new_state["status"] = "active"
+    new_state["lastActivatedAt"] = now_utc.isoformat()
+    new_state[pp.CONTROLLED_KEY] = True
+    new_state[pp.REVERT_AT_KEY] = revert_at
+    # The ack of this apply records its id; an earlier run's must not stand in.
+    new_state.pop(pp.APPLY_CMD_ID_KEY, None)
+
+
+def _eval_priority_rule(
+    event: dict,
+    reading: dict,
+    exec_state: dict,
+    new_state: dict,
+    now_utc: datetime,
+    tz: str,
+    protocol: str | None,
+) -> EvaluatorDecision:
+    """A custom event whose action is a priority profile.
+
+    Its conditions run as any custom event's. Each apply holds for at most six
+    hours (custom_priority_revert_at), so while the conditions hold the rule
+    renews it once less than 30 minutes remain (renewCustomPriorityProfile).
+    """
+    profile = _priority_actions(event)[0].get("profile")
+    decision = _eval_custom(event, reading, exec_state, new_state, now_utc)
+    schedule = event.get("schedule") or {}
+
+    if decision.action == "activate":
+        if profile not in pp.PROFILES_BY_PROTOCOL.get(protocol or "", ()):
+            return _priority_unsupported(copy.deepcopy(exec_state))
+        revert_at = pp.custom_priority_revert_at(schedule, now_utc, tz)
+        payload = pp.custom_priority_apply_payload(profile, revert_at, protocol, now_utc, tz)
+        _mark_applied(decision.new_state, revert_at, now_utc)
+        decision.commands = [(pp.APPLY_COMMAND, payload)]
+        return decision
+
+    if decision.action == "deactivate":
+        return _priority_restore(event, exec_state, decision.new_state, now_utc)
+
+    conditions = (event.get("config") or {}).get("customConditions") or []
+    still_met = exec_state.get("status") == "active" and _evaluate_conditions(
+        conditions, _custom_signals(reading), held=True
+    )
+    if decision.action == "hold" and still_met:
+        next_revert_at = pp.custom_priority_revert_at(schedule, now_utc, tz)
+        current = exec_state.get(pp.REVERT_AT_KEY)
+        if pp.custom_priority_renewal_due(current, next_revert_at, _now_ms(now_utc)):
+            payload = pp.custom_priority_apply_payload(
+                profile, next_revert_at, protocol, now_utc, tz
+            )
+            decision.new_state[pp.REVERT_AT_KEY] = next_revert_at
+            return EvaluatorDecision(
+                action="update",
+                commands=[(pp.APPLY_COMMAND, payload)],
+                new_state=decision.new_state,
+            )
+    return decision

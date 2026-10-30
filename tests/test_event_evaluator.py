@@ -926,3 +926,126 @@ def test_battery_maintenance_without_a_fallback_restores_no_charge():
     result = evaluate_event(event, {"batterySoc": 60}, state, _NOW, TZ)
     assert result.commands == [("set_solar_sell", {"solarSell": 0})]
     assert "lastCommandError" not in result.new_state
+
+
+# ─────────────── Priority profile on an edge island (svitgrid#1254) ───────────
+
+_PI30 = {"modelId": "edecoa_em_624a", "transport": "pi30_serial", "protocolId": "pi30"}
+_SNA = {"modelId": "luxpower_sna_5000_wpv", "transport": "modbus_rtu", "protocolId": "modbus_rtu"}
+
+
+def _priority_rule(state: dict) -> dict:
+    return {
+        "id": "rule-1",
+        "inverterId": "inv-1",
+        "enabled": True,
+        "mode": "custom",
+        "schedule": {"recurrence": "always"},
+        "config": {
+            "customActions": [{"type": "priority_profile", "profile": "grid_charge"}],
+            "customConditions": [{"type": "battery_soc", "op": "lte", "threshold": 60}],
+            "sustainMinutes": 0,
+        },
+        "executionState": state,
+    }
+
+
+_RULE_READING = {"batterySoc": 50, "pvPower": 0, "loadPower": 200, "timestamp": _NOW.isoformat()}
+_SIX_HOURS_S = 6 * 3600
+
+
+def test_an_always_rule_applies_for_at_most_six_hours():
+    state = {"status": "pending_condition", "conditionMetSince": _ago(1)}
+    decision = evaluate_event(_priority_rule(state), _RULE_READING, state, _NOW, TZ, inverter=_PI30)
+
+    revert_at = int(_NOW.timestamp()) + _SIX_HOURS_S + 600
+    assert decision.action == "activate"
+    assert decision.commands == [
+        ("apply_priority_profile", {"profile": "grid_charge", "revertAt": revert_at})
+    ]
+    assert decision.new_state["priorityRevertAt"] == revert_at
+
+
+def test_an_always_rule_renews_before_revert_at():
+    """An always rule re-applies once less than 30 minutes of its hold remain,
+    so the box never reverts it after six hours while the condition holds."""
+    held_until_s = int(_NOW.timestamp()) + 25 * 60
+    state = {
+        "status": "active",
+        "priorityRevertAt": held_until_s + 600,
+        "priorityProfilePrev": {"protocol": "pi30", "outputPriority": 2, "chargerPriority": 3},
+        "priorityApplyCmdId": "cmd-apply-1",
+    }
+    decision = evaluate_event(_priority_rule(state), _RULE_READING, state, _NOW, TZ, inverter=_PI30)
+
+    revert_at = int(_NOW.timestamp()) + _SIX_HOURS_S + 600
+    assert decision.action == "update"
+    assert decision.commands == [
+        ("apply_priority_profile", {"profile": "grid_charge", "revertAt": revert_at})
+    ]
+    assert decision.new_state["priorityRevertAt"] == revert_at
+    # The owner's values from the first apply stay held for the restore.
+    assert decision.new_state["priorityProfilePrev"] == state["priorityProfilePrev"]
+
+
+def test_an_always_rule_does_not_renew_early():
+    state = {"status": "active", "priorityRevertAt": int(_NOW.timestamp()) + 2 * 3600 + 600}
+    decision = evaluate_event(_priority_rule(state), _RULE_READING, state, _NOW, TZ, inverter=_PI30)
+    assert decision.action == "hold"
+    assert decision.commands == []
+
+
+def test_a_rule_restores_prev_when_its_condition_goes():
+    prev = {"protocol": "pi30", "outputPriority": 2, "chargerPriority": 3}
+    state = {
+        "status": "active",
+        "priorityRevertAt": int(_NOW.timestamp()) + 3600,
+        "priorityProfilePrev": prev,
+        "priorityApplyCmdId": "cmd-apply-1",
+    }
+    reading = {**_RULE_READING, "batterySoc": 90}
+    decision = evaluate_event(_priority_rule(state), reading, state, _NOW, TZ, inverter=_PI30)
+    assert decision.action == "deactivate"
+    assert decision.commands == [
+        ("restore_priority_profile", {"prev": prev, "cmdId": "cmd-apply-1"})
+    ]
+    assert "priorityProfilePrev" not in decision.new_state
+
+
+def test_battery_charge_on_a_priority_brand_restores_at_target_soc():
+    prev = {"protocol": "pi30", "outputPriority": 2, "chargerPriority": 3}
+    state = {"status": "active", "priorityProfilePrev": prev, "priorityApplyCmdId": "c1"}
+    event = {
+        "id": "evt-1",
+        "inverterId": "inv-1",
+        "enabled": True,
+        "mode": "battery_charge",
+        "schedule": {"recurrence": "daily", "startTime": "14:00", "endTime": "16:00"},
+        "config": {"targetSoc": 80, "chargeSource": "grid"},
+        "executionState": state,
+    }
+    decision = evaluate_event(event, {"batterySoc": 85}, state, _NOW, TZ, inverter=_PI30)
+    assert decision.commands == [("restore_priority_profile", {"prev": prev, "cmdId": "c1"})]
+    assert decision.new_state["status"] == "idle"
+
+    # The same occurrence never re-arms, even below the target.
+    again = evaluate_event(event, {"batterySoc": 50}, decision.new_state, _NOW, TZ, inverter=_PI30)
+    assert again.commands == []
+
+
+def test_use_battery_on_an_sna_is_refused():
+    """An SNA has no battery_first: the box would report success and do nothing."""
+    event = {
+        "id": "evt-1",
+        "inverterId": "inv-1",
+        "enabled": True,
+        "mode": "use_battery",
+        "schedule": {"recurrence": "daily", "startTime": "14:00", "endTime": "16:00"},
+        "config": {},
+        "executionState": {"status": "idle"},
+    }
+    decision = evaluate_event(
+        event, {"batterySoc": 50}, {"status": "idle"}, _NOW, TZ, inverter=_SNA
+    )
+    assert decision.commands == []
+    assert decision.skip_reason == "profile_unsupported"
