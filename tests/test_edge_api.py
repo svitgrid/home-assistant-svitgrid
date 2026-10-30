@@ -1544,6 +1544,45 @@ async def test_ack_records_the_outcome(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_a_written_ack_leaves_the_command_open_for_its_verdict(tmp_path):
+    """Bench 2026-10-30: a TOU write acks twice, `{"success": false,
+    "transition": "written"}` once the frames are echoed, then the verdict
+    after a 45 s settle. The first ack closed the command as failed and the
+    verdict was ignored, so the app showed an error for a write that landed."""
+    queue = _real_queue(tmp_path)
+    hass = _hass_with_queue(_keystore(_box(inverters={"inv-1": _INV_1})), queue)
+    cmd = await queue.async_enqueue(
+        "EC-1", "set_grid_charge_toggle", {}, signing=None, inverter_id="inv-1", source="t"
+    )
+    await _poll(hass)
+
+    written = {"success": False, "executorVersion": "edge/2.172.0", "transition": "written"}
+    resp = await _call(
+        edge_api.EdgeCommandAckView,
+        "post",
+        hass,
+        api_key=BOX_KEY,
+        match_info={"command_id": cmd},
+        body=written,
+    )
+    assert resp.status == 200
+    assert _json(resp) == {"success": True, "status": "delivered"}
+
+    resp = await _call(
+        edge_api.EdgeCommandAckView,
+        "post",
+        hass,
+        api_key=BOX_KEY,
+        match_info={"command_id": cmd},
+        body={"success": True, "result": {"verified": True}},
+    )
+    assert _json(resp) == {"success": True, "status": "success"}
+    rows = {r["id"]: r for r in await queue.async_recent("EC-1")}
+    assert rows[cmd]["state"] == "success"
+    assert rows[cmd]["result"] == {"verified": True}
+
+
+@pytest.mark.asyncio
 async def test_ack_of_another_boxs_command_is_200_unknown(tmp_path):
     queue = _real_queue(tmp_path)
     other = _box(device_id="EC-2", api_key="box-api-key-2", inverters={"inv-9": _INV_2})
