@@ -111,6 +111,9 @@ class LanClaim:
     preset_id: str | None
     inverters: list[dict[str, Any]]
     paired_at: str
+    # An edge box's move (svitgrid#1223): a station with no inverters of its
+    # own, which its boxes fill through /edge/adopt.
+    edge_move: bool = False
 
 
 @dataclass

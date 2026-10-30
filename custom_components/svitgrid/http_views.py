@@ -623,6 +623,7 @@ class SvitgridPairLocalView(HomeAssistantView):
             preset_id=identity["preset_id"],
             inverters=inverters,
             paired_at=_utc_now_iso(),
+            edge_move=edge_move,
         )
         # The awaits above gave a cloud claim, a closed LAN half or another
         # candidate a chance to land; request_approval settles it.

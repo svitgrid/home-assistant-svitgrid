@@ -1189,6 +1189,7 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
                 "trusted_key_status": "approved",
                 "preset_id": claim.preset_id,
                 "inverters": claim.inverters,
+                **({"edge_move": True} if claim.edge_move else {}),
                 # Lets pair-local find this entry if the browser finished the
                 # flow before it could.
                 "local_pairing_id": session.pairing_id if session else None,

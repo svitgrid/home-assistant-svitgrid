@@ -808,8 +808,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # Nothing to upload to: there is no cloud account behind this entry.
         cloud_ingest_enabled = False
 
-    if inverters:
-        active_ids = {inv["inverter_id"] for inv in inverters}
+    # Edge boxes adopted over the LAN (edge island mode). An install that never
+    # adopted one sets up exactly as before: no queue, no edge executors.
+    _ks_state = await keystore.load()
+    edge_boxes = list(_ks_state.edge_boxes.values()) if _ks_state is not None else []
+    edge_inverter_ids = {i for box in edge_boxes for i in box.inverter_ids}
+    # An edge move's station (svitgrid#1223) has no inverters of its own: its
+    # boxes read them. It still needs the store, the lifecycle and the views,
+    # or /edge/adopt is never registered and the box's readings have nowhere
+    # to go.
+    edge_station = bool(entry.data.get("edge_move")) or bool(edge_boxes)
+
+    if inverters or edge_station:
+        # The boxes' inverters are active too: a prune that did not know them
+        # would delete their readings.
+        active_ids = {inv["inverter_id"] for inv in inverters} | edge_inverter_ids
         # Inverters whose battery power we normalize to Svitgrid's charge-positive
         # convention at capture (HA Solarman) — the sender re-inverts these before
         # upload so the server's existing negation is unchanged. See battery_sign.py.
@@ -901,12 +914,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     mqtt_wake_task = None
     scheduler_task = None
     settings_sync_task = None
-
-    # Edge boxes adopted over the LAN (edge island mode). An install that never
-    # adopted one sets up exactly as before: no queue, no edge executors.
-    _ks_state = await keystore.load()
-    edge_boxes = list(_ks_state.edge_boxes.values()) if _ks_state is not None else []
-    edge_inverter_ids = {i for box in edge_boxes for i in box.inverter_ids}
 
     if loops_active:
         spec_store = RegisterSpecStore(hass)

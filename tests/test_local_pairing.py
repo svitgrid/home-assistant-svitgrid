@@ -356,6 +356,8 @@ async def test_an_edge_move_claim_with_no_inverters_creates_an_empty_station(
     assert len(entries) == 1
     assert entries[0].data["inverters"] == []
     assert entries[0].data["local_only"] is True
+    # Setup reads it: a station with no inverters of its own still starts.
+    assert entries[0].data["edge_move"] is True
 
 
 async def test_a_claim_with_no_inverters_that_is_not_an_edge_move_is_still_400(
