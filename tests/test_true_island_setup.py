@@ -369,3 +369,56 @@ async def test_entry_without_edge_box_sets_up_as_before(hass, enable_custom_inte
     assert list(state["executors_by_inverter"]) == ["inv-direct"]
     assert not any(isinstance(e, EdgeBoxExecutor) for e in state["executors_by_inverter"].values())
     assert m["harvest"].call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_after_a_reload_the_adopted_box_has_a_queue_and_an_executor(
+    hass, enable_custom_integrations
+):
+    """svitgrid#1252: adopting the first box over the LAN reloads the entry, and
+    the reloaded entry drains the box's commands and leaves its inverter to it."""
+    import asyncio
+
+    from homeassistant.config_entries import ConfigEntryState
+
+    from custom_components.svitgrid.edge_command_queue import EdgeCommandQueue
+    from custom_components.svitgrid.executors.edge_box import EdgeBoxExecutor
+    from custom_components.svitgrid.island_lan import SvitgridEdgeAdoptView
+
+    await _seed_keystore(hass)
+    entry = _cloud_entry(cloud_ingest=False)
+    await _setup(hass, entry)
+    entry.mock_state(hass, ConfigEntryState.LOADED)
+    assert hass.data[DOMAIN][entry.entry_id].get("edge_queue") is None
+
+    signed = {
+        "action": "edge_adopt",
+        "deviceId": "EC-1",
+        "inverters": [{"inverterId": "inv-direct", "modelId": "deye_sg04lp3"}],
+    }
+    request = MagicMock()
+    request.app = {"hass": hass}
+    with (
+        patch(
+            "custom_components.svitgrid.island_lan.signed_lan_request",
+            AsyncMock(return_value=(signed, None)),
+        ),
+        patch.object(hass.config_entries, "async_schedule_reload") as schedule_reload,
+    ):
+        resp = await SvitgridEdgeAdoptView().post(request)
+        await asyncio.sleep(0)
+    assert resp.status == 200
+    schedule_reload.assert_called_once_with(entry.entry_id)
+
+    # The reload: the entry's state goes, and setup runs again.
+    hass.data[DOMAIN].pop(entry.entry_id)
+    with patch.object(entry, "add_to_hass"):
+        _, m = await _setup(hass, entry)
+
+    state = hass.data[DOMAIN][entry.entry_id]
+    assert isinstance(state["edge_queue"], EdgeCommandQueue)
+    assert state["edge_boxes"] == ["EC-1"]
+    executor = state["executors_by_inverter"]["inv-direct"]
+    assert isinstance(executor, EdgeBoxExecutor)
+    assert executor._queue is state["edge_queue"]
+    m["harvest"].assert_not_called()

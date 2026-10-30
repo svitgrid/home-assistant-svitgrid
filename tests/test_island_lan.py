@@ -1238,3 +1238,122 @@ async def test_island_status_without_edge_boxes_is_unchanged(hass: HomeAssistant
             "settings_lan",
         ],
     }
+
+
+# ── a reload after adopt and forget (svitgrid#1252) ─────────────────────────
+
+
+@pytest.fixture
+def schedule_reload(hass):
+    with patch.object(hass.config_entries, "async_schedule_reload") as m:
+        yield m
+
+
+def _loaded_entry(hass) -> MockConfigEntry:
+    from homeassistant.config_entries import ConfigEntryState
+
+    entry = _entry(hass)
+    entry.mock_state(hass, ConfigEntryState.LOADED)
+    _entry_state(hass, entry)
+    return entry
+
+
+async def test_adopt_schedules_a_reload_after_answering(hass: HomeAssistant, schedule_reload):
+    """Setup builds the edge queue and the box's executors, so the entry is
+    reloaded; but only once the answer, which carries the pairing code, is out."""
+    import asyncio
+
+    admin = _Admin()
+    await _keystore(hass, admin)
+    entry = _loaded_entry(hass)
+
+    resp = await _adopt(hass, admin, "EC-1", _INV_DEYE)
+
+    assert resp.status == 200, _body(resp)
+    schedule_reload.assert_not_called()
+    await asyncio.sleep(0)
+    schedule_reload.assert_called_once_with(entry.entry_id)
+
+
+async def test_adopting_an_adopted_box_again_schedules_a_reload(
+    hass: HomeAssistant, schedule_reload
+):
+    """The app's retry after `pair_code_expired` may change the box's inverters."""
+    import asyncio
+
+    admin = _Admin()
+    await _keystore(hass, admin)
+    entry = _loaded_entry(hass)
+    await _adopt(hass, admin, "EC-1", _INV_DEYE)
+    await asyncio.sleep(0)
+    schedule_reload.reset_mock()
+
+    resp = await _adopt(hass, admin, "EC-1", _inv("inv-2"))
+    await asyncio.sleep(0)
+
+    assert resp.status == 200, _body(resp)
+    schedule_reload.assert_called_once_with(entry.entry_id)
+
+
+async def test_a_refused_adopt_does_not_reload(hass: HomeAssistant, schedule_reload):
+    import asyncio
+
+    admin = _Admin()
+    await _keystore(hass, admin)
+    _loaded_entry(hass)
+    await _adopt(hass, admin, "EC-1", _INV_DEYE)
+    await asyncio.sleep(0)
+    schedule_reload.reset_mock()
+
+    resp = await _adopt(hass, admin, "EC-2", _INV_DEYE)
+    await asyncio.sleep(0)
+
+    assert resp.status == 409
+    schedule_reload.assert_not_called()
+
+
+async def test_forget_of_a_held_box_schedules_a_reload(hass: HomeAssistant, schedule_reload):
+    import asyncio
+
+    admin = _Admin()
+    await _keystore(hass, admin)
+    entry = _loaded_entry(hass)
+    await _adopt(hass, admin, "EC-1", _INV_DEYE)
+    await asyncio.sleep(0)
+    schedule_reload.reset_mock()
+
+    resp = await _forget(hass, admin, "EC-1")
+
+    assert resp.status == 200, _body(resp)
+    schedule_reload.assert_not_called()
+    await asyncio.sleep(0)
+    schedule_reload.assert_called_once_with(entry.entry_id)
+
+
+async def test_forget_of_an_unknown_box_does_not_reload(hass: HomeAssistant, schedule_reload):
+    import asyncio
+
+    admin = _Admin()
+    await _keystore(hass, admin)
+    _loaded_entry(hass)
+
+    resp = await _forget(hass, admin, "EC-9")
+    await asyncio.sleep(0)
+
+    assert _body(resp) == {"ok": True}
+    schedule_reload.assert_not_called()
+
+
+async def test_adopt_reloads_only_entries_that_are_set_up(hass: HomeAssistant, schedule_reload):
+    """An entry that is not loaded is not set up by an adopt."""
+    import asyncio
+
+    admin = _Admin()
+    await _keystore(hass, admin)
+    loaded = _loaded_entry(hass)
+    _entry(hass)
+
+    await _adopt(hass, admin, "EC-1", _INV_DEYE)
+    await asyncio.sleep(0)
+
+    schedule_reload.assert_called_once_with(loaded.entry_id)

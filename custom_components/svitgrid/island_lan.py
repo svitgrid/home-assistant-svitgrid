@@ -45,6 +45,7 @@ from typing import Any
 
 from aiohttp import web
 from homeassistant.components.http import HomeAssistantView
+from homeassistant.config_entries import ConfigEntryState
 
 from .api_client import async_integration_version
 from .command_auth import verify_signed_command
@@ -463,6 +464,25 @@ def _edge_entry_states(hass) -> list[dict]:
     ]
 
 
+def _schedule_edge_reload(hass) -> None:
+    """Reload every set-up entry once the current answer is out.
+
+    Setup reads the edge boxes: it builds the edge queue and an
+    `EdgeBoxExecutor` per adopted inverter, and stops harvesting what a box
+    holds. The keystore is shared, so each loaded entry is reloaded. Deferred
+    past the handler: the reload starts eagerly, and the adopt answer carries
+    the pairing code, which must reach the app first.
+    """
+    domain_data = hass.data.get(DOMAIN) or {}
+    for entry in _entries(hass):
+        state = domain_data.get(entry.entry_id)
+        if entry.state is not ConfigEntryState.LOADED or not isinstance(state, dict):
+            continue
+        if state.get("store") is None:
+            continue
+        hass.loop.call_soon(hass.config_entries.async_schedule_reload, entry.entry_id)
+
+
 def _first_store(hass):
     for state in (hass.data.get(DOMAIN) or {}).values():
         if isinstance(state, dict) and state.get("store") is not None:
@@ -534,6 +554,7 @@ class SvitgridEdgeAdoptView(HomeAssistantView):
         _LOGGER.info(
             "Edge box %s adopted over the LAN with %d inverter(s)", device_id, len(inverters)
         )
+        _schedule_edge_reload(hass)
         return web.json_response(
             {"ok": True, "pairCode": code, "expiresAt": _wire_time(expires_at)}
         )
@@ -570,6 +591,7 @@ class SvitgridEdgeForgetView(HomeAssistantView):
         edge_refusals(hass).pop(device_id, None)
         if removed:
             _LOGGER.info("Edge box %s forgotten over the LAN", device_id)
+            _schedule_edge_reload(hass)
         return web.json_response({"ok": True})
 
 
