@@ -20,15 +20,14 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from ..const import DOMAIN
 from ..island_lan import _cloud_copy_of, _json_error, signed_lan_request
-from . import copy
-from .bot_api import BotApi, InvalidToken, SendResult, TelegramUnreachable
+from .bot_api import BotApi, InvalidToken, TelegramUnreachable
+from .runtime import TelegramRuntime, TestOutcome
 from .state import CODE_TTL, TelegramState, parse_token
 
 _LOGGER = logging.getLogger(__name__)
 
 ACTION_SET_BOT = "telegram_set_bot"
 ACTION_REMOVE_BOT = "telegram_remove_bot"
-OPEN_URL = "https://svitgrid.app/open?route=/"
 
 
 async def telegram_state(hass) -> TelegramState:
@@ -95,9 +94,21 @@ async def _body_dict(request) -> dict | None:
     return body if isinstance(body, dict) else None
 
 
-def _station_title(hass) -> str:
-    entries = hass.config_entries.async_entries(DOMAIN)
-    return entries[0].title if entries and entries[0].title else "Svitgrid"
+def _runtime(hass, state: TelegramState) -> TelegramRuntime:
+    """The install's runtime, or a one-off one for a station that has not started it."""
+    runtime = hass.data.get(DOMAIN, {}).get("telegram")
+    if isinstance(runtime, TelegramRuntime):
+        return runtime
+    return TelegramRuntime(
+        hass, state, lambda: async_get_clientsession(hass), lambda: datetime.now(UTC)
+    )
+
+
+_TEST_ERRORS = {
+    TestOutcome.NOT_LINKED: (409, "not_linked"),
+    TestOutcome.INVALID_TOKEN: (400, "invalid_token"),
+    TestOutcome.UNREACHABLE: (502, "telegram_unreachable"),
+}
 
 
 class SvitgridTelegramView(HomeAssistantView):
@@ -232,25 +243,9 @@ class SvitgridTelegramTestView(HomeAssistantView):
             return error
         hass = request.app["hass"]
         state = await telegram_state(hass)
-        token = state.token()
-        chat = state.chat_for(device_id)
-        if token is None or chat is None:
-            return _json_error(409, "not_linked")
-        html = copy.render("test", chat.language, station=_station_title(hass))
-        button = (copy.open_button(chat.language), OPEN_URL)
-        api = BotApi(async_get_clientsession(hass), token)
-        try:
-            result = await api.send(chat.chat_id, html, button)
-        except InvalidToken:
-            await state.set_status("invalid_token")
-            return _json_error(400, "invalid_token")
-        except TelegramUnreachable:
-            return _json_error(502, "telegram_unreachable")
-        if result is SendResult.BLOCKED:
-            await state.unlink(device_id)
-            return _json_error(409, "not_linked")
-        if result is not SendResult.OK:
-            return _json_error(502, "telegram_unreachable")
+        outcome = await _runtime(hass, state).send_test(device_id)
+        if outcome is not TestOutcome.SENT:
+            return _json_error(*_TEST_ERRORS[outcome])
         return _json({"ok": True})
 
 

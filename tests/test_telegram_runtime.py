@@ -16,6 +16,7 @@ from custom_components.svitgrid.telegram.bot_api import (
     SendResult,
 )
 from custom_components.svitgrid.telegram.runtime import TelegramRuntime
+from custom_components.svitgrid.telegram.runtime import TestOutcome as Outcome
 from custom_components.svitgrid.telegram.state import Chat
 
 TOKEN = "123456:" + "A" * 35
@@ -292,25 +293,110 @@ async def test_queue_caps_at_50(setup):
     assert queue[-1]["kind"] == "outage" and queue[-1]["createdAtMs"] == NOW_MS + 300_000
 
 
-async def test_sends_oldest_created_first(setup):
+async def test_sends_in_event_order(setup):
     rt, state, api, _, _ = setup
     _chat(state, "phone-1", 11)
     _chat(state, "phone-2", 22)
-    await state.set_queue([_entry(2, NOW_MS, "phone-2"), _entry(1, NOW_MS - 5000, "phone-1")])
+    later = {**_entry(1, NOW_MS - 5000, "phone-1"), "eventAtMs": NOW_MS - 1000}
+    earlier = {**_entry(2, NOW_MS, "phone-2"), "eventAtMs": NOW_MS - 9000}
+    await state.set_queue([later, earlier])
     await rt.start()
     await _settle(rt)
-    assert [c for c, _, _ in api.sent] == [11, 22]
+    assert [c for c, _, _ in api.sent] == [22, 11]
+
+
+async def test_malformed_entry_is_dropped_not_retried(setup):
+    rt, state, api, _, sleeps = setup
+    _chat(state, "phone-1", 11)
+    await state.set_queue(
+        [
+            {**_entry(1, NOW_MS - 3000), "kind": None},
+            {**_entry(2, NOW_MS - 2000), "kind": "bogus"},
+            _entry(3, NOW_MS - 1000),
+        ]
+    )
+    await rt.start()
+    await _settle(rt)
+    assert len(api.sent) == 1 and sleeps == []
+    assert state.queue() == []
+
+
+async def test_unexpected_send_error_drops_the_entry(setup):
+    rt, state, api, _, sleeps = setup
+    _chat(state, "phone-1", 11)
+    _chat(state, "phone-2", 22)
+    api.results[11] = [RuntimeError("boom")]
+    await rt.start()
+    await _outage(rt)
+    await _settle(rt)
+    assert [c for c, _, _ in api.sent] == [22]
+    assert sleeps == [] and state.queue() == []
+
+
+async def test_sender_survives_a_storage_error(setup):
+    rt, state, api, _, sleeps = setup
+    _chat(state, "phone-1", 11)
+    real = rt._next_entry
+    calls = []
+
+    async def flaky():
+        calls.append(1)
+        if len(calls) == 1:
+            raise OSError("disk")
+        return await real()
+
+    rt._next_entry = flaky
+    await rt.start()
+    await _outage(rt)
+    await _settle(rt)
+    assert sleeps == [60]
+    assert len(api.sent) == 1
+
+
+async def test_poller_survives_an_unexpected_error(setup):
+    rt, state, api, clock, sleeps = setup
+    await rt.start()
+    await state.issue_code("phone-1", "uk", clock.now)
+    api.updates = [RuntimeError("boom"), []]
+    rt.wake()
+    await _until(lambda: len(api.update_calls) >= 3)
+    assert sleeps == [5]
+    assert not rt._poller.done()
+
+
+async def test_setup_mid_outage_sends_outage_not_lone_restore(setup):
+    rt, state, api, clock, _ = setup
+    await rt.start()
+    await _outage(rt)  # no chat linked yet
+    assert state.detector() == {}
+    _chat(state, "phone-1", 11)
+    clock.now += timedelta(minutes=1)
+    await rt.on_reading("hh1", "inv1", {"gridPresent": True})
+    await _settle(rt)
+    assert api.sent == []  # no lone restore
+    await _outage(rt)
+    clock.now += timedelta(minutes=1)
+    await rt.on_reading("hh1", "inv1", {"gridPresent": True})
+    await _settle(rt)
+    assert ["<b>Відключення" in h for _, h, _ in api.sent] == [True, False]
 
 
 async def test_send_test(setup):
     rt, state, api, _, _ = setup
     _chat(state, "phone-1", 11)
-    assert await rt.send_test("phone-1") is True
+    assert await rt.send_test("phone-1") is Outcome.SENT
     assert api.sent[0][0] == 11 and api.sent[0][2] == ("Відкрити в Svitgrid", OPEN_URL)
-    assert await rt.send_test("phone-9") is False
+    assert await rt.send_test("phone-9") is Outcome.NOT_LINKED
+    api.results[11] = [SendResult.RETRY]
+    assert await rt.send_test("phone-1") is Outcome.UNREACHABLE
+    api.results[11] = [InvalidToken("x")]
+    assert await rt.send_test("phone-1") is Outcome.INVALID_TOKEN
+    assert state.status == "invalid_token"
     api.results[11] = [SendResult.BLOCKED]
-    assert await rt.send_test("phone-1") is False
+    assert await rt.send_test("phone-1") is Outcome.NOT_LINKED
     assert state.chat_for("phone-1") is None
+    await state.clear()
+    assert await rt.send_test("phone-1") is Outcome.NOT_LINKED
 
 
 async def test_poller_idle_without_codes(setup):

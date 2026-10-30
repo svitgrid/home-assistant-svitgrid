@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import enum
 import logging
 import re
 import uuid
@@ -25,7 +26,6 @@ from . import copy
 from .bot_api import BotApi, BotInUseElsewhere, InvalidToken, SendResult, TelegramUnreachable
 from .detector import evaluate
 from .state import TelegramState
-from .views import OPEN_URL, _station_title
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -35,10 +35,28 @@ POLL_ERROR_S = 5
 MAX_QUEUE = 50
 MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
 
+OPEN_URL = "https://svitgrid.app/open?route=/"
+ALERT_KINDS = ("outage", "grid_restored")
+
 STATUS_INVALID_TOKEN = "invalid_token"
 STATUS_IN_USE = "bot_in_use_elsewhere"
 
 _START_RE = re.compile(r"/start(?:@[A-Za-z0-9_]+)?\s+(\S+)")
+
+
+class TestOutcome(enum.Enum):
+    """What `send_test` did. The /test route maps each to a status code."""
+
+    SENT = "sent"
+    NOT_LINKED = "not_linked"
+    INVALID_TOKEN = "invalid_token"
+    UNREACHABLE = "unreachable"
+
+
+def station_title(hass) -> str:
+    """The first entry's title, or "Svitgrid"."""
+    entries = hass.config_entries.async_entries(DOMAIN)
+    return entries[0].title if entries and entries[0].title else "Svitgrid"
 
 
 def _noop() -> None:
@@ -50,12 +68,17 @@ def _int(value: Any) -> int:
 
 
 def _order(entry: dict[str, Any]) -> tuple[int, int]:
-    return (_int(entry.get("createdAtMs")), _int(entry.get("eventAtMs")))
+    """Send order: the event time, then the time the entry was queued."""
+    return (_int(entry.get("eventAtMs")), _int(entry.get("createdAtMs")))
 
 
 def _trim(queue: list[dict[str, Any]], now_ms: int) -> list[dict[str, Any]]:
-    """Drop entries older than 7 days and keep the newest 50, oldest first."""
-    fresh = [e for e in queue if isinstance(e, dict) and _order(e)[0] >= now_ms - MAX_AGE_MS]
+    """Drop entries queued over 7 days ago and keep the newest 50, in send order."""
+    fresh = [
+        e
+        for e in queue
+        if isinstance(e, dict) and _int(e.get("createdAtMs")) >= now_ms - MAX_AGE_MS
+    ]
     return sorted(fresh, key=_order)[-MAX_QUEUE:]
 
 
@@ -141,21 +164,26 @@ class TelegramRuntime:
                 if entry.title:
                     return entry.title
                 break
-        return _station_title(self._hass)
+        return station_title(self._hass)
 
     # Readings
 
     async def on_reading(self, household_id: str, inverter_id: str, reading: dict) -> None:
-        """Run the detector on one reading and queue any alert for every enabled chat."""
+        """Run the detector on one reading and queue any alert for every enabled chat.
+
+        With no bot or no enabled chat the detector does not run, so an owner
+        who sets up during an outage first hears of the next outage, never a
+        lone restore.
+        """
         now_ms = self._now_ms()
         async with self._lock:
+            chats = [c for c in self._state.chats() if c.enabled]
+            if self._state.token() is None or not chats:
+                return
             detector, alerts = evaluate(
                 self._state.detector(), household_id, inverter_id, reading, now_ms
             )
             await self._state.set_detector(detector)
-            if not alerts or self._state.token() is None:
-                return
-            chats = [c for c in self._state.chats() if c.enabled]
             added = [
                 {
                     "id": uuid.uuid4().hex,
@@ -193,13 +221,21 @@ class TelegramRuntime:
             await self._state.set_queue([e for e in self._state.queue() if e.get(field) != value])
 
     async def _next_entry(self) -> dict[str, Any] | None:
-        """Trim the queue and return its oldest entry, dropping any whose chat is gone."""
+        """Trim the queue and return its first entry in send order.
+
+        Drops entries that are malformed or whose chat is gone or switched off.
+        """
         async with self._lock:
             queue = _trim(self._state.queue(), self._now_ms())
             live = []
             for entry in queue:
                 chat = self._state.chat_for(entry.get("chatDeviceId"))
-                if isinstance(entry.get("id"), str) and chat is not None and chat.enabled:
+                if (
+                    isinstance(entry.get("id"), str)
+                    and entry.get("kind") in ALERT_KINDS
+                    and chat is not None
+                    and chat.enabled
+                ):
                     live.append(entry)
             if live != self._state.queue():
                 await self._state.set_queue(live)
@@ -222,78 +258,102 @@ class TelegramRuntime:
 
     async def _send_loop(self) -> None:
         while self._can_send():
-            entry = await self._next_entry()
-            if entry is None:
-                return
-            chat = self._state.chat_for(entry["chatDeviceId"])
-            api = self._api()
-            if chat is None or api is None:
-                continue
-            button = (copy.open_button(chat.language), OPEN_URL)
             try:
-                result = await api.send(chat.chat_id, self._render(entry, chat.language), button)
-            except InvalidToken:
-                _LOGGER.warning("Telegram rejected the bot token; alerts wait for a new bot")
-                await self._state.set_status(STATUS_INVALID_TOKEN)
-                return
+                if not await self._send_next():
+                    return
             except Exception:  # noqa: BLE001
-                # A bug here must not end the sender for good.
-                _LOGGER.exception("Sending a Telegram alert failed")
-                result = SendResult.RETRY
-                api.retry_after_s = None
-            if result is SendResult.OK:
-                await self._drop("id", entry["id"])
-            elif result is SendResult.BLOCKED:
-                device_id = entry["chatDeviceId"]
-                _LOGGER.info("A Telegram chat blocked the bot; it is unlinked")
-                await self._state.unlink(device_id)
-                await self._drop("chatDeviceId", device_id)
-            elif result is SendResult.REJECTED:
-                _LOGGER.warning("Telegram rejected a queued %s alert; it is dropped", entry["kind"])
-                await self._drop("id", entry["id"])
-            else:
-                await self._sleep(getattr(api, "retry_after_s", None) or RETRY_S)
+                # A storage error must not end the sender for good.
+                _LOGGER.exception("The Telegram alert sender failed; retrying")
+                await self._sleep(RETRY_S)
 
-    async def send_test(self, device_id: str) -> bool:
-        """Send the test message to one device's chat. True when Telegram took it."""
+    async def _send_next(self) -> bool:
+        """Send the next entry. False when the sender should stop."""
+        entry = await self._next_entry()
+        if entry is None:
+            return False
+        chat = self._state.chat_for(entry["chatDeviceId"])
+        api = self._api()
+        if chat is None or api is None:
+            return True
+        button = (copy.open_button(chat.language), OPEN_URL)
+        try:
+            result = await api.send(chat.chat_id, self._render(entry, chat.language), button)
+        except InvalidToken:
+            _LOGGER.warning("Telegram rejected the bot token; alerts wait for a new bot")
+            await self._state.set_status(STATUS_INVALID_TOKEN)
+            return False
+        except Exception:  # noqa: BLE001
+            # Not a Telegram answer, so retrying the same entry cannot help.
+            _LOGGER.exception("A queued %s alert could not be sent; it is dropped", entry["kind"])
+            result = SendResult.REJECTED
+        if result is SendResult.OK:
+            await self._drop("id", entry["id"])
+        elif result is SendResult.BLOCKED:
+            device_id = entry["chatDeviceId"]
+            _LOGGER.info("A Telegram chat blocked the bot; it is unlinked")
+            await self._state.unlink(device_id)
+            await self._drop("chatDeviceId", device_id)
+        elif result is SendResult.REJECTED:
+            _LOGGER.warning("Telegram rejected a queued %s alert; it is dropped", entry["kind"])
+            await self._drop("id", entry["id"])
+        else:
+            await self._sleep(getattr(api, "retry_after_s", None) or RETRY_S)
+        return True
+
+    async def send_test(self, device_id: str) -> TestOutcome:
+        """Send the test message to one device's chat."""
         chat = self._state.chat_for(device_id)
         api = self._api()
         if chat is None or api is None:
-            return False
-        html = copy.render("test", chat.language, station=_station_title(self._hass))
+            return TestOutcome.NOT_LINKED
+        html = copy.render("test", chat.language, station=station_title(self._hass))
         button = (copy.open_button(chat.language), OPEN_URL)
         try:
             result = await api.send(chat.chat_id, html, button)
         except InvalidToken:
             await self._state.set_status(STATUS_INVALID_TOKEN)
-            return False
+            return TestOutcome.INVALID_TOKEN
+        if result is SendResult.OK:
+            return TestOutcome.SENT
         if result is SendResult.BLOCKED:
             await self._state.unlink(device_id)
-        return result is SendResult.OK
+            return TestOutcome.NOT_LINKED
+        return TestOutcome.UNREACHABLE
 
     # Link poller
 
     async def _poll_loop(self) -> None:
         while self._can_poll():
-            api = self._api()
-            if api is None:
-                return
             try:
-                updates = await api.get_updates(self._state.offset or None, POLL_TIMEOUT_S)
-            except BotInUseElsewhere:
-                _LOGGER.warning("Another client polls this Telegram bot; linking paused")
-                await self._state.set_status(STATUS_IN_USE)
-                return
-            except InvalidToken:
-                _LOGGER.warning("Telegram rejected the bot token; linking stopped")
-                await self._state.set_status(STATUS_INVALID_TOKEN)
-                return
-            except TelegramUnreachable:
+                if not await self._poll_once():
+                    return
+            except Exception:  # noqa: BLE001
+                # A storage error must not end the poller for good.
+                _LOGGER.exception("The Telegram link poller failed; retrying")
                 await self._sleep(POLL_ERROR_S)
-                continue
-            if self._state.status == STATUS_IN_USE:
-                await self._state.set_status(None)
-            await self._handle_updates(api, updates)
+
+    async def _poll_once(self) -> bool:
+        """One long poll. False when the poller should stop."""
+        api = self._api()
+        if api is None:
+            return False
+        try:
+            updates = await api.get_updates(self._state.offset or None, POLL_TIMEOUT_S)
+        except BotInUseElsewhere:
+            _LOGGER.warning("Another client polls this Telegram bot; linking paused")
+            await self._state.set_status(STATUS_IN_USE)
+            return False
+        except InvalidToken:
+            _LOGGER.warning("Telegram rejected the bot token; linking stopped")
+            await self._state.set_status(STATUS_INVALID_TOKEN)
+            return False
+        except TelegramUnreachable:
+            await self._sleep(POLL_ERROR_S)
+            return True
+        if self._state.status == STATUS_IN_USE:
+            await self._state.set_status(None)
+        await self._handle_updates(api, updates)
+        return True
 
     async def _handle_updates(self, api: BotApi, updates: list[dict]) -> None:
         ids = [u["update_id"] for u in updates if isinstance(u.get("update_id"), int)]
@@ -321,7 +381,7 @@ class TelegramRuntime:
                 _LOGGER.debug("A /start with an unknown or expired code was ignored")
                 continue
             _LOGGER.info("A Telegram chat was linked")
-            html = copy.render("linked", chat.language, station=_station_title(self._hass))
+            html = copy.render("linked", chat.language, station=station_title(self._hass))
             try:
                 await api.send(chat_id, html, None)
             except Exception:  # noqa: BLE001
