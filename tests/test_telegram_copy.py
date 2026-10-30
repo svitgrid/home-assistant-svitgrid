@@ -2,20 +2,18 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from custom_components.svitgrid.telegram import copy
 
-NOW = datetime(2026, 10, 30, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 10, 30, 12, 0, tzinfo=UTC)
 # 2026-10-30 09:05 UTC is 11:05 in Kyiv (EET, UTC+2, DST ended 2026-10-25).
-TODAY_EVENT = datetime(2026, 10, 30, 9, 5, tzinfo=timezone.utc)
+TODAY_EVENT = datetime(2026, 10, 30, 9, 5, tzinfo=UTC)
 
 
 def test_render_outage_uk():
     out = copy.render("outage", "uk", station="Дім", soc=78)
-    assert out == (
-        "<b>Відключення електроенергії</b>\nДім працює від батареї (78%)"
-    )
+    assert out == ("<b>Відключення електроенергії</b>\nДім працює від батареї (78%)")
 
 
 def test_render_falls_back_to_en_for_ja():
@@ -41,24 +39,29 @@ def test_linked_has_no_title_and_test_uses_test_copy():
     assert copy.render("linked", "en", station="S") == (
         "Done: this station's alerts will arrive here."
     )
-    assert copy.render("test", "en", station="S").startswith(
-        "<b>Test notification</b>\n"
-    )
+    assert copy.render("test", "en", station="S").startswith("<b>Test notification</b>\n")
 
 
 def test_event_time_in_station_zone_without_date_when_today():
     out = copy.render(
-        "grid_restored", "en", station="S",
-        event_at=TODAY_EVENT, tz="Europe/Kyiv", now=NOW,
+        "grid_restored",
+        "en",
+        station="S",
+        event_at=TODAY_EVENT,
+        tz="Europe/Kyiv",
+        now=NOW,
     )
     assert out.endswith("\n🕑 11:05")
 
 
 def test_event_time_shows_date_when_not_today():
     out = copy.render(
-        "grid_restored", "en", station="S",
-        event_at=datetime(2026, 10, 29, 21, 30, tzinfo=timezone.utc),
-        tz="Europe/Kyiv", now=NOW,
+        "grid_restored",
+        "en",
+        station="S",
+        event_at=datetime(2026, 10, 29, 21, 30, tzinfo=UTC),
+        tz="Europe/Kyiv",
+        now=NOW,
     )
     assert out.endswith("\n🕑 30.10 23:30") is False
     assert out.endswith("\n🕑 29.10 23:30")
@@ -67,7 +70,12 @@ def test_event_time_shows_date_when_not_today():
 def test_unknown_or_missing_tz_falls_back_to_utc():
     for tz in (None, "Not/AZone"):
         out = copy.render(
-            "outage", "en", station="S", soc=1,
-            event_at=TODAY_EVENT, tz=tz, now=NOW,
+            "outage",
+            "en",
+            station="S",
+            soc=1,
+            event_at=TODAY_EVENT,
+            tz=tz,
+            now=NOW,
         )
         assert out.endswith("\n🕑 09:05")

@@ -7,7 +7,6 @@ quote the URL, so they are caught and replaced without chaining.
 
 from __future__ import annotations
 
-import asyncio
 import enum
 from typing import Any
 
@@ -68,7 +67,7 @@ class BotApi:
                     body = await resp.json(content_type=None)
                 except (ValueError, aiohttp.ClientError):
                     body = None
-        except (aiohttp.ClientError, asyncio.TimeoutError, OSError):
+        except (TimeoutError, aiohttp.ClientError, OSError):
             raise TelegramUnreachable("Telegram request failed") from None
         if not isinstance(body, dict):
             body = {}

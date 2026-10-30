@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import html
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from importlib import resources
 from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -47,15 +47,15 @@ def _zone(tz: str | None):
             return ZoneInfo(tz)
         except (ZoneInfoNotFoundError, ValueError, OSError):
             pass
-    return timezone.utc
+    return UTC
 
 
 def _time_line(event_at: datetime, tz: str | None, now: datetime | None) -> str:
     zone = _zone(tz)
     if event_at.tzinfo is None:
-        event_at = event_at.replace(tzinfo=timezone.utc)
+        event_at = event_at.replace(tzinfo=UTC)
     local = event_at.astimezone(zone)
-    today = (now or datetime.now(timezone.utc)).astimezone(zone).date()
+    today = (now or datetime.now(UTC)).astimezone(zone).date()
     prefix = "" if local.date() == today else local.strftime("%d.%m ")
     return f"\n🕑 {prefix}{local.strftime('%H:%M')}"
 

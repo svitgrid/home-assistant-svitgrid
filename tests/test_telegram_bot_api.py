@@ -139,9 +139,7 @@ async def test_send_429_retries_with_retry_after(api, aioclient_mock):
 
 
 async def test_send_retry_after_resets(api, aioclient_mock):
-    aioclient_mock.post(
-        f"{BASE}/sendMessage", status=429, json={"parameters": {"retry_after": 7}}
-    )
+    aioclient_mock.post(f"{BASE}/sendMessage", status=429, json={"parameters": {"retry_after": 7}})
     await api.send(42, "hi", None)
     aioclient_mock.clear_requests()
     aioclient_mock.post(f"{BASE}/sendMessage", status=500, text="oops")
