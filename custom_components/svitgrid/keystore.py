@@ -165,6 +165,12 @@ class KeystoreState:
     # deviceId -> the edge boxes adopted for an edge island. Any number of
     # boxes; a keystore written before 0.26.0 has none.
     edge_boxes: dict[str, EdgeBoxEntry] = field(default_factory=dict)
+    # signingKeyId -> the edge boxes that do not hold the key yet. A key
+    # trusted over the LAN while a box is adopted is pending on every box: the
+    # integration cannot sign the box's `add_trusted_key`, so a phone the box
+    # already trusts has to (`/edge/keys/add`). A box drops off its key's list
+    # when it acks the `add_trusted_key` with success.
+    box_pending_keys: dict[str, list[str]] = field(default_factory=dict)
 
     def edge_boxes_list(self) -> list[EdgeBoxEntry]:
         """Every adopted edge box, in insertion order."""
@@ -362,6 +368,11 @@ class SvitgridKeystore:
                 )
                 if entry is not None
             },
+            box_pending_keys={
+                str(k): [d for d in v if isinstance(d, str) and d]
+                for k, v in dict(data.get("box_pending_keys") or {}).items()
+                if isinstance(v, list)
+            },
         )
 
     async def save(
@@ -399,6 +410,7 @@ class SvitgridKeystore:
         resolved_key_devices = current.key_devices if current is not None else {}
         resolved_revoked = current.revoked_key_ids if current is not None else []
         resolved_edge_boxes = current.edge_boxes if current is not None else {}
+        resolved_box_pending = current.box_pending_keys if current is not None else {}
         await self._write(
             KeystoreState(
                 api_key=api_key,
@@ -412,6 +424,7 @@ class SvitgridKeystore:
                 key_devices=resolved_key_devices,
                 revoked_key_ids=resolved_revoked,
                 edge_boxes=resolved_edge_boxes,
+                box_pending_keys=resolved_box_pending,
             )
         )
 
@@ -728,7 +741,8 @@ class SvitgridKeystore:
 
         The deliberate step that trusts a revoked key again: the owner
         approving a LAN pairing in Home Assistant. A no-op on an empty
-        keystore.
+        keystore. While edge boxes are adopted, the key is recorded as pending
+        on each of them (`box_pending_keys`); with none, nothing is recorded.
         """
         current = await self.load()
         if current is None:
@@ -739,7 +753,49 @@ class SvitgridKeystore:
             key_id: public_key_hex,
         }
         current.trusted_key_ids = sorted(current.trusted_public_keys_hex)
+        if current.edge_boxes:
+            current.box_pending_keys = {
+                **current.box_pending_keys,
+                key_id: list(current.edge_boxes),
+            }
         await self._write(current)
+
+    async def async_clear_box_pending(self, key_id: str, device_id: str) -> None:
+        """Record that box `device_id` holds `key_id`: it acked the key's
+        `add_trusted_key` with success. The key leaves `box_pending_keys` when
+        no box is left waiting for it."""
+        current = await self.load()
+        if current is None or device_id not in current.box_pending_keys.get(key_id, []):
+            return
+        waiting = [d for d in current.box_pending_keys[key_id] if d != device_id]
+        pending = {k: v for k, v in current.box_pending_keys.items() if k != key_id}
+        if waiting:
+            pending[key_id] = waiting
+        current.box_pending_keys = pending
+        await self._write(current)
+
+    async def async_list_pending_box_keys(self) -> list[dict[str, Any]]:
+        """The keys trusted here that an adopted box does not hold yet:
+        `[{keyId, label, publicKeyHex}]`. `label` names the phone the key is
+        linked to, or is None. A key no longer trusted, or pending only on a
+        box since forgotten, is not listed."""
+        current = await self.load()
+        if current is None:
+            return []
+        listed = []
+        for key_id, device_ids in current.box_pending_keys.items():
+            public_key_hex = current.trusted_public_keys_hex.get(key_id)
+            if public_key_hex is None or not set(device_ids) & set(current.edge_boxes):
+                continue
+            phone = current.island_keys.get(current.key_devices.get(key_id) or "")
+            listed.append(
+                {
+                    "keyId": key_id,
+                    "label": phone.get("label") if isinstance(phone, dict) else None,
+                    "publicKeyHex": public_key_hex,
+                }
+            )
+        return listed
 
     async def async_untrust_entry_keys(self, key_ids: set[str], *, keep_last: bool) -> list[str]:
         """Untrust `key_ids` and drop their phone links, in one write.

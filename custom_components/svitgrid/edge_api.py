@@ -34,10 +34,11 @@ from aiohttp import web
 from homeassistant.components.http import HomeAssistantView
 
 from . import edge_reading_pipeline
-from .const import DOMAIN
+from .const import ADD_TRUSTED_KEY_COMMAND, DOMAIN
 from .keystore import EdgeBoxEntry, KeystoreState
 from .settings_read_plan import settings_snapshot_kind_for
 from .settings_sync import store_edge_settings_snapshot
+from .signing import compute_key_id
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -535,7 +536,9 @@ def _command_for_box(row: dict) -> dict:
         "inverterId": row["inverter_id"],
     }
     signing = row.get("signing") or {}
-    for key in ("signedEventData", "signature", "signingKeyId"):
+    # `add_trusted_key` carries `signature` and `signerKeyId` beside its
+    # `payload`; every other signed command carries `signedEventData`.
+    for key in ("signedEventData", "signature", "signingKeyId", "signerKeyId"):
         if key in signing:
             command[key] = signing[key]
     return command
@@ -571,6 +574,16 @@ class EdgeCommandsPollView(_EdgeView):
         return self.json(body)
 
 
+async def _box_holds_key(hass, box: EdgeBoxEntry, payload) -> None:
+    """The box acked the `add_trusted_key` queued by `/edge/keys/add`: the
+    key is no longer pending on it."""
+    public_key_hex = payload.get("publicKeyHex") if isinstance(payload, dict) else None
+    keystore = (hass.data.get(DOMAIN) or {}).get("keystore")
+    if keystore is None or not isinstance(public_key_hex, str):
+        return
+    await keystore.async_clear_box_pending(compute_key_id(public_key_hex), box.device_id)
+
+
 class EdgeCommandAckView(_EdgeView):
     """The box's answer to one command. An id this box was not given answers
     200 `{"success": false, "status": "unknown"}`: a 4xx would only make the
@@ -599,6 +612,8 @@ class EdgeCommandAckView(_EdgeView):
             )
         if row is None:
             return self.json({"success": False, "status": "unknown"})
+        if row["command"] == ADD_TRUSTED_KEY_COMMAND and row["state"] == "success":
+            await _box_holds_key(request.app["hass"], box, row["payload"])
         return self.json({"success": True, "status": row["state"]})
 
 

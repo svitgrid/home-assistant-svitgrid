@@ -20,6 +20,9 @@ app directly:
   `clear_island_endpoint` that sends a box back to its cloud endpoint, and
   `GET /api/svitgrid/edge/commands/{command_id}` reports how a queued command
   stands.
+- `POST /api/svitgrid/edge/keys/add` queues the phone-signed
+  `add_trusted_key` for every adopted box, and revoking a key queues
+  `revoke_trusted_key` for each of them.
 
 The three writes carry the phone's island key in `X-Island-Key` and are
 signed by a trusted admin key over the canonical JSON of `signedData`, exactly
@@ -49,13 +52,19 @@ from homeassistant.config_entries import ConfigEntryState
 
 from .api_client import async_integration_version
 from .command_auth import verify_signed_command
-from .const import CONF_LOCAL_ONLY, DOMAIN
+from .const import (
+    ADD_TRUSTED_KEY_COMMAND,
+    CONF_LOCAL_ONLY,
+    DOMAIN,
+    REVOKE_TRUSTED_KEY_COMMAND,
+)
 from .edge_api import EDGE_BOX_LOCK, edge_refusals
 from .edge_api import _entry_state as _edge_poll_state
 from .entry_reload import update_entry_skipping_listener_reload
 from .island_auth import island_key_present_and_valid
 from .keystore import EdgeBoxEntry, LastAdminKey
 from .settings_sync import find_edge_settings_snapshot
+from .signing import compute_key_id, public_key_from_hex
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -368,7 +377,38 @@ async def revoke_signed_key(
         outcome["untrusted"],
         outcome["deviceId"],
     )
+    # The box takes a revocation without a signature (`command_auth.c`). A box
+    # that never held the key acks it as a no-op.
+    await _enqueue_for_every_box(
+        hass, REVOKE_TRUSTED_KEY_COMMAND, {"keyIdToRevoke": key_id}, signing=None, source="revoke"
+    )
     return outcome, None
+
+
+async def _enqueue_for_every_box(
+    hass, command: str, payload: dict, *, signing: dict | None, source: str
+) -> dict[str, str] | None:
+    """Queue `command` for every adopted edge box. Returns `{deviceId:
+    commandId}`, empty with no box adopted, or None when boxes are adopted
+    and no queue is running."""
+    keystore = hass.data.get(DOMAIN, {}).get("keystore")
+    state = await keystore.load() if keystore is not None else None
+    device_ids = list(state.edge_boxes) if state is not None else []
+    if not device_ids:
+        return {}
+    # The queue the box drains on its poll (`EdgeCommandsPollView`).
+    queue = (_edge_poll_state(hass) or {}).get("edge_queue")
+    if queue is None:
+        _LOGGER.warning(
+            "No edge command queue: %s not sent to %d box(es)", command, len(device_ids)
+        )
+        return None
+    return {
+        device_id: await queue.async_enqueue(
+            device_id, command, payload, signing=signing, inverter_id=None, source=source
+        )
+        for device_id in device_ids
+    }
 
 
 class SvitgridIslandStatusView(HomeAssistantView):
@@ -410,6 +450,7 @@ class SvitgridIslandStatusView(HomeAssistantView):
                 {k: status[k] for k in _ISLAND_STATUS_BOX_KEYS}
                 for status in [await _box_status(hass, box) for box in boxes]
             ]
+            body["pendingBoxKeys"] = await keystore.async_list_pending_box_keys()
         return web.json_response(body)
 
 
@@ -601,9 +642,12 @@ class SvitgridEdgeStatusView(HomeAssistantView):
     """GET /api/svitgrid/edge/status — every adopted edge box.
 
     Island key only. `{boxes: [{deviceId, bound, codeExpiresAt, lastContactAt,
-    version, pendingCommands, inverterIds, lastSettingsReadAt, lastRefusal}]}`.
-    `lastRefusal` is the last `pair_code_*` answer the box got, `{error, at}`,
-    so the app can tell an expired code from a box that never called.
+    version, pendingCommands, inverterIds, lastSettingsReadAt, lastRefusal}],
+    pendingBoxKeys: [{keyId, label, publicKeyHex}]}`. `lastRefusal` is the
+    last `pair_code_*` answer the box got, `{error, at}`, so the app can tell
+    an expired code from a box that never called. `pendingBoxKeys`, listed
+    once a box is adopted, are the keys trusted here that a box does not hold
+    yet (`/edge/keys/add`).
     """
 
     url = "/api/svitgrid/edge/status"
@@ -617,7 +661,10 @@ class SvitgridEdgeStatusView(HomeAssistantView):
         keystore = hass.data.get(DOMAIN, {}).get("keystore")
         state = await keystore.load() if keystore is not None else None
         boxes = list(state.edge_boxes.values()) if state is not None else []
-        return web.json_response({"boxes": [await _box_status(hass, box) for box in boxes]})
+        body: dict[str, Any] = {"boxes": [await _box_status(hass, box) for box in boxes]}
+        if boxes:
+            body["pendingBoxKeys"] = await keystore.async_list_pending_box_keys()
+        return web.json_response(body)
 
 
 async def _box_status(hass, box: EdgeBoxEntry) -> dict[str, Any]:
@@ -722,6 +769,79 @@ class SvitgridEdgeLeaveView(HomeAssistantView):
         return web.json_response({"commandId": command_id})
 
 
+def _box_key_command(raw) -> dict | None:
+    """The key-add body's `boxCommand` when it carries a phone signature for
+    the box: `payload` exactly `{publicKeyHex}`, `signature` and `signerKeyId`
+    (non-empty strings). None otherwise."""
+    if not isinstance(raw, dict):
+        return None
+    payload = raw.get("payload")
+    signature = raw.get("signature")
+    signer = raw.get("signerKeyId")
+    if not isinstance(payload, dict) or not isinstance(payload.get("publicKeyHex"), str):
+        return None
+    if not isinstance(signature, str) or not signature:
+        return None
+    if not isinstance(signer, str) or not signer:
+        return None
+    return {"payload": payload, "signature": signature, "signerKeyId": signer}
+
+
+class SvitgridEdgeKeyAddView(HomeAssistantView):
+    """POST /api/svitgrid/edge/keys/add — pass a phone's key to every box.
+
+    `signedData`: `{action: "edge_key_add", keyId, boxCommand, nonce, ts}`.
+    `boxCommand` is `{payload: {publicKeyHex}, signature, signerKeyId}`: the
+    phone's signature over the canonical `payload`, by a key the box already
+    trusts, which the box checks itself (`handle_key_management_command`).
+    The integration holds no key the box trusts, so a request without it is
+    400 `box_signature_required`. `keyId` must be the fingerprint of
+    `publicKeyHex`, or 400 `key_id_mismatch`. The `add_trusted_key` is queued
+    for every adopted box with `signature` and `signerKeyId` beside the
+    payload, where the box reads them; a box's success ack takes the key off
+    `pendingBoxKeys` for that box. Answers `{ok, commandIds: {deviceId:
+    commandId}}`. With no box adopted, 404 `no_edge_boxes`.
+    """
+
+    url = "/api/svitgrid/edge/keys/add"
+    name = "api:svitgrid:edge:keys:add"
+    requires_auth = False
+
+    async def post(self, request) -> web.Response:  # noqa: D102
+        signed, error = await signed_lan_request(request, ACTION_EDGE_KEY_ADD)
+        if error is not None:
+            return error
+        box_command = _box_key_command(signed.get("boxCommand"))
+        if box_command is None:
+            return _json_error(400, "box_signature_required")
+        payload = box_command["payload"]
+        if set(payload) != {"publicKeyHex"}:
+            return _json_error(
+                400, "bad_request", detail="boxCommand payload must be exactly publicKeyHex"
+            )
+        try:
+            public_key_from_hex(payload["publicKeyHex"])
+        except Exception:  # noqa: BLE001
+            return _json_error(400, "bad_public_key")
+        key_id = signed.get("keyId")
+        if not isinstance(key_id, str) or key_id != compute_key_id(payload["publicKeyHex"]):
+            return _json_error(400, "key_id_mismatch")
+        hass = request.app["hass"]
+        command_ids = await _enqueue_for_every_box(
+            hass,
+            ADD_TRUSTED_KEY_COMMAND,
+            payload,
+            signing={k: box_command[k] for k in ("signature", "signerKeyId")},
+            source="key_add",
+        )
+        if command_ids is None:
+            return _json_error(503, "unavailable")
+        if not command_ids:
+            return _json_error(404, "no_edge_boxes")
+        _LOGGER.info("Key %s queued for %d edge box(es) over the LAN", key_id, len(command_ids))
+        return web.json_response({"ok": True, "commandIds": command_ids})
+
+
 class SvitgridEdgeCommandView(HomeAssistantView):
     """GET /api/svitgrid/edge/commands/{command_id} — one queued command.
 
@@ -761,5 +881,6 @@ ISLAND_LAN_VIEWS = (
     SvitgridEdgeForgetView,
     SvitgridEdgeStatusView,
     SvitgridEdgeLeaveView,
+    SvitgridEdgeKeyAddView,
     SvitgridEdgeCommandView,
 )

@@ -958,11 +958,12 @@ class SvitgridTrustKeyView(HomeAssistantView):
         # approving a LAN pairing.
         if key_id in state.revoked_key_ids:
             return _json_error(409, "key_revoked")
-        trusted = dict(state.trusted_public_keys_hex)
-        trusted[key_id] = public_key_hex
-        await keystore.update_trusted_keys_hex(trusted)
+        # Also records the key as pending on every adopted edge box.
+        await keystore.async_trust_key(key_id, public_key_hex)
+        state = await keystore.load()
+        trusted = state.trusted_public_keys_hex if state is not None else {}
         _LOGGER.info("Trusted signing key %s over the LAN", key_id)
-        return self.json({"ok": True, "trustedKeyIds": sorted(trusted.keys())})
+        return self.json({"ok": True, "trustedKeyIds": sorted(trusted)})
 
 
 class SvitgridTrustKeyDetailView(HomeAssistantView):

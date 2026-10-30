@@ -621,3 +621,29 @@ async def test_revoke_rejects_a_missing_or_non_string_device_id():
     ):
         resp = await view.post(_req(hass, headers={"X-Island-Key": "k1"}, json_body=body))
         assert resp.status == 400, body
+
+
+# ── revoking over the LAN reaches every adopted edge box (Task 17) ─────────
+
+
+async def test_trust_key_delete_enqueues_revoke_trusted_key_for_each_box(hass, tmp_path):
+    from unittest.mock import patch
+
+    from custom_components.svitgrid.http_views import SvitgridTrustKeyDetailView
+    from tests.test_island_lan import NOW_MS, _Admin, _body, _leave_setup, _Req
+
+    with patch("custom_components.svitgrid.island_lan._now_ms", return_value=NOW_MS):
+        admin, queue = await _leave_setup(hass, tmp_path)
+        phone = _Admin()
+        ks = hass.data[DOMAIN]["keystore"]
+        await ks.async_trust_key(phone.key_id, phone.pub)
+
+        resp = await SvitgridTrustKeyDetailView().delete(
+            _Req(hass, admin.request("revoke_key", keyId=phone.key_id)), phone.key_id
+        )
+
+    assert resp.status == 200, _body(resp)
+    for device_id in ("EC-1", "EC-2"):
+        row = await queue.async_next_pending(device_id)
+        assert row["command"] == "revoke_trusted_key"
+        assert row["payload"] == {"keyIdToRevoke": phone.key_id}
