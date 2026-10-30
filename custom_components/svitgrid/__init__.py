@@ -66,7 +66,7 @@ from .harvest.write_executor import WriteExecutor
 from .http_views import ensure_hello_view, register_views
 from .inverter_entry import harvest_config_from_api
 from .island_event_store import IslandEventStore
-from .island_lan import is_true_island
+from .island_lan import _cloud_copy_of, is_true_island
 from .keystore import (
     ENTRY_ISLAND_DEVICE_IDS,
     ENTRY_TRUSTED_KEY_IDS,
@@ -84,12 +84,92 @@ from .reading_store import ReadingStore
 from .readings_publisher import run_loop as run_readings_loop
 from .settings_sync import find_edge_settings_snapshot
 from .settings_sync import settings_sync_loop as run_settings_sync_loop
-from .telegram.views import async_ensure_telegram_views, unlink_device
+from .telegram.runtime import TelegramRuntime, household_key
+from .telegram.views import async_ensure_telegram_views, telegram_state, unlink_device
 from .update import SvitgridUpdateCoordinator
 from .updater import read_installed_version
 from .zigbee_devices import ZigbeeDeviceStore
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _telegram_now() -> datetime:
+    """The clock island Telegram alerts are judged against. Tests pin it."""
+    return datetime.now(UTC)
+
+
+def _telegram_entry_for(hass: HomeAssistant, store_entry: ConfigEntry, inverter_id: str):
+    """The config entry an inverter's household belongs to.
+
+    The entry that lists the inverter, else the entry whose store took the
+    reading: an adopted edge box's inverters are listed by no entry, and their
+    readings land in the first entry's store (`edge_api._entry_state`).
+    """
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        if any(i.get("inverter_id") == inverter_id for i in entry.data.get("inverters") or []):
+            return entry
+    return store_entry
+
+
+async def _feed_telegram(hass: HomeAssistant, store_entry: ConfigEntry, reading: dict) -> None:
+    """Hand one stored reading to the Telegram runtime, for a full island only.
+
+    With the cloud copy on, the cloud sends the household's alerts (spec
+    decision 8), so the reading never reaches the detector.
+    """
+    runtime = (hass.data.get(DOMAIN) or {}).get("telegram")
+    inverter_id = reading.get("inverterId")
+    if not isinstance(runtime, TelegramRuntime) or not isinstance(inverter_id, str):
+        return
+    entry = _telegram_entry_for(hass, store_entry, inverter_id)
+    if _cloud_copy_of(entry):
+        return
+    await runtime.on_reading(household_key(entry), inverter_id, reading)
+
+
+async def _start_telegram(hass: HomeAssistant, entry: ConfigEntry, store) -> None:
+    """Start the install's one Telegram runtime and feed it this entry's readings.
+
+    The first entry set up starts the runtime; the last one unloaded stops it
+    (`_stop_telegram_if_last`). Never raises: alerts must not block setup.
+    """
+    try:
+        domain = hass.data.setdefault(DOMAIN, {})
+        if not isinstance(domain.get("telegram"), TelegramRuntime):
+            runtime = TelegramRuntime(
+                hass,
+                await telegram_state(hass),
+                lambda: aiohttp_client.async_get_clientsession(hass),
+                lambda: _telegram_now(),
+            )
+            domain["telegram"] = runtime
+            await runtime.start()
+        if store is not None:
+            entry.async_on_unload(
+                store.add_reading_listener(lambda reading: _feed_telegram(hass, entry, reading))
+            )
+    except Exception:  # noqa: BLE001
+        _LOGGER.exception("Could not start island Telegram alerts")
+
+
+async def _stop_telegram_if_last(hass: HomeAssistant) -> None:
+    """Stop the Telegram runtime once no config entry is set up."""
+    domain = hass.data.get(DOMAIN) or {}
+    if any(e.entry_id in domain for e in hass.config_entries.async_entries(DOMAIN)):
+        return
+    runtime = domain.pop("telegram", None)
+    if not isinstance(runtime, TelegramRuntime):
+        return
+    try:
+        await runtime.stop()
+        state = domain.get("telegram_state")
+        if state is not None:
+            # Write the detector state now, not after the save delay, so a
+            # restart right after the unload finds an ongoing outage and does
+            # not tell it twice.
+            await state.flush()
+    except Exception:  # noqa: BLE001
+        _LOGGER.exception("Could not stop island Telegram alerts")
 
 
 async def _edge_settings(hass: HomeAssistant, inverter_id: str) -> dict | None:
@@ -1263,6 +1343,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "bms_packs": bms_packs,
         "edge_boxes": [box.device_id for box in edge_boxes],
     }
+    await _start_telegram(hass, entry, store)
     await hass.config_entries.async_forward_entry_setups(
         entry, ["sensor", "binary_sensor", "update", "button"]
     )
@@ -1285,6 +1366,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
     remove_panel(hass)
     state = hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
+    await _stop_telegram_if_last(hass)
     if state is None:
         return True
     for task in (state.get("readings_tasks") or {}).values():

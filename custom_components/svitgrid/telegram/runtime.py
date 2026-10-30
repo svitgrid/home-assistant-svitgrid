@@ -53,6 +53,16 @@ class TestOutcome(enum.Enum):
     UNREACHABLE = "unreachable"
 
 
+def household_key(entry) -> str:
+    """The id the detector keys a config entry's household on.
+
+    The entry's household id, else its entry id: a local-only entry has no
+    household id. Every reading of one household must carry the same key, or
+    its outage state splits and the alert goes out twice.
+    """
+    return entry.data.get("household_id") or entry.entry_id
+
+
 def station_title(hass) -> str:
     """The first entry's title, or "Svitgrid"."""
     entries = hass.config_entries.async_entries(DOMAIN)
@@ -158,9 +168,7 @@ class TelegramRuntime:
 
     def _station(self, household_id: str | None) -> str:
         for entry in self._hass.config_entries.async_entries(DOMAIN):
-            if household_id and (
-                entry.data.get("household_id") == household_id or entry.entry_id == household_id
-            ):
+            if household_id and household_key(entry) == household_id:
                 if entry.title:
                     return entry.title
                 break

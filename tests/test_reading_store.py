@@ -634,3 +634,47 @@ async def test_grid_event_async_wrappers(tmp_path):
     }
     assert await store.add_grid_event(event) is True
     assert await store.latest_grid_event("inv-1") == event
+
+
+class _ExecHass:
+    async def async_add_executor_job(self, func, *args):
+        return func(*args)
+
+
+@pytest.mark.asyncio
+async def test_reading_listener_hears_each_append_after_the_write(tmp_path):
+    """Island Telegram alerts read every accepted reading through this hook."""
+    store = ReadingStore(_ExecHass(), str(tmp_path / "readings.db"))
+    heard: list[tuple[dict, int]] = []
+
+    async def listener(reading):
+        heard.append((reading, len(store._recent_sync(reading["inverterId"], 10))))
+
+    remove = store.add_reading_listener(listener)
+    reading = {"inverterId": "inv-1", "timestamp": "2026-10-30T10:00:00Z"}
+    await store.append(reading)
+    assert heard == [(reading, 1)]
+
+    remove()
+    await store.append({"inverterId": "inv-1", "timestamp": "2026-10-30T10:01:00Z"})
+    assert len(heard) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_failing_reading_listener_never_fails_the_append(tmp_path, caplog):
+    store = ReadingStore(_ExecHass(), str(tmp_path / "readings.db"))
+    heard: list[dict] = []
+
+    async def broken(reading):
+        raise RuntimeError("boom")
+
+    async def listener(reading):
+        heard.append(reading)
+
+    store.add_reading_listener(broken)
+    store.add_reading_listener(listener)
+    reading = {"inverterId": "inv-1", "timestamp": "2026-10-30T10:00:00Z"}
+    await store.append(reading)
+    assert store._recent_sync("inv-1", 10)[0]["payload"] == reading
+    assert heard == [reading]
+    assert "reading listener failed" in caplog.text

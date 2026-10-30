@@ -66,6 +66,7 @@ from .island_auth import island_key_present_and_valid
 from .keystore import EdgeBoxEntry, LastAdminKey
 from .settings_sync import find_edge_settings_snapshot
 from .signing import compute_key_id, public_key_from_hex
+from .telegram.runtime import household_key
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -320,8 +321,29 @@ class SvitgridIslandLeaveView(HomeAssistantView):
         if not cloud_entries:
             return _json_error(409, "no_cloud_identity")
         changed = _set_cloud_copy(hass, cloud_entries, True)
+        await _hand_telegram_back(hass, cloud_entries)
         _LOGGER.info("Left island mode over the LAN (%d entry/ies reloaded)", changed)
         return web.json_response({"ok": True})
+
+
+async def _hand_telegram_back(hass, left: list) -> None:
+    """The station stops sending island Telegram alerts for the entries that left.
+
+    Their readings already feed nothing, since the cloud copy is on. When no
+    entry on the install stays a full island, the station changes hands: its
+    bot, chats and queue go, as the spec's "When the station changes hands"
+    says. Otherwise only the queued alerts of the entries that left go.
+    """
+    state = (hass.data.get(DOMAIN) or {}).get("telegram_state")
+    if state is None:
+        return
+    if all(_cloud_copy_of(e) for e in _entries(hass)):
+        await state.clear()
+        return
+    gone = {household_key(e) for e in left}
+    kept = [q for q in state.queue() if q.get("householdId") not in gone]
+    if kept != state.queue():
+        await state.set_queue(kept)
 
 
 class SvitgridKeysRevokeView(HomeAssistantView):

@@ -5,13 +5,19 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import sqlite3
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
 
 from homeassistant.core import HomeAssistant
 
 from .local_time import local_day_of, local_day_window
+
+_LOGGER = logging.getLogger(__name__)
+
+ReadingListener = Callable[[dict[str, Any]], Awaitable[None]]
 
 # Give-up ceiling for per-row send retries (0.17.1). A row that has failed
 # this many times is permanently rejected server-side (per-item ok:false /
@@ -144,6 +150,18 @@ class ReadingStore:
         # that would bind to whatever loop happens to be current at construction,
         # which may differ from the running loop used by the sender.
         self._data_event: asyncio.Event | None = None
+        # Awaited with each reading once it is written (island Telegram alerts).
+        self._reading_listeners: list[ReadingListener] = []
+
+    def add_reading_listener(self, listener: ReadingListener) -> Callable[[], None]:
+        """Await `listener(reading)` after each append. Returns the remover."""
+        self._reading_listeners.append(listener)
+
+        def remove() -> None:
+            with contextlib.suppress(ValueError):
+                self._reading_listeners.remove(listener)
+
+        return remove
 
     def _ensure_event(self) -> asyncio.Event:
         """Return the data-available Event, creating it in the running loop on first use."""
@@ -1159,6 +1177,12 @@ class ReadingStore:
         await self._hass.async_add_executor_job(self._append_sync, reading)
         # Wake the sender immediately so the fresh reading is pushed within ~ms.
         self._signal_data_available()
+        for listener in list(self._reading_listeners):
+            try:
+                await listener(reading)
+            except Exception:  # noqa: BLE001
+                # The reading is stored; a listener must never fail its caller.
+                _LOGGER.exception("A reading listener failed")
 
     async def recent(self, inverter_id: str, limit: int) -> list[dict[str, Any]]:
         return await self._hass.async_add_executor_job(self._recent_sync, inverter_id, limit)
