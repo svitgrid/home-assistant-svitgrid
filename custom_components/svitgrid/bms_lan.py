@@ -422,9 +422,10 @@ class BmsImportView(_BmsView):
 
     Owner-signed, `signedData`: `{action: "bms_import", deviceId, packs:
     [{packId, label?, driver?}], nonce, ts}`; with the island key alone it is
-    403 `owner_only`. Answers `{imported: [packId], skipped: [{packId?,
-    reason}]}`: a pack the box has not reported is skipped (`not_reported`),
-    not kept for later, and so is a malformed entry (`bad_request`).
+    403 `owner_only`. Answers `{imported: [packId], pending: [packId],
+    skipped: [{packId?, reason}]}`: a pack the box has not reported yet is
+    kept for that box and applied when the box first reports it (`pending`);
+    a malformed entry is skipped (`bad_request`).
 
     A box Home Assistant manages has its roster changed (a new driver is sent
     as `bms_sync`); one it does not keeps no roster, because a box with none
@@ -464,6 +465,7 @@ class BmsImportView(_BmsView):
         else:
             held = {p["id"] for p in ((await packs.async_state(box_id)) or {}).get("packs", [])}
         wanted: dict[str, dict] = {}
+        pending: dict[str, dict] = {}
         skipped: list[dict] = []
         for item in signed["packs"]:
             item = item if isinstance(item, dict) else {}
@@ -474,17 +476,15 @@ class BmsImportView(_BmsView):
                 named = {"packId": item["packId"]} if isinstance(item.get("packId"), str) else {}
                 skipped.append({**named, "reason": "bad_request"})
                 continue
-            if pack_id not in held:
-                skipped.append({"packId": pack_id, "reason": "not_reported"})
-                continue
             fields = {}
             if label is not None:
                 fields["label"] = label
             if driver is not None:
                 fields["driver"] = driver
                 fields["driverSource"] = "owner"
-            wanted[pack_id] = fields
+            (wanted if pack_id in held else pending)[pack_id] = fields
 
+        await packs.async_import_pending(box_id, pending, settled=list(wanted))
         if roster is None:
             await packs.async_import(wanted)
         else:
@@ -501,7 +501,9 @@ class BmsImportView(_BmsView):
                 await bms_roster.async_deliver(
                     packs, queue, _household_id(hass), box_id, force=True
                 )
-        return web.json_response({"imported": list(wanted), "skipped": skipped})
+        return web.json_response(
+            {"imported": list(wanted), "pending": list(pending), "skipped": skipped}
+        )
 
 
 def _with(packs: list[dict], pack_id: str, **fields) -> list[dict]:
