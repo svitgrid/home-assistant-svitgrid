@@ -16,3 +16,4 @@ vendor() {
 }
 vendor island_telegram_copy.json "$COPY_DIR"
 vendor island_alert_cases.json "$FIXTURES_DIR"
+vendor island_telegram_contract.json "$FIXTURES_DIR"

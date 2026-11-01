@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, datetime
+from pathlib import Path
 
 import aiohttp
 import pytest
@@ -333,3 +335,138 @@ async def test_revoking_device_drops_its_pending_link_code(hass):
     assert resp.status == 200
     assert await state.claim_code(code, 88, None, datetime.now(UTC)) is None
     assert state.chat_for("phone-2") is None
+
+
+# ── the shared contract ─────────────────────────────────────────────────────
+# `island_telegram_contract.json` is written from the routes and held by the app
+# client and the phone station too. A case here that fails is a disagreement.
+
+CONTRACT = json.loads(
+    (Path(__file__).parent / "fixtures" / "island_telegram_contract.json").read_text()
+)
+CT = CONTRACT["token"]
+CT_BASE = f"https://api.telegram.org/bot{CT}"
+ROUTES = {r["id"]: r for r in CONTRACT["routes"]}
+HA_CASES = [c for c in CONTRACT["cases"] if "ha" in c["stations"] and not c.get("clientOnly")]
+_VIEWS = {
+    "get_status": (tv.SvitgridTelegramView, "get"),
+    "put_bot": (tv.SvitgridTelegramBotView, "put"),
+    "delete_bot": (tv.SvitgridTelegramBotView, "delete"),
+    "post_link": (tv.SvitgridTelegramLinkView, "post"),
+    "patch_me": (tv.SvitgridTelegramMeView, "patch"),
+    "delete_me": (tv.SvitgridTelegramMeView, "delete"),
+    "post_test": (tv.SvitgridTelegramTestView, "post"),
+}
+
+
+def _fill(value):
+    if value == "$token":
+        return CT
+    if isinstance(value, dict):
+        return {k: _fill(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_fill(v) for v in value]
+    return value
+
+
+def _script_telegram(aioclient_mock, script: str) -> None:
+    """Answer the Bot API as the contract's named script says."""
+    get_me = {"json": {"ok": True, "result": {"username": CONTRACT["botUsername"]}}}
+    webhook = {"json": {"ok": True, "result": {"url": ""}}}
+    send = {"json": {"ok": True, "result": {}}}
+    if script == "getMe_401":
+        get_me = {"status": 401, "json": {"ok": False}}
+    elif script == "getMe_down":
+        get_me = {"exc": aiohttp.ClientError("down")}
+    elif script == "webhook":
+        webhook = {"json": {"ok": True, "result": {"url": "https://x.example/hook"}}}
+    elif script == "send_403":
+        send = {"status": 403, "json": {"ok": False}}
+    elif script == "send_401":
+        send = {"status": 401, "json": {"ok": False}}
+    elif script == "send_down":
+        send = {"exc": aiohttp.ClientError("down")}
+    aioclient_mock.get(f"{CT_BASE}/getMe", **get_me)
+    aioclient_mock.get(f"{CT_BASE}/getWebhookInfo", **webhook)
+    aioclient_mock.post(f"{CT_BASE}/sendMessage", **send)
+
+
+def _ha_request(hass, case, admin, *, replay_of=None):
+    wire = case["request"]["ha"]
+    island_key = None if case.get("noIslandKey") else ISLAND_KEY
+    if wire["auth"] == "keyed":
+        return _Req(hass, _fill(wire["body"]), island_key=island_key)
+    if replay_of is not None:
+        return _Req(hass, replay_of, island_key=island_key)
+    fields = _fill(dict(wire["fields"]))
+    envelope = admin.request(fields.pop("action"), **fields)
+    tamper = case.get("tamper")
+    if tamper == "signature":
+        envelope["signature"] = "00" * 64
+    elif tamper == "stale_ts":
+        envelope = admin.signed({**envelope["signedData"], "ts": NOW_MS - 10 * 60 * 1000})
+    return _Req(hass, envelope, island_key=island_key)
+
+
+def _volatile_matches(value, pattern: str) -> bool:
+    if not isinstance(value, str):
+        return False
+    if pattern == "iso8601":
+        try:
+            datetime.fromisoformat(value)
+        except ValueError:
+            return False
+        return True
+    return re.fullmatch(pattern, value) is not None
+
+
+def test_contract_routes_are_the_views_routes():
+    served = set()
+    for view_cls in tv.TELEGRAM_VIEWS:
+        for method in ("get", "put", "post", "patch", "delete"):
+            if method in vars(view_cls):
+                served.add((method.upper(), view_cls.url))
+    assert served == {(r["method"], r["path"]) for r in CONTRACT["routes"]}
+    for rid, (view_cls, method) in _VIEWS.items():
+        assert view_cls.url == ROUTES[rid]["path"]
+        assert method.upper() == ROUTES[rid]["method"]
+
+
+@pytest.mark.parametrize("case", HA_CASES, ids=[c["id"] for c in HA_CASES])
+async def test_contract_case(hass, aioclient_mock, case):
+    admin, _, _, state = await _setup(hass)
+    if case.get("sends"):
+        MockConfigEntry(domain=DOMAIN, data={"cloud_ingest_enabled": False}).add_to_hass(hass)
+    if case["setup"] in ("bot", "linked"):
+        await state.set_bot(CT, CONTRACT["botUsername"])
+    if case["setup"] == "linked":
+        chat = CONTRACT["linkedChat"]
+        state._chats["phone-1"] = Chat(
+            "phone-1",
+            chat["chatId"],
+            chat["username"],
+            True,
+            chat["language"],
+            "2026-10-30T00:00:00+00:00",
+        )
+    _script_telegram(aioclient_mock, case.get("telegram", "ok"))
+
+    route = ROUTES[case["route"]]
+    assert route["auth"]["ha"].split(":")[0] == case["request"]["ha"]["auth"] or case.get(
+        "stationOnly"
+    )
+    view_cls, method = _VIEWS[case["route"]]
+    first = _ha_request(hass, case, admin)
+    if case.get("tamper") == "replay":
+        assert (await getattr(view_cls(), method)(first)).status == 200
+        first = _ha_request(hass, case, admin, replay_of=first._body)
+    resp = await getattr(view_cls(), method)(first)
+
+    reply = case["reply"]
+    assert resp.status == reply["status"], resp.text
+    actual = _body(resp)
+    expected = dict(reply["body"])
+    for key, pattern in reply.get("volatile", {}).items():
+        assert _volatile_matches(actual.pop(key, None), pattern), f"{case['id']}: {key}"
+        expected.pop(key)
+    assert actual == expected

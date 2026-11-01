@@ -1,0 +1,353 @@
+{
+  "description": "The island Telegram LAN contract, written from the ROUTES as implemented (add-on telegram/views.py and the phone station's PhoneTelegramStation.handle), not from the app client. The app client and both stations are held to it. Change all three together.",
+  "token": "123456:AAbbCCddEEffGGhhIIjjKKllMMnnOOpp_x",
+  "botUsername": "my_bot",
+  "linkedChat": { "chatId": 77, "username": "ann", "language": "uk" },
+  "stationKinds": {
+    "ha": "Home Assistant add-on. The two bot routes are signed (signedSend): the body is {signingKeyId, signedData, signature} and signedData holds the request's fields plus a nonce and ts in epoch milliseconds. Every other route is keyed (keyedSend).",
+    "phone": "Phone station. Every route is keyed (keyedSend), the bot routes included: the body is the flat fields, here {token}. No keypair is needed."
+  },
+  "setups": {
+    "no_bot": "The station holds no bot token. The calling phone is unlinked.",
+    "bot": "The station holds the token and the username in botUsername. The calling phone is unlinked.",
+    "linked": "As bot, and the calling phone is linked to linkedChat, enabled."
+  },
+  "sendsNote": "A case's sends is false unless the case says otherwise. HA: no config entry with the cloud copy off. Phone: no household with the cloud copy off. sends true: one entry or household has it off.",
+  "telegramScripts": {
+    "ok": "getMe answers {ok, result: {username: botUsername}}, getWebhookInfo answers an empty url, sendMessage answers 200.",
+    "getMe_401": "getMe answers HTTP 401.",
+    "getMe_down": "getMe fails at the transport.",
+    "webhook": "getWebhookInfo answers a non-empty url.",
+    "send_403": "sendMessage answers HTTP 403 (the user blocked the bot).",
+    "send_401": "sendMessage answers HTTP 401.",
+    "send_down": "sendMessage fails at the transport."
+  },
+  "matchers": "A case's reply.volatile names body fields compared by pattern instead of equality. A value starting with 'iso8601' means any ISO-8601 timestamp; any other value is a regular expression the whole string must match.",
+  "layers": "reply.layer 'server' marks a refusal the station's HTTP layer gives before any route runs (HA: the view's island-key check, phone: PhoneStationServer). The phone station's handle() is never reached, so island_telegram_test.dart skips it and phone_station_server_test.dart owns it.",
+  "routes": [
+    { "id": "get_status", "method": "GET", "path": "/api/svitgrid/telegram", "auth": { "ha": "keyed", "phone": "keyed" } },
+    { "id": "put_bot", "method": "PUT", "path": "/api/svitgrid/telegram/bot", "auth": { "ha": "signed:telegram_set_bot", "phone": "keyed" } },
+    { "id": "delete_bot", "method": "DELETE", "path": "/api/svitgrid/telegram/bot", "auth": { "ha": "signed:telegram_remove_bot", "phone": "keyed" } },
+    { "id": "post_link", "method": "POST", "path": "/api/svitgrid/telegram/link", "auth": { "ha": "keyed", "phone": "keyed" } },
+    { "id": "patch_me", "method": "PATCH", "path": "/api/svitgrid/telegram/me", "auth": { "ha": "keyed", "phone": "keyed" } },
+    { "id": "delete_me", "method": "DELETE", "path": "/api/svitgrid/telegram/me", "auth": { "ha": "keyed", "phone": "keyed" } },
+    { "id": "post_test", "method": "POST", "path": "/api/svitgrid/telegram/test", "auth": { "ha": "keyed", "phone": "keyed" } }
+  ],
+  "appErrors": [
+    "invalidToken", "botHasWebhook", "telegramUnreachable", "notSigner",
+    "noBot", "notLinked", "stationUnreachable", "failed"
+  ],
+  "errorCodes": [
+    { "status": 400, "code": "invalid_token", "appError": "invalidToken" },
+    { "status": 409, "code": "bot_has_webhook", "appError": "botHasWebhook" },
+    { "status": 502, "code": "telegram_unreachable", "appError": "telegramUnreachable" },
+    { "status": 403, "code": "signature_invalid", "appError": "notSigner" },
+    { "status": null, "code": "no_signing_key", "appError": "notSigner", "note": "Raised by the app itself when this phone holds no keypair; no station says it." },
+    { "status": 409, "code": "no_bot", "appError": "noBot" },
+    { "status": 409, "code": "not_linked", "appError": "notLinked" },
+    { "status": null, "code": "no_answer", "appError": "stationUnreachable", "note": "The station did not answer." },
+    { "status": 400, "code": "bad_request", "appError": "failed" },
+    { "status": 401, "code": "unauthorized", "appError": "failed" },
+    { "status": 403, "code": "stale_request", "appError": "failed" },
+    { "status": 403, "code": "replayed", "appError": "failed" },
+    { "status": 405, "code": "method_not_allowed", "appError": "failed" },
+    { "status": 500, "code": "boom", "appError": "failed" }
+  ],
+  "cases": [
+    {
+      "id": "get_no_bot", "route": "get_status", "stations": ["ha", "phone"], "setup": "no_bot",
+      "call": { "method": "status" },
+      "request": { "ha": { "auth": "keyed", "body": null }, "phone": { "auth": "keyed", "body": null } },
+      "reply": { "status": 200, "body": { "botConfigured": false, "botUsername": null, "status": null, "me": null, "chats": 0, "sends": false } },
+      "outcome": { "status": "ok" }
+    },
+    {
+      "id": "get_bot_unlinked", "route": "get_status", "stations": ["ha", "phone"], "setup": "bot",
+      "call": { "method": "status" },
+      "request": { "ha": { "auth": "keyed", "body": null }, "phone": { "auth": "keyed", "body": null } },
+      "reply": { "status": 200, "body": { "botConfigured": true, "botUsername": "my_bot", "status": null, "me": { "linked": false, "enabled": false, "username": null }, "chats": 0, "sends": false } },
+      "outcome": { "status": "ok" }
+    },
+    {
+      "id": "get_linked", "route": "get_status", "stations": ["ha", "phone"], "setup": "linked",
+      "call": { "method": "status" },
+      "request": { "ha": { "auth": "keyed", "body": null }, "phone": { "auth": "keyed", "body": null } },
+      "reply": { "status": 200, "body": { "botConfigured": true, "botUsername": "my_bot", "status": null, "me": { "linked": true, "enabled": true, "username": "ann" }, "chats": 1, "sends": false } },
+      "outcome": { "status": "ok" }
+    },
+    {
+      "id": "get_sends_true", "route": "get_status", "stations": ["ha", "phone"], "setup": "bot", "sends": true,
+      "call": { "method": "status" },
+      "request": { "ha": { "auth": "keyed", "body": null }, "phone": { "auth": "keyed", "body": null } },
+      "reply": { "status": 200, "body": { "botConfigured": true, "botUsername": "my_bot", "status": null, "me": { "linked": false, "enabled": false, "username": null }, "chats": 0, "sends": true } },
+      "outcome": { "status": "ok" }
+    },
+    {
+      "id": "get_without_island_key", "route": "get_status", "stations": ["ha", "phone"], "setup": "no_bot", "noIslandKey": true,
+      "call": { "method": "status" },
+      "request": { "ha": { "auth": "keyed", "body": null }, "phone": { "auth": "keyed", "body": null } },
+      "reply": { "status": 401, "layer": "server", "body": { "error": "unauthorized" } },
+      "outcome": { "status": "unreachable" }
+    },
+    {
+      "id": "get_older_station", "route": "get_status", "stations": ["ha", "phone"], "setup": null, "clientOnly": true,
+      "call": { "method": "status" },
+      "request": { "ha": { "auth": "keyed", "body": null }, "phone": { "auth": "keyed", "body": null } },
+      "reply": { "status": 404, "body": { "error": "not_found" } },
+      "outcome": { "status": "unsupported" }
+    },
+    {
+      "id": "get_no_answer", "route": "get_status", "stations": ["ha", "phone"], "setup": null, "clientOnly": true,
+      "call": { "method": "status" },
+      "request": { "ha": { "auth": "keyed", "body": null }, "phone": { "auth": "keyed", "body": null } },
+      "reply": null,
+      "outcome": { "status": "unreachable" }
+    },
+    {
+      "id": "put_bot_ok", "route": "put_bot", "stations": ["ha", "phone"], "setup": "no_bot", "telegram": "ok",
+      "call": { "method": "setBot", "token": "$token" },
+      "request": {
+        "ha": { "auth": "signed", "fields": { "action": "telegram_set_bot", "token": "$token" } },
+        "phone": { "auth": "keyed", "body": { "token": "$token" } }
+      },
+      "reply": { "status": 200, "body": { "botConfigured": true, "botUsername": "my_bot", "status": null, "me": { "linked": false, "enabled": false, "username": null }, "chats": 0, "sends": false } },
+      "outcome": { "result": "ok" }
+    },
+    {
+      "id": "put_bot_garbage_token", "route": "put_bot", "stations": ["ha", "phone"], "setup": "no_bot", "telegram": "ok",
+      "call": { "method": "setBot", "token": "nope" },
+      "request": {
+        "ha": { "auth": "signed", "fields": { "action": "telegram_set_bot", "token": "nope" } },
+        "phone": { "auth": "keyed", "body": { "token": "nope" } }
+      },
+      "reply": { "status": 400, "body": { "error": "invalid_token" } },
+      "outcome": { "error": "invalidToken" }
+    },
+    {
+      "id": "put_bot_telegram_refuses_token", "route": "put_bot", "stations": ["ha", "phone"], "setup": "no_bot", "telegram": "getMe_401",
+      "call": { "method": "setBot", "token": "$token" },
+      "request": {
+        "ha": { "auth": "signed", "fields": { "action": "telegram_set_bot", "token": "$token" } },
+        "phone": { "auth": "keyed", "body": { "token": "$token" } }
+      },
+      "reply": { "status": 400, "body": { "error": "invalid_token" } },
+      "outcome": { "error": "invalidToken" }
+    },
+    {
+      "id": "put_bot_has_webhook", "route": "put_bot", "stations": ["ha", "phone"], "setup": "no_bot", "telegram": "webhook",
+      "call": { "method": "setBot", "token": "$token" },
+      "request": {
+        "ha": { "auth": "signed", "fields": { "action": "telegram_set_bot", "token": "$token" } },
+        "phone": { "auth": "keyed", "body": { "token": "$token" } }
+      },
+      "reply": { "status": 409, "body": { "error": "bot_has_webhook" } },
+      "outcome": { "error": "botHasWebhook" }
+    },
+    {
+      "id": "put_bot_telegram_down", "route": "put_bot", "stations": ["ha", "phone"], "setup": "no_bot", "telegram": "getMe_down",
+      "call": { "method": "setBot", "token": "$token" },
+      "request": {
+        "ha": { "auth": "signed", "fields": { "action": "telegram_set_bot", "token": "$token" } },
+        "phone": { "auth": "keyed", "body": { "token": "$token" } }
+      },
+      "reply": { "status": 502, "body": { "error": "telegram_unreachable" } },
+      "outcome": { "error": "telegramUnreachable" }
+    },
+    {
+      "id": "put_bot_without_island_key", "route": "put_bot", "stations": ["ha", "phone"], "setup": "no_bot", "noIslandKey": true,
+      "call": { "method": "setBot", "token": "$token" },
+      "request": {
+        "ha": { "auth": "signed", "fields": { "action": "telegram_set_bot", "token": "$token" } },
+        "phone": { "auth": "keyed", "body": { "token": "$token" } }
+      },
+      "reply": { "status": 401, "layer": "server", "body": { "error": "unauthorized" } },
+      "outcome": { "error": "failed" }
+    },
+    {
+      "id": "put_bot_bad_signature", "route": "put_bot", "stations": ["ha"], "setup": "no_bot", "tamper": "signature",
+      "call": { "method": "setBot", "token": "$token" },
+      "request": { "ha": { "auth": "signed", "fields": { "action": "telegram_set_bot", "token": "$token" } } },
+      "reply": { "status": 403, "body": { "error": "signature_invalid" } },
+      "outcome": { "error": "notSigner" }
+    },
+    {
+      "id": "put_bot_stale_clock", "route": "put_bot", "stations": ["ha"], "setup": "no_bot", "tamper": "stale_ts",
+      "call": { "method": "setBot", "token": "$token" },
+      "request": { "ha": { "auth": "signed", "fields": { "action": "telegram_set_bot", "token": "$token" } } },
+      "reply": { "status": 403, "body": { "error": "stale_request" } },
+      "outcome": { "error": "failed" }
+    },
+    {
+      "id": "put_bot_replayed_nonce", "route": "put_bot", "stations": ["ha"], "setup": "no_bot", "tamper": "replay",
+      "call": { "method": "setBot", "token": "$token" },
+      "request": { "ha": { "auth": "signed", "fields": { "action": "telegram_set_bot", "token": "$token" } } },
+      "reply": { "status": 403, "body": { "error": "replayed" } },
+      "outcome": { "error": "failed" }
+    },
+    {
+      "id": "put_bot_flat_body_to_signed_station", "route": "put_bot", "stations": ["ha"], "setup": "no_bot", "stationOnly": true,
+      "request": { "ha": { "auth": "keyed", "body": { "token": "$token" } } },
+      "reply": { "status": 400, "body": { "error": "bad_request" } },
+      "outcome": { "error": "failed" }
+    },
+    {
+      "id": "put_bot_no_keypair", "route": "put_bot", "stations": ["ha"], "setup": "no_bot", "clientOnly": true, "noKeypair": true,
+      "call": { "method": "setBot", "token": "$token" },
+      "request": { "ha": null },
+      "reply": null,
+      "outcome": { "error": "notSigner", "code": "no_signing_key", "sendsNothing": true }
+    },
+    {
+      "id": "put_bot_no_answer", "route": "put_bot", "stations": ["ha", "phone"], "setup": "no_bot", "clientOnly": true,
+      "call": { "method": "setBot", "token": "$token" },
+      "request": {
+        "ha": { "auth": "signed", "fields": { "action": "telegram_set_bot", "token": "$token" } },
+        "phone": { "auth": "keyed", "body": { "token": "$token" } }
+      },
+      "reply": null,
+      "outcome": { "error": "stationUnreachable" }
+    },
+    {
+      "id": "delete_bot_ok", "route": "delete_bot", "stations": ["ha", "phone"], "setup": "linked",
+      "call": { "method": "removeBot" },
+      "request": {
+        "ha": { "auth": "signed", "fields": { "action": "telegram_remove_bot" } },
+        "phone": { "auth": "keyed", "body": null }
+      },
+      "reply": { "status": 200, "body": { "botConfigured": false, "botUsername": null, "status": null, "me": null, "chats": 0, "sends": false } },
+      "outcome": { "result": "ok" }
+    },
+    {
+      "id": "delete_bot_without_island_key", "route": "delete_bot", "stations": ["ha", "phone"], "setup": "linked", "noIslandKey": true,
+      "call": { "method": "removeBot" },
+      "request": {
+        "ha": { "auth": "signed", "fields": { "action": "telegram_remove_bot" } },
+        "phone": { "auth": "keyed", "body": null }
+      },
+      "reply": { "status": 401, "layer": "server", "body": { "error": "unauthorized" } },
+      "outcome": { "error": "failed" }
+    },
+    {
+      "id": "delete_bot_bad_signature", "route": "delete_bot", "stations": ["ha"], "setup": "linked", "tamper": "signature",
+      "call": { "method": "removeBot" },
+      "request": { "ha": { "auth": "signed", "fields": { "action": "telegram_remove_bot" } } },
+      "reply": { "status": 403, "body": { "error": "signature_invalid" } },
+      "outcome": { "error": "notSigner" }
+    },
+    {
+      "id": "link_ok", "route": "post_link", "stations": ["ha", "phone"], "setup": "bot",
+      "call": { "method": "link", "language": "uk" },
+      "request": { "ha": { "auth": "keyed", "body": { "language": "uk" } }, "phone": { "auth": "keyed", "body": { "language": "uk" } } },
+      "reply": {
+        "status": 200,
+        "body": { "url": "https://t.me/my_bot?start=CODE", "expiresAt": "2026-11-01T12:10:00+00:00" },
+        "volatile": { "url": "^https://t\\.me/my_bot\\?start=[A-Za-z0-9_-]+$", "expiresAt": "iso8601" }
+      },
+      "outcome": { "link": "$reply.url" }
+    },
+    {
+      "id": "link_empty_object_defaults_language", "route": "post_link", "stations": ["ha", "phone"], "setup": "bot", "stationOnly": true,
+      "request": { "ha": { "auth": "keyed", "body": {} }, "phone": { "auth": "keyed", "body": {} } },
+      "reply": {
+        "status": 200,
+        "body": { "url": "https://t.me/my_bot?start=CODE", "expiresAt": "2026-11-01T12:10:00+00:00" },
+        "volatile": { "url": "^https://t\\.me/my_bot\\?start=[A-Za-z0-9_-]+$", "expiresAt": "iso8601" }
+      }
+    },
+    {
+      "id": "link_no_bot", "route": "post_link", "stations": ["ha", "phone"], "setup": "no_bot",
+      "call": { "method": "link", "language": "uk" },
+      "request": { "ha": { "auth": "keyed", "body": { "language": "uk" } }, "phone": { "auth": "keyed", "body": { "language": "uk" } } },
+      "reply": { "status": 409, "body": { "error": "no_bot" } },
+      "outcome": { "error": "noBot" }
+    },
+    {
+      "id": "link_body_not_an_object", "route": "post_link", "stations": ["ha", "phone"], "setup": "bot", "stationOnly": true,
+      "request": { "ha": { "auth": "keyed", "body": [1] }, "phone": { "auth": "keyed", "body": [1] } },
+      "reply": { "status": 400, "body": { "error": "bad_request" } },
+      "outcome": { "error": "failed" }
+    },
+    {
+      "id": "link_reply_without_url", "route": "post_link", "stations": ["ha", "phone"], "setup": null, "clientOnly": true,
+      "call": { "method": "link", "language": "uk" },
+      "request": { "ha": { "auth": "keyed", "body": { "language": "uk" } }, "phone": { "auth": "keyed", "body": { "language": "uk" } } },
+      "reply": { "status": 200, "body": { "url": 5 } },
+      "outcome": { "error": "failed" }
+    },
+    {
+      "id": "me_disable", "route": "patch_me", "stations": ["ha", "phone"], "setup": "linked",
+      "call": { "method": "setEnabled", "enabled": false },
+      "request": { "ha": { "auth": "keyed", "body": { "enabled": false } }, "phone": { "auth": "keyed", "body": { "enabled": false } } },
+      "reply": { "status": 200, "body": { "botConfigured": true, "botUsername": "my_bot", "status": null, "me": { "linked": true, "enabled": false, "username": "ann" }, "chats": 1, "sends": false } },
+      "outcome": { "result": "ok" }
+    },
+    {
+      "id": "me_enabled_not_a_bool", "route": "patch_me", "stations": ["ha", "phone"], "setup": "linked", "stationOnly": true,
+      "request": { "ha": { "auth": "keyed", "body": { "enabled": "x" } }, "phone": { "auth": "keyed", "body": { "enabled": "x" } } },
+      "reply": { "status": 400, "body": { "error": "bad_request" } },
+      "outcome": { "error": "failed" }
+    },
+    {
+      "id": "me_unlink", "route": "delete_me", "stations": ["ha", "phone"], "setup": "linked",
+      "call": { "method": "unlink" },
+      "request": { "ha": { "auth": "keyed", "body": null }, "phone": { "auth": "keyed", "body": null } },
+      "reply": { "status": 200, "body": { "botConfigured": true, "botUsername": "my_bot", "status": null, "me": { "linked": false, "enabled": false, "username": null }, "chats": 0, "sends": false } },
+      "outcome": { "result": "ok" }
+    },
+    {
+      "id": "test_sent", "route": "post_test", "stations": ["ha", "phone"], "setup": "linked", "telegram": "ok",
+      "call": { "method": "sendTest" },
+      "request": { "ha": { "auth": "keyed", "body": null }, "phone": { "auth": "keyed", "body": null } },
+      "reply": { "status": 200, "body": { "ok": true } },
+      "outcome": { "result": "ok" }
+    },
+    {
+      "id": "test_not_linked", "route": "post_test", "stations": ["ha", "phone"], "setup": "bot", "telegram": "ok",
+      "call": { "method": "sendTest" },
+      "request": { "ha": { "auth": "keyed", "body": null }, "phone": { "auth": "keyed", "body": null } },
+      "reply": { "status": 409, "body": { "error": "not_linked" } },
+      "outcome": { "error": "notLinked" }
+    },
+    {
+      "id": "test_no_bot", "route": "post_test", "stations": ["ha", "phone"], "setup": "no_bot",
+      "call": { "method": "sendTest" },
+      "request": { "ha": { "auth": "keyed", "body": null }, "phone": { "auth": "keyed", "body": null } },
+      "reply": { "status": 409, "body": { "error": "not_linked" } },
+      "outcome": { "error": "notLinked" }
+    },
+    {
+      "id": "test_user_blocked_bot", "route": "post_test", "stations": ["ha", "phone"], "setup": "linked", "telegram": "send_403",
+      "call": { "method": "sendTest" },
+      "request": { "ha": { "auth": "keyed", "body": null }, "phone": { "auth": "keyed", "body": null } },
+      "reply": { "status": 409, "body": { "error": "not_linked" } },
+      "outcome": { "error": "notLinked" }
+    },
+    {
+      "id": "test_telegram_refuses_token", "route": "post_test", "stations": ["ha", "phone"], "setup": "linked", "telegram": "send_401",
+      "call": { "method": "sendTest" },
+      "request": { "ha": { "auth": "keyed", "body": null }, "phone": { "auth": "keyed", "body": null } },
+      "reply": { "status": 400, "body": { "error": "invalid_token" } },
+      "outcome": { "error": "invalidToken" }
+    },
+    {
+      "id": "test_telegram_down", "route": "post_test", "stations": ["ha", "phone"], "setup": "linked", "telegram": "send_down",
+      "call": { "method": "sendTest" },
+      "request": { "ha": { "auth": "keyed", "body": null }, "phone": { "auth": "keyed", "body": null } },
+      "reply": { "status": 502, "body": { "error": "telegram_unreachable" } },
+      "outcome": { "error": "telegramUnreachable" }
+    },
+    {
+      "id": "test_unknown_error_body", "route": "post_test", "stations": ["ha", "phone"], "setup": null, "clientOnly": true,
+      "call": { "method": "sendTest" },
+      "request": { "ha": { "auth": "keyed", "body": null }, "phone": { "auth": "keyed", "body": null } },
+      "reply": { "status": 500, "body": { "error": "boom" } },
+      "outcome": { "error": "failed" }
+    },
+    {
+      "id": "phone_wrong_method", "route": "post_test", "stations": ["phone"], "setup": "bot", "stationOnly": true, "methodOverride": "GET",
+      "request": { "phone": { "auth": "keyed", "body": null } },
+      "reply": { "status": 405, "body": { "error": "method_not_allowed" } },
+      "outcome": { "error": "failed" }
+    }
+  ]
+}
