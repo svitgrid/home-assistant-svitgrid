@@ -68,6 +68,27 @@ def test_missing_grid_present_is_derived_and_first_down_is_held():
     assert [(a.type, a.event_at_ms) for a in alerts] == [("grid_restored", t0 + 9 * MIN_MS)]
 
 
+def test_direct_harvest_per_phase_voltages_count_when_frequency_holds():
+    # A harvested reading carries gridVoltageL1..3, not phaseVoltages. The dead
+    # phases are the only sign of the outage when the frequency register holds.
+    t0 = 1_793_181_600_000
+    phases = {"gridVoltageL1": 0, "gridVoltageL2": 0, "gridVoltageL3": 0}
+    dead = {**phases, "gridFrequency": 50, "gridPower": 0, "batterySoc": 70}
+    live = {
+        "gridVoltageL1": 230,
+        "gridVoltageL2": 231,
+        "gridVoltageL3": 229,
+        "gridFrequency": 50,
+        "gridPower": 500,
+        "batterySoc": 70,
+    }
+    state, _ = evaluate({}, "hh1", "inv1", live, t0)
+    state, _ = evaluate(state, "hh1", "inv1", dead, t0 + MIN_MS)
+    state, _ = evaluate(state, "hh1", "inv1", dead, t0 + 2 * MIN_MS)
+    state, alerts = evaluate(state, "hh1", "inv1", dead, t0 + 7 * MIN_MS)
+    assert [(a.type, a.event_at_ms) for a in alerts] == [("outage", t0 + 2 * MIN_MS)]
+
+
 def test_restore_uses_reading_timestamp_when_present():
     t0 = 1_793_181_600_000
     edge = {

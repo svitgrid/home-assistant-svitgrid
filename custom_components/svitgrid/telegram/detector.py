@@ -26,6 +26,7 @@ from ..edge_reading_pipeline import (
     _parse_ms,
     derive_grid_present,
     js_round,
+    normalize_inbound_reading,
 )
 
 OUTAGE_DEBOUNCE_MS = 5 * 60 * 1000
@@ -55,7 +56,7 @@ def _grid_present(inv: dict, reading: dict) -> bool | None:
         raw = present if isinstance(present, bool) else None
         stored = raw
     else:
-        raw = derive_grid_present(reading)
+        raw = derive_grid_present(normalize_inbound_reading(reading))
         stored = _debounce_grid_present(raw, inv.get("rawGrid"), inv.get("storedGrid"))
     inv["rawGrid"] = raw
     inv["storedGrid"] = stored
