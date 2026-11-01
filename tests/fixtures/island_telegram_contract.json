@@ -93,7 +93,7 @@
       "id": "get_older_station", "route": "get_status", "stations": ["ha", "phone"], "setup": null, "clientOnly": true,
       "call": { "method": "status" },
       "request": { "ha": { "auth": "keyed", "body": null }, "phone": { "auth": "keyed", "body": null } },
-      "reply": { "status": 404, "body": { "error": "not_found" } },
+      "reply": { "status": 404, "body": null },
       "outcome": { "status": "unsupported" }
     },
     {
