@@ -840,6 +840,9 @@ async def _box_status(hass, box: EdgeBoxEntry) -> dict[str, Any]:
         "inverterIds": list(box.inverter_ids),
         "lastSettingsReadAt": max(read_ats) if read_ats else None,
         "lastRefusal": dict(refusal) if refusal is not None else None,
+        # Absent until the box reports one, which the app reads as a Zigbee
+        # module too old to answer.
+        **({"h2FirmwareVersion": h2} if (h2 := contact.get("h2FirmwareVersion")) else {}),
     }
 
 

@@ -2642,3 +2642,15 @@ async def test_a_moved_box_that_holds_its_inverters_gets_none(tmp_path):
     queue = await _bind_with_queue(tmp_path, _adopted_box(send_inverters=False))
 
     assert await queue.async_pending("EC-1", "add_inverter") == []
+
+
+@pytest.mark.asyncio
+async def test_telemetry_keeps_the_zigbee_module_version():
+    store = _FakeIngestStore()
+    hass = _hass_with_store(_keystore(_box(inverters={"inv-1": _INV_1})), store)
+    body = {"readings": [_reading()], "telemetry": {"h2FirmwareVersion": "0.22.27"}}
+
+    resp = await _call(edge_api.EdgeIngestBatchView, "post", hass, api_key=BOX_KEY, body=body)
+
+    assert resp.status == 200
+    assert store.box_states["EC-1"]["h2FirmwareVersion"] == "0.22.27"

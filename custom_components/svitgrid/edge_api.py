@@ -76,7 +76,7 @@ POLL_INTERVAL_IDLE_MS = 30000
 
 # The `telemetry` keys of an ingest batch kept as the box's state
 # (`heartbeat-canonical.json` in the firmware's tests names them).
-_TELEMETRY_STATE_KEYS = ("version", "uptime", "wifiRssi", "otaStatus")
+_TELEMETRY_STATE_KEYS = ("version", "uptime", "wifiRssi", "otaStatus", "h2FirmwareVersion")
 
 # The per-inverter keys of the cloud's `config` block that the box reads
 # (`config_sync_models_from_block`, the reconcile in `cloud_uploader.c`).

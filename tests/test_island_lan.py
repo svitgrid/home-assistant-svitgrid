@@ -2968,3 +2968,19 @@ async def test_edge_adopt_keeps_send_inverters(hass: HomeAssistant):
     boxes = (await ks.load()).edge_boxes
     assert boxes["EC-1"].send_inverters is True
     assert boxes["EC-2"].send_inverters is False
+
+
+async def test_edge_status_names_the_zigbee_module_version(hass: HomeAssistant, tmp_path):
+    from custom_components.svitgrid.edge_command_queue import EdgeCommandQueue
+
+    admin = _Admin()
+    await _keystore(hass, admin)
+    entry = _entry(hass)
+    queue = EdgeCommandQueue(str(tmp_path / "edge_commands.db"), None)
+    store = _EdgeStore(box_states={"EC-1": {"h2FirmwareVersion": "0.22.27"}})
+    _entry_state(hass, entry, store=store, queue=queue)
+    await _adopt(hass, admin, "EC-1", _inv("inv-1"))
+
+    resp = await _edge_status(hass)
+
+    assert _body(resp)["boxes"][0]["h2FirmwareVersion"] == "0.22.27"
