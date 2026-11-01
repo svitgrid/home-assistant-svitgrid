@@ -117,6 +117,7 @@ EDGE_ADOPT_INVERTER_KEYS = (
     "transport",
     "ipAddress",
     "loggerSerial",
+    "collectorSerial",
     "slaveId",
     "phases",
     "hasBattery",
@@ -672,7 +673,7 @@ class SvitgridEdgeAdoptView(HomeAssistantView):
     """POST /api/svitgrid/edge/adopt — adopt one edge box and its inverters.
 
     `signedData`: `{action: "edge_adopt", deviceId, inverters: [{inverterId,
-    modelId, ...}], pollIntervalMs?, zigbeeDevices?, nonce, ts}`. The box is
+    modelId, ...}], pollIntervalMs?, zigbeeDevices?, sendInverters?, nonce, ts}`. The box is
     stored unbound,
     with a fresh pairing code, which this answer carries in clear and nothing
     else ever does: `{ok, pairCode, expiresAt}`. Adopting the same box again
@@ -732,6 +733,10 @@ class SvitgridEdgeAdoptView(HomeAssistantView):
                     else datetime.now(UTC).isoformat(),
                     pair_code_hash=None,
                     pair_code_expires_at=None,
+                    # A new box the cloud assigned nothing: it gets its
+                    # inverters from here when it binds, because `config`
+                    # only prunes and renames what a box already holds.
+                    send_inverters=signed.get("sendInverters") is True,
                 )
             )
             code = await keystore.async_issue_pair_code(device_id)

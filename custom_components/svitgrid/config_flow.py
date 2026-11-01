@@ -1190,6 +1190,9 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
         session = self._local_session
         return self.async_create_entry(
             title=claim.station_name or "Svitgrid",
+            # Home Assistant opens its own integration page after a flow and
+            # offers no redirect, so the dialog before it links the panel.
+            description="open_panel",
             data={
                 CONF_LOCAL_ONLY: True,
                 # No account, so nothing to upload to.

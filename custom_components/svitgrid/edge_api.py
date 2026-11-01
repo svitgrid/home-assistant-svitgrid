@@ -93,6 +93,67 @@ _CONFIG_INVERTER_KEYS = (
 )
 
 
+# The keys of `add_inverter`, as the cloud sends it. The intervals are what
+# the app assigns a box in the cloud.
+_ADD_INVERTER_KEYS = (
+    "inverterId",
+    "modelId",
+    "protocolId",
+    "ipAddress",
+    "collectorSerial",
+    "phases",
+    "hasBattery",
+    "slaveId",
+    "batteryCapacityWh",
+)
+_ADD_INVERTER_POLLING_INTERVAL = 5
+_ADD_INVERTER_REPORTING_INTERVAL = 60
+
+
+def add_inverter_payload(inverter: dict) -> dict:
+    """`add_inverter`'s payload for one adopted inverter. The box refuses a
+    logger serial that is not a number, and the adopt stores it as sent."""
+    payload = {k: inverter[k] for k in _ADD_INVERTER_KEYS if inverter.get(k) is not None}
+    serial = inverter.get("loggerSerial")
+    if isinstance(serial, str) and serial.isdigit():
+        serial = int(serial)
+    if isinstance(serial, int) and not isinstance(serial, bool):
+        payload["loggerSerial"] = serial
+    payload["pollingInterval"] = _ADD_INVERTER_POLLING_INTERVAL
+    payload["reportingInterval"] = _ADD_INVERTER_REPORTING_INTERVAL
+    return payload
+
+
+async def _prepare_bound_box(hass, box: EdgeBoxEntry) -> None:
+    """Starts a box that just bound with a clean queue.
+
+    A move that rolled back leaves `clear_island_endpoint` waiting for this
+    box, and adopting it again must not send it straight back out. Then a new
+    box gets its inverters, which nothing else can give it.
+    """
+    queue = (_entry_state(hass) or {}).get("edge_queue")
+    if queue is None:
+        _LOGGER.warning("No edge command queue when box %s bound", box.device_id)
+        return
+    dropped = await queue.async_forget_device(box.device_id)
+    if dropped:
+        _LOGGER.info("Dropped %d stale command(s) for box %s", dropped, box.device_id)
+    if not box.send_inverters:
+        return
+    for inverter_id in box.inverter_ids:
+        adopted = box.inverters.get(inverter_id)
+        if adopted is None:
+            continue
+        await queue.async_enqueue(
+            box.device_id,
+            "add_inverter",
+            add_inverter_payload(adopted),
+            signing=None,
+            inverter_id=None,
+            source="adopt",
+        )
+
+
 def build_edge_config(box: EdgeBoxEntry) -> dict:
     """The `config` block for `box`, in the cloud's keys.
 
@@ -315,6 +376,7 @@ class _EdgeView(HomeAssistantView):
             return _refuse_pair_code(hass, PAIR_CODE_INVALID)
         edge_refusals(hass).pop(box.device_id, None)
         _LOGGER.info("Edge box %s bound its key with a pairing code", box.device_id)
+        await _prepare_bound_box(hass, box)
         return replace(box, api_key=api_key, pair_code_hash=None, pair_code_expires_at=None)
 
 

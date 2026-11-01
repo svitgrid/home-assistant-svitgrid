@@ -113,6 +113,9 @@ class EdgeBoxEntry:
     added_at: str
     pair_code_hash: str | None
     pair_code_expires_at: str | None
+    # A new box the cloud has assigned nothing: its inverters go to it as
+    # `add_inverter` when it binds (`sendInverters` on the adopt).
+    send_inverters: bool = False
 
 
 def _parse_edge_box(device_id: str, value: Any) -> EdgeBoxEntry | None:
@@ -139,6 +142,7 @@ def _parse_edge_box(device_id: str, value: Any) -> EdgeBoxEntry | None:
         added_at=value.get("added_at") if isinstance(value.get("added_at"), str) else "",
         pair_code_hash=_opt_str("pair_code_hash"),
         pair_code_expires_at=_opt_str("pair_code_expires_at"),
+        send_inverters=value.get("send_inverters") is True,
     )
 
 

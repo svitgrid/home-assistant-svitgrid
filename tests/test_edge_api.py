@@ -2567,3 +2567,78 @@ async def test_a_box_behind_the_roster_epoch_gets_bms_sync_again(tmp_path, monke
     await _ingest_bms(hass, _bms_report(rosterEpoch={"generation": "g-7f3a", "n": 9}))
     [fresh] = await _drain(queue)
     assert fresh["payload"]["generation"] != "g-7f3a"
+
+
+# ── A box that binds starts clean, and a new box gets its inverters ─────
+
+
+def _adopted_box(*, send_inverters) -> EdgeBoxEntry:
+    box = _box(
+        api_key=None,
+        inverters={
+            "inv-1": {
+                "inverterId": "inv-1",
+                "modelId": "deye_sg04lp3",
+                "ipAddress": "192.168.1.249",
+                "loggerSerial": "2799990001",
+                "slaveId": 1,
+                "phases": 3,
+                "hasBattery": True,
+            }
+        },
+    )
+    box.inverter_ids = ["inv-1"]
+    box.send_inverters = send_inverters
+    return box
+
+
+async def _bind_with_queue(tmp_path, box):
+    keystore = _keystore()
+    await keystore.async_add_edge_box(box)
+    code = await keystore.async_issue_pair_code(box.device_id)
+    queue = _real_queue(tmp_path)
+    await queue.async_enqueue(
+        box.device_id,
+        "clear_island_endpoint",
+        {},
+        signing=None,
+        inverter_id=None,
+        source="leave",
+    )
+    hass = _hass_with_queue(keystore, queue)
+    resp = await _me(hass, api_key="box-new-key", pair_code=code)
+    assert resp.status == 200
+    return queue
+
+
+@pytest.mark.asyncio
+async def test_a_new_box_gets_its_inverter_when_it_binds(tmp_path):
+    queue = await _bind_with_queue(tmp_path, _adopted_box(send_inverters=True))
+
+    rows = await queue.async_pending("EC-1", "add_inverter")
+    assert len(rows) == 1
+    assert rows[0]["payload"] == {
+        "inverterId": "inv-1",
+        "modelId": "deye_sg04lp3",
+        "ipAddress": "192.168.1.249",
+        "loggerSerial": 2799990001,
+        "phases": 3,
+        "hasBattery": True,
+        "slaveId": 1,
+        "pollingInterval": 5,
+        "reportingInterval": 60,
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_stale_leave_never_reaches_a_box_that_just_bound(tmp_path):
+    queue = await _bind_with_queue(tmp_path, _adopted_box(send_inverters=True))
+
+    assert await queue.async_pending("EC-1", "clear_island_endpoint") == []
+
+
+@pytest.mark.asyncio
+async def test_a_moved_box_that_holds_its_inverters_gets_none(tmp_path):
+    queue = await _bind_with_queue(tmp_path, _adopted_box(send_inverters=False))
+
+    assert await queue.async_pending("EC-1", "add_inverter") == []

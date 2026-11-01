@@ -2955,3 +2955,16 @@ async def test_bms_import_of_labels_alone_sends_a_managed_box_nothing(
 
     assert _body(resp)["imported"] == ["c0ffee000004"]
     assert await _drain_box(queue) == []
+
+
+async def test_edge_adopt_keeps_send_inverters(hass: HomeAssistant):
+    admin = _Admin()
+    ks = await _keystore(hass, admin)
+    _entry(hass)
+
+    await _adopt(hass, admin, "EC-1", _INV_DEYE, sendInverters=True)
+    await _adopt(hass, admin, "EC-2", dict(_INV_DEYE, inverterId="inv-other"))
+
+    boxes = (await ks.load()).edge_boxes
+    assert boxes["EC-1"].send_inverters is True
+    assert boxes["EC-2"].send_inverters is False

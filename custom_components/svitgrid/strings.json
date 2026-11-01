@@ -122,6 +122,9 @@
       "no_entities_selected": "Pick at least one sensor — otherwise the dashboard has nothing to show.",
       "no_collector_selected": "Choose which inverter this is.",
       "required": "This is required."
+    },
+    "create_entry": {
+      "open_panel": "Svitgrid is ready. [Open Svitgrid](/svitgrid)"
     }
   },
   "entity": {
