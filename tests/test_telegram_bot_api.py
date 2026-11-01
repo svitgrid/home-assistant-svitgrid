@@ -182,6 +182,25 @@ async def test_send_invalid_token_raises(api, aioclient_mock, status):
     assert TOKEN not in repr(err.value)
 
 
+async def test_api_base_defaults_when_env_unset(hass, aioclient_mock, monkeypatch):
+    monkeypatch.delenv("SVITGRID_TELEGRAM_API", raising=False)
+    api = BotApi(async_get_clientsession(hass), TOKEN)
+    aioclient_mock.get(f"{BASE}/getMe", json={"ok": True, "result": {"username": "my_bot"}})
+    assert await api.get_me() == "my_bot"
+    assert aioclient_mock.call_count == 1
+
+
+async def test_api_base_from_env_strips_one_trailing_slash(hass, aioclient_mock, monkeypatch):
+    monkeypatch.setenv("SVITGRID_TELEGRAM_API", "http://127.0.0.1:8081/")
+    api = BotApi(async_get_clientsession(hass), TOKEN)
+    aioclient_mock.get(
+        f"http://127.0.0.1:8081/bot{TOKEN}/getMe",
+        json={"ok": True, "result": {"username": "my_bot"}},
+    )
+    assert await api.get_me() == "my_bot"
+    assert aioclient_mock.call_count == 1
+
+
 async def test_send_429_without_parameters_has_no_retry_after(api, aioclient_mock):
     aioclient_mock.post(f"{BASE}/sendMessage", status=429, json={"ok": False})
     assert await api.send(42, "hi", None) is SendResult.RETRY

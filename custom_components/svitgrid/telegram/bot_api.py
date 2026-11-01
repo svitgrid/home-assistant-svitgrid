@@ -8,6 +8,7 @@ quote the URL, so they are caught and replaced without chaining.
 from __future__ import annotations
 
 import enum
+import os
 from typing import Any
 
 import aiohttp
@@ -40,6 +41,7 @@ class BotApi:
     def __init__(self, session: aiohttp.ClientSession, token: str) -> None:
         self._session = session
         self._token = token
+        self._api = os.environ.get("SVITGRID_TELEGRAM_API", _API).removesuffix("/")
         # Set by `send` on every call: the 429 hint, else None.
         self.retry_after_s: int | None = None
 
@@ -54,7 +56,7 @@ class BotApi:
         timeout_s: float = _CALL_TIMEOUT_S,
     ) -> tuple[int, dict[str, Any]]:
         """Return (status, JSON body). Raise TelegramUnreachable on a network error."""
-        url = f"{_API}/bot{self._token}/{api_method}"
+        url = f"{self._api}/bot{self._token}/{api_method}"
         try:
             async with self._session.request(
                 http_method,
