@@ -2654,3 +2654,48 @@ async def test_telemetry_keeps_the_zigbee_module_version():
 
     assert resp.status == 200
     assert store.box_states["EC-1"]["h2FirmwareVersion"] == "0.22.27"
+
+
+class _RecordingDevices:
+    def __init__(self):
+        self.updates = []
+
+    async def async_update(self, device_id, fields):
+        self.updates.append((device_id, fields))
+
+
+async def _ack_set_state(tmp_path, *, success):
+    queue = _real_queue(tmp_path)
+    command_id = await queue.async_enqueue(
+        "EC-1",
+        "set_state",
+        {"on": False},
+        signing=None,
+        inverter_id=None,
+        source="zigbee",
+        target={"smartDeviceId": "zb-1", "zigbeeAddr": "0x7d6b", "zigbeeEndpoint": 1},
+    )
+    await queue.async_next_pending("EC-1")
+    hass = _hass_with_queue(_keystore(_box()), queue)
+    devices = _RecordingDevices()
+    hass.data[DOMAIN][ENTRY_ID]["zigbee_devices"] = devices
+    resp = await _call(
+        edge_api.EdgeCommandAckView,
+        "post",
+        hass,
+        api_key=BOX_KEY,
+        body={"success": success},
+        match_info={"command_id": command_id},
+    )
+    assert resp.status == 200
+    return devices.updates
+
+
+@pytest.mark.asyncio
+async def test_a_set_state_the_box_ran_updates_the_stored_state(tmp_path):
+    assert await _ack_set_state(tmp_path, success=True) == [("zb-1", {"on": False})]
+
+
+@pytest.mark.asyncio
+async def test_a_set_state_that_failed_leaves_the_stored_state(tmp_path):
+    assert await _ack_set_state(tmp_path, success=False) == []

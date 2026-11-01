@@ -747,6 +747,16 @@ async def _box_holds_key(hass, box: EdgeBoxEntry, payload) -> None:
     await keystore.async_clear_box_pending(compute_key_id(public_key_hex), box.device_id)
 
 
+async def _apply_set_state(hass, row: dict) -> None:
+    """The box switched the device. Not every device reports the change on
+    its own, so without this the stored state stays on the old value."""
+    devices = (_entry_state(hass) or {}).get("zigbee_devices")
+    device_id = (row.get("target") or {}).get("smartDeviceId")
+    on = (row.get("payload") or {}).get("on")
+    if devices is not None and device_id and isinstance(on, bool):
+        await devices.async_update(device_id, {"on": on})
+
+
 class EdgeCommandAckView(_EdgeView):
     """The box's answer to one command. An id this box was not given answers
     200 `{"success": false, "status": "unknown"}`: a 4xx would only make the
@@ -787,6 +797,8 @@ class EdgeCommandAckView(_EdgeView):
             return self.json({"success": False, "status": "unknown"})
         if row["command"] == ADD_TRUSTED_KEY_COMMAND and row["state"] == "success":
             await _box_holds_key(request.app["hass"], box, row["payload"])
+        if row["command"] == "set_state" and row["state"] == "success":
+            await _apply_set_state(request.app["hass"], row)
         return self.json({"success": True, "status": row["state"]})
 
 
