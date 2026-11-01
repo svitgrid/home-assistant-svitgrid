@@ -497,7 +497,7 @@ class SvitgridIslandStatusView(HomeAssistantView):
         if boxes:
             # Only once a box is adopted: an install without one answers as before.
             body["edgeBoxes"] = [
-                {k: status[k] for k in _ISLAND_STATUS_BOX_KEYS}
+                {k: status[k] for k in _ISLAND_STATUS_BOX_KEYS if k in status}
                 for status in [await _box_status(hass, box) for box in boxes]
             ]
             body["pendingBoxKeys"] = await keystore.async_list_pending_box_keys()
@@ -529,7 +529,14 @@ def _inverter_adverts(hass, boxes: list[EdgeBoxEntry]) -> dict[str, dict]:
 
 
 # What `/island/status` says of each edge box; `/edge/status` says more.
-_ISLAND_STATUS_BOX_KEYS = ("deviceId", "lastContactAt", "version", "pendingCommands", "inverterIds")
+_ISLAND_STATUS_BOX_KEYS = (
+    "deviceId",
+    "lastContactAt",
+    "version",
+    "pendingCommands",
+    "inverterIds",
+    "h2FirmwareVersion",
+)
 
 
 def _wire_time(iso: str | None) -> str | None:

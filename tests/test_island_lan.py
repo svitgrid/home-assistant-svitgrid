@@ -2984,3 +2984,7 @@ async def test_edge_status_names_the_zigbee_module_version(hass: HomeAssistant, 
     resp = await _edge_status(hass)
 
     assert _body(resp)["boxes"][0]["h2FirmwareVersion"] == "0.22.27"
+
+    # The island status is the one the app reads for a true island's boards.
+    status = await SvitgridIslandStatusView().get(_Req(hass))
+    assert _body(status)["edgeBoxes"][0]["h2FirmwareVersion"] == "0.22.27"
