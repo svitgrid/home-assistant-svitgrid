@@ -48,12 +48,16 @@ from .const import (
 from .entry_reload import update_entry_skipping_listener_reload
 from .inverter_entry import harvest_config_from_api
 from .keystore import ENTRY_ISLAND_DEVICE_IDS, ENTRY_TRUSTED_KEY_IDS, SvitgridKeystore
+from .signing import compute_key_id, public_key_from_hex, verify_payload
 
 _LOGGER = logging.getLogger(__name__)
 
 # hass.data[DOMAIN] keys. `pending_pairing` holds ONLY the code, because
 # /hello publishes it unauthenticated; the session object lives apart from it.
 PENDING_PAIRING_KEY = "pending_pairing"
+# The phone key of a cloud claim the owner approved, on entry.data until setup
+# trusts it. It waits there because a first pairing has no keystore yet.
+PAIRING_PHONE_KEY = "pairing_phone_key"
 SESSION_KEY = "local_pairing"
 
 # How long pair-local holds a request while the owner decides (contract).
@@ -577,6 +581,33 @@ async def add_phone(hass: HomeAssistant, entry: Any, claim: LanClaim, role: str)
     update_entry_skipping_listener_reload(hass, entry, new_data)
     _LOGGER.info("Added phone %s to station %s as %s", claim.device_id, entry.entry_id, role)
     return ROLE_CONTROL if claim.signing_key_id in trusted else ROLE_VIEW
+
+
+def verified_phone_key(raw: Any) -> dict[str, str] | None:
+    """The key a cloud claim named for its phone, or None if it proves nothing.
+
+    The checks are `pair-local`'s: the id is the key's fingerprint, and the
+    signature shows the phone holds the private half. The cloud relays this
+    claim, so a failed check drops the key rather than the pairing: the phone
+    then has to join over the LAN, as it did before claims carried a key.
+    """
+    if not isinstance(raw, dict):
+        return None
+    key_id = raw.get("signingKeyId")
+    public_key_hex = raw.get("publicKeyHex")
+    signature = raw.get("signature")
+    if not all(isinstance(v, str) and v for v in (key_id, public_key_hex, signature)):
+        return None
+    try:
+        public_key_from_hex(public_key_hex)
+    except Exception:  # noqa: BLE001
+        return None
+    if key_id != compute_key_id(public_key_hex):
+        return None
+    proof = {"signingKeyId": key_id, "publicKeyHex": public_key_hex}
+    if not verify_payload(proof, signature, public_key_hex):
+        return None
+    return {"keyId": key_id, "publicKeyHex": public_key_hex}
 
 
 _ISLAND_KEY = re.compile(r"^[A-Za-z0-9_-]{43,512}$")

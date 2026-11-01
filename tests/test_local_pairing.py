@@ -47,7 +47,7 @@ from custom_components.svitgrid.http_views import (
     SvitgridPairLocalView,
 )
 from custom_components.svitgrid.keystore import SvitgridKeystore
-from custom_components.svitgrid.local_pairing import get_session
+from custom_components.svitgrid.local_pairing import PAIRING_PHONE_KEY, get_session
 from custom_components.svitgrid.pairing_client import PairingClaimed, PairingPending
 from custom_components.svitgrid.signing import compute_key_id, generate_keypair, sign_payload
 
@@ -672,6 +672,74 @@ async def test_a_cloud_claim_during_approval_is_asked_about_when_the_owner_rejec
 # /hello publishes the code to the whole network, so a stranger's signed-in
 # app can claim it through the cloud as easily as over the LAN. Nothing is
 # finalized until someone at the Home Assistant screen approves the claim.
+
+
+def _phone_key(**overrides) -> dict:
+    """What `/status` relays for the phone that made a claim."""
+    key_id, public_key_hex, signature = _app_key()
+    return {
+        "signingKeyId": key_id,
+        "publicKeyHex": public_key_hex,
+        "signature": signature,
+        **overrides,
+    }
+
+
+async def _approved_entry_data(hass: HomeAssistant, phone_key: dict | None) -> dict:
+    """Pair through the cloud as an island with the cloud copy off, approve it,
+    and return the data of the entry that made."""
+    claimed = PairingClaimed(
+        household_id="h1",
+        preset_id=None,
+        island=True,
+        cloud_ingest=False,
+        island_key=ISLAND_KEY,
+        phone_key=phone_key,
+    )
+    with _cloud(reachable=True, status=AsyncMock(return_value=claimed)):
+        result = await _start_flow(hass)
+        await _cloud_question(hass, result["flow_id"])
+        after = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {"next_step_id": "pair_cloud_approve"}
+        )
+    assert after["type"] == "create_entry"
+    return after["data"]
+
+
+async def test_an_approved_island_claim_carries_the_phones_key_to_the_entry(
+    hass: HomeAssistant, enable_custom_integrations
+) -> None:
+    phone_key = _phone_key()
+
+    data = await _approved_entry_data(hass, phone_key)
+
+    assert data[PAIRING_PHONE_KEY] == {
+        "keyId": phone_key["signingKeyId"],
+        "publicKeyHex": phone_key["publicKeyHex"],
+    }
+
+
+async def test_a_claim_from_an_older_app_pairs_with_no_phone_key(
+    hass: HomeAssistant, enable_custom_integrations
+) -> None:
+    assert PAIRING_PHONE_KEY not in await _approved_entry_data(hass, None)
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    [
+        pytest.param({"signature": "AAAA"}, id="no proof of possession"),
+        pytest.param({"signingKeyId": "not-the-fingerprint"}, id="id is not the key's"),
+        pytest.param({"publicKeyHex": "04zz"}, id="not a public key"),
+    ],
+)
+async def test_a_phone_key_that_proves_nothing_is_dropped(
+    hass: HomeAssistant, enable_custom_integrations, tamper: dict
+) -> None:
+    data = await _approved_entry_data(hass, _phone_key(**tamper))
+
+    assert PAIRING_PHONE_KEY not in data
+    assert data["island_key"] == ISLAND_KEY
 
 
 async def test_a_cloud_claim_asks_the_owner_before_anything_is_finalized(

@@ -76,6 +76,7 @@ from .keystore import (
     pairing_island_device_id,
 )
 from .lifecycle import DEPROVISIONED, LifecycleState
+from .local_pairing import PAIRING_PHONE_KEY
 from .mqtt_control import MqttControlState
 from .mqtt_wake import run_loop as run_mqtt_wake_loop
 from .panel import register_panel, remove_panel
@@ -821,6 +822,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     #
     # The key leaves, so the roster id holding it is recorded instead: it is
     # what async_remove_entry revokes (issue #6).
+    _adopted_id = None
     _pairing_island_key = data.get("island_key")
     if _pairing_island_key:
         _created_at = getattr(entry, "created_at", None)
@@ -837,6 +839,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _new_data[ENTRY_ISLAND_DEVICE_IDS] = sorted(
                 {*(entry.data.get(ENTRY_ISLAND_DEVICE_IDS) or []), _adopted_id}
             )
+        hass.config_entries.async_update_entry(entry, data=_new_data)
+        data = entry.data
+    # The phone of a cloud claim the owner approved: same once-only adoption.
+    # It is the keystore's to hold, because the keystore wins over the entry's
+    # trusted-keys snapshot.
+    _phone_key = data.get(PAIRING_PHONE_KEY)
+    if _phone_key:
+        await keystore.async_trust_key(_phone_key["keyId"], _phone_key["publicKeyHex"])
+        if _adopted_id is not None:
+            await keystore.async_link_signing_key(_phone_key["keyId"], _adopted_id)
+        _new_data = {k: v for k, v in entry.data.items() if k != PAIRING_PHONE_KEY}
+        _new_data[ENTRY_TRUSTED_KEY_IDS] = sorted(
+            {*(entry.data.get(ENTRY_TRUSTED_KEY_IDS) or []), _phone_key["keyId"]}
+        )
         hass.config_entries.async_update_entry(entry, data=_new_data)
         data = entry.data
     # What a LAN pairing granted: same once-only adoption as the island key

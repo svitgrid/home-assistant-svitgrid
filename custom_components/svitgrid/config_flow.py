@@ -374,6 +374,8 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
         self._shown_candidate: local_pairing.LanClaim | None = None
         # The cloud claim the approval question asked about, likewise.
         self._shown_cloud_claim: PairingClaimed | None = None
+        # The claim the owner approved. Only its phone key may be trusted.
+        self._approved_cloud_claim: PairingClaimed | None = None
         # Why the claim task ended without a claim, for async_step_pair_aborted.
         self._pair_abort_reason: str | None = None
         # Set when this Home Assistant already has a station: the pairing then
@@ -859,6 +861,14 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
             session.reject()
         return await self.async_step_pair()
 
+    def _approved_phone_key(self) -> dict[str, dict[str, str]]:
+        """Entry data for the phone of an island claim the owner approved."""
+        claim = self._claimed_status
+        if claim is None or claim is not self._approved_cloud_claim or not claim.island:
+            return {}
+        key = local_pairing.verified_phone_key(claim.phone_key)
+        return {local_pairing.PAIRING_PHONE_KEY: key} if key else {}
+
     async def async_step_pair_cloud_approval(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
@@ -886,6 +896,7 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
         if session is None or not session.approve_cloud(shown):
             return await self.async_step_pair()
         self._claimed_status = session.cloud_claim
+        self._approved_cloud_claim = session.cloud_claim
         self._stop_cloud_poll()
         local_pairing.close(self.hass, session)
         return await self.async_step_pair_finalize()
@@ -1160,6 +1171,9 @@ class SvitgridConfigFlow(EybondCollectorSteps, config_entries.ConfigFlow, domain
                 # installs (blob doesn't exist yet); entry.data is the durable
                 # hand-off channel.  Only written for island pairings.
                 **({"island_key": self._island_key} if self._island_key else {}),
+                # A signed-in phone's key reaches a true island no other way:
+                # the cloud loops that deliver trusted keys never start there.
+                **self._approved_phone_key(),
             },
         )
 

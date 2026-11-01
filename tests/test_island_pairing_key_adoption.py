@@ -24,6 +24,7 @@ from custom_components.svitgrid.keystore import (
     SvitgridKeystore,
     pairing_island_device_id,
 )
+from custom_components.svitgrid.local_pairing import PAIRING_PHONE_KEY
 from custom_components.svitgrid.reading_store import ReadingStore
 from tests.test_init_harvest_wiring import _ACTIVE_LIFECYCLE, _MINIMAL_SPEC, _make_entry
 
@@ -156,13 +157,15 @@ def _stub_store_side_effects():
         yield
 
 
-def _island_entry(hass, island_key: str | None = PAIRING_KEY):
+def _island_entry(hass, island_key: str | None = PAIRING_KEY, phone_key: dict | None = None):
     from pytest_homeassistant_custom_component.common import MockConfigEntry
 
     base = _make_entry(dict(_SNAKE))
     data = dict(base.data)
     if island_key is not None:
         data["island_key"] = island_key
+    if phone_key is not None:
+        data[PAIRING_PHONE_KEY] = phone_key
     entry = MockConfigEntry(domain=DOMAIN, version=2, title=base.title, data=data)
     entry.add_to_hass(hass)
     return entry
@@ -195,6 +198,39 @@ async def _setup(hass, entry):
         await hass.async_block_till_done()
         await async_unload_entry(hass, entry)
         await hass.async_block_till_done()
+
+
+PHONE_KEY = {"keyId": "phone-key", "publicKeyHex": "04" + "ab" * 64}
+
+
+@pytest.mark.asyncio
+async def test_setup_trusts_the_phone_the_owner_approved(hass, enable_custom_integrations):
+    entry = _island_entry(hass, phone_key=PHONE_KEY)
+
+    await _setup(hass, entry)
+
+    state = await SvitgridKeystore(hass).load()
+    assert state.trusted_public_keys_hex[PHONE_KEY["keyId"]] == PHONE_KEY["publicKeyHex"]
+    # Revoking the key has to take the phone's island key with it.
+    assert state.key_devices[PHONE_KEY["keyId"]] == pairing_island_device_id(PAIRING_KEY)
+    assert PAIRING_PHONE_KEY not in entry.data
+
+
+@pytest.mark.asyncio
+async def test_setup_trusts_the_phone_on_a_keystore_that_already_holds_keys(
+    hass, enable_custom_integrations
+):
+    """The keystore wins over the entry's snapshot of trusted keys, so a phone
+    key in that snapshot would be lost on a re-pairing."""
+    ks = SvitgridKeystore(hass)
+    await _prime(ks)
+    await ks.update_trusted_keys_hex({"earlier-key": "04" + "cd" * 64})
+    entry = _island_entry(hass, phone_key=PHONE_KEY)
+
+    await _setup(hass, entry)
+
+    trusted = (await SvitgridKeystore(hass).load()).trusted_public_keys_hex
+    assert set(trusted) >= {"earlier-key", PHONE_KEY["keyId"]}
 
 
 @pytest.mark.asyncio

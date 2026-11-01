@@ -56,6 +56,7 @@ class PairingClaimed:
     island: bool = False
     cloud_ingest: bool = True
     island_key: str | None = None
+    phone_key: dict[str, Any] | None = None
 
 
 class PairingClient:
@@ -96,6 +97,7 @@ class PairingClient:
                     island=bool(body.get("island", False)),
                     cloud_ingest=bool(body.get("cloudIngest", True)),
                     island_key=body.get("islandKey"),
+                    phone_key=body.get("phoneKey"),
                 )
             raise PairingError(f"unknown status: {body['status']}")
 

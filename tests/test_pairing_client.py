@@ -118,6 +118,20 @@ async def test_get_status_claimed_with_island_key(mock_session):
 
 
 @pytest.mark.asyncio
+async def test_get_status_claimed_with_phone_key(mock_session):
+    """get_status passes the claiming phone's key on, unchecked: the config
+    flow verifies it once the owner has approved the claim."""
+    phone_key = {"signingKeyId": "k", "publicKeyHex": "04ab", "signature": "c2ln"}
+    mock_session.get.return_value = _mock_response(
+        200,
+        {"status": "claimed", "householdId": "h", "island": True, "phoneKey": phone_key},
+    )
+    client = PairingClient(mock_session, api_base="https://api.example.com")
+    status = await client.get_status("secret-abc")
+    assert status.phone_key == phone_key
+
+
+@pytest.mark.asyncio
 async def test_get_status_claimed_without_island_key(mock_session):
     """get_status returns island_key=None when islandKey absent (non-island or app omitted it)."""
     mock_session.get.return_value = _mock_response(
