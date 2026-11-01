@@ -41,7 +41,7 @@ class BotApi:
     def __init__(self, session: aiohttp.ClientSession, token: str) -> None:
         self._session = session
         self._token = token
-        self._api = os.environ.get("SVITGRID_TELEGRAM_API", _API).removesuffix("/")
+        self._api = (os.environ.get("SVITGRID_TELEGRAM_API") or _API).removesuffix("/")
         # Set by `send` on every call: the 429 hint, else None.
         self.retry_after_s: int | None = None
 
