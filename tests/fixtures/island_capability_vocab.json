@@ -1,5 +1,5 @@
 {
-  "_comment": "The vocabulary of the `inverters` field of the Home Assistant integration's GET /api/svitgrid/island/status (edge island plan, Task 35). Each inverter reports {host, writableActions, modes}. host is one of `hosts`; writableActions names custom action types from `actionTypes`; modes names writing modes from `writingModes`. `brandKinds` is what each value of the integration's brand_kind (Task 13) advertises; for `priority`, an inverter lists only the thresholds action of its own protocol. The integration vendors this file as tests/fixtures/island_capability_vocab.json. Pinned by apps/mobile/test/features/calendar/data/island_custom_capabilities_test.dart.",
+  "_comment": "The vocabulary of the `inverters` field of the Home Assistant integration's GET /api/svitgrid/island/status (edge island plan, Task 35). Each inverter reports {host, writableActions, modes}. host is one of `hosts`; writableActions names custom action types from `actionTypes`; modes names writing modes from `writingModes`; conditionTypes (optional, #1328) names the rule condition types the integration evaluates on a true island, from `conditionTypes`, which the app would otherwise treat as cloud-only. `brandKinds` is what each value of the integration's brand_kind (Task 13) advertises; for `priority`, an inverter lists only the thresholds action of its own protocol. The integration vendors this file as tests/fixtures/island_capability_vocab.json. Pinned by apps/mobile/test/features/calendar/data/island_custom_capabilities_test.dart.",
   "hosts": ["edge", "ha"],
   "actionTypes": [
     "work_mode",
@@ -19,6 +19,7 @@
     "must_thresholds"
   ],
   "writingModes": ["battery_charge", "use_battery", "sell_to_grid", "gen_force"],
+  "conditionTypes": ["inverter_temperature", "bms_temperature"],
   "brandKinds": {
     "deye": {
       "writableActions": [

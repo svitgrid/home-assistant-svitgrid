@@ -182,6 +182,15 @@ async def _edge_settings(hass: HomeAssistant, inverter_id: str) -> dict | None:
     return snapshot
 
 
+async def _bms_states(hass: HomeAssistant, entry_id: str) -> dict | None:
+    """Every adopted edge box's latest BMS report, or None without a box.
+
+    The store is created after the scheduler starts, so it is looked up on
+    each call rather than captured."""
+    packs = (hass.data.get(DOMAIN, {}).get(entry_id) or {}).get("bms_packs")
+    return await packs.async_states() if packs is not None else None
+
+
 async def _start_local_store(
     hass: HomeAssistant,
     api_client,
@@ -1228,6 +1237,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     # The settings the box posted, which a PI30 or MUST
                     # threshold rule reads the owner's voltages from.
                     settings_for=lambda inverter_id: _edge_settings(hass, inverter_id),
+                    # The adopted boxes' BMS reports, which a bms_temperature
+                    # rule reads the household's battery temperature from.
+                    bms_states_for=lambda: _bms_states(hass, entry.entry_id),
                 ),
                 name="svitgrid_event_scheduler",
             )

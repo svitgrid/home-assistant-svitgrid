@@ -63,8 +63,10 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+from ..bms_temperature import bms_temperature_from_states
 from . import priority_profile as pp
 from .event_evaluator import (
+    BMS_TEMPERATURE_KEY,
     NEEDS_CLOUD,
     SKIPPED_REASON_KEY,
     evaluate_event,
@@ -310,6 +312,25 @@ def _log_failure(event_id: object, inverter_id: object, failure: _Failure, failu
         )
 
 
+def _has_bms_condition(event: dict) -> bool:
+    conditions = (event.get("config") or {}).get("customConditions") or []
+    return any(isinstance(c, dict) and c.get("type") == "bms_temperature" for c in conditions)
+
+
+async def _bms_temperature(events: list, bms_states_for, now_utc: datetime) -> float | None:
+    """The household's battery temperature, or None when no event needs it,
+    no box reports a fresh accepted sensor, or the read fails. None is "not
+    met", so an active rule releases, as the API does on a failed lookup."""
+    if bms_states_for is None or not any(_has_bms_condition(e) for e in events):
+        return None
+    try:
+        states = await bms_states_for()
+    except Exception:  # noqa: BLE001
+        _LOGGER.warning("Island scheduler: BMS temperature lookup failed", exc_info=True)
+        return None
+    return bms_temperature_from_states(states, now_utc.timestamp() * 1000)
+
+
 async def _tick(
     store: object,
     event_store: object,
@@ -318,6 +339,7 @@ async def _tick(
     now_utc: datetime,
     inverter_for: object = None,
     settings_for: object = None,
+    bms_states_for: object = None,
 ) -> None:
     """Single scheduler tick.
 
@@ -334,6 +356,10 @@ async def _tick(
     settings_for : async callable(inverter_id: str) -> dict | None, the settings
                    an adopted edge box posted for the inverter, which a PI30 or
                    MUST threshold rule reads the owner's voltages from.
+    bms_states_for : async callable() -> dict | None, every adopted box's BMS
+                   report (``BmsPackStore.async_states``). Read once per tick,
+                   and only when an enabled event has a ``bms_temperature``
+                   condition, whose value it supplies.
     """
     # 1. List events; finish any cancel the app asked for first
     all_events = await event_store.async_list_events()
@@ -354,6 +380,8 @@ async def _tick(
     # 2. Live reading per inverter
     snapshot = await store.live_snapshot()
     reading_by_inverter = {r["inverterId"]: r for r in snapshot}
+
+    bms_temperature = await _bms_temperature(enabled_events, bms_states_for, now_utc)
 
     # Every event's latest state, so an event sees what the ones before it in
     # this tick wrote (overlap handoff and hand-back, see event_evaluator).
@@ -385,9 +413,12 @@ async def _tick(
         if inverter is not None and settings_for is not None and needs_settings(event):
             brand["settings"] = await settings_for(inverter_id)
         try:
+            reading = reading_entry["payload"]
+            if bms_temperature is not None and _has_bms_condition(event):
+                reading = {**reading, BMS_TEMPERATURE_KEY: bms_temperature}
             decision = evaluate_event(
                 event,
-                reading_entry["payload"],
+                reading,
                 exec_state,
                 now_utc,
                 tz,
@@ -538,6 +569,7 @@ async def run_event_scheduler_loop(
     interval_s: int = _DEFAULT_INTERVAL_S,
     inverter_for: object = None,
     settings_for: object = None,
+    bms_states_for: object = None,
 ) -> None:
     """Island-mode event scheduler loop.
 
@@ -560,6 +592,7 @@ async def run_event_scheduler_loop(
                    the knob to tune if local automations feel sluggish.
     inverter_for : callable(inverter_id: str) -> dict | None, see ``_tick``.
     settings_for : async callable(inverter_id: str) -> dict | None, see ``_tick``.
+    bms_states_for : async callable() -> dict | None, see ``_tick``.
 
     GATED: spawned ONLY when cloud_ingest_enabled=False.  With cloud-sync ON
     the cloud engine handles events; double-fire must not occur.
@@ -576,6 +609,7 @@ async def run_event_scheduler_loop(
                 datetime.now(UTC),
                 inverter_for,
                 settings_for,
+                bms_states_for,
             )
         except Exception:  # noqa: BLE001
             _LOGGER.exception(

@@ -402,8 +402,35 @@ def _usable_grid_voltages(reading: dict) -> list[float]:
 # Conditions that read the reading's numbers. A rule holding one of them does
 # nothing on a reading older than _STALE_READING_MS (evaluator.ts
 # hasReadingDependentCondition): acting on a stale SOC risks a false start.
-_READING_CONDITION_TYPES = frozenset({"battery_soc", "pv_power", "load_power", "grid_voltage"})
+_READING_CONDITION_TYPES = frozenset(
+    {"battery_soc", "pv_power", "load_power", "grid_voltage", "inverter_temperature"}
+)
 _STALE_READING_MS = 15 * 60_000.0
+
+# The window outside which an inverter temperature is not a measurement
+# (INVERTER_TEMPERATURE_MIN_C / _MAX_C, custom-event-decision.ts). Several
+# register maps report -100 or a raw sentinel when no sensor answers.
+_INVERTER_TEMPERATURE_MIN_C = -40.0
+_INVERTER_TEMPERATURE_MAX_C = 120.0
+
+# The household's battery temperature, which the island scheduler adds to the
+# reading it passes for an event with a `bms_temperature` condition
+# (bms_temperature.bms_temperature_from_states). It is not a reading field.
+BMS_TEMPERATURE_KEY = "bmsTemperatureC"
+
+
+def _finite_or_none(v) -> float | None:
+    if isinstance(v, bool) or not isinstance(v, int | float):
+        return None
+    return float(v) if math.isfinite(v) else None
+
+
+def plausible_inverter_temperature(v) -> float | None:
+    """Port of plausibleInverterTemperatureC: None when missing or outside -40..120."""
+    t = _finite_or_none(v)
+    if t is None or t < _INVERTER_TEMPERATURE_MIN_C or t > _INVERTER_TEMPERATURE_MAX_C:
+        return None
+    return t
 
 
 def _numeric_holds(
@@ -467,6 +494,21 @@ def _one_holds(condition: dict, signals: dict, held: bool) -> bool:
             float(v),
             float(condition["thresholdV"]),
             condition.get("releaseThresholdV"),
+            held,
+        )
+    if ctype in ("inverter_temperature", "bms_temperature"):
+        # Unknown is not met, so an active rule releases, like Zigbee and
+        # unlike grid_voltage (#1326 decisions).
+        v = signals.get(
+            "inverterTemperatureC" if ctype == "inverter_temperature" else "bmsTemperatureC"
+        )
+        if v is None:
+            return False
+        return _numeric_holds(
+            condition["op"],
+            float(v),
+            float(condition["thresholdC"]),
+            condition.get("releaseThresholdC"),
             held,
         )
     # Cloud-only types are pre-filtered; an unrecognised type must be fail-closed
@@ -1998,6 +2040,8 @@ def _custom_signals(reading: dict) -> dict:
         "gridPresent": grid_present,
         "gridVoltageMinV": min(voltages) if voltages else None,
         "gridVoltageMaxV": max(voltages) if voltages else None,
+        "inverterTemperatureC": plausible_inverter_temperature(reading.get("inverterTemperature")),
+        "bmsTemperatureC": _finite_or_none(reading.get(BMS_TEMPERATURE_KEY)),
         # Cloud-only fields unavailable locally; skip guard already fired
         "outageHourNow": False,
         "forecastTodayKwh": None,

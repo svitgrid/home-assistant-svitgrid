@@ -44,6 +44,10 @@
     {"name": "battery maintenance", "needsCloud": false,
      "event": {"mode": "battery_maintenance", "config": {"gridFallbackHour": 6}}},
     {"name": "lower consumption that waits for a scheduled outage", "needsCloud": true,
-     "event": {"mode": "lower_consumption", "config": {"requireScheduledOutage": true}}}
+     "event": {"mode": "lower_consumption", "config": {"requireScheduledOutage": true}}},
+    {"name": "rule: inverter temperature", "needsCloud": false,
+     "event": {"mode": "custom", "schedule": {"recurrence": "always"}, "config": {"customConditions": [{"type": "inverter_temperature", "op": "gte", "thresholdC": 60, "releaseThresholdC": 55}], "customActions": [{"type": "work_mode", "value": 2}]}}},
+    {"name": "rule: battery temperature", "needsCloud": false,
+     "event": {"mode": "custom", "schedule": {"recurrence": "always"}, "config": {"customConditions": [{"type": "bms_temperature", "op": "lte", "thresholdC": 10, "releaseThresholdC": 12}], "customActions": [{"type": "grid_charge_toggle", "enabled": true}]}}}
   ]
 }

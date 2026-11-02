@@ -203,6 +203,12 @@
       "functionCode": "FC04"
     },
     {
+      "field": "inverterTemperature",
+      "address": 8,
+      "signed": true,
+      "functionCode": "FC04"
+    },
+    {
       "field": "bmsChargeCurrentLimit",
       "address": 36,
       "scale": 0.1,
@@ -237,6 +243,14 @@
       "op": "builtin",
       "inputs": [
         "batteryTemperature"
+      ],
+      "builtin": "battery_temp_clamp"
+    },
+    {
+      "field": "inverterTemperature",
+      "op": "builtin",
+      "inputs": [
+        "inverterTemperature"
       ],
       "builtin": "battery_temp_clamp"
     },

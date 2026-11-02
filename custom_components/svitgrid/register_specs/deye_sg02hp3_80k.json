@@ -219,6 +219,12 @@
       "scale": 0.1
     },
     {
+      "field": "inverterTemperature",
+      "address": 541,
+      "scale": 0.1,
+      "offset": -100.0
+    },
+    {
       "field": "bmsChargeCurrentLimit",
       "address": 212
     },
@@ -290,6 +296,14 @@
       "op": "builtin",
       "inputs": [
         "batteryTemperature"
+      ],
+      "builtin": "battery_temp_clamp"
+    },
+    {
+      "field": "inverterTemperature",
+      "op": "builtin",
+      "inputs": [
+        "inverterTemperature"
       ],
       "builtin": "battery_temp_clamp"
     },
