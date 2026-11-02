@@ -30,6 +30,7 @@ from .activity import ActivityTracker
 from .api_client import SvitgridApiClient, async_integration_version
 from .battery_sign import preset_is_discharge_positive
 from .bms_packs import BmsPackStore
+from .bms_temperature import household_bms_states
 from .bootstrap import run_first_time
 from .cloud_endpoint_handler import probe_endpoint_auth
 from .command_poller import run_loop as run_command_loop
@@ -183,12 +184,17 @@ async def _edge_settings(hass: HomeAssistant, inverter_id: str) -> dict | None:
 
 
 async def _bms_states(hass: HomeAssistant, entry_id: str) -> dict | None:
-    """Every adopted edge box's latest BMS report, or None without a box.
+    """Every adopted edge box's latest BMS report, then the packs the phones
+    posted over the LAN (svitgrid#1329), or None with neither store.
 
-    The store is created after the scheduler starts, so it is looked up on
-    each call rather than captured."""
+    The stores are created after the scheduler starts, so they are looked up
+    on each call rather than captured."""
     packs = (hass.data.get(DOMAIN, {}).get(entry_id) or {}).get("bms_packs")
-    return await packs.async_states() if packs is not None else None
+    phones = hass.data.get(DOMAIN, {}).get("bms_report_store")
+    return household_bms_states(
+        await packs.async_states() if packs is not None else None,
+        await phones.async_phone_states() if phones is not None else None,
+    )
 
 
 async def _start_local_store(
@@ -985,6 +991,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         event_store = IslandEventStore(os.path.join(_db_dir, "island_events.db"), hass=hass)
         hass.data.setdefault(DOMAIN, {})
         hass.data[DOMAIN]["event_store"] = event_store
+        # The packs a phone reads and posts over the LAN on a true island
+        # (island_lan.SvitgridIslandBmsReportView, svitgrid#1329). Beside the
+        # boxes' reports in bms_packs.db, in a table of its own.
+        hass.data[DOMAIN]["bms_report_store"] = BmsPackStore(
+            os.path.join(_db_dir, "bms_packs.db"), hass=hass
+        )
 
     # Only deprovisioned (terminal) skips all loops. Paused devices still start
     # loops so the command poller can detect an operator re-enable. The
@@ -1430,6 +1442,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Release the IslandEventStore (and its SQLite handle) on final unload.
     # A subsequent async_setup_entry re-creates it, so the reload path is safe.
     hass.data.get(DOMAIN, {}).pop("event_store", None)
+    hass.data.get(DOMAIN, {}).pop("bms_report_store", None)
     return True
 
 

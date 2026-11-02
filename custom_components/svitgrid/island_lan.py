@@ -20,6 +20,8 @@ app directly:
   `clear_island_endpoint` that sends a box back to its cloud endpoint, and
   `GET /api/svitgrid/edge/commands/{command_id}` reports how a queued command
   stands.
+- `POST /api/svitgrid/island/bms` keeps the battery packs a phone read, for
+  the battery-temperature condition (svitgrid#1329).
 - `POST /api/svitgrid/edge/keys/add` queues the phone-signed
   `add_trusted_key` for every adopted box, and revoking a key queues
   `revoke_trusted_key` for each of them.
@@ -52,7 +54,8 @@ from homeassistant.components.http import HomeAssistantView
 from homeassistant.config_entries import ConfigEntryState
 
 from .api_client import async_integration_version
-from .bms_temperature import has_bms_temperature
+from .bms_packs import valid_report as valid_bms_report
+from .bms_temperature import has_bms_temperature, household_bms_states
 from .command_auth import verify_signed_command
 from .const import (
     ADD_TRUSTED_KEY_COMMAND,
@@ -95,6 +98,10 @@ CAPABILITIES = (
     # not_read_yet from nothing_to_configure; an app reads a 404 from a host
     # without it as "host too old".
     "settings_lan",
+    # POST /api/svitgrid/island/bms keeps a phone-read BMS report for the
+    # battery-temperature condition (svitgrid#1329). An app routes its report
+    # here on a true island only when this is listed.
+    "bms_report_lan",
 )
 
 ACTION_SET_CLOUD_COPY = "set_cloud_copy"
@@ -106,6 +113,7 @@ ACTION_EDGE_ADOPT = "edge_adopt"
 ACTION_EDGE_FORGET = "edge_forget"
 ACTION_EDGE_LEAVE = "edge_leave"
 ACTION_EDGE_KEY_ADD = "edge_key_add"
+ACTION_BMS_REPORT = "bms_report"
 # The box command `/edge/leave` queues (`edge_pair_code.json` `commands.clear`).
 EDGE_LEAVE_COMMAND = "clear_island_endpoint"
 
@@ -541,8 +549,9 @@ async def _advertise_condition_types(hass, entry, adverts: dict[str, dict]) -> N
 
     - `inverter_temperature` for an inverter whose latest reading holds a
       plausible temperature (-40..120 degC);
-    - `bms_temperature` for every inverter once an adopted box reports a
-      pack with a labelled cell sensor, fresh or not: it is the household's.
+    - `bms_temperature` for every inverter once an adopted box, or a phone
+      over `POST /api/svitgrid/island/bms`, reports a pack with a labelled
+      cell sensor, fresh or not: it is the household's.
 
     An inverter with neither has no `conditionTypes`, as before.
     """
@@ -561,9 +570,15 @@ async def _advertise_condition_types(hass, entry, adverts: dict[str, dict]) -> N
             _LOGGER.warning("island status: reading the live readings failed", exc_info=True)
     bms = False
     packs = state.get("bms_packs")
-    if packs is not None:
+    phones = hass.data.get(DOMAIN, {}).get("bms_report_store")
+    if packs is not None or phones is not None:
         try:
-            bms = has_bms_temperature(await packs.async_states())
+            bms = has_bms_temperature(
+                household_bms_states(
+                    await packs.async_states() if packs is not None else None,
+                    await phones.async_phone_states() if phones is not None else None,
+                )
+            )
         except Exception:  # noqa: BLE001
             _LOGGER.warning("island status: reading the BMS reports failed", exc_info=True)
     for inverter_id, advert in adverts.items():
@@ -574,6 +589,68 @@ async def _advertise_condition_types(hass, entry, adverts: dict[str, dict]) -> N
         ]
         if types:
             advert["conditionTypes"] = types
+
+
+def _valid_phone_report(value) -> dict | None:
+    """The phone's report when the cloud's `BmsReportSchema` would take its
+    packs, `removed` and `clear`, else None."""
+    report = valid_bms_report(value)
+    if report is None:
+        return None
+    removed = report.get("removed")
+    if removed is not None and (
+        not isinstance(removed, list)
+        or not all(isinstance(r, str) for r in removed)
+        or len(removed) > 64
+    ):
+        return None
+    if report.get("clear") is not None and not isinstance(report["clear"], bool):
+        return None
+    return report
+
+
+class SvitgridIslandBmsReportView(HomeAssistantView):
+    """POST /api/svitgrid/island/bms — the battery packs a phone read.
+
+    `signedData`: `{action: "bms_report", inverterId, report, nonce, ts}`,
+    `report` the body the phone posts to the cloud's
+    `POST /inverters/{id}/bms` (`BmsReportSchema`). On a true island that
+    POST reaches nothing the island scheduler sees, so the phone posts here
+    (svitgrid#1329). Kept as the cloud keeps `inverters/{id}.bms`
+    (`BmsPackStore.async_store_phone_report`), and read only by the
+    battery-temperature condition, a box's copy of a pack winning.
+
+    404 `unknown_inverter` for an inverter this station does not serve, 503
+    `unavailable` before the store exists.
+    """
+
+    url = "/api/svitgrid/island/bms"
+    name = "api:svitgrid:island:bms"
+    requires_auth = False
+
+    async def post(self, request) -> web.Response:  # noqa: D102
+        signed, error = await signed_lan_request(request, ACTION_BMS_REPORT)
+        if error is not None:
+            return error
+        hass = request.app["hass"]
+        inverter_id = signed.get("inverterId")
+        if not isinstance(inverter_id, str) or not inverter_id:
+            return _json_error(400, "bad_request", detail="inverterId must be a string")
+        report = _valid_phone_report(signed.get("report"))
+        if report is None:
+            return _json_error(400, "bad_request", detail="report is not a BMS report")
+        keystore = hass.data.get(DOMAIN, {}).get("keystore")
+        state = await keystore.load() if keystore is not None else None
+        boxes = list(state.edge_boxes.values()) if state is not None else []
+        if inverter_id not in _inverter_adverts(hass, boxes):
+            return _json_error(404, "unknown_inverter")
+        store = hass.data.get(DOMAIN, {}).get("bms_report_store")
+        if store is None:
+            return _json_error(503, "unavailable")
+        count = await store.async_store_phone_report(
+            inverter_id, report, datetime.fromtimestamp(_now_ms() / 1000, UTC)
+        )
+        return web.json_response({"ok": True, "packCount": count})
 
 
 # What `/island/status` says of each edge box; `/edge/status` says more.
@@ -1085,6 +1162,7 @@ ISLAND_LAN_VIEWS = (
     SvitgridIslandLeaveView,
     SvitgridKeysRevokeView,
     SvitgridIslandStatusView,
+    SvitgridIslandBmsReportView,
     SvitgridEdgeAdoptView,
     SvitgridEdgeForgetView,
     SvitgridEdgeStatusView,

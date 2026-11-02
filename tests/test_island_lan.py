@@ -527,6 +527,7 @@ async def test_status_of_a_true_island(hass: HomeAssistant):
             "pair_extra_phone",
             "rules",
             "settings_lan",
+            "bms_report_lan",
         ],
     }
 
@@ -1243,6 +1244,7 @@ async def test_island_status_without_edge_boxes_is_unchanged(hass: HomeAssistant
             "pair_extra_phone",
             "rules",
             "settings_lan",
+            "bms_report_lan",
         ],
     }
 
@@ -1706,6 +1708,7 @@ async def test_island_status_without_edge_boxes_lists_ha_inverters_only(hass: Ho
             "pair_extra_phone",
             "rules",
             "settings_lan",
+            "bms_report_lan",
         ],
         "inverters": {"inv-ha-1": {"host": "ha"}, "inv-ha-2": {"host": "ha"}},
     }
