@@ -94,6 +94,22 @@ def accepted_pack_temperatures(pack: dict) -> list[float]:
     return plausible
 
 
+def household_bms_states(
+    boards: Mapping[str, dict] | None, phones: Mapping[str, dict] | None
+) -> dict[str, dict] | None:
+    """The boxes' states, then the phones' (`householdPacks`): a pack both
+    report counts once, from the box, which reads on a cycle while a phone
+    reads only while its Harvest screen is open (svitgrid#1329). A phone's
+    pack carries `readAtMs`, so it ages from its own reading. None when
+    neither is known."""
+    if boards is None and phones is None:
+        return None
+    out = dict(boards or {})
+    for inverter_id, state in (phones or {}).items():
+        out[f"phone:{inverter_id}"] = state
+    return out
+
+
 def _packs(states: Mapping[str, dict] | None):
     """Every pack with the time its box's report arrived, a pack id once."""
     seen: set[str] = set()

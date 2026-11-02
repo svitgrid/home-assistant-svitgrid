@@ -589,6 +589,10 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             box_id      TEXT NOT NULL,
             fields_json TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS bms_phone_state (
+            inverter_id TEXT PRIMARY KEY,
+            state_json  TEXT NOT NULL
+        );
         """
     )
     conn.commit()
@@ -726,6 +730,71 @@ class BmsPackStore:
             conn.execute("DELETE FROM bms_samples WHERE date < ?", (oldest.strftime("%Y-%m-%d"),))
             conn.commit()
             return record
+        finally:
+            conn.close()
+
+    def _phone_states_sync(self) -> dict:
+        conn = _connect(self._db_path)
+        try:
+            rows = conn.execute("SELECT * FROM bms_phone_state ORDER BY inverter_id").fetchall()
+            return {r["inverter_id"]: json.loads(r["state_json"]) for r in rows}
+        finally:
+            conn.close()
+
+    def _store_phone_report_sync(
+        self, inverter_id: str, report: dict, received_at: datetime
+    ) -> int:
+        """`writeInverterBmsState`: a phone speaks only for the packs it
+        read, so its packs are merged into the stored ones by id; `removed`
+        drops packs, an empty report with nothing removed keeps them, and
+        `clear` replaces them wholesale. Each pack the phone read gets
+        `readAtMs`, the time of its reading; a kept pack keeps its own.
+        Returns how many packs are stored."""
+        received_ms = _ms(received_at)
+        conn = _connect(self._db_path)
+        try:
+            row = conn.execute(
+                "SELECT state_json FROM bms_phone_state WHERE inverter_id = ?", (inverter_id,)
+            ).fetchone()
+            stored = json.loads(row["state_json"]) if row is not None else {}
+            read = []
+            for pack in report["packs"]:
+                doc = build_pack_doc(pack)
+                age = doc.get("ageMs")
+                doc["readAtMs"] = received_ms - (
+                    max(0, age) if _is_num(age) and math.isfinite(age) else 0
+                )
+                read.append(doc)
+            if report.get("clear") is True:
+                packs = read
+            else:
+                removed = set(report.get("removed") or [])
+                by_id = {
+                    p["id"]: p
+                    for p in stored.get("packs") or []
+                    if isinstance(p, dict) and p.get("id") not in removed
+                }
+                for doc in read:
+                    by_id[doc["id"]] = doc
+                packs = list(by_id.values())
+            now_iso = _iso(_utcnow())
+            state: dict[str, Any] = {
+                "packs": packs,
+                "packCount": len(packs),
+                "updatedAt": now_iso,
+                "readingReceivedAt": _iso(received_at),
+                "lastGoodAt": stored.get("lastGoodAt"),
+            }
+            if report.get("source") is not None:
+                state["source"] = report["source"]
+            if any(p["result"] == "ok" for p in read):
+                state["lastGoodAt"] = now_iso
+            conn.execute(
+                "INSERT OR REPLACE INTO bms_phone_state (inverter_id, state_json) VALUES (?, ?)",
+                (inverter_id, json.dumps(state)),
+            )
+            conn.commit()
+            return len(packs)
         finally:
             conn.close()
 
@@ -1075,6 +1144,20 @@ class BmsPackStore:
     async def async_states(self) -> dict[str, dict]:
         """Every box's latest report, by box id."""
         return await self._run(self._state_sync, None)
+
+    async def async_store_phone_report(
+        self, inverter_id: str, report: dict, received_at: datetime | None = None
+    ) -> int:
+        """Store a phone's report for `inverter_id` received at `received_at`
+        (now), as the cloud keeps `inverters/{id}.bms`. Returns the pack count."""
+        return await self._run(
+            self._store_phone_report_sync, inverter_id, report, received_at or _utcnow()
+        )
+
+    async def async_phone_states(self) -> dict[str, dict]:
+        """Every inverter's phone-read packs, by inverter id. Kept apart from
+        the boxes' states: only the temperature condition reads these."""
+        return await self._run(self._phone_states_sync)
 
     async def async_history_rows(self, box_id: str) -> list[dict]:
         """The box's history rows, newest first."""
