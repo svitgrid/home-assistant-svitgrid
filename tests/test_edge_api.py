@@ -1914,6 +1914,27 @@ async def test_a_window_on_another_box_does_not_admit_a_join(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_a_known_device_joining_another_box_moves_there(tmp_path):
+    """The second half of a hub move (svitgrid#1278): after `leave_hub` on
+    EC-1 the device joins EC-2 and keeps its id, name and room."""
+    other = _box(device_id="EC-2", api_key="box-api-key-2", inverters={})
+    hass, queue, devices = _hass_with_zigbee(_keystore(_box(), other), tmp_path)
+    await devices.async_open_permit_join("EC-1", 120)
+    await _joined(hass)
+    await devices.async_update(_ZB_ID, {"name": "Kettle", "room": "kitchen"})
+
+    resp = await _joined(
+        hass, {**_ZIGBEE["device_joined"], "addr": "0x5678"}, api_key="box-api-key-2"
+    )
+
+    assert resp.status == 200
+    assert _json(resp) == {"success": True, "smartDeviceId": _ZB_ID, "isNew": False}
+    device = await devices.async_get(_ZB_ID)
+    assert (device["deviceId"], device["addr"]) == ("EC-2", "0x5678")
+    assert (device["name"], device["room"]) == ("Kettle", "kitchen")
+
+
+@pytest.mark.asyncio
 async def test_a_known_device_rejoining_updates_its_address(tmp_path):
     hass, queue, devices = _hass_with_zigbee(_keystore(_box()), tmp_path)
     await devices.async_open_permit_join("EC-1", 120)
