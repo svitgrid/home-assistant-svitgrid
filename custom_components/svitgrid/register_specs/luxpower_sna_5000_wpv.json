@@ -129,6 +129,12 @@
       "address": 34,
       "scale": 0.1,
       "functionCode": "FC04"
+    },
+    {
+      "field": "inverterTemperature",
+      "address": 64,
+      "signed": true,
+      "functionCode": "FC04"
     }
   ],
   "derivations": [
@@ -181,6 +187,14 @@
       "builtin": "battery_temp_clamp"
     },
     {
+      "field": "inverterTemperature",
+      "op": "builtin",
+      "inputs": [
+        "inverterTemperature"
+      ],
+      "builtin": "battery_temp_clamp"
+    },
+    {
       "field": "totalPvPower",
       "op": "sum",
       "inputs": [
@@ -199,8 +213,8 @@
       "unitId": 1
     },
     {
-      "startRegister": 67,
-      "count": 1,
+      "startRegister": 64,
+      "count": 4,
       "functionCode": "FC04",
       "unitId": 1
     },

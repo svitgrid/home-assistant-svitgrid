@@ -35,12 +35,6 @@
       "unitId": 100
     },
     {
-      "field": "batteryTemperature",
-      "address": 843,
-      "signed": true,
-      "unitId": 100
-    },
-    {
       "field": "gridPower",
       "address": 820,
       "signed": true,
@@ -120,14 +114,6 @@
         "batteryPower"
       ],
       "builtin": "battery_sign_normalize"
-    },
-    {
-      "field": "batteryTemperature",
-      "op": "builtin",
-      "inputs": [
-        "batteryTemperature"
-      ],
-      "builtin": "battery_temp_clamp"
     },
     {
       "field": "totalPvPower",

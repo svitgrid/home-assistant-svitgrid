@@ -601,9 +601,13 @@ def _inv(inverter_id: str, **fields) -> dict:
 class _EdgeStore:
     """The parts of the reading store the edge status reads."""
 
-    def __init__(self, box_states=None, snapshots=None) -> None:
+    def __init__(self, box_states=None, snapshots=None, live=None) -> None:
         self.box_states = dict(box_states or {})
         self.snapshots = dict(snapshots or {})
+        self.live = list(live or [])
+
+    async def live_snapshot(self):
+        return list(self.live)
 
     async def get_edge_box_state(self, device_id):
         return self.box_states.get(device_id)
@@ -3027,3 +3031,74 @@ async def test_edge_status_names_the_zigbee_module_version(hass: HomeAssistant, 
     # The island status is the one the app reads for a true island's boards.
     status = await SvitgridIslandStatusView().get(_Req(hass))
     assert _body(status)["edgeBoxes"][0]["h2FirmwareVersion"] == "0.22.27"
+
+
+# ── conditionTypes: the temperature conditions the island evaluates (#1328) ──
+
+
+class _BmsPacks:
+    def __init__(self, states) -> None:
+        self.states = states
+
+    async def async_states(self):
+        return dict(self.states)
+
+
+_JBD_PACK = {"id": "aaaaaaaaaa01", "driver": "jbd", "result": "ok", "ageMs": 0, "tempsC": [14]}
+
+
+def _live(inverter_id, **payload) -> dict:
+    return {"inverterId": inverter_id, "payload": {"batterySoc": 50, **payload}}
+
+
+async def test_island_status_advertises_inverter_temperature_it_has_read(hass: HomeAssistant):
+    """`inverter_temperature` is advertised for an inverter whose latest
+    reading holds a plausible temperature, as the API's
+    loadHasInverterTemperature decides, and for no other."""
+    await _keystore(hass, _Admin())
+    entry = _ha_entry(hass, "inv-hot", "inv-none", "inv-sentinel")
+    live = [
+        _live("inv-hot", inverterTemperature=41.5),
+        _live("inv-none"),
+        _live("inv-sentinel", inverterTemperature=-100),
+    ]
+    _entry_state(hass, entry, store=_EdgeStore(live=live))
+
+    advert = _body(await SvitgridIslandStatusView().get(_Req(hass)))["inverters"]
+
+    assert advert["inv-hot"] == {"host": "ha", "conditionTypes": ["inverter_temperature"]}
+    assert advert["inv-none"] == {"host": "ha"}
+    assert advert["inv-sentinel"] == {"host": "ha"}
+
+
+async def test_island_status_advertises_bms_temperature_with_a_labelled_pack(
+    hass: HomeAssistant,
+):
+    """`bms_temperature` is the household's: every inverter carries it once a
+    box reports a pack with a labelled cell sensor (hasBmsTemperature)."""
+    await _keystore(hass, _Admin())
+    entry = _ha_entry(hass, "inv-1", "inv-2")
+    state = _entry_state(
+        hass, entry, store=_EdgeStore(live=[_live("inv-1", inverterTemperature=30)])
+    )
+    state["bms_packs"] = _BmsPacks({"EC-1": {"packs": [_JBD_PACK], "receivedAtMs": 0}})
+
+    advert = _body(await SvitgridIslandStatusView().get(_Req(hass)))["inverters"]
+
+    assert advert["inv-1"]["conditionTypes"] == ["inverter_temperature", "bms_temperature"]
+    assert advert["inv-2"]["conditionTypes"] == ["bms_temperature"]
+    for item in advert.values():
+        assert set(item["conditionTypes"]) <= set(_VOCAB["conditionTypes"])
+
+
+async def test_island_status_without_a_labelled_pack_advertises_no_bms_temperature(
+    hass: HomeAssistant,
+):
+    await _keystore(hass, _Admin())
+    entry = _ha_entry(hass, "inv-1")
+    state = _entry_state(hass, entry)
+    state["bms_packs"] = _BmsPacks({"EC-1": {"packs": [{**_JBD_PACK, "driver": "mystery"}]}})
+
+    advert = _body(await SvitgridIslandStatusView().get(_Req(hass)))["inverters"]
+
+    assert advert["inv-1"] == {"host": "ha"}

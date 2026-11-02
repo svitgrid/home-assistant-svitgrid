@@ -52,6 +52,7 @@ from homeassistant.components.http import HomeAssistantView
 from homeassistant.config_entries import ConfigEntryState
 
 from .api_client import async_integration_version
+from .bms_temperature import has_bms_temperature
 from .command_auth import verify_signed_command
 from .const import (
     ADD_TRUSTED_KEY_COMMAND,
@@ -64,6 +65,7 @@ from .edge_api import EDGE_BOX_LOCK, edge_refusals
 from .edge_api import _entry_state as _edge_poll_state
 from .entry_reload import update_entry_skipping_listener_reload
 from .harvest.brand_commands import island_writes
+from .harvest.event_evaluator import plausible_inverter_temperature
 from .island_auth import island_key_present_and_valid
 from .keystore import EdgeBoxEntry, LastAdminKey
 from .settings_sync import find_edge_settings_snapshot
@@ -502,6 +504,7 @@ class SvitgridIslandStatusView(HomeAssistantView):
             ]
             body["pendingBoxKeys"] = await keystore.async_list_pending_box_keys()
         inverters = _inverter_adverts(hass, boxes)
+        await _advertise_condition_types(hass, entry, inverters)
         if inverters:
             body["inverters"] = inverters
         return web.json_response(body)
@@ -526,6 +529,51 @@ def _inverter_adverts(hass, boxes: list[EdgeBoxEntry]) -> dict[str, dict]:
             adopted = box.inverters.get(inverter_id) or {}
             adverts[inverter_id] = {"host": "edge", **island_writes(adopted)}
     return adverts
+
+
+async def _advertise_condition_types(hass, entry, adverts: dict[str, dict]) -> None:
+    """Add `conditionTypes`, the temperature conditions the island scheduler
+    evaluates, to each inverter's advert (svitgrid#1328).
+
+    The app hides both as cloud-only on a true island unless the advert names
+    them, so each is named only where it can fire, as the API decides
+    `hasInverterTemperature` and `hasBmsTemperature`:
+
+    - `inverter_temperature` for an inverter whose latest reading holds a
+      plausible temperature (-40..120 degC);
+    - `bms_temperature` for every inverter once an adopted box reports a
+      pack with a labelled cell sensor, fresh or not: it is the household's.
+
+    An inverter with neither has no `conditionTypes`, as before.
+    """
+    if not adverts:
+        return
+    state = hass.data.get(DOMAIN, {}).get(entry.entry_id) or {}
+    hot: set[str] = set()
+    store = state.get("store")
+    if store is not None:
+        try:
+            for row in await store.live_snapshot():
+                payload = row.get("payload") or {}
+                if plausible_inverter_temperature(payload.get("inverterTemperature")) is not None:
+                    hot.add(row.get("inverterId"))
+        except Exception:  # noqa: BLE001
+            _LOGGER.warning("island status: reading the live readings failed", exc_info=True)
+    bms = False
+    packs = state.get("bms_packs")
+    if packs is not None:
+        try:
+            bms = has_bms_temperature(await packs.async_states())
+        except Exception:  # noqa: BLE001
+            _LOGGER.warning("island status: reading the BMS reports failed", exc_info=True)
+    for inverter_id, advert in adverts.items():
+        types = [
+            t
+            for t, has in (("inverter_temperature", inverter_id in hot), ("bms_temperature", bms))
+            if has
+        ]
+        if types:
+            advert["conditionTypes"] = types
 
 
 # What `/island/status` says of each edge box; `/edge/status` says more.
