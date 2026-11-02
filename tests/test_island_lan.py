@@ -2128,6 +2128,45 @@ async def test_remove_device_queues_the_leave_and_forgets_the_device(hass: HomeA
     assert await devices.async_get(PLUG_ID) is None
 
 
+async def test_leave_hub_queues_the_leave_and_keeps_the_device(hass: HomeAssistant, tmp_path):
+    """A hub move (svitgrid#1278): the box drops the device from its mesh, and
+    Home Assistant keeps its record, name, room and history until it joins
+    the other box, whose `device-joined` re-points it."""
+    from custom_components.svitgrid.zigbee_lan import ZigbeeDeviceCommandView
+
+    _, queue, devices = await _zigbee_setup(hass, tmp_path)
+    await devices.async_update(PLUG_ID, {"name": "Kettle", "room": "kitchen"})
+    await devices.async_add_history(PLUG_ID, "command_sent", {"on": True}, "cmd-0")
+
+    resp = await ZigbeeDeviceCommandView().post(_ZReq(hass, {"command": "leave_hub"}), PLUG_ID)
+
+    assert resp.status == 200, _body(resp)
+    row = await queue.async_next_pending("EC-1")
+    assert (row["command"], row["payload"]) == (
+        "remove_device",
+        {"addr": "0x1234", "ieee": PLUG_IEEE},
+    )
+    assert row["signing"] is None
+    assert _body(resp) == {"success": True, "commandId": row["id"], "status": "pending"}
+    device = await devices.async_get(PLUG_ID)
+    assert (device["name"], device["room"], device["deviceId"]) == ("Kettle", "kitchen", "EC-1")
+    assert len(await devices.async_history(PLUG_ID)) == 1
+
+
+async def test_leave_hub_needs_the_island_key(hass: HomeAssistant, tmp_path):
+    from custom_components.svitgrid.zigbee_lan import ZigbeeDeviceCommandView
+
+    _, queue, devices = await _zigbee_setup(hass, tmp_path)
+
+    resp = await ZigbeeDeviceCommandView().post(
+        _ZReq(hass, {"command": "leave_hub"}, island_key=OTHER_ISLAND_KEY), PLUG_ID
+    )
+
+    assert resp.status == 401
+    assert await queue.async_next_pending("EC-1") is None
+    assert await devices.async_get(PLUG_ID) is not None
+
+
 async def test_identify_carries_the_address_and_endpoint(hass: HomeAssistant, tmp_path):
     from custom_components.svitgrid.zigbee_lan import ZigbeeDeviceCommandView
 

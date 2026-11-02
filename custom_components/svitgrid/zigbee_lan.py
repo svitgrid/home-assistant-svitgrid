@@ -13,8 +13,8 @@ relay its commands to the box:
 - `POST /api/svitgrid/edge/zigbee/{id}/command` sends `set_state` signed by a
   trusted (owner or admin) key, and the phone's signature for the box rides
   untouched in `boxCommand`: the integration holds no key the box trusts. The
-  unsigned `identify`, `get_device_status`, `set_startup_state` and
-  `remove_device` need the island key only (spec 27).
+  unsigned `identify`, `get_device_status`, `set_startup_state`,
+  `remove_device` and `leave_hub` need the island key only (spec 27).
 - `POST /api/svitgrid/edge/zigbee/command` sends a box-wide command:
   `list_devices`, `neighbors`, `routes`, `mesh_snapshot` with the island key,
   `zigbee_restart` and `zigbee_factory_reset` signed by a trusted key only.
@@ -57,7 +57,18 @@ SENSOR_HISTORY_MAX_HOURS = 168
 
 # Per-device commands the island key may send (spec 27). The box asks no
 # signature for any of them (`command_requires_signature`, `command_auth.c`).
-UNSIGNED_DEVICE_COMMANDS = ("identify", "get_device_status", "set_startup_state", "remove_device")
+UNSIGNED_DEVICE_COMMANDS = (
+    "identify",
+    "get_device_status",
+    "set_startup_state",
+    "remove_device",
+    "leave_hub",
+)
+# The commands that take the device off its box's mesh. `leave_hub` is a hub
+# move (svitgrid#1278): the box gets the same `remove_device`, and the record
+# stays here until the device joins another box, whose `device-joined`
+# re-points it, as the cloud's document stays until the join.
+LEAVE_COMMANDS = ("remove_device", "leave_hub")
 # The H2 compares `set_startup_state`'s mode literally
 # (`uart_bridge_startup_mode_is_valid`).
 STARTUP_MODES = ("restore", "off", "on")
@@ -346,9 +357,11 @@ class ZigbeeDeviceCommandView(_ZigbeeView):
     signed by a trusted key is refused (`signed_lan_request`).
 
     `{command: "identify" | "get_device_status" | "set_startup_state" |
-    "remove_device", payload?}` needs the island key only. `set_startup_state`
-    takes `payload: {mode: "restore" | "off" | "on"}`. `remove_device` also
-    forgets the device here.
+    "remove_device" | "leave_hub", payload?}` needs the island key only.
+    `set_startup_state` takes `payload: {mode: "restore" | "off" | "on"}`.
+    `remove_device` also forgets the device here; `leave_hub` sends the box
+    the same `remove_device` and keeps the device's record, for a move to
+    another box.
     Answers `{success, commandId, status}`.
     """
 
@@ -382,12 +395,19 @@ class ZigbeeDeviceCommandView(_ZigbeeView):
             return _json_error(404, "unknown_device")
         if device["deviceId"] not in boxes:
             return _json_error(409, "edge_device_missing")
-        if command == "remove_device":
+        if command in LEAVE_COMMANDS:
+            box_command = "remove_device"
             payload = {"addr": device["addr"], "ieee": device["ieee"]}
         else:
+            box_command = command
             payload = {**extra, "addr": device["addr"], "ep": device["endpoint"]}
         command_id = await queue.async_enqueue(
-            device["deviceId"], command, payload, signing=None, inverter_id=None, source="zigbee"
+            device["deviceId"],
+            box_command,
+            payload,
+            signing=None,
+            inverter_id=None,
+            source="zigbee",
         )
         if command == "remove_device":
             await devices.async_remove(device_id)
