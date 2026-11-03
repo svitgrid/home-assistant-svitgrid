@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.26.0 — 2026-11-03
+
+### Added
+- **Home Assistant hosts your edge connectors.** An ED-1 or ED-1.1 box can
+  move onto a Home Assistant island and talk only to it. The box binds with a
+  one-time pairing code, and a cloud claim of that code waits for your
+  approval in Home Assistant. Home Assistant then stores the box's readings,
+  grid events, settings, Zigbee devices and battery packs, and serves them to
+  the app over your network. The app's commands, rules and phone keys reach
+  the box through a local command queue. Leaving returns the box to the cloud
+  (svitgrid#1200, #1201, #1203–#1210, #1215–#1217, #1229–#1235, #1249,
+  #1252, #1254, #1255).
+- **A box's Zigbee devices and battery packs work on the island.** The app
+  reads and switches Zigbee plugs, sees sensor readings, imports pack labels
+  and drivers, and removes a device from its box. Home Assistant shows them
+  as read-only entities (svitgrid#1259, #1261–#1264, #1268, #1272, #1277,
+  #1278, #1282).
+- **Telegram alerts on an island.** Home Assistant links a Telegram chat by
+  code and sends outage and grid-restored alerts itself, with no cloud. An
+  outage the box confirms is sent at once. Otherwise Home Assistant waits
+  5 minutes, judging the grid from per-phase voltages on a model with no
+  frequency register.
+- **Temperature rules on a true island.** A custom rule can use the
+  inverter's temperature or the average temperature of your battery packs'
+  sensors, as it can in the cloud. Packs that a phone reads over Bluetooth
+  reach Home Assistant over your network and count too (svitgrid#1328,
+  #1329).
+
+### Fixed
+- An edge box that binds starts clean, and a new box gets its inverters.
+- A Zigbee switch the box ran updates the stored state.
+- A gzip body that Home Assistant has already inflated is read correctly.
+- The pairing wait follows the server's time limit (svitgrid#1209).
+- `manifest.json` is read off the event loop (svitgrid#1210).
+
 ## 0.25.0 — 2026-10-28
 
 ### Added
