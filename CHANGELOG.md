@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.26.1 — 2026-11-03
+
+### Fixed
+- The manifest passes Home Assistant's hassfest check. It declares the `http`
+  dependency, and it no longer lists `aiohttp` and `cryptography`, which Home
+  Assistant already ships. Nothing changes in how the integration behaves.
+
 ## 0.26.0 — 2026-11-03
 
 ### Added
