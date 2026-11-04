@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Removed
+- `https://api-staging.svitgrid.app` is no longer an allowed cloud endpoint.
+  The staging API was shut down on 2026-07-21, so a `set_cloud_endpoint`
+  command naming it is now rejected. The README example uses
+  `https://api.svitgrid.app`.
+
 ## 0.27.0 — 2026-11-04
 
 ### Removed

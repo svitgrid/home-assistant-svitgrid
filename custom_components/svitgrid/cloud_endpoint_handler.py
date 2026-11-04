@@ -3,7 +3,8 @@
 Mirrors `services/api/src/config/cloud-endpoint.ts` in the svitgrid
 monorepo. Keep both sides in lockstep — drift means the integration
 accepts a URL the server rejects (or vice versa), silently breaking the
-migration handoff.
+migration handoff. The one deliberate difference: this list has dropped the
+retired staging host, so the integration is stricter than the server.
 
 No HA imports — host-testable via plain pytest."""
 
@@ -15,10 +16,9 @@ import aiohttp
 
 _LOGGER = logging.getLogger(__name__)
 
-ALLOWED_API_BASES: tuple[str, ...] = (
-    "https://api-staging.svitgrid.app",
-    "https://api.svitgrid.app",
-)
+# Prod only. The staging API (`api-staging.svitgrid.app`) was torn down on
+# 2026-07-21, so switching an install to it would leave it uploading nowhere.
+ALLOWED_API_BASES: tuple[str, ...] = ("https://api.svitgrid.app",)
 
 
 def is_allowed_api_base(url: object) -> bool:

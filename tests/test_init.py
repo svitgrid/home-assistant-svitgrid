@@ -1187,7 +1187,7 @@ async def test_apply_cloud_endpoint_change_updates_entry_and_schedules_reload(
         minor_version=1,
         title="test",
         data={
-            "api_base": "https://api-staging.svitgrid.app",
+            "api_base": "https://old-endpoint.example",
             "api_key": "k",
             "edge_device_id": "d",
             "household_id": "h",
@@ -1233,7 +1233,7 @@ async def test_apply_cloud_endpoint_change_is_noop_when_unchanged(hass):
         minor_version=1,
         title="test",
         data={
-            "api_base": "https://api-staging.svitgrid.app",
+            "api_base": "https://api.svitgrid.app",
             "api_key": "k",
             "edge_device_id": "d",
             "household_id": "h",
@@ -1246,7 +1246,7 @@ async def test_apply_cloud_endpoint_change_is_noop_when_unchanged(hass):
         patch.object(hass.config_entries, "async_reload") as mock_reload,
         patch.object(hass.config_entries, "async_update_entry") as mock_update,
     ):
-        result = await apply_cloud_endpoint_change(hass, entry, "https://api-staging.svitgrid.app")
+        result = await apply_cloud_endpoint_change(hass, entry, "https://api.svitgrid.app")
 
     assert result is True
     mock_reload.assert_not_called()
@@ -1275,7 +1275,7 @@ async def test_apply_cloud_endpoint_change_returns_true_on_probe_success(hass):
         minor_version=1,
         title="test",
         data={
-            "api_base": "https://api-staging.svitgrid.app",
+            "api_base": "https://old-endpoint.example",
             "api_key": "test-api-key",
             "edge_device_id": "d",
             "household_id": "h",
@@ -1498,7 +1498,7 @@ async def test_apply_cloud_endpoint_change_returns_false_on_probe_failure(
         minor_version=1,
         title="test",
         data={
-            "api_base": "https://api-staging.svitgrid.app",
+            "api_base": "https://old-endpoint.example",
             "api_key": "test-api-key",
             "edge_device_id": "d",
             "household_id": "h",
@@ -1521,7 +1521,7 @@ async def test_apply_cloud_endpoint_change_returns_false_on_probe_failure(
 
     assert result is False
     # ConfigEntry must NOT have been mutated
-    assert entry.data["api_base"] == "https://api-staging.svitgrid.app"
+    assert entry.data["api_base"] == "https://old-endpoint.example"
     mock_update.assert_not_called()
     mock_reload.assert_not_called()
     # Distinctive grep-friendly error log

@@ -22,7 +22,7 @@ Open the Svitgrid app → your household's inverter → **Add Home Assistant int
 
 ```yaml
 svitgrid:
-  api_base: "https://api-staging.svitgrid.app"
+  api_base: "https://api.svitgrid.app"
   device_id: "<paste from mobile app>"
   signing_key_id: "<your chosen id, e.g. ha-home>"
   entity_map:
@@ -79,7 +79,7 @@ Covers EASUN SMG-II, ISolar SMG-II, POW-HVM, Anenji 4kW/6kW, and other SMG-II cl
 
 Currently handles one command: `set_battery_charge` (chargePowerLimitW field). Writes to Modbus register 233 (inverter-side charging current, 0.1 A units). Conversion: `register_value = round(chargePowerLimitW / battery_nominal_voltage / 0.1)`.
 
-**⚠️ Experimental — not yet validated on real hardware.** The register map comes from community references (`syssi/esphome-smg-ii`) and has passed all unit + integration tests against Svitgrid's staging server, but no one has confirmed that writing to register 233 on real SMG-II hardware produces the expected effect. If you try it and something looks wrong, remove the `executor:` block and nothing further happens; the add-on reverts to read-only. Please [open an issue](https://github.com/svitgrid/home-assistant-svitgrid/issues) with what you observed — your feedback is how we validate this.
+**⚠️ Experimental — not yet validated on real hardware.** The register map comes from community references (`syssi/esphome-smg-ii`) and has passed all unit and integration tests, but no one has confirmed that writing to register 233 on real SMG-II hardware produces the expected effect. If you try it and something looks wrong, remove the `executor:` block and nothing further happens; the add-on reverts to read-only. Please [open an issue](https://github.com/svitgrid/home-assistant-svitgrid/issues) with what you observed — your feedback is how we validate this.
 
 Future releases will add Deye, Growatt, and more SMG-II commands (sell-power cap, charge window, working mode).
 
@@ -93,23 +93,17 @@ Future releases will add Deye, Growatt, and more SMG-II commands (sell-power cap
 | `Skipping command — signingKeyId X not in trusted keys` | Admin key hasn't propagated yet. In v0.2.0 this usually means your HA installed BEFORE the admin key was registered in the household; re-bootstrap to pull the current trusted keys. | Restart HA, or re-add the integration via the mobile app |
 | `Command X (set_battery_charge) dispatchable but no executor configured` | The add-on received a signed command from the Svitgrid app but you haven't added an `executor:` block to `configuration.yaml` | Add the executor block (see above) or leave it out to stay read-only |
 
-## Migration between Svitgrid environments
+## Cloud endpoint changes
 
-The integration is auto-migrated by Svitgrid when your household moves
-between staging (`api-staging.svitgrid.app`) and production
-(`api.svitgrid.app`). You don't need to update the API URL in
+The integration talks to `https://api.svitgrid.app`. If Svitgrid ever moves
+the API, the server sends a `set_cloud_endpoint` command and the integration
+switches by itself. You don't need to change the API URL in
 Settings → Devices & Services → Svitgrid.
 
-The migration happens via a server-issued `set_cloud_endpoint` command
-that the integration's command poller processes internally. The URL is
-validated against an allow-list (only the two Svitgrid hostnames are
-accepted), the ConfigEntry is updated atomically, and the integration
-reloads in-place — your entities stay stable, no user action required.
-
-If you manually changed `api_base` to a custom URL for development,
-that override survives an auto-migration only if it's one of the allowed
-hostnames; any other value gets rejected by the integration with
-`reason: disallowed_url` in the server's audit log.
+The integration checks the new URL against an allow-list, which holds only
+`https://api.svitgrid.app`. It then updates the ConfigEntry and reloads in
+place, so your entities stay the same. It rejects any other URL, and the
+server's audit log records `reason: disallowed_url`.
 
 ## Updates
 
