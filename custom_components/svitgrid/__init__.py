@@ -15,7 +15,6 @@ import contextlib
 import logging
 import os
 from datetime import UTC, datetime
-from pathlib import Path
 from types import SimpleNamespace
 
 import voluptuous as vol
@@ -36,7 +35,6 @@ from .cloud_endpoint_handler import probe_endpoint_auth
 from .command_poller import run_loop as run_command_loop
 from .const import (
     COMMAND_POLL_INTERVAL_S,
-    CONF_AUTO_UPDATE,
     CONF_LOCAL_ONLY,
     DEFAULT_API_BASE,
     DOMAIN,
@@ -89,8 +87,6 @@ from .settings_sync import find_edge_settings_snapshot
 from .settings_sync import settings_sync_loop as run_settings_sync_loop
 from .telegram.runtime import TelegramRuntime, household_key
 from .telegram.views import async_ensure_telegram_views, telegram_state, unlink_device
-from .update import SvitgridUpdateCoordinator
-from .updater import read_installed_version
 from .zigbee_devices import ZigbeeDeviceStore
 
 _LOGGER = logging.getLogger(__name__)
@@ -617,11 +613,8 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     api_client = SvitgridApiClient(session, api_base=api_base)
     # manifest.json is read in the executor: a file read on the event loop makes
     # Home Assistant log a blocking-call warning with a stack trace (#1210).
-    # The second call warms the cache push_readings_batch reads haVersion from.
-    integration_version = await hass.async_add_executor_job(
-        read_installed_version, Path(__file__).parent
-    )
-    await async_integration_version(hass)
+    # The same call warms the cache push_readings_batch reads haVersion from.
+    integration_version = await async_integration_version(hass)
     keystore = SvitgridKeystore(hass)
 
     state = await keystore.load()
@@ -743,11 +736,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     session = aiohttp_client.async_get_clientsession(hass)
     # manifest.json is read in the executor: a file read on the event loop makes
     # Home Assistant log a blocking-call warning with a stack trace (#1210).
-    # The second call warms the cache push_readings_batch reads haVersion from.
-    integration_version = await hass.async_add_executor_job(
-        read_installed_version, Path(__file__).parent
-    )
-    await async_integration_version(hass)
+    # The same call warms the cache push_readings_batch reads haVersion from.
+    integration_version = await async_integration_version(hass)
     # A local-only entry was paired over the LAN by a guest with no cloud
     # account: it has no api_key, api_base, edge_device_id or household_id.
     # It gets no keyed API client, so no loop below can call the cloud and
@@ -767,10 +757,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # the `add_trusted_key` carrying our own key arrives on approval.
     activity.set_signing_key_approved(data.get("trusted_key_status", "approved") != "pending")
     inverters = _inverters_from_entry(entry)
-    # v0.15.3: late-binding holder connecting the wake loop's server-pushed
-    # updateCheck nudge to the update coordinator (created much further down).
-    _update_nudge: dict = {}
-
     # Seed the keystore blob from entry data.
     # Purpose 1 (keystore-population fix, SP2): if entry.data["island_key"] is
     #   set (island pairing), write it into the keystore blob.  At config-flow
@@ -1191,16 +1177,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 # set by this point; the None annotation covers that hoisted
                 # default for type-checking only).
                 control=control,
-                # v0.15.3: server-pushed `{"updateCheck": true}` on the config
-                # topic nudges the update coordinator to check GitHub NOW
-                # instead of waiting out the 12h cycle. Late-bound holder: the
-                # coordinator is created further down; until then the nudge is
-                # a silent no-op. The wake loop marshals this callback onto the
-                # asyncio loop, so async_create_task is safe here.
-                on_update_check=lambda: (
-                    (_c := _update_nudge.get("coordinator")) is not None
-                    and hass.async_create_task(_c.async_request_refresh())
-                ),
             ),
             name="svitgrid_mqtt_wake",
         )
@@ -1264,17 +1240,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             lifecycle.reason,
             entry.entry_id,
         )
-
-    update_coordinator = SvitgridUpdateCoordinator(
-        hass,
-        session=aiohttp_client.async_get_clientsession(hass),
-        install_dir=Path(__file__).parent,
-        installed_version=integration_version,
-        activity=activity,
-        get_auto_update=lambda: entry.options.get(CONF_AUTO_UPDATE, True),
-    )
-    # v0.15.3: arm the wake loop's updateCheck nudge.
-    _update_nudge["coordinator"] = update_coordinator
 
     if eybond_inverters:
         # One hub, N sessions, routed by the serial each collector reports.
@@ -1381,7 +1346,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "cancel_rollup": cancel_rollup,
         "lifecycle": lifecycle,
         "mqtt_control": control,
-        "update_coordinator": update_coordinator,
         "read_now": read_now_triggers,
         "true_island": true_island,
         "settings_snapshots": settings_snapshots,
@@ -1393,10 +1357,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     }
     await _start_telegram(hass, entry, store)
     await hass.config_entries.async_forward_entry_setups(
-        entry, ["sensor", "binary_sensor", "update", "button"]
-    )
-    hass.async_create_background_task(
-        update_coordinator.async_refresh(), name="svitgrid_update_first_check"
+        entry, ["sensor", "binary_sensor", "button"]
     )
     _LOGGER.info(
         "Svitgrid started from config entry %s with %d inverter(s)",
@@ -1409,9 +1370,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Cancel background tasks when the user removes the integration."""
-    await hass.config_entries.async_unload_platforms(
-        entry, ["sensor", "binary_sensor", "update", "button"]
-    )
+    await hass.config_entries.async_unload_platforms(entry, ["sensor", "binary_sensor", "button"])
     remove_panel(hass)
     state = hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
     await _stop_telegram_if_last(hass)

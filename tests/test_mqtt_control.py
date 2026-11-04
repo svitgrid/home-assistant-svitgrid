@@ -134,43 +134,23 @@ def test_bootstrapped_never_touched():
     assert state2.bootstrapped is False
 
 
-def test_update_check_true_fires_callback():
+def test_update_check_is_ignored():
+    """HACS owns installs and updates (hacs/default#13218), so a server-sent
+    `updateCheck` no longer triggers anything; sibling fields still apply."""
     state = MqttControlState()
-    calls = []
-    apply_config(state, json.dumps({"updateCheck": True}), on_update_check=lambda: calls.append(1))
-    assert calls == [1]
-    # and it must not disturb other fields
+    apply_config(state, json.dumps({"updateCheck": True, "ingestIntervalMs": 30000}))
+    assert state.interval_s == 30
     assert state.mqtt_primary is False
 
 
-def test_update_check_absent_or_falsy_does_not_fire():
-    state = MqttControlState()
-    calls = []
-    apply_config(
-        state, json.dumps({"mqttPublishReadings": True}), on_update_check=lambda: calls.append(1)
-    )
-    apply_config(state, json.dumps({"updateCheck": False}), on_update_check=lambda: calls.append(1))
-    apply_config(state, json.dumps({"updateCheck": "yes"}), on_update_check=lambda: calls.append(1))
-    assert calls == []
-    assert state.mqtt_primary is True
+def test_integration_ships_no_self_updater():
+    """The integration must never replace its own files or restart Home
+    Assistant: HACS rejects a default-catalog entry that does
+    (hacs/default#13218)."""
+    import importlib.util
 
-
-def test_update_check_callback_exception_is_swallowed():
-    state = MqttControlState()
-
-    def boom():
-        raise RuntimeError("boom")
-
-    # must not raise, and must still apply sibling fields
-    apply_config(
-        state, json.dumps({"updateCheck": True, "ingestIntervalMs": 30000}), on_update_check=boom
-    )
-    assert state.interval_s == 30
-
-
-def test_update_check_without_callback_is_noop():
-    state = MqttControlState()
-    apply_config(state, json.dumps({"updateCheck": True}))  # no callback wired — no raise
+    for module in ("updater", "update"):
+        assert importlib.util.find_spec(f"custom_components.svitgrid.{module}") is None
 
 
 # ── Live mode (dynamic cadence plan 2) ──────────────────────────────────────

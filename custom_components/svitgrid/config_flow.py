@@ -41,7 +41,6 @@ from homeassistant.helpers.selector import (
 from . import local_pairing
 from .api_client import SvitgridApiClient
 from .const import (
-    CONF_AUTO_UPDATE,
     CONF_LOCAL_ONLY,
     DEFAULT_API_BASE,
     DOMAIN,
@@ -1347,7 +1346,7 @@ class SvitgridOptionsFlow(EybondCollectorSteps, config_entries.OptionsFlow):
 
     # ── menu ────────────────────────────────────────────────────────────
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> FlowResult:
-        options = ["add_inverter", "edit_inverter", "remove_inverter", "settings"]
+        options = ["add_inverter", "edit_inverter", "remove_inverter"]
         if self._entry.data.get(CONF_LOCAL_ONLY):
             # Adding an inverter registers it with the cloud
             # (POST /api/v1/ha/inverters), and a local-only entry has no
@@ -1595,17 +1594,3 @@ class SvitgridOptionsFlow(EybondCollectorSteps, config_entries.OptionsFlow):
                 {vol.Required("inverter_id"): SelectSelector(SelectSelectorConfig(options=options))}
             ),
         )
-
-    # ── settings: auto-update opt-out ─────────────────────────────────────
-    async def async_step_settings(self, user_input: dict[str, Any] | None = None) -> FlowResult:
-        if user_input is not None:
-            return self.async_create_entry(
-                title="", data={CONF_AUTO_UPDATE: bool(user_input[CONF_AUTO_UPDATE])}
-            )
-        current = self._entry.options.get(CONF_AUTO_UPDATE, True)
-        schema = vol.Schema(
-            {
-                vol.Required(CONF_AUTO_UPDATE, default=current): BooleanSelector(),
-            }
-        )
-        return self.async_show_form(step_id="settings", data_schema=schema)

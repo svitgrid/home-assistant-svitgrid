@@ -176,13 +176,6 @@
           "inverterTemperature": "Inverter temperature (°C)"
         }
       },
-      "settings": {
-        "title": "Automatic updates",
-        "description": "When on, Svitgrid installs new releases automatically and restarts Home Assistant to apply them.",
-        "data": {
-          "auto_update": "Automatically install updates"
-        }
-      },
       "add_inverter": {
         "title": "Add inverter",
         "description": "How is this inverter connected?",

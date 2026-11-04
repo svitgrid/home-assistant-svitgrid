@@ -94,10 +94,6 @@ def station(hass, enable_custom_integrations, tmp_path, monkeypatch, aioclient_m
         patch("custom_components.svitgrid.register_views"),
         patch("custom_components.svitgrid.register_panel", new_callable=AsyncMock),
         patch("custom_components.svitgrid.remove_panel"),
-        patch(
-            "custom_components.svitgrid.SvitgridUpdateCoordinator.async_refresh",
-            AsyncMock(return_value=None),
-        ),
         patch.object(hass.config_entries, "async_forward_entry_setups", AsyncMock()),
         patch.object(hass.config_entries, "async_unload_platforms", AsyncMock(return_value=True)),
     ):

@@ -111,13 +111,11 @@ that override survives an auto-migration only if it's one of the allowed
 hostnames; any other value gets rejected by the integration with
 `reason: disallowed_url` in the server's audit log.
 
-## Automatic updates
+## Updates
 
-Svitgrid checks GitHub for a new release every 12 hours and installs it
-automatically (Home Assistant restarts to apply the new code). It never restarts
-while a command is running. Turn it off in
-**Settings → Devices & Services → Svitgrid → Configure → Settings**; you can then
-update manually from **Settings → Updates**.
+HACS installs and updates Svitgrid. When a new release is out, HACS shows it
+under **Settings → Updates**, with its release notes. You choose when to
+install it and when to restart Home Assistant.
 
 ## License
 

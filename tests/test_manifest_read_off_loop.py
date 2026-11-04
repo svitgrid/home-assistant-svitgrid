@@ -121,15 +121,17 @@ async def test_setup_entry_reads_the_manifest_off_the_event_loop(
         patch.object(ReadingStore, "prune_inverters_not_in", AsyncMock(return_value=0)),
         patch.object(
             hass.config_entries, "async_forward_entry_setups", AsyncMock(return_value=True)
-        ),
+        ) as forward,
     ):
         assert await async_setup_entry(hass, entry) is True
         await hass.async_block_till_done()
 
     assert loop_reads == []
     assert cp.call_args.kwargs["integration_version"] == _VERSION
-    coordinator = hass.data[DOMAIN][entry.entry_id]["update_coordinator"]
-    assert coordinator.installed_version == _VERSION
+    # HACS owns installs and updates (hacs/default#13218): the integration
+    # forwards no `update` platform and keeps no update coordinator.
+    assert "update" not in forward.call_args.args[1]
+    assert "update_coordinator" not in hass.data[DOMAIN][entry.entry_id]
     # Readings batches carry haVersion from the same cache; setup warmed it,
     # so the push made on the loop reads nothing.
     from custom_components.svitgrid.api_client import _integration_version

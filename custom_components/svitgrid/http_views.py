@@ -181,10 +181,10 @@ class SvitgridHistoryView(_BaseView):
         #
         # It is a shared contract. The panel ships inside the add-on and moves
         # in lockstep with it, but the mobile app is a separate release train
-        # (app-store review, then user updates) while the add-on self-updates
-        # via HACS within ~12h -- so the add-on always lands first, and any
-        # change requiring both sides to move together leaves a long window of
-        # broken clients.
+        # (app-store review, then user updates) while the add-on updates
+        # whenever its owner installs the release from HACS -- so either side
+        # can land first, by days, and any change requiring both sides to move
+        # together leaves a long window of broken clients.
         #
         # The app already compensates for the UTC window client-side: it
         # enumerates the UTC days its local range spans and merges them.

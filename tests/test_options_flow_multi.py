@@ -143,4 +143,4 @@ async def test_a_local_only_entry_is_not_offered_add_inverter(hass):
     res = await flow.async_step_init()
     assert res["type"] == "menu"
     assert "add_inverter" not in res["menu_options"]
-    assert {"edit_inverter", "remove_inverter", "settings"} <= set(res["menu_options"])
+    assert set(res["menu_options"]) == {"edit_inverter", "remove_inverter"}

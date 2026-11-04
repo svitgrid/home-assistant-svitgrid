@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.27.0 — 2026-11-04
+
+### Removed
+- **The integration no longer updates itself.** HACS installs and updates it,
+  and you choose when to update and restart Home Assistant. Removed with it:
+  the 12-hour GitHub release check, the automatic install and restart, the
+  Svitgrid update entity, the **Automatic updates** option, and the server's
+  `updateCheck` nudge over MQTT, which is now ignored. HACS shows its own
+  update entity for the integration (hacs/default#13218).
+
 ## 0.26.1 — 2026-11-03
 
 ### Fixed

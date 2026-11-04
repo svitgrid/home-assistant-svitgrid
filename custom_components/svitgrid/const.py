@@ -375,15 +375,6 @@ DAILY_COUNTER_FIELDS = frozenset(
 )
 PEAK_FIELDS = frozenset({"pvPower", "loadPower"})
 
-# ── auto-update ────────────────────────────────────────────────────────
-GITHUB_REPO = "svitgrid/home-assistant-svitgrid"
-GITHUB_LATEST_RELEASE_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
-GITHUB_USER_AGENT = "svitgrid-ha-integration"
-
-UPDATE_CHECK_INTERVAL_S = 12 * 3600  # how often to poll GitHub for a new release
-RESTART_GUARD_WINDOW_S = 60  # defer auto-restart if a command ran this recently
-CONF_AUTO_UPDATE = "auto_update"  # entry-options key; default True
-
 # The most inverters this add-on will carry, reported verbatim by
 # /api/svitgrid/hello so the app reads a NUMBER rather than inferring a
 # capability from a version string. Mirrors MAX_HA_INVERTERS in the API
