@@ -5,8 +5,14 @@
 ### Removed
 - `https://api-staging.svitgrid.app` is no longer an allowed cloud endpoint.
   The staging API was shut down on 2026-07-21, so a `set_cloud_endpoint`
-  command naming it is now rejected. The README example uses
-  `https://api.svitgrid.app`.
+  command naming it is now rejected.
+
+### Changed
+- The README describes setup as it works since pairing replaced YAML: install
+  through HACS, add the integration, and pair it with the Svitgrid app. It
+  links to the full guide at https://svitgrid.app/docs/home-assistant. The
+  `configuration.yaml` instructions from v0.2.0 are gone; existing YAML
+  installs keep working.
 
 ## 0.27.0 — 2026-11-04
 
