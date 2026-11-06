@@ -435,3 +435,122 @@ def test_read_solarman_logs_a_warning_when_a_range_is_dropped(caplog):
             _read_solarman(cfg, [(1, 100, 1, "FC03"), (1, 200, 1, "FC03")])
 
     assert any("addr=200" in r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING)
+
+
+# ---------------------------------------------------------------------------
+# Unit probes — a Victron GX assigns unit ids dynamically (Venus 2.60+), so a
+# read naming a placeholder unit goes to whichever unit answers the probe.
+# ---------------------------------------------------------------------------
+
+
+class _FakeGx:
+    """A ModbusTcpClient double that answers like a Venus GX: a register only
+    on the unit carrying its service, ExceptionResponse(10) everywhere else."""
+
+    def __init__(self, units, fail_after=None):
+        self.units = units
+        self.calls: list[tuple[int, int]] = []
+        self.fail_after = fail_after
+
+    def connect(self):
+        return True
+
+    def close(self):
+        pass
+
+    def read_holding_registers(self, address, *, count=1, device_id=1):
+        from pymodbus.pdu import ExceptionResponse
+
+        self.calls.append((device_id, address))
+        if self.fail_after is not None and len(self.calls) > self.fail_after:
+            raise OSError("connection reset")
+        regs = self.units.get(device_id, {})
+        words = [regs.get(a) for a in range(address, address + count)]
+        if any(w is None for w in words):
+            return ExceptionResponse(3, 10)
+        result = MagicMock()
+        result.isError.return_value = False
+        result.registers = words
+        return result
+
+
+def _run_read_modbus(gx, ranges, probes, ip="10.0.0.9"):
+    from custom_components.svitgrid.harvest.transport import _read_modbus
+
+    fake_client_mod = types.ModuleType("pymodbus.client")
+    fake_client_mod.ModbusTcpClient = MagicMock(return_value=gx)  # type: ignore[attr-defined]
+    with patch.dict(sys.modules, {"pymodbus.client": fake_client_mod}):
+        return _read_modbus({"ip": ip, "port": "502"}, ranges, unit_probes=probes)
+
+
+def test_read_modbus_reads_a_placeholder_on_the_unit_that_answers_its_probe():
+    from custom_components.svitgrid.harvest.transport import reset_unit_cache
+
+    reset_unit_cache()
+    gx = _FakeGx({100: {817: 242}, 227: {3: 2301}})  # Cerbo GX VE.Bus port
+    raw = _run_read_modbus(gx, [(100, 817, 1, "FC03"), (246, 3, 1, "FC03")], ((246, 3),))
+
+    # Filed under the placeholder, so the decoder needs no change.
+    assert raw == {100: {817: 242}, 246: {3: 2301}}
+    assert (100, 3) not in gx.calls
+
+
+def test_read_modbus_skips_a_service_the_site_lacks_and_scans_once():
+    from custom_components.svitgrid.harvest.transport import reset_unit_cache
+
+    reset_unit_cache()
+    gx = _FakeGx({100: {817: 242}})
+    ranges = [(100, 817, 1, "FC03"), (247, 784, 1, "FC03")]
+    raw = _run_read_modbus(gx, ranges, ((247, 784),))
+    assert raw == {100: {817: 242}}
+    first = len(gx.calls)
+
+    _run_read_modbus(gx, ranges, ((247, 784),))
+    assert gx.calls[first:] == [(100, 817)]
+
+
+def test_read_modbus_transport_failure_mid_scan_is_not_cached():
+    from custom_components.svitgrid.harvest.transport import reset_unit_cache
+
+    reset_unit_cache()
+    gx = _FakeGx({100: {817: 242}, 226: {784: 123}}, fail_after=2)
+    ranges = [(247, 784, 1, "FC03")]
+    try:
+        _run_read_modbus(gx, ranges, ((247, 784),))
+    except OSError:
+        pass
+
+    healthy = _FakeGx({100: {817: 242}, 226: {784: 123}})
+    raw = _run_read_modbus(healthy, ranges, ((247, 784),))
+    assert raw == {247: {784: 123}}
+
+
+async def test_read_raw_hands_the_spec_probes_to_the_modbus_reader(monkeypatch):
+    from custom_components.svitgrid.harvest import transport
+
+    seen = {}
+
+    def fake_read_modbus(cfg, ranges, unit_probes=()):
+        seen["probes"] = unit_probes
+        return {}
+
+    monkeypatch.setattr(transport, "_read_modbus", fake_read_modbus)
+
+    class _Hass:
+        async def async_add_executor_job(self, fn, *args):
+            return fn(*args)
+
+    spec = RegisterSpec.from_dict(
+        {
+            "modelId": "victron_multiplus_ii_3k",
+            "version": 1,
+            "source": "generated",
+            "verified": False,
+            "protocol": "modbus_tcp",
+            "port": 502,
+            "reads": [{"field": "gridVoltageL1", "address": 3, "unitId": 246}],
+            "unitProbes": [{"unitId": 246, "probeAddress": 3}],
+        }
+    )
+    await transport.read_raw(_Hass(), spec, {"ip": "10.0.0.9", "port": "502"})
+    assert seen["probes"] == ((246, 3),)

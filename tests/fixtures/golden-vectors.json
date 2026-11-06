@@ -7482,12 +7482,6 @@
             "unitId": 100
           },
           {
-            "field": "batteryTemperature",
-            "address": 843,
-            "signed": true,
-            "unitId": 100
-          },
-          {
             "field": "gridPower",
             "address": 820,
             "signed": true,
@@ -7497,7 +7491,7 @@
             "field": "gridVoltageL1",
             "address": 3,
             "scale": 0.1,
-            "unitId": 100
+            "unitId": 246
           },
           {
             "field": "loadPower",
@@ -7518,32 +7512,14 @@
             "unitId": 247
           },
           {
-            "field": "pv2Voltage",
-            "address": 776,
-            "scale": 0.01,
-            "unitId": 247
-          },
-          {
-            "field": "pv2Current",
-            "address": 777,
-            "signed": true,
-            "scale": 0.1,
-            "unitId": 247
-          },
-          {
             "field": "pv1Power",
-            "address": 850,
-            "unitId": 100
-          },
-          {
-            "field": "pv2Power",
             "address": 850,
             "unitId": 100
           },
           {
             "field": "dailyPvEnergy",
             "address": 784,
-            "scale": 0.01,
+            "scale": 0.1,
             "unitId": 247
           },
           {
@@ -7569,14 +7545,6 @@
             "builtin": "battery_sign_normalize"
           },
           {
-            "field": "batteryTemperature",
-            "op": "builtin",
-            "inputs": [
-              "batteryTemperature"
-            ],
-            "builtin": "battery_temp_clamp"
-          },
-          {
             "field": "totalPvPower",
             "op": "sum",
             "inputs": [
@@ -7598,7 +7566,21 @@
         ],
         "writes": [],
         "transport": "modbus_tcp",
-        "confidence": "extrapolated"
+        "confidence": "extrapolated",
+        "unitProbes": [
+          {
+            "unitId": 246,
+            "probeAddress": 3
+          },
+          {
+            "unitId": 245,
+            "probeAddress": 307
+          },
+          {
+            "unitId": 247,
+            "probeAddress": 784
+          }
+        ]
       },
       "rawRegisters": {
         "100": {
@@ -7607,14 +7589,16 @@
           "842": 1500,
           "841": 295,
           "820": 65036,
-          "3": 2300,
           "817": 1200,
           "850": 1850
+        },
+        "246": {
+          "3": 2300
         },
         "247": {
           "776": 3850,
           "777": 65,
-          "784": 1850
+          "784": 185
         },
         "245": {
           "307": 500,
@@ -11296,12 +11280,6 @@
             "unitId": 100
           },
           {
-            "field": "batteryTemperature",
-            "address": 843,
-            "signed": true,
-            "unitId": 100
-          },
-          {
             "field": "gridPower",
             "address": 820,
             "signed": true,
@@ -11311,7 +11289,7 @@
             "field": "gridVoltageL1",
             "address": 3,
             "scale": 0.1,
-            "unitId": 100
+            "unitId": 246
           },
           {
             "field": "loadPower",
@@ -11332,32 +11310,14 @@
             "unitId": 247
           },
           {
-            "field": "pv2Voltage",
-            "address": 776,
-            "scale": 0.01,
-            "unitId": 247
-          },
-          {
-            "field": "pv2Current",
-            "address": 777,
-            "signed": true,
-            "scale": 0.1,
-            "unitId": 247
-          },
-          {
             "field": "pv1Power",
-            "address": 850,
-            "unitId": 100
-          },
-          {
-            "field": "pv2Power",
             "address": 850,
             "unitId": 100
           },
           {
             "field": "dailyPvEnergy",
             "address": 784,
-            "scale": 0.01,
+            "scale": 0.1,
             "unitId": 247
           },
           {
@@ -11383,14 +11343,6 @@
             "builtin": "battery_sign_normalize"
           },
           {
-            "field": "batteryTemperature",
-            "op": "builtin",
-            "inputs": [
-              "batteryTemperature"
-            ],
-            "builtin": "battery_temp_clamp"
-          },
-          {
             "field": "totalPvPower",
             "op": "sum",
             "inputs": [
@@ -11412,7 +11364,21 @@
         ],
         "writes": [],
         "transport": "modbus_tcp",
-        "confidence": "extrapolated"
+        "confidence": "extrapolated",
+        "unitProbes": [
+          {
+            "unitId": 246,
+            "probeAddress": 3
+          },
+          {
+            "unitId": 245,
+            "probeAddress": 307
+          },
+          {
+            "unitId": 247,
+            "probeAddress": 784
+          }
+        ]
       },
       "rawRegisters": {
         "100": {
@@ -11421,14 +11387,16 @@
           "842": 1500,
           "841": 295,
           "820": 65036,
-          "3": 2300,
           "817": 1200,
           "850": 1850
+        },
+        "246": {
+          "3": 2300
         },
         "247": {
           "776": 3850,
           "777": 65,
-          "784": 1850
+          "784": 185
         },
         "245": {
           "307": 500,
@@ -11484,12 +11452,6 @@
             "unitId": 100
           },
           {
-            "field": "batteryTemperature",
-            "address": 843,
-            "signed": true,
-            "unitId": 100
-          },
-          {
             "field": "gridPower",
             "address": 820,
             "signed": true,
@@ -11499,7 +11461,7 @@
             "field": "gridVoltageL1",
             "address": 3,
             "scale": 0.1,
-            "unitId": 100
+            "unitId": 246
           },
           {
             "field": "loadPower",
@@ -11520,32 +11482,14 @@
             "unitId": 247
           },
           {
-            "field": "pv2Voltage",
-            "address": 776,
-            "scale": 0.01,
-            "unitId": 247
-          },
-          {
-            "field": "pv2Current",
-            "address": 777,
-            "signed": true,
-            "scale": 0.1,
-            "unitId": 247
-          },
-          {
             "field": "pv1Power",
-            "address": 850,
-            "unitId": 100
-          },
-          {
-            "field": "pv2Power",
             "address": 850,
             "unitId": 100
           },
           {
             "field": "dailyPvEnergy",
             "address": 784,
-            "scale": 0.01,
+            "scale": 0.1,
             "unitId": 247
           },
           {
@@ -11571,14 +11515,6 @@
             "builtin": "battery_sign_normalize"
           },
           {
-            "field": "batteryTemperature",
-            "op": "builtin",
-            "inputs": [
-              "batteryTemperature"
-            ],
-            "builtin": "battery_temp_clamp"
-          },
-          {
             "field": "totalPvPower",
             "op": "sum",
             "inputs": [
@@ -11600,7 +11536,21 @@
         ],
         "writes": [],
         "transport": "modbus_tcp",
-        "confidence": "extrapolated"
+        "confidence": "extrapolated",
+        "unitProbes": [
+          {
+            "unitId": 246,
+            "probeAddress": 3
+          },
+          {
+            "unitId": 245,
+            "probeAddress": 307
+          },
+          {
+            "unitId": 247,
+            "probeAddress": 784
+          }
+        ]
       },
       "rawRegisters": {
         "100": {
@@ -11609,14 +11559,16 @@
           "842": 1500,
           "841": 295,
           "820": 65036,
-          "3": 2300,
           "817": 1200,
           "850": 1850
+        },
+        "246": {
+          "3": 2300
         },
         "247": {
           "776": 3850,
           "777": 65,
-          "784": 1850
+          "784": 185
         },
         "245": {
           "307": 500,
@@ -11672,12 +11624,6 @@
             "unitId": 100
           },
           {
-            "field": "batteryTemperature",
-            "address": 843,
-            "signed": true,
-            "unitId": 100
-          },
-          {
             "field": "gridPower",
             "address": 820,
             "signed": true,
@@ -11687,7 +11633,7 @@
             "field": "gridVoltageL1",
             "address": 3,
             "scale": 0.1,
-            "unitId": 100
+            "unitId": 246
           },
           {
             "field": "loadPower",
@@ -11708,32 +11654,14 @@
             "unitId": 247
           },
           {
-            "field": "pv2Voltage",
-            "address": 776,
-            "scale": 0.01,
-            "unitId": 247
-          },
-          {
-            "field": "pv2Current",
-            "address": 777,
-            "signed": true,
-            "scale": 0.1,
-            "unitId": 247
-          },
-          {
             "field": "pv1Power",
-            "address": 850,
-            "unitId": 100
-          },
-          {
-            "field": "pv2Power",
             "address": 850,
             "unitId": 100
           },
           {
             "field": "dailyPvEnergy",
             "address": 784,
-            "scale": 0.01,
+            "scale": 0.1,
             "unitId": 247
           },
           {
@@ -11759,14 +11687,6 @@
             "builtin": "battery_sign_normalize"
           },
           {
-            "field": "batteryTemperature",
-            "op": "builtin",
-            "inputs": [
-              "batteryTemperature"
-            ],
-            "builtin": "battery_temp_clamp"
-          },
-          {
             "field": "totalPvPower",
             "op": "sum",
             "inputs": [
@@ -11788,7 +11708,21 @@
         ],
         "writes": [],
         "transport": "modbus_tcp",
-        "confidence": "extrapolated"
+        "confidence": "extrapolated",
+        "unitProbes": [
+          {
+            "unitId": 246,
+            "probeAddress": 3
+          },
+          {
+            "unitId": 245,
+            "probeAddress": 307
+          },
+          {
+            "unitId": 247,
+            "probeAddress": 784
+          }
+        ]
       },
       "rawRegisters": {
         "100": {
@@ -11797,14 +11731,16 @@
           "842": 1500,
           "841": 295,
           "820": 65036,
-          "3": 2300,
           "817": 1200,
           "850": 1850
+        },
+        "246": {
+          "3": 2300
         },
         "247": {
           "776": 3850,
           "777": 65,
-          "784": 1850
+          "784": 185
         },
         "245": {
           "307": 500,
@@ -11860,12 +11796,6 @@
             "unitId": 100
           },
           {
-            "field": "batteryTemperature",
-            "address": 843,
-            "signed": true,
-            "unitId": 100
-          },
-          {
             "field": "gridPower",
             "address": 820,
             "signed": true,
@@ -11875,7 +11805,7 @@
             "field": "gridVoltageL1",
             "address": 3,
             "scale": 0.1,
-            "unitId": 100
+            "unitId": 246
           },
           {
             "field": "loadPower",
@@ -11896,32 +11826,14 @@
             "unitId": 247
           },
           {
-            "field": "pv2Voltage",
-            "address": 776,
-            "scale": 0.01,
-            "unitId": 247
-          },
-          {
-            "field": "pv2Current",
-            "address": 777,
-            "signed": true,
-            "scale": 0.1,
-            "unitId": 247
-          },
-          {
             "field": "pv1Power",
-            "address": 850,
-            "unitId": 100
-          },
-          {
-            "field": "pv2Power",
             "address": 850,
             "unitId": 100
           },
           {
             "field": "dailyPvEnergy",
             "address": 784,
-            "scale": 0.01,
+            "scale": 0.1,
             "unitId": 247
           },
           {
@@ -11947,14 +11859,6 @@
             "builtin": "battery_sign_normalize"
           },
           {
-            "field": "batteryTemperature",
-            "op": "builtin",
-            "inputs": [
-              "batteryTemperature"
-            ],
-            "builtin": "battery_temp_clamp"
-          },
-          {
             "field": "totalPvPower",
             "op": "sum",
             "inputs": [
@@ -11976,7 +11880,21 @@
         ],
         "writes": [],
         "transport": "modbus_tcp",
-        "confidence": "extrapolated"
+        "confidence": "extrapolated",
+        "unitProbes": [
+          {
+            "unitId": 246,
+            "probeAddress": 3
+          },
+          {
+            "unitId": 245,
+            "probeAddress": 307
+          },
+          {
+            "unitId": 247,
+            "probeAddress": 784
+          }
+        ]
       },
       "rawRegisters": {
         "100": {
@@ -11985,14 +11903,16 @@
           "842": 1500,
           "841": 295,
           "820": 65036,
-          "3": 2300,
           "817": 1200,
           "850": 1850
+        },
+        "246": {
+          "3": 2300
         },
         "247": {
           "776": 3850,
           "777": 65,
-          "784": 1850
+          "784": 185
         },
         "245": {
           "307": 500,
@@ -12048,12 +11968,6 @@
             "unitId": 100
           },
           {
-            "field": "batteryTemperature",
-            "address": 843,
-            "signed": true,
-            "unitId": 100
-          },
-          {
             "field": "gridPower",
             "address": 820,
             "signed": true,
@@ -12063,7 +11977,7 @@
             "field": "gridVoltageL1",
             "address": 3,
             "scale": 0.1,
-            "unitId": 100
+            "unitId": 246
           },
           {
             "field": "loadPower",
@@ -12084,32 +11998,14 @@
             "unitId": 247
           },
           {
-            "field": "pv2Voltage",
-            "address": 776,
-            "scale": 0.01,
-            "unitId": 247
-          },
-          {
-            "field": "pv2Current",
-            "address": 777,
-            "signed": true,
-            "scale": 0.1,
-            "unitId": 247
-          },
-          {
             "field": "pv1Power",
-            "address": 850,
-            "unitId": 100
-          },
-          {
-            "field": "pv2Power",
             "address": 850,
             "unitId": 100
           },
           {
             "field": "dailyPvEnergy",
             "address": 784,
-            "scale": 0.01,
+            "scale": 0.1,
             "unitId": 247
           },
           {
@@ -12135,14 +12031,6 @@
             "builtin": "battery_sign_normalize"
           },
           {
-            "field": "batteryTemperature",
-            "op": "builtin",
-            "inputs": [
-              "batteryTemperature"
-            ],
-            "builtin": "battery_temp_clamp"
-          },
-          {
             "field": "totalPvPower",
             "op": "sum",
             "inputs": [
@@ -12164,7 +12052,21 @@
         ],
         "writes": [],
         "transport": "modbus_tcp",
-        "confidence": "extrapolated"
+        "confidence": "extrapolated",
+        "unitProbes": [
+          {
+            "unitId": 246,
+            "probeAddress": 3
+          },
+          {
+            "unitId": 245,
+            "probeAddress": 307
+          },
+          {
+            "unitId": 247,
+            "probeAddress": 784
+          }
+        ]
       },
       "rawRegisters": {
         "100": {
@@ -12173,14 +12075,16 @@
           "842": 1500,
           "841": 295,
           "820": 65036,
-          "3": 2300,
           "817": 1200,
           "850": 1850
+        },
+        "246": {
+          "3": 2300
         },
         "247": {
           "776": 3850,
           "777": 65,
-          "784": 1850
+          "784": 185
         },
         "245": {
           "307": 500,
@@ -12236,12 +12140,6 @@
             "unitId": 100
           },
           {
-            "field": "batteryTemperature",
-            "address": 843,
-            "signed": true,
-            "unitId": 100
-          },
-          {
             "field": "gridPower",
             "address": 820,
             "signed": true,
@@ -12251,7 +12149,7 @@
             "field": "gridVoltageL1",
             "address": 3,
             "scale": 0.1,
-            "unitId": 100
+            "unitId": 246
           },
           {
             "field": "loadPower",
@@ -12272,32 +12170,14 @@
             "unitId": 247
           },
           {
-            "field": "pv2Voltage",
-            "address": 776,
-            "scale": 0.01,
-            "unitId": 247
-          },
-          {
-            "field": "pv2Current",
-            "address": 777,
-            "signed": true,
-            "scale": 0.1,
-            "unitId": 247
-          },
-          {
             "field": "pv1Power",
-            "address": 850,
-            "unitId": 100
-          },
-          {
-            "field": "pv2Power",
             "address": 850,
             "unitId": 100
           },
           {
             "field": "dailyPvEnergy",
             "address": 784,
-            "scale": 0.01,
+            "scale": 0.1,
             "unitId": 247
           },
           {
@@ -12323,14 +12203,6 @@
             "builtin": "battery_sign_normalize"
           },
           {
-            "field": "batteryTemperature",
-            "op": "builtin",
-            "inputs": [
-              "batteryTemperature"
-            ],
-            "builtin": "battery_temp_clamp"
-          },
-          {
             "field": "totalPvPower",
             "op": "sum",
             "inputs": [
@@ -12352,7 +12224,21 @@
         ],
         "writes": [],
         "transport": "modbus_tcp",
-        "confidence": "extrapolated"
+        "confidence": "extrapolated",
+        "unitProbes": [
+          {
+            "unitId": 246,
+            "probeAddress": 3
+          },
+          {
+            "unitId": 245,
+            "probeAddress": 307
+          },
+          {
+            "unitId": 247,
+            "probeAddress": 784
+          }
+        ]
       },
       "rawRegisters": {
         "100": {
@@ -12361,14 +12247,16 @@
           "842": 1500,
           "841": 295,
           "820": 65036,
-          "3": 2300,
           "817": 1200,
           "850": 1850
+        },
+        "246": {
+          "3": 2300
         },
         "247": {
           "776": 3850,
           "777": 65,
-          "784": 1850
+          "784": 185
         },
         "245": {
           "307": 500,
@@ -12424,12 +12312,6 @@
             "unitId": 100
           },
           {
-            "field": "batteryTemperature",
-            "address": 843,
-            "signed": true,
-            "unitId": 100
-          },
-          {
             "field": "gridPower",
             "address": 820,
             "signed": true,
@@ -12439,7 +12321,7 @@
             "field": "gridVoltageL1",
             "address": 3,
             "scale": 0.1,
-            "unitId": 100
+            "unitId": 246
           },
           {
             "field": "loadPower",
@@ -12460,32 +12342,14 @@
             "unitId": 247
           },
           {
-            "field": "pv2Voltage",
-            "address": 776,
-            "scale": 0.01,
-            "unitId": 247
-          },
-          {
-            "field": "pv2Current",
-            "address": 777,
-            "signed": true,
-            "scale": 0.1,
-            "unitId": 247
-          },
-          {
             "field": "pv1Power",
-            "address": 850,
-            "unitId": 100
-          },
-          {
-            "field": "pv2Power",
             "address": 850,
             "unitId": 100
           },
           {
             "field": "dailyPvEnergy",
             "address": 784,
-            "scale": 0.01,
+            "scale": 0.1,
             "unitId": 247
           },
           {
@@ -12511,14 +12375,6 @@
             "builtin": "battery_sign_normalize"
           },
           {
-            "field": "batteryTemperature",
-            "op": "builtin",
-            "inputs": [
-              "batteryTemperature"
-            ],
-            "builtin": "battery_temp_clamp"
-          },
-          {
             "field": "totalPvPower",
             "op": "sum",
             "inputs": [
@@ -12540,7 +12396,21 @@
         ],
         "writes": [],
         "transport": "modbus_tcp",
-        "confidence": "extrapolated"
+        "confidence": "extrapolated",
+        "unitProbes": [
+          {
+            "unitId": 246,
+            "probeAddress": 3
+          },
+          {
+            "unitId": 245,
+            "probeAddress": 307
+          },
+          {
+            "unitId": 247,
+            "probeAddress": 784
+          }
+        ]
       },
       "rawRegisters": {
         "100": {
@@ -12549,14 +12419,16 @@
           "842": 1500,
           "841": 295,
           "820": 65036,
-          "3": 2300,
           "817": 1200,
           "850": 1850
+        },
+        "246": {
+          "3": 2300
         },
         "247": {
           "776": 3850,
           "777": 65,
-          "784": 1850
+          "784": 185
         },
         "245": {
           "307": 500,
@@ -21385,13 +21257,13 @@
             "independentOf": "solax_vendor_modbus_pdf"
           },
           {
-            "project": "evcc-io/evcc meter template (Hybrid X1/X3 G3/G4 + Qcells Q.HOME rebrand) — corroborates the grid and battery sign conventions and the little-word-first 32-bit order",
+            "project": "evcc-io/evcc meter template (Hybrid X1/X3 G3/G4 + Qcells Q.HOME rebrand) \u2014 corroborates the grid and battery sign conventions and the little-word-first 32-bit order",
             "url": "https://github.com/evcc-io/evcc/blob/master/templates/definition/meter/solax.yaml",
             "retrievedAt": "2026-08-23",
             "independentOf": "solax_vendor_modbus_pdf"
           },
           {
-            "project": "Live capture of SolaX X3-Hybrid G4 unit H34A15IB610126 (2026-08-23 13:35:45, site OFF-GRID) — a measurement with no document lineage",
+            "project": "Live capture of SolaX X3-Hybrid G4 unit H34A15IB610126 (2026-08-23 13:35:45, site OFF-GRID) \u2014 a measurement with no document lineage",
             "url": "https://github.com/ivanursul/svitgrid/blob/main/docs/inverter-research/captures/2026-08-23-solax-x3-hybrid-g4-h34a15ib610126.json",
             "retrievedAt": "2026-08-23"
           }

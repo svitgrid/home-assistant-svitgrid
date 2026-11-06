@@ -161,3 +161,42 @@ def test_read_def_parses_low_word_first():
     soc = next(r for r in spec.reads if r.field == "batterySoc")
     assert daily.low_word_first is True
     assert soc.low_word_first is False  # default
+
+
+# --- unitProbes (Victron GX: unit ids are assigned dynamically) -------------
+
+VICTRON = {
+    "modelId": "victron_multiplus_ii_3k",
+    "version": 1,
+    "source": "generated",
+    "verified": False,
+    "protocol": "modbus_tcp",
+    "port": 502,
+    "defaultSlaveId": 1,
+    "flags": {},
+    "reads": [
+        {"field": "loadPower", "address": 817, "unitId": 100},
+        {"field": "gridVoltageL1", "address": 3, "scale": 0.1, "unitId": 246},
+    ],
+    "derivations": [],
+    "writes": [],
+    "unitProbes": [{"unitId": 246, "probeAddress": 3}],
+}
+
+
+def test_unit_probes_parse_and_default_to_none():
+    spec = RegisterSpec.from_dict(VICTRON)
+    assert spec.unit_probes == ((246, 3),)
+    assert spec.validate() == []
+    assert RegisterSpec.from_dict(DEYE).unit_probes == ()
+
+
+def test_validate_refuses_a_probe_no_read_names():
+    doc = {**VICTRON, "unitProbes": [{"unitId": 246, "probeAddress": 3}, {"unitId": 247, "probeAddress": 784}]}
+    problems = RegisterSpec.from_dict(doc).validate()
+    assert any("unitProbes: unit 247" in p for p in problems)
+
+
+def test_validate_refuses_a_probe_outside_1_to_247():
+    doc = {**VICTRON, "unitProbes": [{"unitId": 0, "probeAddress": 3}]}
+    assert any("1-247" in p for p in RegisterSpec.from_dict(doc).validate())

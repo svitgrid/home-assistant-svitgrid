@@ -263,6 +263,14 @@ class RegisterSpec:
     reads: tuple[ReadDef, ...]
     derivations: tuple[Derivation, ...]
     writes: tuple[WriteCommand, ...]
+    # (placeholder unit id, probe address) pairs. A read naming the
+    # placeholder goes to whichever unit answers a holding-register read of
+    # the probe address (transport.resolve_units). Only Victron has any: a GX
+    # has assigned unit ids dynamically since Venus 2.60, and the fixed ids
+    # read 0 V grid and no daily PV on most sites. Top-level in the document
+    # because an older add-on refuses an unknown READ key but ignores an
+    # unknown top-level one, and keeps reading the placeholder directly.
+    unit_probes: tuple[tuple[int, int], ...] = ()
 
     @staticmethod
     def from_dict(d: dict) -> RegisterSpec:
@@ -276,6 +284,9 @@ class RegisterSpec:
             reads=tuple(ReadDef.from_dict(r) for r in d.get("reads", [])),
             derivations=tuple(Derivation.from_dict(x) for x in d.get("derivations", [])),
             writes=tuple(WriteCommand.from_dict(w) for w in d.get("writes", [])),
+            unit_probes=tuple(
+                (int(p["unitId"]), int(p["probeAddress"])) for p in (d.get("unitProbes") or [])
+            ),
         )
 
     def validate(self) -> list[str]:
@@ -289,6 +300,18 @@ class RegisterSpec:
                 )
             if r.mask is not None and r.words != 1:
                 problems.append(f"read {r.field}: mask is only valid on a 1-word read")
+        named_units = {r.unit_id for r in self.reads}
+        seen_units: set[int] = set()
+        for unit, probe_address in self.unit_probes:
+            if not 1 <= unit <= 247:
+                problems.append(f"unitProbes: unit {unit} is outside 1-247")
+            if unit in seen_units:
+                problems.append(f"unitProbes: unit {unit} is declared twice")
+            seen_units.add(unit)
+            if unit not in named_units:
+                problems.append(f"unitProbes: unit {unit} is named by no read")
+            if probe_address < 0:
+                problems.append(f"unitProbes: unit {unit} has a negative probe address")
         for x in self.derivations:
             if x.op == "builtin" and (x.builtin not in BUILTIN_CATALOG):
                 problems.append(f"unknown builtin: {x.builtin}")

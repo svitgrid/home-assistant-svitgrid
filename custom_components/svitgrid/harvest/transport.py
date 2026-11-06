@@ -5,6 +5,7 @@ socket I/O is run by the caller via hass.async_add_executor_job."""
 from __future__ import annotations
 
 import contextlib
+import functools
 import logging
 import time
 
@@ -63,6 +64,10 @@ async def read_raw(hass, spec: RegisterSpec, cfg: dict) -> RawRegisters:
             return await hass.async_add_executor_job(_read_solarman, cfg, ranges)
     if spec.protocol == "modbus_tcp":
         async with logger_lock(cfg):
+            if spec.unit_probes:
+                return await hass.async_add_executor_job(
+                    functools.partial(_read_modbus, cfg, ranges, unit_probes=spec.unit_probes)
+                )
             return await hass.async_add_executor_job(_read_modbus, cfg, ranges)
     _LOGGER.error("unsupported harvest protocol: %s", spec.protocol)
     raise ValueError(f"unsupported protocol: {spec.protocol}")
@@ -223,7 +228,74 @@ def _read_solarman(cfg: dict, ranges: list[tuple[int, int, int, str]]) -> RawReg
     return out
 
 
-def _read_modbus(cfg: dict, ranges: list[tuple[int, int, int, str]]) -> RawRegisters:
+# How long a resolved (or absent) unit id is trusted before it is probed again.
+UNIT_CACHE_TTL_S = 3600.0
+
+# (ip, port, placeholder unit, probe address) -> (real unit or None, when).
+_UNIT_CACHE: dict[tuple[str, int, int, int], tuple[int | None, float]] = {}
+
+
+def reset_unit_cache() -> None:
+    """Forget every resolved unit id. For tests."""
+    _UNIT_CACHE.clear()
+
+
+def _unit_candidates(placeholder: int) -> list[int]:
+    """The placeholder first (the service's preferred id), then 247 down to 1:
+    a GX gives its own ports ids in the 200s. Mirrors Dart's
+    UnitResolver.candidateOrder."""
+    return [placeholder] + [u for u in range(247, 0, -1) if u != placeholder]
+
+
+def _is_exception_response(rr) -> bool:
+    """True for a Modbus exception reply (the unit does not carry the register),
+    as opposed to a transport failure. pymodbus returns ExceptionResponse, whose
+    exception_code is an int."""
+    return rr.isError() and isinstance(getattr(rr, "exception_code", None), int)
+
+
+def resolve_units(client, cfg: dict, unit_probes) -> dict[int, int | None]:
+    """The real unit id behind each placeholder in *unit_probes*, or None where
+    no unit answers the probe.
+
+    A missing service is cached as well, so a site with no solar charger costs
+    one scan per hour rather than one per poll. A transport failure during a
+    scan raises and caches nothing.
+    """
+    out: dict[int, int | None] = {}
+    now = time.monotonic()
+    for placeholder, probe_address in unit_probes:
+        key = (str(cfg["ip"]), int(cfg.get("port", 502)), placeholder, probe_address)
+        hit = _UNIT_CACHE.get(key)
+        if hit is not None and now - hit[1] <= UNIT_CACHE_TTL_S:
+            out[placeholder] = hit[0]
+            continue
+        found: int | None = None
+        for unit in _unit_candidates(placeholder):
+            rr = client.read_holding_registers(probe_address, count=1, device_id=unit)
+            if not rr.isError():
+                found = unit
+                break
+            if not _is_exception_response(rr):
+                raise OSError(f"unit probe for {placeholder} failed at unit {unit}: {rr}")
+        _UNIT_CACHE[key] = (found, now)
+        if found is None:
+            _LOGGER.info(
+                "no unit answers register %s (placeholder unit %s); its fields are skipped",
+                probe_address,
+                placeholder,
+            )
+        else:
+            _LOGGER.debug("placeholder unit %s resolved to unit %s", placeholder, found)
+        out[placeholder] = found
+    return out
+
+
+def _read_modbus(
+    cfg: dict,
+    ranges: list[tuple[int, int, int, str]],
+    unit_probes: tuple[tuple[int, int], ...] = (),
+) -> RawRegisters:
     """Open one Modbus TCP connection and read all *ranges*.
 
     Installed library: pymodbus 3.13.1
@@ -233,6 +305,10 @@ def _read_modbus(cfg: dict, ranges: list[tuple[int, int, int, str]]) -> RawRegis
       read_input_registers(address, *, count=1, device_id=1, …) → result
     NOTE: pymodbus 3.x uses ``device_id`` (not ``slave`` or ``unit``).
     result.isError() → bool; result.registers → list[int]
+
+    A range on a placeholder unit (see *unit_probes*) is read from the unit
+    resolve_units finds, and filed under the placeholder, so the decoder is
+    unchanged. A placeholder with no unit behind it is skipped.
     """
     from pymodbus.client import ModbusTcpClient  # lazy import
 
@@ -240,13 +316,17 @@ def _read_modbus(cfg: dict, ranges: list[tuple[int, int, int, str]]) -> RawRegis
     client = ModbusTcpClient(cfg["ip"], port=int(cfg.get("port", 502)), timeout=8)
     try:
         client.connect()
+        units = resolve_units(client, cfg, unit_probes) if unit_probes else {}
         for unit_id, start, count, fc in ranges:
+            device_id = units[unit_id] if unit_id in units else unit_id
+            if device_id is None:
+                continue
             if fc == "FC04":
-                rr = client.read_input_registers(start, count=count, device_id=unit_id)
+                rr = client.read_input_registers(start, count=count, device_id=device_id)
             else:
-                rr = client.read_holding_registers(start, count=count, device_id=unit_id)
+                rr = client.read_holding_registers(start, count=count, device_id=device_id)
             if rr.isError():
-                _LOGGER.debug("modbus read error unit=%s addr=%s: %s", unit_id, start, rr)
+                _LOGGER.debug("modbus read error unit=%s addr=%s: %s", device_id, start, rr)
                 continue
             slot = out.setdefault(unit_id, {})
             for i, w in enumerate(rr.registers):

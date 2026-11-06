@@ -44,7 +44,7 @@
       "field": "gridVoltageL1",
       "address": 3,
       "scale": 0.1,
-      "unitId": 100
+      "unitId": 246
     },
     {
       "field": "loadPower",
@@ -65,32 +65,14 @@
       "unitId": 247
     },
     {
-      "field": "pv2Voltage",
-      "address": 776,
-      "scale": 0.01,
-      "unitId": 247
-    },
-    {
-      "field": "pv2Current",
-      "address": 777,
-      "signed": true,
-      "scale": 0.1,
-      "unitId": 247
-    },
-    {
       "field": "pv1Power",
-      "address": 850,
-      "unitId": 100
-    },
-    {
-      "field": "pv2Power",
       "address": 850,
       "unitId": 100
     },
     {
       "field": "dailyPvEnergy",
       "address": 784,
-      "scale": 0.01,
+      "scale": 0.1,
       "unitId": 247
     },
     {
@@ -137,5 +119,19 @@
   ],
   "writes": [],
   "transport": "modbus_tcp",
-  "confidence": "extrapolated"
+  "confidence": "extrapolated",
+  "unitProbes": [
+    {
+      "unitId": 246,
+      "probeAddress": 3
+    },
+    {
+      "unitId": 245,
+      "probeAddress": 307
+    },
+    {
+      "unitId": 247,
+      "probeAddress": 784
+    }
+  ]
 }

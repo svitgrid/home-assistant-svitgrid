@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Fixed
+- **Victron GX: grid voltage, daily PV and the BMS limits now read on every
+  GX model.** A GX has assigned Modbus unit ids dynamically since Venus 2.60,
+  so the fixed ids the register specs named (VE.Bus on unit 100, the solar
+  charger on 247, the battery on 245) were wrong on a Cerbo GX, a Venus GX and
+  a MultiPlus-II GX. Grid voltage read 0 V and daily PV was missing. A spec
+  now carries `unitProbes`, and direct Modbus harvest finds the unit that
+  answers each probe register, files its values under the placeholder unit,
+  and caches the answer for an hour. Daily PV yield is also read at 0.1 kWh
+  per step, not 0.01, so it no longer shows a tenth of the real figure.
+
 ### Removed
 - `https://api-staging.svitgrid.app` is no longer an allowed cloud endpoint.
   The staging API was shut down on 2026-07-21, so a `set_cloud_endpoint`
