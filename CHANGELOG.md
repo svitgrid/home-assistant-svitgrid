@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.28.0 — 2026-11-06
 
 ### Fixed
 - **Victron GX: grid voltage, daily PV and the BMS limits now read on every
