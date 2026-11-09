@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- **An edge box on an island reads its inverter every 10 seconds, as in the
+  cloud.** The `config` block sent `pollingInterval` 60000, which the box
+  applies over the `add_inverter` value, so it read the inverter once a minute
+  and each reading held one sample (svitgrid#1305).
+- **A switch from an idle edge box lands within about 2 seconds.** The box has
+  no wake channel on the LAN, and it waited out a 30-second idle poll: 20-32 s
+  on the e2e stack. The idle poll is now 2 s and the pending one 1 s.
+- **A paused edge box no longer reads offline after 10 minutes.** Every box
+  request stamps `lastContactAt` now, at most once a minute, not only an
+  upload.
+
 ## 0.28.0 — 2026-11-06
 
 ### Fixed

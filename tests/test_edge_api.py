@@ -814,12 +814,21 @@ def test_config_block_lists_every_adopted_inverter():
     assert [inv["inverterId"] for inv in block["inverters"]] == ["inv-1", "inv-2"]
     assert block["inverters"][0] == {"inverterId": "inv-1", **_INV_1}
     assert block["inverters"][1] == {"inverterId": "inv-2", **_INV_2}
-    assert block["pollingInterval"] == 60000
     assert block["reportingInterval"] == 60000
     assert block["nonMeteringModels"] == []
     assert block["chargers"] == []
     assert block["relayChargers"] == []
     assert re.fullmatch(r"[0-9a-f]{16}", block["configHash"])
+
+
+def test_config_block_polls_the_inverter_at_the_cloud_cadence():
+    """The box applies the block's `pollingInterval` over add_inverter's
+    (`cloud_uploader_apply_polling_config` in cloud_uploader.c). The cloud's
+    `buildConfig` defaults it to 10000; 60000 left an island box reading its
+    inverter once a minute, one sample per reading (#1305)."""
+    block = edge_api.build_edge_config(_box(inverters={"inv-1": _INV_1}))
+    assert block["pollingInterval"] == 10000
+    assert block["reportingInterval"] == 60000
 
 
 def test_config_block_lists_an_inverter_with_no_adopt_details():
@@ -1072,7 +1081,7 @@ async def test_batch_stores_each_known_reading():
         {"ok": True, "inverterId": "inv-1"},
     ]
     assert store.appended == _stored(readings)
-    assert body["pollIntervalMs"] == 30000
+    assert body["pollIntervalMs"] == edge_api.POLL_INTERVAL_IDLE_MS
     assert body["mqttPublishReadings"] is False
     assert body["ingestMode"] == "batch"
     assert body["expectedInverterCount"] == 2
@@ -1224,19 +1233,19 @@ async def test_gzip_body_is_inflated():
 
 
 @pytest.mark.asyncio
-async def test_poll_interval_is_5000_with_pending_commands():
+async def test_poll_interval_is_pending_with_pending_commands():
     store = _FakeIngestStore()
     other = _box(device_id="EC-2", api_key="other-key", inverters={"inv-2": _INV_2})
     hass = _hass_with_store(_keystore(_box(inverters={"inv-1": _INV_1}), other), store)
     hass.data[DOMAIN][ENTRY_ID]["edge_queue"] = _FakeEdgeQueue({"EC-1": 2})
     body = {"readings": [_reading()]}
     resp = await _call(edge_api.EdgeIngestBatchView, "post", hass, api_key=BOX_KEY, body=body)
-    assert _json(resp)["pollIntervalMs"] == 5000
+    assert _json(resp)["pollIntervalMs"] == edge_api.POLL_INTERVAL_PENDING_MS
 
     resp = await _call(
         edge_api.EdgeIngestBatchView, "post", hass, api_key="other-key", body={"readings": []}
     )
-    assert _json(resp)["pollIntervalMs"] == 30000
+    assert _json(resp)["pollIntervalMs"] == edge_api.POLL_INTERVAL_IDLE_MS
 
 
 @pytest.mark.asyncio
@@ -1476,6 +1485,89 @@ async def test_poll_interval_5000_while_pending(tmp_path):
         await queue.async_enqueue("EC-1", name, {}, signing=None, inverter_id=None, source="t")
     assert _json(await _poll(hass))["pollIntervalMs"] == edge_api.POLL_INTERVAL_PENDING_MS
     assert _json(await _poll(hass))["pollIntervalMs"] == edge_api.POLL_INTERVAL_IDLE_MS
+
+
+@pytest.mark.asyncio
+async def test_idle_poll_brings_a_command_within_a_few_seconds(tmp_path):
+    """A command queued while the box is idle waits out the idle answer it
+    already holds: the box polls at the interval of the previous answer, so
+    the pending cadence never shortens that first wait. The box has no wake
+    channel on the LAN, so the idle answer bounds a switch's delay (#1305:
+    20-32 s measured at 30000 on the e2e stack)."""
+    queue = _real_queue(tmp_path)
+    hass = _hass_with_queue(_keystore(_box(inverters={"inv-1": _INV_1})), queue)
+    idle = _json(await _poll(hass))["pollIntervalMs"]
+    assert idle <= 2000
+    await queue.async_enqueue("EC-1", "a", {}, signing=None, inverter_id=None, source="t")
+    await queue.async_enqueue("EC-1", "b", {}, signing=None, inverter_id=None, source="t")
+    # A queue drains no slower than the idle cadence.
+    assert _json(await _poll(hass))["pollIntervalMs"] <= idle
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("view_cls", "method", "match_info", "body"),
+    [
+        (edge_api.EdgeCommandsPollView, "get", {}, None),
+        (edge_api.EdgeCommandAckView, "post", {"command_id": "cmd-1"}, {"success": True}),
+        (edge_api.EdgeMeView, "get", {}, None),
+        (edge_api.EdgeFirmwareCheckView, "get", {}, None),
+        (edge_api.EdgeSyncSettingsView, "post", {}, {"inverterId": "inv-1"}),
+    ],
+    ids=lambda v: getattr(v, "__name__", None),
+)
+async def test_every_box_request_stamps_contact(tmp_path, view_cls, method, match_info, body):
+    """A paused box uploads nothing but keeps polling, and the app reads a
+    box with no contact for 10 minutes as offline (`kEdgeIslandOnlineWindow`),
+    so a contact stamped only by an ingest made a paused box read offline
+    (#1305)."""
+    store = _FakeIngestStore()
+    hass = _hass_with_queue(_keystore(_box(inverters={"inv-1": _INV_1})), _real_queue(tmp_path))
+    hass.data[DOMAIN][ENTRY_ID]["store"] = store
+    view = view_cls()
+    request = _FakeRequest(hass, api_key=BOX_KEY, body=body, match_info=match_info)
+    request.query = {"wait": "0"}
+    resp = await getattr(view, method)(request, **match_info)
+    assert resp.status == 200
+    assert _SERVER_TIME.fullmatch(store.box_states["EC-1"]["lastContactAt"])
+
+
+@pytest.mark.asyncio
+async def test_poll_contact_stamp_is_throttled(tmp_path, monkeypatch):
+    """The idle poll comes every few seconds; the stamp is written at most
+    once a minute, well inside the app's 10-minute window. The cloud
+    throttles its own `lastSeen` write the same way."""
+    store = _FakeIngestStore()
+    writes = []
+    real_set = store.set_edge_box_state
+
+    async def counting_set(device_id, state):
+        writes.append(state["lastContactAt"])
+        await real_set(device_id, state)
+
+    store.set_edge_box_state = counting_set
+    clock = [1000.0]
+    monkeypatch.setattr(edge_api, "_monotonic", lambda: clock[0])
+    hass = _hass_with_queue(_keystore(_box(inverters={"inv-1": _INV_1})), _real_queue(tmp_path))
+    hass.data[DOMAIN][ENTRY_ID]["store"] = store
+    await _poll(hass)
+    clock[0] += 30
+    await _poll(hass)
+    assert len(writes) == 1
+    clock[0] += edge_api.CONTACT_STAMP_MIN_INTERVAL_S
+    await _poll(hass)
+    assert len(writes) == 2
+
+
+@pytest.mark.asyncio
+async def test_poll_stamp_keeps_the_telemetry_an_ingest_stored(tmp_path):
+    store = _FakeIngestStore()
+    store.box_states["EC-1"] = {"version": "2.175.0", "lastContactAt": "2026-10-28T09:00:00.000Z"}
+    hass = _hass_with_queue(_keystore(_box(inverters={"inv-1": _INV_1})), _real_queue(tmp_path))
+    hass.data[DOMAIN][ENTRY_ID]["store"] = store
+    await _poll(hass)
+    assert store.box_states["EC-1"]["version"] == "2.175.0"
+    assert store.box_states["EC-1"]["lastContactAt"] != "2026-10-28T09:00:00.000Z"
 
 
 @pytest.mark.asyncio

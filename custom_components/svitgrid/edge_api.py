@@ -28,6 +28,7 @@ import hashlib
 import json
 import logging
 import math
+import time
 import zlib
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -71,8 +72,26 @@ MAX_INFLATED_BODY_BYTES = 256 * 1024
 
 # How often the box polls for commands: soon while one waits for it, else
 # at the idle cadence (both inside the firmware's 500-600,000 ms clamp).
-POLL_INTERVAL_PENDING_MS = 5000
-POLL_INTERVAL_IDLE_MS = 30000
+# The box has no wake channel on the LAN and polls at the interval of the
+# previous answer, so a command queued while it is idle waits up to the idle
+# interval: 30000 made a switch take 20-32 s (#1305). Measured on the e2e
+# stack, one idle poll costs Home Assistant 3-4 ms of CPU and answers in
+# 9-11 ms, so 2000 adds about 0.2 % of one core per box.
+POLL_INTERVAL_PENDING_MS = 1000
+POLL_INTERVAL_IDLE_MS = 2000
+
+# The `pollingInterval` of the `config` block, in ms: how often the box reads
+# its inverter. The cloud's `buildConfig` default (executor-commands.ts).
+INVERTER_POLLING_INTERVAL_MS = 10000
+
+# The command poll and every other box request stamp `lastContactAt` at most
+# this often. The app reads a box as offline after 10 minutes without one.
+CONTACT_STAMP_MIN_INTERVAL_S = 60
+
+
+def _monotonic() -> float:
+    return time.monotonic()
+
 
 # The `telemetry` keys of an ingest batch kept as the box's state
 # (`heartbeat-canonical.json` in the firmware's tests names them).
@@ -175,7 +194,7 @@ def build_edge_config(box: EdgeBoxEntry) -> dict:
         )
     block = {
         "inverters": inverters,
-        "pollingInterval": 60000,
+        "pollingInterval": INVERTER_POLLING_INTERVAL_MS,
         "reportingInterval": 60000,
         "nonMeteringModels": [],
         "chargers": [],
@@ -323,7 +342,15 @@ class _EdgeView(HomeAssistantView):
             return self.json({"error": "no_edge_boxes"}, status_code=404)
         return state
 
-    async def _box(self, request) -> EdgeBoxEntry | web.Response:
+    async def _box(self, request, *, stamp: bool = True) -> EdgeBoxEntry | web.Response:
+        """`_authorize`, and a box it lets through stamps its contact (#1305).
+        The ingest views pass `stamp=False`: they stamp with telemetry."""
+        box = await self._authorize(request)
+        if stamp and isinstance(box, EdgeBoxEntry):
+            await _note_contact(request.app["hass"], box)
+        return box
+
+    async def _authorize(self, request) -> EdgeBoxEntry | web.Response:
         """The adopted box the request's `X-API-Key` is bound to, or a refusal.
 
         An unknown key with an `X-Pair-Code` binds on the first contact, on
@@ -471,6 +498,32 @@ async def _stamp_contact(store, box: EdgeBoxEntry, telemetry=None) -> None:
     await store.set_edge_box_state(box.device_id, state)
 
 
+def _contact_stamps(entry_state: dict) -> dict[str, float]:
+    """When each box's contact was last written, on the monotonic clock."""
+    return entry_state.setdefault("edge_contact_stamped", {})
+
+
+async def _note_contact(hass, box: EdgeBoxEntry) -> None:
+    """Stamp `lastContactAt` for any box request, at most once every
+    `CONTACT_STAMP_MIN_INTERVAL_S`. A paused box uploads nothing but still
+    polls, and without this it read offline after 10 minutes. Best-effort: a
+    failed stamp never fails the request."""
+    entry_state = _entry_state(hass)
+    if entry_state is None:
+        return
+    stamps = _contact_stamps(entry_state)
+    now = _monotonic()
+    last = stamps.get(box.device_id)
+    if last is not None and now - last < CONTACT_STAMP_MIN_INTERVAL_S:
+        return
+    try:
+        await _stamp_contact(entry_state["store"], box)
+    except Exception:  # noqa: BLE001 - liveness must never fail a box request
+        _LOGGER.warning("Edge box %s: contact not stamped", box.device_id, exc_info=True)
+        return
+    stamps[box.device_id] = now
+
+
 async def _previous_reading(store, inverter_id: str) -> dict | None:
     """The inverter's latest stored reading, the cloud's `current/latest`
     the pipeline derives the next one from; None before the first."""
@@ -612,7 +665,7 @@ class EdgeIngestBatchView(_EdgeView):
     name = "svitgrid:edge:ingest-readings"
 
     async def post(self, request):
-        box = await self._box(request)
+        box = await self._box(request, stamp=False)
         if isinstance(box, web.Response):
             return box
         entry_state = _entry_state(request.app["hass"])
@@ -635,6 +688,7 @@ class EdgeIngestBatchView(_EdgeView):
             await _store_socket_readings(entry_state, box, _iso_now(), body.get("socketReadings"))
         await _store_bms(request.app["hass"], entry_state, box, body.get("bms"))
         await _stamp_contact(store, box, body.get("telemetry"))
+        _contact_stamps(entry_state)[box.device_id] = _monotonic()
         return self.json(
             {
                 "results": results,
@@ -654,7 +708,7 @@ class EdgeIngestReadingView(_EdgeView):
     name = "svitgrid:edge:ingest-reading"
 
     async def post(self, request):
-        box = await self._box(request)
+        box = await self._box(request, stamp=False)
         if isinstance(box, web.Response):
             return box
         entry_state = _entry_state(request.app["hass"])
@@ -672,6 +726,7 @@ class EdgeIngestReadingView(_EdgeView):
             entry_state, box, reading["timestamp"], reading.get("socketReadings")
         )
         await _stamp_contact(store, box)
+        _contact_stamps(entry_state)[box.device_id] = _monotonic()
         return self.json(
             {
                 "success": True,
