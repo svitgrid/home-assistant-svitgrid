@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.28.1 — 2026-11-09
 
 ### Fixed
 - **An edge box on an island reads its inverter every 10 seconds, as in the
