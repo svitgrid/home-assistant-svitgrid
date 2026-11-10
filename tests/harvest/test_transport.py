@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import sys
 import types
 from unittest.mock import MagicMock, patch
@@ -515,10 +516,8 @@ def test_read_modbus_transport_failure_mid_scan_is_not_cached():
     reset_unit_cache()
     gx = _FakeGx({100: {817: 242}, 226: {784: 123}}, fail_after=2)
     ranges = [(247, 784, 1, "FC03")]
-    try:
+    with contextlib.suppress(OSError):
         _run_read_modbus(gx, ranges, ((247, 784),))
-    except OSError:
-        pass
 
     healthy = _FakeGx({100: {817: 242}, 226: {784: 123}})
     raw = _run_read_modbus(healthy, ranges, ((247, 784),))

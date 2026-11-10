@@ -178,7 +178,7 @@ class TestEndToEnd:
 
     async def test_refuses_a_device_reporting_an_unmeasured_protocol(self):
         registers = dict(CAPTURED_REGISTERS)
-        registers[184] = 4  # a protocol we have never captured
+        registers[184] = 5  # a protocol we have never captured
         inverter = FakeAnenji(registers)
         link = await connected_link(inverter)
         try:
