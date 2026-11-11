@@ -249,6 +249,25 @@ class SvitgridApiClient:
                 raise SvitgridApiError(f"mqtt-token failed: HTTP {resp.status}: {await _err(resp)}")
             return await resp.json()
 
+    async def report_island_status(
+        self, api_key: str, inverters: list[dict[str, Any]]
+    ) -> tuple[int, dict[str, Any] | None]:
+        """POST the hourly island status (svitgrid D-1715). Returns the status
+        and the parsed body for every answer, refusals included: each carries
+        the `{nextReportAfterSec, stop}` directive the caller obeys. The body
+        is None when it is not a JSON object."""
+        url = f"{self._base}/api/v1/island-report"
+        async with self._session.post(
+            url, headers={"x-api-key": api_key}, json={"inverters": inverters}
+        ) as resp:
+            try:
+                body = await resp.json(content_type=None)
+            except Exception:  # noqa: BLE001
+                body = None
+            if resp.status >= 400:
+                _LOGGER.warning("island report refused: status=%s body=%s", resp.status, body)
+            return resp.status, body if isinstance(body, dict) else None
+
     async def ack_command(self, api_key: str, command_id: str, body: dict[str, Any]) -> None:
         url = f"{self._base}/api/v3/executors/commands/{command_id}/ack"
         async with self._session.post(url, headers={"x-api-key": api_key}, json=body) as resp:
