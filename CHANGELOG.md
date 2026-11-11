@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.28.2 — 2026-11-12
 
 ### Fixed
 - **The readings publisher no longer floods the MQTT broker after an outage.**
