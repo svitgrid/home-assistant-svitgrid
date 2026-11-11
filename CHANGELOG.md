@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- **The readings publisher no longer floods the MQTT broker after an outage.**
+  A connection attempt that timed out left its client retrying in the
+  background, and a reconnect after a failed publish never stopped the old
+  client. Every such client logs in under the same client id, so once the
+  broker came back they pushed each other off it in a loop. On 2026-11-08 one
+  install did this about 15 times a second for 5.5 hours, until Home Assistant
+  restarted. The publisher now stops a client before it makes a new one, as
+  the wake client has since 0.12.
+
 ## 0.28.1 — 2026-11-09
 
 ### Fixed

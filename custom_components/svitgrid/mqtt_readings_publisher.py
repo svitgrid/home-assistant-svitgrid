@@ -28,6 +28,22 @@ _LOGGER = logging.getLogger(__name__)
 CONNECT_TIMEOUT_S = 10
 
 
+def _stop_client(client: Any) -> None:
+    """Stop paho's network thread and disconnect. Idempotent; never raises.
+
+    ``connect_async`` + ``loop_start`` spawn a thread that reconnects on its
+    own, and every client of one install uses the same client id. A client
+    that is dropped without this keeps logging in, and two live ones push
+    each other off the broker in a loop. Same rule as ``mqtt_wake``.
+    """
+    if client is None:
+        return
+    with contextlib.suppress(Exception):
+        client.loop_stop()
+    with contextlib.suppress(Exception):
+        client.disconnect()
+
+
 def readings_topic(broker: dict[str, Any]) -> str | None:
     """Build ``devices/<deviceId>/readings`` from an mqtt-token ``broker`` block.
 
@@ -69,6 +85,10 @@ class ReadingsMqttClient:
         Returns True when ready to publish."""
         if self._connected and self._client is not None:
             return True
+        # A client flagged for reconnect may still have its network thread up.
+        # Stop it before a new one logs in under the same client id.
+        self._discard_client()
+        client: Any = None
         try:
             import paho.mqtt.client as paho  # noqa: PLC0415
         except ImportError:
@@ -110,6 +130,8 @@ class ReadingsMqttClient:
             return True
         except Exception as exc:  # noqa: BLE001 — fail-open observability path
             _LOGGER.debug("MQTT readings connect failed (will retry): %s", exc)
+            # A timed-out connect leaves paho retrying in the background.
+            _stop_client(client)
             self._connected = False
             return False
 
@@ -171,9 +193,9 @@ class ReadingsMqttClient:
         if future is not None and not future.done():
             future.set_result(True)
 
-    def stop(self) -> None:
+    def _discard_client(self) -> None:
         client, self._client, self._connected = self._client, None, False
-        if client is not None:
-            with contextlib.suppress(Exception):
-                client.loop_stop()
-                client.disconnect()
+        _stop_client(client)
+
+    def stop(self) -> None:
+        self._discard_client()

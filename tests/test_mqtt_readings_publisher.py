@@ -195,3 +195,109 @@ class TestPublishAndWait:
         assert await c.publish_and_wait("{}") is False
         assert fake.published == [("devices/kBRkv3/readings", "{}", 1)]
         assert not c._pending, "no future should be registered for a failed publish"
+
+
+class _TrackedClient:
+    """A paho stand-in that records whether its network thread is still up.
+
+    ``connects`` controls whether ``loop_start`` fires on_connect: False models
+    a broker that accepts TCP but never completes the MQTT login, which is
+    what the 2026-11-08 certificate outage looked like from the add-on."""
+
+    instances: list[_TrackedClient] = []
+    connects = True
+
+    def __init__(self, client_id="", protocol=None):
+        self.client_id = client_id
+        self.on_connect = None
+        self.on_publish = None
+        self.running = False
+        _TrackedClient.instances.append(self)
+
+    def username_pw_set(self, username, password):
+        pass
+
+    def tls_set(self):
+        pass
+
+    def connect_async(self, host, port, keepalive=60):
+        pass
+
+    def loop_start(self):
+        self.running = True
+        if _TrackedClient.connects:
+            self.on_connect(self, None, None, 0)
+
+    def loop_stop(self):
+        self.running = False
+
+    def disconnect(self):
+        pass
+
+    def publish(self, topic, payload, qos=0):
+        raise RuntimeError("broker gone")
+
+
+@pytest.mark.asyncio
+class TestNoLeakedClients:
+    """One install must never hold more than one live paho client.
+
+    Every client logs in under the same client id, so two live ones push each
+    other off the broker in a loop. On 2026-11-08 one install reconnected about
+    15 times a second for 5.5 hours: each timed-out connect during the broker
+    outage left a paho thread retrying, and they all came back together."""
+
+    @pytest.fixture(autouse=True)
+    def _fresh(self, monkeypatch):
+        _TrackedClient.instances = []
+        _TrackedClient.connects = True
+        _install_fake_paho(monkeypatch, _TrackedClient)
+        monkeypatch.setattr(
+            "custom_components.svitgrid.mqtt_readings_publisher.CONNECT_TIMEOUT_S", 0.01
+        )
+
+    def _publisher(self) -> ReadingsMqttClient:
+        api = _FakeApi({"host": "h", "port": 8883, "deviceId": "kBRkv3"})
+        return ReadingsMqttClient(api_client=api, api_key="k")
+
+    @staticmethod
+    def _live() -> list[_TrackedClient]:
+        return [c for c in _TrackedClient.instances if c.running]
+
+    async def test_timed_out_connect_stops_its_client(self):
+        _TrackedClient.connects = False
+        c = self._publisher()
+        assert await c.ensure_connected() is False
+        assert self._live() == []
+
+    async def test_repeated_timeouts_leave_no_live_client(self):
+        _TrackedClient.connects = False
+        c = self._publisher()
+        for _ in range(5):
+            assert await c.ensure_connected() is False
+        assert len(_TrackedClient.instances) == 5
+        assert self._live() == []
+
+    async def test_reconnect_after_publish_error_stops_the_old_client(self):
+        c = self._publisher()
+        assert await c.ensure_connected() is True
+        assert c.publish("{}") is False  # raises inside -> flagged for reconnect
+        assert await c.ensure_connected() is True
+        assert len(_TrackedClient.instances) == 2
+        assert self._live() == [_TrackedClient.instances[1]]
+
+    async def test_reconnect_after_publish_and_wait_error_stops_the_old_client(self):
+        c = self._publisher()
+        assert await c.ensure_connected() is True
+        assert await c.publish_and_wait("{}") is False
+        assert await c.ensure_connected() is True
+        assert self._live() == [_TrackedClient.instances[1]]
+
+    async def test_outage_then_recovery_leaves_exactly_one_client(self):
+        c = self._publisher()
+        _TrackedClient.connects = False
+        for _ in range(10):
+            await c.ensure_connected()
+        _TrackedClient.connects = True
+        assert await c.ensure_connected() is True
+        assert len(self._live()) == 1
