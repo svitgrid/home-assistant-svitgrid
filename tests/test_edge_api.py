@@ -142,6 +142,7 @@ EDGE_VIEWS = [
     (edge_api.EdgeFirmwareCheckView, "get", {}),
     (edge_api.EdgeMqttTokenView, "post", {"device_id": "EC-1"}),
     (edge_api.EdgeCoredumpView, "post", {}),
+    (edge_api.EdgeLogsView, "post", {}),
     (edge_api.EdgePairAttemptsView, "post", {"device_id": "EC-1"}),
     (edge_api.EdgeUpdateInverterIpView, "post", {}),
     (edge_api.EdgeZigbeeSinkView, "post", {}),
@@ -472,6 +473,16 @@ async def test_coredump_with_a_body_that_is_not_json_still_answers_200():
 
 
 @pytest.mark.asyncio
+async def test_logs_upload_is_refused_with_403_island():
+    """upload_logs is an operator command sent through the cloud, so an
+    island box never asked for these parts: the 403 stops the upload."""
+    hass = _hass(_keystore(_box()))
+    resp = await _call(edge_api.EdgeLogsView, "post", hass, api_key=BOX_KEY, body={"part": 1})
+    assert resp.status == 403
+    assert _json(resp) == {"error": "island"}
+
+
+@pytest.mark.asyncio
 async def test_pair_attempts_answers_empty():
     hass = _hass(_keystore(_box()))
     resp = await _call(
@@ -571,6 +582,7 @@ def test_edge_views_use_the_cloud_paths_and_skip_ha_auth():
         edge_api.EdgeFirmwareCheckView: "/api/v3/executors/firmware-check",
         edge_api.EdgeMqttTokenView: "/api/v3/edge-devices/{device_id}/mqtt-token",
         edge_api.EdgeCoredumpView: "/api/v1/edge-devices/coredump",
+        edge_api.EdgeLogsView: "/api/v1/edge-devices/logs",
         edge_api.EdgePairAttemptsView: "/api/v1/edge-devices/{device_id}/pair-attempts",
         edge_api.EdgeUpdateInverterIpView: "/api/v1/edge-devices/update-inverter-ip",
     }

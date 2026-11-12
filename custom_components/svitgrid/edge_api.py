@@ -949,6 +949,21 @@ class EdgeCoredumpView(_EdgeView):
         return self.json({"stored": False, "reason": "island"})
 
 
+class EdgeLogsView(_EdgeView):
+    """`upload_logs` is an operator command sent through the cloud, so a box
+    in island mode never asked for these parts. The 403 stops the upload and
+    the box reports it in its own log."""
+
+    url = "/api/v1/edge-devices/logs"
+    name = "svitgrid:edge:logs"
+
+    async def post(self, request):
+        box = await self._box(request)
+        if isinstance(box, web.Response):
+            return box
+        return self.json({"error": "island"}, status_code=403)
+
+
 class EdgePairAttemptsView(_EdgeView):
     url = "/api/v1/edge-devices/{device_id}/pair-attempts"
     name = "svitgrid:edge:pair-attempts"
@@ -1227,6 +1242,7 @@ EDGE_VIEWS = (
     EdgeFirmwareCheckView,
     EdgeMqttTokenView,
     EdgeCoredumpView,
+    EdgeLogsView,
     EdgePairAttemptsView,
     EdgeUpdateInverterIpView,
     EdgeZigbeeDeviceJoinedView,
