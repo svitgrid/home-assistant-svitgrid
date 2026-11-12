@@ -192,7 +192,10 @@ def test_unit_probes_parse_and_default_to_none():
 
 
 def test_validate_refuses_a_probe_no_read_names():
-    doc = {**VICTRON, "unitProbes": [{"unitId": 246, "probeAddress": 3}, {"unitId": 247, "probeAddress": 784}]}
+    doc = {
+        **VICTRON,
+        "unitProbes": [{"unitId": 246, "probeAddress": 3}, {"unitId": 247, "probeAddress": 784}],
+    }
     problems = RegisterSpec.from_dict(doc).validate()
     assert any("unitProbes: unit 247" in p for p in problems)
 

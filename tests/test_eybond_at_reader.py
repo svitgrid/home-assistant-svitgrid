@@ -102,12 +102,12 @@ class TestIdentityCaching:
 class TestRefusal:
     async def test_refuses_to_read_an_unknown_protocol(self):
         # Publishing nothing is recoverable; publishing a wrong map is not.
-        reader = EybondAtReader(FakeLink(protocol=4))
+        reader = EybondAtReader(FakeLink(protocol=5))
         with pytest.raises(UnknownPlatform):
             await reader.read()
 
     async def test_does_not_poll_telemetry_when_the_platform_is_unknown(self):
-        link = FakeLink(protocol=4)
+        link = FakeLink(protocol=5)
         reader = EybondAtReader(link)
         with pytest.raises(UnknownPlatform):
             await reader.read()

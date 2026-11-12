@@ -113,9 +113,10 @@ class TestDispatch:
         assert resolve_map(identity) is SMG_II_PROTOCOL_11
 
     def test_refuses_an_unrecognised_protocol_number(self):
-        # Protocols 3-6 are documented publicly but disagree with our hardware
-        # at register 202, so they are NOT in the allowlist until measured.
-        for protocol in (3, 4, 5, 6, 0, 99):
+        # Protocols 3, 5 and 6 are documented publicly but no device has
+        # reported them, so they are NOT in the allowlist until measured.
+        # (4 was measured on an ANJ-11KW: see test_eybond_at_protocol_4.)
+        for protocol in (3, 5, 6, 0, 99):
             identity = DeviceIdentity(
                 protocol_number=protocol, device_type=0x7803, serial="x", firmware=""
             )
@@ -123,8 +124,8 @@ class TestDispatch:
                 resolve_map(identity)
 
     def test_the_error_names_the_protocol_number(self):
-        identity = DeviceIdentity(protocol_number=4, device_type=0x3501, serial="x", firmware="")
-        with pytest.raises(UnknownPlatform, match="4"):
+        identity = DeviceIdentity(protocol_number=5, device_type=0x3501, serial="x", firmware="")
+        with pytest.raises(UnknownPlatform, match="5"):
             resolve_map(identity)
 
 

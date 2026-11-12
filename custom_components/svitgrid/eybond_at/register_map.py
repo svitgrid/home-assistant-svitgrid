@@ -12,6 +12,9 @@ which would make an idle inverter draw 238 A. On protocol 11 it is AC
 voltage, and reads 228.4 V. Neither source is wrong; they describe different
 versions of the same product line.
 
+Protocol 4 (the 8/11 kW units) turned out to use that 3-6 table: see
+`SMG_II_PROTOCOL_4` below.
+
 So: only protocol numbers we have measured appear here, and an unrecognised
 one publishes nothing rather than being decoded on a guess.
 
@@ -188,7 +191,57 @@ SMG_II_PROTOCOL_11 = RegisterMap(
     ),
 )
 
+# Protocol 4 is the SMG II 8/11 kW "phase-block" layout, ported from
+# `smgIiProtocol4` in the svitgrid monorepo (inverter_protocol eybond_at
+# register_map.dart); keep the two in step.
+#
+# Captured 2026-10-25 from a customer's ANJ-11KW (device type 0x8401, serial
+# 92B32604100658) by the unknown-protocol sweep, off grid and idle. Registers
+# 200-263 matched the per-protocol table in gagara/easun-smg-ii-ha-config word
+# for word, including every "not used" gap: 201 = 3 (Off-Grid), 227 = 50.00 Hz,
+# 231 = 36 C, 252-255 = the output block, 202-206 = 0 with no mains. That is
+# the same table protocol 1 REFUTED, so the layout really does change with the
+# protocol number.
+#
+# Telemetry lives in per-line blocks rather than at 202-229:
+#
+# * Grid voltage and power come from L1 (338, 340). 202 is grid CURRENT here.
+# * Load is the total output active power (254), signed: it read -1 W at idle.
+# * PV is two strings (351-353, 389-391), not one average.
+# * Battery current is positive while charging, matching protocol 11's 216.
+#
+# Every field is IDENTIFIED: the capture window did not reach the battery, L1
+# or PV blocks, and the values it did carry were never compared with the
+# inverter's display. Protocols 3, 5 and 6 share most of this table but no
+# device has reported them, so they stay out.
+SMG_II_PROTOCOL_4 = RegisterMap(
+    name="EASUN/ISolar SMG II 8/11 kW, protocol 4",
+    protocol_numbers=(4,),
+    topology_register=600,
+    fields=(
+        FieldSpec("runningState", 201),
+        FieldSpec("gridFrequency", 203, 0.01, unit="Hz"),
+        FieldSpec("inverterTemperature", 231, unit="°C"),
+        FieldSpec("loadPower", 254, unit="W", signed=True),
+        FieldSpec("batteryVoltage", 277, 0.1, unit="V"),
+        FieldSpec("batteryCurrent", 278, 0.1, signed=True, unit="A"),
+        FieldSpec("batteryPower", 279, unit="W", signed=True),
+        FieldSpec("batterySoc", 280, unit="%"),
+        FieldSpec("gridVoltageL1", 338, 0.1, unit="V"),
+        FieldSpec("gridPower", 340, unit="W", signed=True),
+        FieldSpec("loadVoltageL1", 346, 0.1, unit="V"),
+        FieldSpec("pv1Voltage", 351, 0.1, unit="V"),
+        FieldSpec("pv1Current", 352, 0.1, unit="A"),
+        FieldSpec("pv1Power", 353, unit="W"),
+        FieldSpec("pv2Voltage", 389, 0.1, unit="V"),
+        FieldSpec("pv2Current", 390, 0.1, unit="A"),
+        FieldSpec("pv2Power", 391, unit="W"),
+    ),
+)
+
 # Only protocol numbers measured on real hardware belong here.
 PLATFORMS: dict[int, RegisterMap] = {
-    protocol: SMG_II_PROTOCOL_11 for protocol in SMG_II_PROTOCOL_11.protocol_numbers
+    protocol: register_map
+    for register_map in (SMG_II_PROTOCOL_11, SMG_II_PROTOCOL_4)
+    for protocol in register_map.protocol_numbers
 }

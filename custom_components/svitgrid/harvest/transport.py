@@ -318,7 +318,7 @@ def _read_modbus(
         client.connect()
         units = resolve_units(client, cfg, unit_probes) if unit_probes else {}
         for unit_id, start, count, fc in ranges:
-            device_id = units[unit_id] if unit_id in units else unit_id
+            device_id = units.get(unit_id, unit_id)
             if device_id is None:
                 continue
             if fc == "FC04":
