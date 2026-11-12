@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.28.4 — 2026-11-12
+
+### Fixed
+- **An edge box on an island gets a clear refusal when it tries to upload its
+  logs.** The box can now send its own hour logs from its SD card, but that
+  upload is an operator command that comes through the cloud, so a box on an
+  island never needs it. The add-on now answers the upload with 403
+  `{"error": "island"}`, and the box records the refusal in its own log
+  (svitgrid D-1844).
+
 ## 0.28.3 — 2026-11-12
 
 ### Fixed
