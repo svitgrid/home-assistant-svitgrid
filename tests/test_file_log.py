@@ -147,3 +147,45 @@ async def test_ensure_file_log_attaches_once_under_config_svitgrid_logs(hass):
         assert len(ours) == 1
     finally:
         await hass.async_add_executor_job(detach, first)
+
+
+def test_an_unencodable_character_does_not_stop_the_writer(tmp_path):
+    h = HourlyFileHandler(str(tmp_path), now=lambda: NOW)
+    log = _logger("custom_components.svitgrid.surrogate", h)
+    try:
+        log.info("bad %s", b"\xff".decode("utf-8", "surrogateescape"))
+        log.info("next line")
+        h.flush()
+        text = open(hour_path(str(tmp_path), "2026-11-12T14"), encoding="utf-8").read()
+        assert "next line" in text
+    finally:
+        log.removeHandler(h)
+        h.close()
+
+
+def test_attach_keeps_a_level_the_user_set(tmp_path):
+    from custom_components.svitgrid.file_log import attach, detach
+
+    logger = logging.getLogger("custom_components.svitgrid")
+    before = logger.level
+    logger.setLevel(logging.WARNING)
+    h = attach(str(tmp_path), now=lambda: NOW)
+    try:
+        assert logger.level == logging.WARNING
+    finally:
+        detach(h)
+        logger.setLevel(before)
+
+
+def test_attach_raises_an_unset_level_to_info(tmp_path):
+    from custom_components.svitgrid.file_log import attach, detach
+
+    logger = logging.getLogger("custom_components.svitgrid")
+    before = logger.level
+    logger.setLevel(logging.NOTSET)
+    h = attach(str(tmp_path), now=lambda: NOW)
+    try:
+        assert logger.level == logging.INFO
+    finally:
+        detach(h)
+        logger.setLevel(before)

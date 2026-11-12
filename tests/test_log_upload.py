@@ -127,8 +127,10 @@ async def test_run_upload_posts_parts_then_summary(tmp_path):
         "missing": ["2026-11-12T15"],
         "dropped": 0,
         "lost": 0,
-        "error": None,
     }
+    # The server's schema has `error: z.string().optional()`: a null is a 400,
+    # and the upload never reaches done. The board omits the key on success.
+    assert "error" not in summary
 
 
 async def test_run_upload_flushes_before_reading(tmp_path):
@@ -181,3 +183,44 @@ async def test_run_upload_holds_the_lock_while_running(tmp_path):
     )
     assert seen == [True]
     assert not _UPLOAD_LOCK.locked()
+
+
+async def test_run_upload_sends_only_lines_inside_the_window(tmp_path):
+    from custom_components.svitgrid.log_upload import run_upload
+
+    root = str(tmp_path)
+    _write(
+        root,
+        "2026-11-12T14",
+        "2026-11-12T14:05:00.000Z I a before\n"
+        "2026-11-12T14:10:00.000Z I a first-in\n"
+        "2026-11-12T14:19:59.999Z I a last-in\n"
+        "2026-11-12T14:20:00.000Z I a at-to\n",
+    )
+    client = _FakeClient()
+    summary = await run_upload(
+        api_client=client, api_key="k1", command_id="c1",
+        from_ts=_ts(2026, 11, 12, 14, 10), to_ts=_ts(2026, 11, 12, 14, 20),
+        root=root, flush=lambda: None,
+    )
+    text = "".join(p["text"] for p in client.parts)
+    assert text == (
+        "2026-11-12T14:10:00.000Z I a first-in\n"
+        "2026-11-12T14:19:59.999Z I a last-in\n"
+    )
+    assert summary["hours"] == [{"hour": "2026-11-12T14", "bytes": len(text.encode()), "parts": 1}]
+
+
+async def test_run_upload_reports_an_hour_with_no_line_in_the_window_as_missing(tmp_path):
+    from custom_components.svitgrid.log_upload import run_upload
+
+    root = str(tmp_path)
+    _write(root, "2026-11-12T14", "2026-11-12T14:05:00.000Z I a before\n")
+    client = _FakeClient()
+    summary = await run_upload(
+        api_client=client, api_key="k1", command_id="c1",
+        from_ts=_ts(2026, 11, 12, 14, 10), to_ts=_ts(2026, 11, 12, 14, 20),
+        root=root, flush=lambda: None,
+    )
+    assert client.parts == []
+    assert summary["missing"] == ["2026-11-12T14"]

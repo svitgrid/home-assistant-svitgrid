@@ -23,6 +23,9 @@ from datetime import datetime, timezone
 LOGGER_NAME = "custom_components.svitgrid"
 LOG_SUBDIR = "logs"
 RETAIN_HOURS = 7 * 24
+# Lines waiting for the writer. Past this the newest are dropped, so a stalled
+# disk cannot grow Home Assistant's memory.
+QUEUE_MAX = 10000
 
 _LEVEL_LETTER = {logging.INFO: "I", logging.WARNING: "W", logging.ERROR: "E", logging.CRITICAL: "E"}
 _PREFIX = "custom_components."
@@ -63,7 +66,7 @@ class HourlyFileHandler(logging.Handler):
         super().__init__(level=logging.INFO)
         self._root = root
         self._now = now
-        self._queue: queue.SimpleQueue[tuple[str, str] | threading.Event | None] = queue.SimpleQueue()
+        self._queue: queue.Queue[tuple[str, str] | threading.Event | None] = queue.Queue(maxsize=QUEUE_MAX)
         self._last_label: str | None = None
         self._thread = threading.Thread(target=self._run, name="svitgrid-file-log", daemon=True)
         self._thread.start()
@@ -75,7 +78,7 @@ class HourlyFileHandler(logging.Handler):
             name = record.name[len(_PREFIX):] if record.name.startswith(_PREFIX) else record.name
             letter = _LEVEL_LETTER.get(record.levelno, "I")
             line = f"{stamp}Z {letter} {name} {redact(record.getMessage())}\n"
-            self._queue.put((hour_label(ts), line))
+            self._queue.put_nowait((hour_label(ts), line))
         except Exception:  # noqa: BLE001 - a log call must never raise into HA
             pass
 
@@ -84,13 +87,19 @@ class HourlyFileHandler(logging.Handler):
         if not self._thread.is_alive():
             return
         marker = threading.Event()
-        self._queue.put(marker)
+        try:
+            self._queue.put(marker, timeout=5)
+        except queue.Full:
+            return
         marker.wait(timeout=5)
 
     def close(self) -> None:
         if self._thread.is_alive():
             self.flush()
-            self._queue.put(None)
+            try:
+                self._queue.put(None, timeout=5)
+            except queue.Full:
+                pass
             self._thread.join(timeout=5)
         super().close()
 
@@ -121,18 +130,19 @@ class HourlyFileHandler(logging.Handler):
             if isinstance(item, threading.Event):
                 item.set()
                 continue
-            label, line = item
-            if label != self._last_label:
-                self._last_label = label
-                self.prune(_label_ts(label))
+            # Nothing may end this loop but None: a dead writer would leave
+            # every later line queued and every later upload empty.
             try:
+                label, line = item
+                if label != self._last_label:
+                    self._last_label = label
+                    self.prune(_label_ts(label))
                 path = hour_path(self._root, label)
                 os.makedirs(os.path.dirname(path), exist_ok=True)
-                with open(path, "a", encoding="utf-8") as f:
+                with open(path, "a", encoding="utf-8", errors="replace") as f:
                     f.write(line)
-            except OSError:
+            except Exception:  # noqa: BLE001 - drop the line, keep writing
                 pass
-
 
 def attach(root: str, now: Callable[[], float] = time.time) -> HourlyFileHandler:
     """Attach a handler to the integration's logger and prune once."""
@@ -140,7 +150,9 @@ def attach(root: str, now: Callable[[], float] = time.time) -> HourlyFileHandler
     handler.prune(now())
     logger = logging.getLogger(LOGGER_NAME)
     logger.addHandler(handler)
-    if logger.getEffectiveLevel() > logging.INFO:
+    # Raise only a level nobody set: a `logger:` entry in configuration.yaml
+    # (for example warning) is the user's choice and is kept.
+    if logger.level == logging.NOTSET:
         logger.setLevel(logging.INFO)
     return handler
 

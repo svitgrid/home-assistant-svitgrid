@@ -13,6 +13,8 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
+from datetime import datetime, timezone
+
 from .file_log import hour_label, hour_path
 
 _LOGGER = logging.getLogger(__name__)
@@ -69,16 +71,36 @@ def _split_line(line: str) -> list[str]:
     return chunks
 
 
-def read_parts(root: str, label: str) -> list[str]:
+def _stamp(ts: int) -> str:
+    """The line-prefix form of a timestamp: 2026-11-12T14:05:00.000Z."""
+    return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+
+def _in_window(line: str, start: str, end: str) -> bool:
+    # Lines start with a fixed-width UTC stamp, so string order is time order.
+    # A line without one (never written by file_log) is kept.
+    stamp = line[:24]
+    if len(stamp) < 24 or stamp[10] != "T" or stamp[23] != "Z":
+        return True
+    return start <= stamp < end
+
+
+def read_parts(
+    root: str, label: str, from_ts: int | None = None, to_ts: int | None = None
+) -> list[str]:
     """The hour's text in parts of at most PART_MAX_BYTES, split at line ends.
 
-    [] when the hour has no file.
+    With a window, only lines stamped inside [from_ts, to_ts) are kept, as the
+    ED-1 does. [] when the hour has no file or no line in the window.
     """
     try:
         with open(hour_path(root, label), encoding="utf-8", errors="replace") as f:
             text = f.read()
     except OSError:
         return []
+    if from_ts is not None and to_ts is not None:
+        start, end = _stamp(from_ts), _stamp(to_ts)
+        text = "".join(ln for ln in text.splitlines(keepends=True) if _in_window(ln, start, end))
     parts: list[str] = []
     current: list[str] = []
     size = 0
@@ -125,7 +147,7 @@ async def run_upload(
         missing: list[str] = []
         error: str | None = None
         for label in hours_in_window(from_ts, to_ts):
-            parts = await asyncio.to_thread(read_parts, root, label)
+            parts = await asyncio.to_thread(read_parts, root, label, from_ts, to_ts)
             if not parts:
                 missing.append(label)
                 continue
@@ -155,8 +177,11 @@ async def run_upload(
             "missing": missing,
             "dropped": 0,
             "lost": 0,
-            "error": error,
         }
+        # The server's schema has `error: z.string().optional()`: a null is
+        # refused with 400. The board, too, sends the key only on a failure.
+        if error is not None:
+            summary["error"] = error
         try:
             await api_client.post_log_summary(api_key=api_key, body=summary)
         except Exception:  # noqa: BLE001
