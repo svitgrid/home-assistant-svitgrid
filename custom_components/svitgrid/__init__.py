@@ -33,6 +33,7 @@ from .bms_temperature import household_bms_states
 from .bootstrap import run_first_time
 from .cloud_endpoint_handler import probe_endpoint_auth
 from .command_poller import run_loop as run_command_loop
+from .file_log import async_ensure_file_log
 from .const import (
     COMMAND_POLL_INTERVAL_S,
     CONF_LOCAL_ONLY,
@@ -596,6 +597,8 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     # is for; the config flow registers it as well.
     ensure_hello_view(hass)
     await async_ensure_telegram_views(hass)
+    # The integration's own hourly log, for upload_logs (one per install).
+    await async_ensure_file_log(hass)
 
     conf = config.get(DOMAIN)
     if not conf:
