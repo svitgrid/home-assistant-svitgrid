@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.28.3 — 2026-11-12
+
+### Fixed
+- **An SMG II 8/11 kW inverter on an EyBond collector now reports readings.**
+  An Anenji ANJ-11KW reports protocol 4 at register 184, and the add-on knew
+  only protocols 1 and 11, so it refused the inverter with "unrecognised
+  protocol number 4" and published nothing. Protocol 4 now decodes with the
+  8/11 kW phase-block map from the Svitgrid app (svitgrid D-1781). Its
+  battery, grid and PV addresses come from a published table and are not yet
+  compared with the inverter's own display. Protocols 3, 5 and 6 are still
+  refused.
+
 ## 0.28.2 — 2026-11-12
 
 ### Fixed
