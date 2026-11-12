@@ -12,6 +12,7 @@ from homeassistant.data_entry_flow import FlowResultType
 
 from custom_components.svitgrid.const import DOMAIN
 from tests.cloud_approval import approve_cloud_claims
+from tests.flow_sleep import patch_flow_sleep
 
 
 @pytest.mark.asyncio
@@ -85,10 +86,7 @@ async def test_pair_finalize_creates_entry(hass: HomeAssistant, enable_custom_in
             "custom_components.svitgrid.config_flow.generate_keypair",
             return_value=(fake_priv, "04" + "a" * 128),
         ),
-        patch(
-            "custom_components.svitgrid.config_flow.asyncio.sleep",
-            side_effect=_instant_sleep,
-        ),
+        patch_flow_sleep(_instant_sleep),
     ):
         mock_client = mock_client_cls.return_value
         mock_client.start = AsyncMock(
@@ -150,10 +148,7 @@ async def test_pair_finalize_persists_preset_fields(
             "custom_components.svitgrid.config_flow.generate_keypair",
             return_value=(fake_priv, "04" + "a" * 128),
         ),
-        patch(
-            "custom_components.svitgrid.config_flow.asyncio.sleep",
-            side_effect=_instant_sleep,
-        ),
+        patch_flow_sleep(_instant_sleep),
     ):
         mock_client = mock_client_cls.return_value
         mock_client.start = AsyncMock(
@@ -243,10 +238,7 @@ async def test_pair_finalize_populates_inverters_list(
             "custom_components.svitgrid.config_flow.generate_keypair",
             return_value=(fake_priv, "04" + "a" * 128),
         ),
-        patch(
-            "custom_components.svitgrid.config_flow.asyncio.sleep",
-            side_effect=_instant_sleep,
-        ),
+        patch_flow_sleep(_instant_sleep),
         patch(
             # We assert the created entry's shape, not its runtime; skip the real
             # setup so background tasks (command poller / mqtt wake) don't fire.
@@ -340,10 +332,7 @@ async def test_pair_finalize_phase_1_compat_when_no_preset(
             "custom_components.svitgrid.config_flow.generate_keypair",
             return_value=(fake_priv, "04" + "a" * 128),
         ),
-        patch(
-            "custom_components.svitgrid.config_flow.asyncio.sleep",
-            side_effect=_instant_sleep,
-        ),
+        patch_flow_sleep(_instant_sleep),
     ):
         mock_client = mock_client_cls.return_value
         mock_client.start = AsyncMock(
@@ -584,10 +573,7 @@ async def _run_pair_flow_with_finalize(hass, finalize_payload):
             "custom_components.svitgrid.config_flow.generate_keypair",
             return_value=(fake_priv, "04" + "a" * 128),
         ),
-        patch(
-            "custom_components.svitgrid.config_flow.asyncio.sleep",
-            side_effect=_instant_sleep,
-        ),
+        patch_flow_sleep(_instant_sleep),
     ):
         mock_client = mock_client_cls.return_value
         mock_client.start = AsyncMock(
@@ -665,8 +651,8 @@ async def _drive_refused_pair_flow(
     from custom_components.svitgrid.pairing_client import PairingClaimed
 
     fake_priv = ec.generate_private_key(ec.SECP256R1())
-    # Bound before the patch: patching `config_flow.asyncio.sleep` replaces the
-    # attribute on the real asyncio module, so calling it here would recurse.
+    # patch_flow_sleep swaps sleep only on the config flow's asyncio, so the
+    # real one stays reachable here.
     real_sleep = asyncio.sleep
 
     async def _one_loop_tick(_: float) -> None:
@@ -681,7 +667,7 @@ async def _drive_refused_pair_flow(
             "custom_components.svitgrid.config_flow.generate_keypair",
             return_value=(fake_priv, "04" + "a" * 128),
         ),
-        patch("custom_components.svitgrid.config_flow.asyncio.sleep", side_effect=_one_loop_tick),
+        patch_flow_sleep(_one_loop_tick),
     ):
         mock_client = mock_client_cls.return_value
         mock_client.start = AsyncMock(side_effect=start_results)
@@ -832,7 +818,7 @@ async def test_pair_finalize_plain_failure_aborts_as_pairing_failed(
             "custom_components.svitgrid.config_flow.generate_keypair",
             return_value=(fake_priv, "04" + "a" * 128),
         ),
-        patch("custom_components.svitgrid.config_flow.asyncio.sleep", side_effect=_instant_sleep),
+        patch_flow_sleep(_instant_sleep),
         patch.object(manager, "async_configure", _recording_configure),
     ):
         mock_client = mock_client_cls.return_value

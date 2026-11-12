@@ -16,6 +16,7 @@ from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
 
 from custom_components.svitgrid.const import DOMAIN
+from tests.flow_sleep import patch_flow_sleep
 
 
 def _pending(hass: HomeAssistant):
@@ -69,7 +70,7 @@ async def test_the_code_stops_being_published_once_the_pairing_expires(
 
     with (
         patch("custom_components.svitgrid.config_flow.PairingClient") as mock_client_cls,
-        patch("custom_components.svitgrid.config_flow.asyncio.sleep", side_effect=_instant_sleep),
+        patch_flow_sleep(_instant_sleep),
     ):
         mock_client = mock_client_cls.return_value
         mock_client.start = AsyncMock(
