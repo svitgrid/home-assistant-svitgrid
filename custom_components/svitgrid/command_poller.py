@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
@@ -28,10 +29,13 @@ from .const import (
     COMMAND_POLL_INTERVAL_S,
     DISABLE_ISLAND_COMMAND,
     DISPATCHABLE_COMMANDS,
+    DOMAIN,
     ENABLE_ISLAND_COMMAND,
     LEGACY_ISLAND_DEVICE_ID,
     MAX_INVERTERS,
     POLL_NOW_COMMAND,
+    READINGS_DB_SUBDIR,
+    UPLOAD_LOGS_COMMAND,
     REVOKE_TRUSTED_KEY_COMMAND,
     SET_CLOUD_ENDPOINT_COMMAND,
     SET_CLOUD_INGEST_COMMAND,
@@ -39,6 +43,8 @@ from .const import (
     SET_READ_SOURCE_COMMAND,
     TRUSTED_KEY_RESYNC_MIN_INTERVAL_S,
 )
+from .file_log import LOG_SUBDIR
+from .log_upload import _UPLOAD_LOCK, run_upload, window_error
 from .entry_reload import update_entry_skipping_listener_reload
 from .harvest.read_now import find_triggers
 from .harvest_config_apply import (
@@ -975,6 +981,45 @@ async def process_command(
             api_key=api_key,
             command_id=cmd_id,
             success=True,
+            our_private_key=our_private_key,
+            our_signing_key_id=our_signing_key_id,
+            executor_version=executor_version,
+        )
+        return
+
+    # === Arm 1f: upload_logs ===
+    # Internal (no admin signature), for parity with the ED-1. Ack at once and
+    # upload in a task, as the board does: the ack says whether the upload
+    # started, and the summary posted to the logs route carries the outcome.
+    if cmd_type == UPLOAD_LOGS_COMMAND:
+        payload = command.get("payload") or {}
+        file_log = (hass.data.get(DOMAIN) or {}).get("file_log") if hass else None
+        if file_log is None:
+            reason = "no_log"
+        elif _UPLOAD_LOCK.locked():
+            reason = "busy"
+        else:
+            reason = window_error(payload, time.time())
+        if reason is not None:
+            _LOGGER.info("upload_logs refused: %s. cmd_id=%s", reason, cmd_id)
+        else:
+            hass.async_create_task(
+                run_upload(
+                    api_client=api_client,
+                    api_key=api_key,
+                    command_id=cmd_id,
+                    from_ts=payload["from"],
+                    to_ts=payload["to"],
+                    root=hass.config.path(READINGS_DB_SUBDIR, LOG_SUBDIR),
+                    flush=file_log.flush,
+                )
+            )
+        await _send_signed_ack(
+            api_client=api_client,
+            api_key=api_key,
+            command_id=cmd_id,
+            success=reason is None,
+            result={"started": True} if reason is None else {"error": reason},
             our_private_key=our_private_key,
             our_signing_key_id=our_signing_key_id,
             executor_version=executor_version,

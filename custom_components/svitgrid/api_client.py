@@ -64,6 +64,14 @@ class RateLimited(SvitgridApiError):
     """Too many bootstrap attempts for this deviceId."""
 
 
+class LogUploadRefused(SvitgridApiError):
+    """403 from the logs route: no upload_logs command for this device."""
+
+
+class LogUploadFailed(SvitgridApiError):
+    """Any other refusal of a log part or summary."""
+
+
 class CommandAckFailed(SvitgridApiError):
     """POST /commands/:id/ack returned non-2xx."""
 
@@ -254,6 +262,22 @@ class SvitgridApiClient:
         async with self._session.post(url, headers={"x-api-key": api_key}, json=body) as resp:
             if resp.status >= 400:
                 raise CommandAckFailed(f"HTTP {resp.status}: {await _err(resp)}")
+
+    async def post_log_part(self, api_key: str, body: dict[str, Any]) -> None:
+        """POST one upload_logs part to the logs route the ED-1 uses."""
+        await self._post_log(api_key, body)
+
+    async def post_log_summary(self, api_key: str, body: dict[str, Any]) -> None:
+        """POST the upload_logs summary that closes the upload."""
+        await self._post_log(api_key, body)
+
+    async def _post_log(self, api_key: str, body: dict[str, Any]) -> None:
+        url = f"{self._base}/api/v1/edge-devices/logs"
+        async with self._session.post(url, headers={"x-api-key": api_key}, json=body) as resp:
+            if resp.status == 403:
+                raise LogUploadRefused(f"HTTP 403: {await _err(resp)}")
+            if resp.status >= 400:
+                raise LogUploadFailed(f"HTTP {resp.status}: {await _err(resp)}")
 
     async def push_readings_batch(
         self, api_key: str, readings: list[dict[str, Any]]

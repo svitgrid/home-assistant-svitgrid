@@ -627,3 +627,35 @@ class TestBatchHaVersion:
 
         _integration_version.cache_clear()
         assert _integration_version() == _MANIFEST_VERSION
+
+
+@pytest.mark.asyncio
+class TestLogUpload:
+    async def test_part_posts_to_the_logs_route_with_the_key(self):
+        from custom_components.svitgrid.api_client import LogUploadRefused  # noqa: F401
+
+        session, _ = _mock_session_with_response(201, {"gcsPath": "x"})
+        client = SvitgridApiClient(session, api_base="https://api.example")
+        body = {"commandId": "c1", "hour": "2026-11-12T14", "part": 0, "text": "a\n"}
+        await client.post_log_part(api_key="k1", body=body)
+        url = session.post.call_args.args[0]
+        kwargs = session.post.call_args.kwargs
+        assert url == "https://api.example/api/v1/edge-devices/logs"
+        assert kwargs["headers"] == {"x-api-key": "k1"}
+        assert kwargs["json"] == body
+
+    async def test_403_raises_log_upload_refused(self):
+        from custom_components.svitgrid.api_client import LogUploadRefused
+
+        session, _ = _mock_session_with_response(403, {"error": "no upload_logs command"})
+        client = SvitgridApiClient(session, api_base="https://api.example")
+        with pytest.raises(LogUploadRefused):
+            await client.post_log_part(api_key="k1", body={})
+
+    async def test_500_raises_log_upload_failed(self):
+        from custom_components.svitgrid.api_client import LogUploadFailed
+
+        session, _ = _mock_session_with_response(500, {"error": "Upload failed"})
+        client = SvitgridApiClient(session, api_base="https://api.example")
+        with pytest.raises(LogUploadFailed):
+            await client.post_log_summary(api_key="k1", body={})

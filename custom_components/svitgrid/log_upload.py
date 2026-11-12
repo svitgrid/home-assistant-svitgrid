@@ -8,12 +8,20 @@ EdgeDeviceLogSummarySchema): a window of at most 24 h, parts of at most
 
 from __future__ import annotations
 
+import asyncio
+import logging
+from collections.abc import Callable
 from typing import Any
 
 from .file_log import hour_label, hour_path
 
+_LOGGER = logging.getLogger(__name__)
+
 MAX_WINDOW_S = 86400
 PART_MAX_BYTES = 32768
+
+# One upload at a time per install, as on the ED-1 (a second is refused busy).
+_UPLOAD_LOCK = asyncio.Lock()
 
 
 def _is_int(v: Any) -> bool:
@@ -91,3 +99,70 @@ def read_parts(root: str, label: str) -> list[str]:
         parts.append("".join(current))
     return parts
 
+
+
+async def run_upload(
+    *,
+    api_client: Any,
+    api_key: str,
+    command_id: str,
+    from_ts: int,
+    to_ts: int,
+    root: str,
+    flush: Callable[[], None],
+) -> dict[str, Any]:
+    """Post the window's parts, then the summary. Returns the summary posted.
+
+    A refused or failed part stops the upload; the summary still goes out once,
+    with `error` set, so the operator's script is not left waiting.
+    """
+    from .api_client import LogUploadRefused
+
+    async with _UPLOAD_LOCK:
+        # Lines still queued in the writer thread belong to the current hour.
+        await asyncio.to_thread(flush)
+        hours: list[dict[str, Any]] = []
+        missing: list[str] = []
+        error: str | None = None
+        for label in hours_in_window(from_ts, to_ts):
+            parts = await asyncio.to_thread(read_parts, root, label)
+            if not parts:
+                missing.append(label)
+                continue
+            sent_bytes = 0
+            for index, text in enumerate(parts):
+                try:
+                    await api_client.post_log_part(
+                        api_key=api_key,
+                        body={"commandId": command_id, "hour": label, "part": index, "text": text},
+                    )
+                except LogUploadRefused:
+                    error = "refused"
+                    break
+                except Exception:  # noqa: BLE001 - stop and report, never retry forever
+                    error = "post_failed"
+                    break
+                sent_bytes += len(text.encode("utf-8"))
+            if error is not None:
+                break
+            hours.append({"hour": label, "bytes": sent_bytes, "parts": len(parts)})
+        summary = {
+            "commandId": command_id,
+            "done": True,
+            "from": from_ts,
+            "to": to_ts,
+            "hours": hours,
+            "missing": missing,
+            "dropped": 0,
+            "lost": 0,
+            "error": error,
+        }
+        try:
+            await api_client.post_log_summary(api_key=api_key, body=summary)
+        except Exception:  # noqa: BLE001
+            _LOGGER.warning("upload_logs %s: the summary was not accepted", command_id)
+        _LOGGER.info(
+            "upload_logs %s: %d hours sent, %d missing%s",
+            command_id, len(hours), len(missing), f", error {error}" if error else "",
+        )
+        return summary
