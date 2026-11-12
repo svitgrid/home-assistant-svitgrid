@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.29.0 — 2026-11-12
+
+### Added
+- **The integration keeps its own log, and Svitgrid support can fetch an hour
+  of it.** INFO, WARN and ERROR lines from the Svitgrid integration go to hourly
+  files under `<config>/svitgrid/logs/`, kept for 7 days. API keys, tokens and
+  JWTs are removed from every line. When support sends `upload_logs` for a time
+  window of up to 24 hours, the integration posts that window's files to the
+  cloud, the same way an ED-1 sends the log from its microSD card. Nothing
+  leaves the install until that command arrives.
+
 ## 0.28.4 — 2026-11-12
 
 ### Fixed
