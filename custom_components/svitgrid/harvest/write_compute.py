@@ -19,6 +19,7 @@ raised ``KeyError`` and the whole command failed.
 from __future__ import annotations
 
 from .register_spec import FieldWrite, SlotSpec, WriteCommand
+from .slot_soc_word import compose_slot_soc_word
 
 # Fields where 0 means "do not write", not "write 0".  The API sends
 # ``chargeVoltage: 0`` when it cannot work one out from the battery chemistry
@@ -62,6 +63,15 @@ _PROGRAM_KEYS = (
 # With the mirror in step, both give the same word.
 _ENABLE_KNOWN_BITS = 0x03
 
+# The slot field that writes a Deye TOU slot's SOC register, and the payload
+# field (and ``prevSlots`` entry key) that sets its Gen byte. The register
+# holds Batt in the low byte and Gen in the high byte (slot_soc_word.py), so
+# every write is composed over the live word: a Batt write keeps Gen, and an
+# absent ``genSoc`` keeps the live high byte. The phone harvester's
+# BatteryChargeExecutor and the edge firmware (S3 2.177.0) do the same.
+SLOT_SOC_FIELD = "gridChargeSoc"
+GEN_SOC_FIELD = "genSoc"
+
 
 def is_set(f: FieldWrite, payload: dict) -> bool:
     """Return True when *payload* asks for field *f* to be written."""
@@ -77,6 +87,39 @@ def _is_on(raw: object, f: FieldWrite) -> bool:
     if isinstance(raw, bool):
         return raw
     return int(raw) == (f.on_value if f.on_value is not None else 1)
+
+
+def _slot_soc_word(live: int, batt: int | None, gen: int | None, slot_no: int) -> int:
+    """Compose slot *slot_no*'s SOC word over the *live* one.
+
+    Raises ``ValueError`` when the live word is not a valid Batt/Gen pair or a
+    byte is out of range. Nothing is written then: ``compute_register_writes``
+    returns before the executor writes anything.
+    """
+    try:
+        return compose_slot_soc_word(live, batt=batt, gen=gen)
+    except ValueError as err:
+        raise ValueError(
+            f"refusing to write slot {slot_no} SOC: {err}. The register holds Batt in "
+            "the low byte and Gen in the high byte, and neither can be written safely "
+            "from this value"
+        ) from err
+
+
+def _single_slot_soc(
+    f: FieldWrite, payload: dict, prior: dict[int, int], address: int, slot_no: int
+) -> int | None:
+    """The SOC word a single-slot payload writes, or None when it sets neither byte.
+
+    Batt keeps its clamp to the recipe limits, so the byte is clamped and never
+    the raw word. An out-of-range ``genSoc`` refuses, as it does in a program.
+    """
+    batt = _encode_value(f, payload, prior, address) if is_set(f, payload) else None
+    gen_raw = _number(payload.get(GEN_SOC_FIELD))
+    gen = int(gen_raw) if gen_raw is not None else None
+    if batt is None and gen is None:
+        return None
+    return _slot_soc_word(prior.get(address, 0), batt, gen, slot_no)
 
 
 def _encode_value(
@@ -161,10 +204,15 @@ def compute_register_writes(
         if not (0 <= idx < s.count):
             raise ValueError(f"slot index {idx} out of range 0..{s.count - 1}")
         for f in s.fields:
-            if not is_set(f, payload):
-                continue
             slot_idx = ((idx + 1) % s.count) if f.via_next_slot else idx
             addr = f.base + slot_idx * s.stride
+            if f.payload_field == SLOT_SOC_FIELD:
+                word = _single_slot_soc(f, payload, prior, addr, slot_idx + 1)
+                if word is not None:
+                    out.append((unit_id, addr, word))
+                continue
+            if not is_set(f, payload):
+                continue
             out.append((unit_id, addr, _encode_value(f, payload, prior, addr)))
         if payload.get(DISABLE_OTHERS_FIELD) is True:
             out.extend(_disable_other_slots(s, idx, prior, unit_id))
@@ -241,6 +289,11 @@ def _program_writes(
     register only), power, voltage (skipped at 0), SOC and enable. A key an
     entry leaves out is skipped. The enable word needs the live register in
     *prior* (see ``_ENABLE_KNOWN_BITS``).
+
+    An entry's ``soc`` is Batt and its ``genSoc`` Gen, each composed over the
+    live word in *prior* and never clamped. Every word is composed before this
+    returns, so one invalid live word, or a raw word arriving as Batt, refuses
+    the whole program with nothing written.
     """
     if not isinstance(program, list) or len(program) != slot.count:
         size = len(program) if isinstance(program, list | dict | str) else "?"
@@ -255,6 +308,16 @@ def _program_writes(
         for key, _name in _PROGRAM_KEYS:
             f = program_field(slot, key)
             raw = _number(entry.get(key))
+            if key == "soc":
+                gen = _number(entry.get(GEN_SOC_FIELD))
+                if f is None or (raw is None and gen is None):
+                    continue
+                addr = f.base + i * slot.stride  # type: ignore[operator]
+                batt = int(raw) if raw is not None else None
+                gen_byte = int(gen) if gen is not None else None
+                word = _slot_soc_word(prior.get(addr, 0), batt, gen_byte, i + 1)
+                out.append((unit_id, addr, word))
+                continue
             if f is None or raw is None:
                 continue
             if key == "voltage" and raw == 0:

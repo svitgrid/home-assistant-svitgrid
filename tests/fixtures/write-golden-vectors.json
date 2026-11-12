@@ -1,5 +1,5 @@
 {
-  "sourceCommit": "2afdc1cd24fbc24e99b4b59f98f824919f880a08",
+  "sourceCommit": "3d2277057fabbb3f182d006e15eb4c536f076940",
   "vectors": [
     {
       "modelId": "deye_sg04lp3",
@@ -732,6 +732,199 @@
           "unitId": 1,
           "address": 279,
           "value": 242
+        }
+      ]
+    },
+    {
+      "modelId": "deye_sg03lp1",
+      "command": "set_battery_charge",
+      "payload": {
+        "slotIndex": 2,
+        "slotStart": 830,
+        "slotEnd": 1200,
+        "powerLimit": 3000,
+        "chargeVoltage": 5760,
+        "gridChargeSoc": 100,
+        "gridChargeEnabled": true
+      },
+      "priorRegisters": {
+        "270": 13894,
+        "276": 242
+      },
+      "writeCommand": {
+        "command": "set_battery_charge",
+        "slot": {
+          "indexField": "slotIndex",
+          "count": 6,
+          "stride": 1,
+          "endViaNextSlotStart": true,
+          "fields": [
+            {
+              "payloadField": "slotStart",
+              "base": 250
+            },
+            {
+              "payloadField": "slotEnd",
+              "base": 250,
+              "viaNextSlot": true
+            },
+            {
+              "payloadField": "powerLimit",
+              "base": 256
+            },
+            {
+              "payloadField": "chargeVoltage",
+              "base": 262,
+              "limits": {
+                "min": 0,
+                "max": 6500
+              }
+            },
+            {
+              "payloadField": "gridChargeSoc",
+              "base": 268,
+              "limits": {
+                "min": 0,
+                "max": 100
+              }
+            },
+            {
+              "payloadField": "gridChargeEnabled",
+              "base": 274,
+              "onValue": 1,
+              "offValue": 0,
+              "clearMask": 1
+            }
+          ]
+        }
+      },
+      "expectedRegisterWrites": [
+        {
+          "unitId": 1,
+          "address": 252,
+          "value": 830
+        },
+        {
+          "unitId": 1,
+          "address": 253,
+          "value": 1200
+        },
+        {
+          "unitId": 1,
+          "address": 258,
+          "value": 3000
+        },
+        {
+          "unitId": 1,
+          "address": 264,
+          "value": 5760
+        },
+        {
+          "unitId": 1,
+          "address": 270,
+          "value": 13924
+        },
+        {
+          "unitId": 1,
+          "address": 276,
+          "value": 243
+        }
+      ]
+    },
+    {
+      "modelId": "deye_sg03lp1",
+      "command": "set_battery_charge",
+      "payload": {
+        "slotIndex": 0,
+        "slotStart": 100,
+        "slotEnd": 500,
+        "powerLimit": 2000,
+        "chargeVoltage": 5600,
+        "gridChargeSoc": 140,
+        "genSoc": 60,
+        "gridChargeEnabled": true
+      },
+      "priorRegisters": {
+        "268": 14175,
+        "274": 240
+      },
+      "writeCommand": {
+        "command": "set_battery_charge",
+        "slot": {
+          "indexField": "slotIndex",
+          "count": 6,
+          "stride": 1,
+          "endViaNextSlotStart": true,
+          "fields": [
+            {
+              "payloadField": "slotStart",
+              "base": 250
+            },
+            {
+              "payloadField": "slotEnd",
+              "base": 250,
+              "viaNextSlot": true
+            },
+            {
+              "payloadField": "powerLimit",
+              "base": 256
+            },
+            {
+              "payloadField": "chargeVoltage",
+              "base": 262,
+              "limits": {
+                "min": 0,
+                "max": 6500
+              }
+            },
+            {
+              "payloadField": "gridChargeSoc",
+              "base": 268,
+              "limits": {
+                "min": 0,
+                "max": 100
+              }
+            },
+            {
+              "payloadField": "gridChargeEnabled",
+              "base": 274,
+              "onValue": 1,
+              "offValue": 0,
+              "clearMask": 1
+            }
+          ]
+        }
+      },
+      "expectedRegisterWrites": [
+        {
+          "unitId": 1,
+          "address": 250,
+          "value": 100
+        },
+        {
+          "unitId": 1,
+          "address": 251,
+          "value": 500
+        },
+        {
+          "unitId": 1,
+          "address": 256,
+          "value": 2000
+        },
+        {
+          "unitId": 1,
+          "address": 262,
+          "value": 5600
+        },
+        {
+          "unitId": 1,
+          "address": 268,
+          "value": 15460
+        },
+        {
+          "unitId": 1,
+          "address": 274,
+          "value": 241
         }
       ]
     },

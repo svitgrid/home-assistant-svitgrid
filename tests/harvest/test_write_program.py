@@ -169,11 +169,66 @@ def test_program_skips_a_field_an_entry_leaves_out():
     assert 151 in addrs and 175 in addrs
 
 
-def test_program_clamps_to_the_recipe_limits():
+def test_program_refuses_a_batt_above_100():
+    """`soc` is Batt, the low byte. A raw word arriving as Batt (a restore
+    built from an old ACK) refuses the whole program instead of clamping it,
+    as the phone and firmware executors do."""
     slots = [dict(s) for s in ORIGINAL]
     slots[0]["soc"] = 150
-    got = compute_register_writes(_sg04lp3_charge(), {"prevSlots": slots}, _registers_of(ORIGINAL))
-    assert (1, 166, 100) in got
+    with pytest.raises(ValueError, match="slot 1"):
+        compute_register_writes(_sg04lp3_charge(), {"prevSlots": slots}, _registers_of(ORIGINAL))
+
+
+# The packed words of inverter RInTOQcxtMoAZUgVxmp9 (LCD photo 2026-11-12):
+# Batt in the low byte, Gen in the high byte.
+PACKED_WORDS = [14175, 13919, 13894, 13387, 13653, 14431]
+
+
+def _packed_registers() -> dict[int, int]:
+    regs = _registers_of(ORIGINAL)
+    for i, word in enumerate(PACKED_WORDS):
+        regs[166 + i] = word
+    return regs
+
+
+def test_program_batt_keeps_the_live_gen_byte():
+    """A program with no `genSoc`, as an old API or app build sends, keeps Gen."""
+    slots = [dict(s) for s in ORIGINAL]
+    slots[2]["soc"] = 100
+    got = compute_register_writes(_sg04lp3_charge(), {"prevSlots": slots}, _packed_registers())
+    socs = [v for _, a, v in got if 166 <= a <= 171]
+    assert socs == [
+        (55 << 8) | 100,
+        (54 << 8) | 30,
+        0x3664,
+        (52 << 8) | 30,
+        (53 << 8) | 30,
+        (56 << 8) | 100,
+    ]
+
+
+def test_program_gen_soc_sets_the_high_byte():
+    slots = [dict(s) for s in ORIGINAL]
+    slots[1]["genSoc"] = 60
+    del slots[3]["soc"]
+    slots[3]["genSoc"] = 40
+    got = compute_register_writes(_sg04lp3_charge(), {"prevSlots": slots}, _packed_registers())
+    assert (1, 167, (60 << 8) | 30) in got
+    assert (1, 169, (40 << 8) | 75) in got  # Batt 75 kept from the live 13387
+
+
+def test_program_refuses_an_out_of_range_gen_soc():
+    slots = [dict(s) for s in ORIGINAL]
+    slots[4]["genSoc"] = 101
+    with pytest.raises(ValueError, match="slot 5"):
+        compute_register_writes(_sg04lp3_charge(), {"prevSlots": slots}, _packed_registers())
+
+
+def test_program_refuses_an_invalid_live_word():
+    live = _packed_registers()
+    live[171] = 30728
+    with pytest.raises(ValueError, match="slot 6"):
+        compute_register_writes(_sg04lp3_charge(), {"prevSlots": ORIGINAL}, live)
 
 
 @pytest.mark.parametrize("prev_slots", [ORIGINAL[:5], ORIGINAL + ORIGINAL[:1], "x", {}])
@@ -282,7 +337,7 @@ async def test_dispatch_reports_the_table_it_found_like_the_firmware():
     with p1, p2, p3:
         result = await _executor(inv).dispatch("set_battery_charge", _api_program_payload())
 
-    assert result["prevSlots"] == ORIGINAL
+    assert result["prevSlots"] == [dict(s, genSoc=0) for s in ORIGINAL]
     assert result["prevSlotStart"] == 0
     assert result["prevSlotEnd"] == 700
     assert result["prevPowerLimit"] == 3000
@@ -317,7 +372,38 @@ async def test_single_slot_dispatch_reports_the_table_too():
         result = await _executor(inv).dispatch("set_battery_charge", payload)
 
     assert inv.writes == [[(1, 148, 200), (1, 149, 500), (1, 166, 90), (1, 172, 961)]]
-    assert result["prevSlots"] == ORIGINAL
+    assert result["prevSlots"] == [dict(s, genSoc=0) for s in ORIGINAL]
+
+
+async def test_ack_reports_batt_and_gen_soc_and_a_restore_puts_the_words_back():
+    """`prevSlots[i].soc` is Batt and `genSoc` Gen, the shape the phone and
+    firmware report, so a restore built from the ACK composes the same word.
+    An invalid word is reported raw with no `genSoc`."""
+    live = _packed_registers()
+    live[171] = 30728
+    inv = _Inverter(live)
+    executor = _executor(inv)
+    payload = {"slotIndex": 2, "gridChargeSoc": 100, "gridChargeEnabled": True}
+    p1, p2, p3 = _patches(inv)
+    with p1, p2, p3:
+        result = await executor.dispatch("set_battery_charge", payload)
+        assert inv.registers[168] == 0x3664
+
+        assert [(s["soc"], s.get("genSoc")) for s in result["prevSlots"]] == [
+            (95, 55),
+            (95, 54),
+            (70, 54),
+            (75, 52),
+            (85, 53),
+            (30728, None),
+        ]
+        assert result["prevGridChargeSoc"] == 95
+
+        restore = {"slotIndex": 2, "gridChargeSoc": result["prevSlots"][2]["soc"]}
+        restore["genSoc"] = result["prevSlots"][2]["genSoc"]
+        await executor.dispatch("restore_battery_charge", restore)
+
+    assert inv.registers[168] == 13894
 
 
 async def test_a_failed_table_read_aborts_before_any_write():

@@ -11,6 +11,10 @@ from __future__ import annotations
 import pytest
 
 from custom_components.svitgrid.harvest.register_spec import FieldWrite, SlotSpec, WriteCommand
+from custom_components.svitgrid.harvest.slot_soc_word import (
+    compose_slot_soc_word,
+    split_slot_soc_word,
+)
 from custom_components.svitgrid.harvest.write_compute import compute_register_writes
 
 # ---------------------------------------------------------------------------
@@ -432,3 +436,104 @@ class TestOptionalFields:
         cmd = _cmd([_fw(payload_field="workMode", address=142)])
         with pytest.raises(ValueError, match="workMode"):
             compute_register_writes(cmd, {}, {})
+
+
+# ---------------------------------------------------------------------------
+# Slot SOC word: Batt in the low byte, Gen in the high byte
+# ---------------------------------------------------------------------------
+#
+# Twin of services/api/src/tou/slot-soc-word.ts and the Dart
+# slot_soc_word.dart. Inverter RInTOQcxtMoAZUgVxmp9, LCD photo 2026-11-12.
+
+_SOC_FIXTURE = [
+    (14175, 95, 55),
+    (13919, 95, 54),
+    (13894, 70, 54),
+    (13387, 75, 52),
+    (13653, 85, 53),
+    (14431, 95, 56),
+]
+
+
+class TestSlotSocWord:
+    @pytest.mark.parametrize(("word", "batt", "gen"), _SOC_FIXTURE)
+    def test_splits_the_fixture_words(self, word, batt, gen):
+        assert split_slot_soc_word(word) == (batt, gen)
+
+    def test_reads_an_unpacked_word_as_batt_with_gen_0(self):
+        assert split_slot_soc_word(70) == (70, 0)
+
+    def test_accepts_100_100(self):
+        assert split_slot_soc_word(25700) == (100, 100)
+
+    @pytest.mark.parametrize("word", [30728, 0x6565, -1, 65536, True, 70.5, "70"])
+    def test_an_invalid_word_splits_to_none(self, word):
+        assert split_slot_soc_word(word) is None
+
+    def test_compose_replaces_batt_and_keeps_gen(self):
+        assert compose_slot_soc_word(13894, batt=100) == 0x3664
+
+    def test_compose_replaces_gen_and_keeps_batt(self):
+        assert compose_slot_soc_word(13894, gen=0) == 70
+
+    def test_compose_keeps_the_high_byte_0_on_an_unpacked_unit(self):
+        assert compose_slot_soc_word(70, batt=95) == 95
+
+    def test_compose_refuses_an_invalid_live_word(self):
+        with pytest.raises(ValueError, match="30728"):
+            compose_slot_soc_word(30728, batt=50)
+
+    @pytest.mark.parametrize("change", [{"batt": 101}, {"gen": -1}, {"gen": 101}])
+    def test_compose_refuses_a_byte_outside_0_100(self, change):
+        with pytest.raises(ValueError):
+            compose_slot_soc_word(70, **change)
+
+
+def _soc_cmd() -> WriteCommand:
+    """The SG03LP1 slot SOC field alone: base 268, limits 0..100."""
+    return WriteCommand(
+        command="set_battery_charge",
+        fields=(),
+        slot=SlotSpec(
+            index_field="slotIndex",
+            count=6,
+            stride=1,
+            end_via_next_slot=False,
+            fields=(_fw(payload_field="gridChargeSoc", base=268, limits={"min": 0, "max": 100}),),
+        ),
+    )
+
+
+class TestSingleSlotSocWord:
+    """A single-slot write composes the SOC word over the live one."""
+
+    def test_slot_3_batt_100_over_13894_keeps_gen(self):
+        got = compute_register_writes(
+            _soc_cmd(), {"slotIndex": 2, "gridChargeSoc": 100}, {270: 13894}
+        )
+        assert got == [(1, 270, 0x3664)]
+
+    def test_gen_soc_sets_the_high_byte(self):
+        payload = {"slotIndex": 2, "gridChargeSoc": 80, "genSoc": 60}
+        got = compute_register_writes(_soc_cmd(), payload, {270: 13894})
+        assert got == [(1, 270, (60 << 8) | 80)]
+
+    def test_gen_soc_alone_keeps_batt(self):
+        got = compute_register_writes(_soc_cmd(), {"slotIndex": 2, "genSoc": 0}, {270: 13894})
+        assert got == [(1, 270, 70)]
+
+    def test_batt_above_100_clamps_the_byte_not_the_word(self):
+        got = compute_register_writes(
+            _soc_cmd(), {"slotIndex": 0, "gridChargeSoc": 140}, {268: 14175}
+        )
+        assert got == [(1, 268, (55 << 8) | 100)]
+
+    def test_an_invalid_live_word_refuses(self):
+        with pytest.raises(ValueError, match="30728"):
+            compute_register_writes(_soc_cmd(), {"slotIndex": 0, "gridChargeSoc": 90}, {268: 30728})
+
+    def test_an_out_of_range_gen_soc_refuses(self):
+        with pytest.raises(ValueError, match="gen"):
+            compute_register_writes(
+                _soc_cmd(), {"slotIndex": 2, "gridChargeSoc": 80, "genSoc": 101}, {270: 13894}
+            )

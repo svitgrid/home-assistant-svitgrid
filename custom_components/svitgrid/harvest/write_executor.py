@@ -24,6 +24,7 @@ from typing import Any
 
 from ..executors.base import BaseExecutor
 from .register_spec import FieldWrite, RegisterSpec, SlotSpec, WriteCommand
+from .slot_soc_word import split_slot_soc_word
 from .transport import read_word, read_words, write_registers
 from .write_compute import compute_register_writes, is_set, program_field
 
@@ -132,6 +133,11 @@ def _prev_slot_fields(slot: SlotSpec, table: dict[int, int]) -> dict[str, Any]:
     reports 0, as in the firmware. ``end`` is the next slot's start unless the
     recipe has an end register (the firmware reports 0 there; the phone
     harvester reports the next start, as here).
+
+    ``soc`` is Batt and ``genSoc`` Gen, the two bytes of the slot SOC word, so
+    a restore built from this table composes the same word back. An invalid
+    word is reported raw with no ``genSoc``, so a restore built from it
+    refuses instead of writing it. The phone harvester reports the same shape.
     """
 
     def value(key: str, i: int) -> int:
@@ -144,16 +150,19 @@ def _prev_slot_fields(slot: SlotSpec, table: dict[int, int]) -> dict[str, Any]:
     for i in range(slot.count):
         has_end = program_field(slot, "end") is not None
         end = value("end", i) if has_end else value("start", (i + 1) % slot.count)
-        entries.append(
-            {
-                "start": value("start", i),
-                "end": end,
-                "power": value("power", i),
-                "voltage": value("voltage", i),
-                "soc": value("soc", i),
-                "enable": value("enable", i),
-            }
-        )
+        soc = value("soc", i)
+        pair = split_slot_soc_word(soc)
+        entry: dict[str, Any] = {
+            "start": value("start", i),
+            "end": end,
+            "power": value("power", i),
+            "voltage": value("voltage", i),
+            "soc": pair[0] if pair else soc,
+        }
+        if pair:
+            entry["genSoc"] = pair[1]
+        entry["enable"] = value("enable", i)
+        entries.append(entry)
     first = entries[0]
     return {
         "prevSlotStart": first["start"],
