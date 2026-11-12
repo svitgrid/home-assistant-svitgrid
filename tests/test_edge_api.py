@@ -113,12 +113,18 @@ def _json(resp) -> dict:
 # Every reading and grid event here carries a fixed 2026-10-28 timestamp, and
 # the pipeline refuses one more than 24 hours old, so the views' clock is pinned
 # near them (#1215: these tests went red 24 hours after they were written).
+# The battery-pack store keeps its own clock for pruning: a history row stamped
+# with the views' time expires 14 days later, so with only the views pinned the
+# store deleted every row it had just written from 2026-11-11 on. Pin both.
 _NOW = datetime(2026, 10, 28, 10, 5, tzinfo=UTC)
 
 
 @pytest.fixture(autouse=True)
 def _pinned_clock(monkeypatch):
+    from custom_components.svitgrid import bms_packs
+
     monkeypatch.setattr(edge_api, "_now", lambda: _NOW)
+    monkeypatch.setattr(bms_packs, "_utcnow", lambda: _NOW)
 
 
 async def _call(view_cls, method, hass, **kwargs):
