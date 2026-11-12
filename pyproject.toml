@@ -15,3 +15,6 @@ ignore = ["E501"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# A hung test fails and is named, instead of holding the CI runner until it
+# is cancelled (svitgrid D-1850). Needs pytest-timeout.
+timeout = 60
