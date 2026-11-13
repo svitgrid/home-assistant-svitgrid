@@ -152,6 +152,9 @@ async def test_ensure_file_log_attaches_once_under_config_svitgrid_logs(hass):
 def test_an_unencodable_character_does_not_stop_the_writer(tmp_path):
     h = HourlyFileHandler(str(tmp_path), now=lambda: NOW)
     log = _logger("custom_components.svitgrid.surrogate", h)
+    # The bad line must not reach pytest's log capture: xdist cannot send a
+    # lone surrogate between processes and aborts the whole run.
+    log.propagate = False
     try:
         log.info("bad %s", b"\xff".decode("utf-8", "surrogateescape"))
         log.info("next line")
