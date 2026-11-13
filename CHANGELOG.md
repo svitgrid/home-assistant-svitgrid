@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.30.0 — unreleased
+
+### Added
+- **An island station can send its log to support from the app.** Support
+  opens the station for 1 hour, then the owner taps «Надіслати логи в
+  підтримку». Home Assistant uploads its own last 7 days, and for an ED-1
+  that reports to it, the board's last 24 hours. The board's parts reach the
+  cloud through Home Assistant, which used to refuse them. Nothing leaves the
+  install outside an opening.
+
 ## 0.29.0 — 2026-11-12
 
 ### Added
