@@ -528,6 +528,7 @@ async def test_status_of_a_true_island(hass: HomeAssistant):
             "rules",
             "settings_lan",
             "bms_report_lan",
+            "read_source_lan",
         ],
     }
 
@@ -1245,6 +1246,7 @@ async def test_island_status_without_edge_boxes_is_unchanged(hass: HomeAssistant
             "rules",
             "settings_lan",
             "bms_report_lan",
+            "read_source_lan",
         ],
     }
 
@@ -1709,8 +1711,12 @@ async def test_island_status_without_edge_boxes_lists_ha_inverters_only(hass: Ho
             "rules",
             "settings_lan",
             "bms_report_lan",
+            "read_source_lan",
         ],
-        "inverters": {"inv-ha-1": {"host": "ha"}, "inv-ha-2": {"host": "ha"}},
+        "inverters": {
+            "inv-ha-1": {"host": "ha", "readSource": "native"},
+            "inv-ha-2": {"host": "ha", "readSource": "native"},
+        },
     }
 
 
@@ -1748,7 +1754,7 @@ async def test_island_status_advertises_each_edge_inverters_writes(hass: HomeAss
 
     deye = _VOCAB["brandKinds"]["deye"]
     assert body["inverters"] == {
-        "inv-ha": {"host": "ha"},
+        "inv-ha": {"host": "ha", "readSource": "native"},
         "inv-deye": {"host": "edge", **deye},
         # Battery charge and use battery run as priority profiles, and each
         # protocol writes its own thresholds (svitgrid#1255). sell_to_grid has
@@ -3069,9 +3075,13 @@ async def test_island_status_advertises_inverter_temperature_it_has_read(hass: H
 
     advert = _body(await SvitgridIslandStatusView().get(_Req(hass)))["inverters"]
 
-    assert advert["inv-hot"] == {"host": "ha", "conditionTypes": ["inverter_temperature"]}
-    assert advert["inv-none"] == {"host": "ha"}
-    assert advert["inv-sentinel"] == {"host": "ha"}
+    assert advert["inv-hot"] == {
+        "host": "ha",
+        "readSource": "native",
+        "conditionTypes": ["inverter_temperature"],
+    }
+    assert advert["inv-none"] == {"host": "ha", "readSource": "native"}
+    assert advert["inv-sentinel"] == {"host": "ha", "readSource": "native"}
 
 
 async def test_island_status_advertises_bms_temperature_with_a_labelled_pack(
@@ -3104,4 +3114,238 @@ async def test_island_status_without_a_labelled_pack_advertises_no_bms_temperatu
 
     advert = _body(await SvitgridIslandStatusView().get(_Req(hass)))["inverters"]
 
-    assert advert["inv-1"] == {"host": "ha"}
+    assert advert["inv-1"] == {"host": "ha", "readSource": "native"}
+
+
+# ── read source over the LAN (svitgrid D-1848) ──────────────────────────────
+#
+# A true island polls no cloud command, so the app's read-source switch
+# (native harvest <-> relay of Home Assistant's own sensors) reaches the
+# integration here, signed like every other LAN write. With relay, Svitgrid
+# reads the Solarman integration's entities and no longer holds the logger's
+# one TCP connection, so both run at once.
+
+_ENTITY_MAP = {"batterySoc": "sensor.inverter_battery"}
+_HC_WIRE = {
+    "protocol": "solarman_v5",
+    "ip": "192.168.50.10",
+    "port": 8899,
+    "slaveId": 1,
+    "modelId": "deye_sg04lp3",
+    "loggerSerial": "2712345678",
+}
+
+
+def _read_source_entry(hass, *, native=True, entity_map=_ENTITY_MAP) -> MockConfigEntry:
+    inverter = {"inverter_id": "inv-1", "entity_map": dict(entity_map)}
+    if native:
+        inverter["harvest_config"] = {
+            "protocol": "solarman_v5",
+            "ip": "192.168.50.10",
+            "port": 8899,
+            "slave_id": 1,
+            "model_id": "deye_sg04lp3",
+            "logger_serial": "2712345678",
+        }
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        version=2,
+        data={
+            "api_key": "k",
+            "edge_device_id": "ed-1",
+            "cloud_ingest_enabled": False,
+            "inverters": [inverter],
+        },
+    )
+    entry.add_to_hass(hass)
+    return entry
+
+
+async def _post_read_source(hass, admin, **fields):
+    from custom_components.svitgrid.island_lan import SvitgridIslandReadSourceView
+
+    return await SvitgridIslandReadSourceView().post(
+        _Req(hass, admin.request("set_read_source", **fields))
+    )
+
+
+async def test_read_source_relay_clears_the_harvest_config_and_reloads(
+    hass: HomeAssistant, reload_mock
+):
+    admin = _Admin()
+    await _keystore(hass, admin)
+    entry = _read_source_entry(hass)
+
+    resp = await _post_read_source(hass, admin, inverterId="inv-1", mode="relay")
+    await hass.async_block_till_done()
+
+    assert resp.status == 200, _body(resp)
+    assert _body(resp) == {"ok": True, "inverterId": "inv-1", "mode": "relay"}
+    inverter = entry.data["inverters"][0]
+    assert "harvest_config" not in inverter
+    assert inverter["entity_map"] == _ENTITY_MAP
+    reload_mock.assert_awaited_once_with(entry.entry_id)
+
+
+async def test_read_source_native_probes_and_stores_the_harvest_config(
+    hass: HomeAssistant, reload_mock
+):
+    admin = _Admin()
+    await _keystore(hass, admin)
+    entry = _read_source_entry(hass, native=False)
+
+    with patch(
+        "custom_components.svitgrid.island_lan.probe_modbus_reachable",
+        AsyncMock(return_value=True),
+    ) as probe:
+        resp = await _post_read_source(
+            hass, admin, inverterId="inv-1", mode="native", harvestConfig=_HC_WIRE
+        )
+    await hass.async_block_till_done()
+
+    assert resp.status == 200, _body(resp)
+    assert _body(resp) == {"ok": True, "inverterId": "inv-1", "mode": "native"}
+    probe.assert_awaited_once_with("192.168.50.10", 8899)
+    assert entry.data["inverters"][0]["harvest_config"] == {
+        "protocol": "solarman_v5",
+        "ip": "192.168.50.10",
+        "port": 8899,
+        "slave_id": 1,
+        "model_id": "deye_sg04lp3",
+        "logger_serial": "2712345678",
+    }
+    reload_mock.assert_awaited_once_with(entry.entry_id)
+
+
+async def test_read_source_native_with_an_unreachable_logger_is_probe_failed(
+    hass: HomeAssistant, reload_mock
+):
+    admin = _Admin()
+    await _keystore(hass, admin)
+    entry = _read_source_entry(hass, native=False)
+
+    with patch(
+        "custom_components.svitgrid.island_lan.probe_modbus_reachable",
+        AsyncMock(return_value=False),
+    ):
+        resp = await _post_read_source(
+            hass, admin, inverterId="inv-1", mode="native", harvestConfig=_HC_WIRE
+        )
+
+    assert resp.status == 409
+    assert _body(resp) == {"error": "probe_failed"}
+    assert "harvest_config" not in entry.data["inverters"][0]
+    reload_mock.assert_not_awaited()
+
+
+async def test_read_source_relay_without_an_entity_map_is_refused(hass: HomeAssistant, reload_mock):
+    admin = _Admin()
+    await _keystore(hass, admin)
+    entry = _read_source_entry(hass, entity_map={})
+
+    resp = await _post_read_source(hass, admin, inverterId="inv-1", mode="relay")
+
+    assert resp.status == 409
+    assert _body(resp) == {"error": "no_entity_map"}
+    assert "harvest_config" in entry.data["inverters"][0]
+    reload_mock.assert_not_awaited()
+
+
+async def test_read_source_for_an_unknown_inverter_is_404(hass: HomeAssistant, reload_mock):
+    admin = _Admin()
+    await _keystore(hass, admin)
+    _read_source_entry(hass)
+
+    resp = await _post_read_source(hass, admin, inverterId="inv-9", mode="relay")
+
+    assert resp.status == 404
+    assert _body(resp) == {"error": "unknown_inverter"}
+    reload_mock.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        pytest.param({"mode": "relay"}, id="no-inverter"),
+        pytest.param({"inverterId": "inv-1", "mode": "cloud"}, id="bad-mode"),
+        pytest.param({"inverterId": "inv-1", "mode": "native"}, id="native-no-config"),
+        pytest.param(
+            {"inverterId": "inv-1", "mode": "native", "harvestConfig": {"ip": "1.2.3.4"}},
+            id="native-no-port",
+        ),
+    ],
+)
+async def test_read_source_with_a_bad_payload_is_bad_request(
+    hass: HomeAssistant, reload_mock, fields
+):
+    admin = _Admin()
+    await _keystore(hass, admin)
+    _read_source_entry(hass, native=False)
+
+    resp = await _post_read_source(hass, admin, **fields)
+
+    assert resp.status == 400
+    assert _body(resp)["error"] == "bad_request"
+    reload_mock.assert_not_awaited()
+
+
+async def test_read_source_needs_a_trusted_signature(hass: HomeAssistant, reload_mock):
+    from custom_components.svitgrid.island_lan import SvitgridIslandReadSourceView
+
+    await _keystore(hass, _Admin())
+    entry = _read_source_entry(hass)
+    stranger = _Admin()
+
+    resp = await SvitgridIslandReadSourceView().post(
+        _Req(hass, stranger.request("set_read_source", inverterId="inv-1", mode="relay"))
+    )
+    assert resp.status == 403
+    assert _body(resp) == {"error": "signature_invalid"}
+    resp = await SvitgridIslandReadSourceView().post(
+        _Req(
+            hass,
+            stranger.request("set_read_source", inverterId="inv-1", mode="relay"),
+            island_key=None,
+        )
+    )
+    assert resp.status == 401
+    assert "harvest_config" in entry.data["inverters"][0]
+    reload_mock.assert_not_awaited()
+
+
+async def test_island_status_advertises_read_source_lan_and_each_inverters_source(
+    hass: HomeAssistant,
+):
+    """The app shows the switch on a true island only when the integration
+    serves it, and reads the current source from here: on a true island the
+    cloud's inverter doc is not updated by a LAN switch."""
+    await _keystore(hass, _Admin())
+    _read_source_entry(hass)
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        version=2,
+        data={
+            "api_key": "k2",
+            "edge_device_id": "ed-2",
+            "cloud_ingest_enabled": False,
+            "inverters": [{"inverter_id": "inv-2", "entity_map": dict(_ENTITY_MAP)}],
+        },
+    )
+    entry.add_to_hass(hass)
+
+    body = _body(await SvitgridIslandStatusView().get(_Req(hass)))
+
+    assert "read_source_lan" in body["capabilities"]
+    assert body["inverters"]["inv-1"] == {"host": "ha", "readSource": "native"}
+    assert body["inverters"]["inv-2"] == {"host": "ha", "readSource": "relay"}
+
+
+async def test_the_read_source_view_is_registered(hass: HomeAssistant):
+    from unittest.mock import MagicMock
+
+    from custom_components.svitgrid.http_views import register_views
+
+    hass.http = MagicMock()
+    register_views(hass, store=MagicMock())
+    urls = {call.args[0].url for call in hass.http.register_view.call_args_list}
+    assert "/api/svitgrid/island/read-source" in urls

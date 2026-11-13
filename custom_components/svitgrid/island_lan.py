@@ -7,6 +7,9 @@ app directly:
 
 - `POST /api/svitgrid/island/cloud-copy` turns the cloud copy on or off.
 - `POST /api/svitgrid/island/leave` leaves island mode.
+- `POST /api/svitgrid/island/read-source` switches an inverter between the
+  native harvest and the relay of Home Assistant's own sensors, the cloud's
+  `set_read_source` command (svitgrid D-1848).
 - `POST /api/svitgrid/keys/revoke` untrusts a signing key, and removes the
   island key of the phone it belongs to.
 - `GET /api/svitgrid/island/status` says which of these this integration
@@ -69,6 +72,8 @@ from .edge_api import _entry_state as _edge_poll_state
 from .entry_reload import update_entry_skipping_listener_reload
 from .harvest.brand_commands import island_writes
 from .harvest.event_evaluator import plausible_inverter_temperature
+from .harvest_config_apply import apply_read_source_change, probe_modbus_reachable
+from .inverter_entry import harvest_config_from_api
 from .island_auth import island_key_present_and_valid
 from .keystore import EdgeBoxEntry, LastAdminKey
 from .settings_sync import find_edge_settings_snapshot
@@ -102,10 +107,15 @@ CAPABILITIES = (
     # battery-temperature condition (svitgrid#1329). An app routes its report
     # here on a true island only when this is listed.
     "bms_report_lan",
+    # POST /api/svitgrid/island/read-source switches an inverter between the
+    # native harvest and the relay of HA's own sensors (svitgrid D-1848). Each
+    # Home Assistant inverter's advert names its `readSource`.
+    "read_source_lan",
 )
 
 ACTION_SET_CLOUD_COPY = "set_cloud_copy"
 ACTION_LEAVE_ISLAND = "leave_island"
+ACTION_SET_READ_SOURCE = "set_read_source"
 ACTION_REVOKE_KEY = "revoke_key"
 # `POST /api/svitgrid/trust-key`, served by http_views.SvitgridTrustKeyView.
 ACTION_TRUST_KEY = "trust_key"
@@ -341,6 +351,84 @@ class SvitgridIslandLeaveView(HomeAssistantView):
         return web.json_response({"ok": True})
 
 
+class SvitgridIslandReadSourceView(HomeAssistantView):
+    """POST /api/svitgrid/island/read-source — native harvest or relay.
+
+    `signedData`: `{action: "set_read_source", inverterId, mode:
+    "native"|"relay", harvestConfig?, nonce, ts}`, the payload of the cloud's
+    `set_read_source` command (`command_poller`), which a true island never
+    polls. `relay` clears the inverter's `harvest_config` and reads Home
+    Assistant's own entities through its `entity_map`, so Svitgrid stops
+    holding the logger's one connection and HA's Solarman integration can run
+    beside it; `native` needs `harvestConfig` with an `ip` and a `port` it can
+    connect to. The entry reloads after the response.
+
+    Errors: 400 `bad_request`, 404 `unknown_inverter`, 409 `no_entity_map`
+    (relay would leave the inverter reading nothing), 409 `probe_failed` (the
+    native endpoint does not answer).
+    """
+
+    url = "/api/svitgrid/island/read-source"
+    name = "api:svitgrid:island:read-source"
+    requires_auth = False
+
+    async def post(self, request) -> web.Response:  # noqa: D102
+        signed, error = await signed_lan_request(request, ACTION_SET_READ_SOURCE)
+        if error is not None:
+            return error
+        inverter_id = signed.get("inverterId")
+        mode = signed.get("mode")
+        if not isinstance(inverter_id, str) or not inverter_id:
+            return _json_error(400, "bad_request", detail="inverterId must be a string")
+        if mode not in ("native", "relay"):
+            return _json_error(400, "bad_request", detail="mode must be native or relay")
+        harvest_wire = signed.get("harvestConfig")
+        if mode == "native" and (
+            not isinstance(harvest_wire, dict)
+            or not isinstance(harvest_wire.get("ip"), str)
+            or not harvest_wire.get("ip")
+            or isinstance(harvest_wire.get("port"), bool)
+            or not isinstance(harvest_wire.get("port"), int)
+        ):
+            return _json_error(
+                400, "bad_request", detail="native needs harvestConfig with ip and port"
+            )
+
+        hass = request.app["hass"]
+        found = next(
+            (
+                (entry, inverter)
+                for entry in _entries(hass)
+                for inverter in entry.data.get("inverters") or []
+                if isinstance(inverter, dict) and inverter.get("inverter_id") == inverter_id
+            ),
+            None,
+        )
+        if found is None:
+            return _json_error(404, "unknown_inverter")
+        entry, inverter = found
+
+        harvest_config = None
+        if mode == "relay":
+            if not inverter.get("entity_map"):
+                return _json_error(409, "no_entity_map")
+        else:
+            if not await probe_modbus_reachable(harvest_wire["ip"], harvest_wire["port"]):
+                return _json_error(409, "probe_failed")
+            # The defaults and the converter the cloud command's arm uses.
+            harvest_config = {
+                "protocol": "solarman_v5",
+                "slave_id": 1,
+                "model_id": None,
+                "logger_serial": "",
+                **harvest_config_from_api(harvest_wire),
+            }
+
+        await apply_read_source_change(hass, entry, inverter_id, harvest_config)
+        _LOGGER.info("Read source of %s set to %s over the LAN", inverter_id, mode)
+        return web.json_response({"ok": True, "inverterId": inverter_id, "mode": mode})
+
+
 async def _forget_telegram_households(hass, entries: list) -> None:
     """Forget the island Telegram state of households the cloud copy now covers.
 
@@ -531,7 +619,11 @@ def _inverter_adverts(hass, boxes: list[EdgeBoxEntry]) -> dict[str, dict]:
         for inverter in entry.data.get("inverters") or []:
             inverter_id = inverter.get("inverter_id") if isinstance(inverter, dict) else None
             if isinstance(inverter_id, str) and inverter_id:
-                adverts[inverter_id] = {"host": "ha"}
+                adverts[inverter_id] = {
+                    "host": "ha",
+                    # The app's read-source switch reads it on a true island.
+                    "readSource": "native" if inverter.get("harvest_config") else "relay",
+                }
     for box in boxes:
         for inverter_id in box.inverter_ids:
             adopted = box.inverters.get(inverter_id) or {}
@@ -1160,6 +1252,7 @@ class SvitgridEdgeCommandView(HomeAssistantView):
 ISLAND_LAN_VIEWS = (
     SvitgridIslandCloudCopyView,
     SvitgridIslandLeaveView,
+    SvitgridIslandReadSourceView,
     SvitgridKeysRevokeView,
     SvitgridIslandStatusView,
     SvitgridIslandBmsReportView,
