@@ -83,6 +83,23 @@ def config_range_for_model(model_id: str) -> tuple[int, int] | None:
     return CONFIG_RANGES.get(model_id)
 
 
+# The Deye battery mode word: 0 = Use Batt V, 1 = Use Batt %, 2 = none. It sits
+# outside CONFIG_RANGES (3-phase 111 is below the 115 start), so it is read as an
+# optional single register. Same pair as the firmware and the phone.
+_BATTERY_MODE_REGISTER_3PHASE = 111
+_BATTERY_MODE_REGISTER_1PHASE = 213
+
+
+def battery_mode_register_for_model(model_id: str) -> int | None:
+    """Return the battery mode register for a Deye-family model, or None."""
+    config_range = CONFIG_RANGES.get(model_id)
+    if config_range is None:
+        return None
+    return (
+        _BATTERY_MODE_REGISTER_3PHASE if config_range[0] == 115 else _BATTERY_MODE_REGISTER_1PHASE
+    )
+
+
 # ── The kind table ─────────────────────────────────────────────────────
 #
 # Model-id sets, not prefixes, wherever the Dart asks the model catalogue

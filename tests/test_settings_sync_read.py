@@ -60,10 +60,11 @@ async def test_stitches_three_chunks_in_order(monkeypatch):
     result = await read_config_registers(hass, _cfg(), "deye_sg04lp3", chunk_size=25)
 
     assert result == list(range(115, 115 + 77))
-    # Exactly ONE transport call (one connection), carrying all 4 chunk ranges.
+    # Exactly ONE transport call (one connection), carrying all 4 chunk ranges
+    # plus the optional battery mode register (111) as a fifth single-word range.
     assert len(calls) == 1
-    assert [r[2] for r in calls[0]] == [25, 25, 25, 2]
-    assert [r[1] for r in calls[0]] == [115, 140, 165, 190]
+    assert [r[2] for r in calls[0]] == [25, 25, 25, 2, 1]
+    assert [r[1] for r in calls[0]] == [115, 140, 165, 190, 111]
 
 
 async def test_returns_none_on_short_chunk(monkeypatch):
@@ -457,3 +458,45 @@ def test_deye_plan_is_the_config_range():
     assert plan is not None
     assert plan.kind == "deye"
     assert plan.blocks == ((115, 77),)
+
+
+async def test_mode_register_is_read_in_the_same_call_and_reported(monkeypatch):
+    calls: list[list[tuple]] = []
+
+    def fake_read_solarman(cfg, ranges):
+        calls.append(ranges)
+        out: dict = {}
+        for unit_id, start, count, _fc in ranges:
+            slot = out.setdefault(unit_id, {})
+            for addr in range(start, start + count):
+                slot[addr] = 0 if addr == 111 else addr
+        return out
+
+    monkeypatch.setattr(transport, "_read_solarman", fake_read_solarman)
+    mode: dict[int, int] = {}
+    result = await read_config_registers(
+        _FakeHass(), _cfg(), "deye_sg04lp3", chunk_size=25, mode_out=mode
+    )
+    assert len(result) == 77
+    assert mode == {111: 0}
+    assert len(calls) == 1
+    assert (1, 111, 1, "FC03") in calls[0]
+
+
+async def test_missing_mode_register_never_fails_the_sweep(monkeypatch):
+    def fake_read_solarman(cfg, ranges):
+        out: dict = {}
+        for unit_id, start, count, _fc in ranges:
+            slot = out.setdefault(unit_id, {})
+            for addr in range(start, start + count):
+                if addr != 111:
+                    slot[addr] = addr
+        return out
+
+    monkeypatch.setattr(transport, "_read_solarman", fake_read_solarman)
+    mode: dict[int, int] = {}
+    result = await read_config_registers(
+        _FakeHass(), _cfg(), "deye_sg04lp3", chunk_size=25, mode_out=mode
+    )
+    assert result == list(range(115, 115 + 77))
+    assert mode == {}

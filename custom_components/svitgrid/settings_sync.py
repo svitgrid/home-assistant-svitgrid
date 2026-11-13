@@ -24,6 +24,7 @@ from .harvest import transport
 from .harvest.device_lock import logger_lock
 from .settings_read_plan import (
     SettingsReadPlan,
+    battery_mode_register_for_model,
     build_snapshot_body,
     config_range_for_model,
     onboarding_body,
@@ -348,6 +349,18 @@ def registers_hash(regs: list[int]) -> int:
     return h
 
 
+def settings_upload_hash(registers: list[int], mode_word: int | None) -> int:
+    """The upload gate's hash: the batch words, then the mode word when read.
+
+    ``registers_hash`` stays the firmware/server algorithm over the batch; the
+    mode register sits outside the batch, so a flip on the LCD with identical
+    batch words has to reach the gate some other way.
+    """
+    if mode_word is None:
+        return registers_hash(registers)
+    return registers_hash([*registers, mode_word])
+
+
 def should_upload(
     new_hash: int,
     cached_hash: int,
@@ -378,6 +391,7 @@ async def read_config_registers(
     chunk_size: int = 25,
     *,
     errors_out: list[str] | None = None,
+    mode_out: dict[int, int] | None = None,
 ) -> list[int] | None:
     """Read a model's config-register block in small chunks and stitch them.
 
@@ -422,6 +436,11 @@ async def read_config_registers(
     The transport call holds the logger's lock (``harvest.device_lock``), so
     it never opens a connection while the harvest loop has one open.
 
+    ``mode_out``, when given, receives ``{register: word}`` for the Deye battery
+    mode register, read as an optional single register in the same transport
+    call. A register that does not answer leaves ``mode_out`` empty and never
+    fails the sweep.
+
     Returns:
         The full list of ``count`` registers in address order, or ``None``
         if the model is unsupported, any chunk read raised, or any chunk
@@ -444,11 +463,19 @@ async def read_config_registers(
         return None
     start, count = config_range
 
+    mode_reg = battery_mode_register_for_model(model_id)
     words = await read_holding_blocks(
-        hass, cfg, (config_range,), chunk_size=chunk_size, errors_out=errors_out
+        hass,
+        cfg,
+        (config_range,),
+        optional=(mode_reg,) if mode_reg is not None else (),
+        chunk_size=chunk_size,
+        errors_out=errors_out,
     )
     if words is None:
         return None
+    if mode_out is not None and mode_reg is not None and mode_reg in words:
+        mode_out[mode_reg] = words[mode_reg]
     return [words[addr] for addr in range(start, start + count)]
 
 
@@ -751,7 +778,10 @@ async def sync_inverter_once(
             return False
 
     errors: list[str] = []
-    registers = await read_config_registers(hass, cfg, model_id, errors_out=errors)
+    mode_words: dict[int, int] = {}
+    registers = await read_config_registers(
+        hass, cfg, model_id, errors_out=errors, mode_out=mode_words
+    )
     if registers is None:
         _note_read_failure(inverter_id, model_id, cfg, errors, failing)
         return False
@@ -778,12 +808,14 @@ async def sync_inverter_once(
         )
         return False
 
-    new_hash = registers_hash(registers)
+    mode_word = next(iter(mode_words.values()), None)
+    new_hash = settings_upload_hash(registers, mode_word)
     cached_hash, last_uploaded = cache.get(inverter_id, (0, 0))
 
     if not should_upload(new_hash, cached_hash, last_uploaded, now, heartbeat_s):
         return False
 
+    extra = {"battery_mode_register": mode_word} if mode_word is not None else {}
     try:
         ok = await api_client.sync_settings(
             api_key=api_key,
@@ -791,6 +823,7 @@ async def sync_inverter_once(
             model_id=model_id,
             start_register=start,
             registers=registers,
+            **extra,
         )
     except SettingsSyncRejected as exc:
         if backoff_until is not None:

@@ -545,6 +545,21 @@ class TestSyncSettings:
         )
         assert ok is True
 
+    async def test_battery_mode_register_is_sent_only_when_given(self):
+        session, _ = _mock_session_with_response(200, {})
+        client = SvitgridApiClient(session, api_base="https://api.example")
+        common = dict(
+            api_key="k" * 64,
+            inverter_id="inv-1",
+            model_id="deye_sg04lp3",
+            start_register=115,
+            registers=[1, 2, 3],
+        )
+        await client.sync_settings(**common, battery_mode_register=0)
+        assert session.post.call_args.kwargs["json"]["batteryModeRegister"] == 0
+        await client.sync_settings(**common)
+        assert "batteryModeRegister" not in session.post.call_args.kwargs["json"]
+
     async def test_5xx_returns_false(self):
         session, _ = _mock_session_with_response(503, {"error": "overloaded"})
         client = SvitgridApiClient(session, api_base="https://api.example")

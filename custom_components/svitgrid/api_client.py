@@ -321,6 +321,7 @@ class SvitgridApiClient:
         model_id: str,
         start_register: int,
         registers: list[int],
+        battery_mode_register: int | None = None,
     ) -> bool:
         """POST one inverter's config-register block (TOU/work-mode mirror).
 
@@ -338,6 +339,8 @@ class SvitgridApiClient:
             "startRegister": start_register,
             "registers": registers,
         }
+        if battery_mode_register is not None:
+            body["batteryModeRegister"] = battery_mode_register
         try:
             async with self._session.post(url, headers={"x-api-key": api_key}, json=body) as resp:
                 if 200 <= resp.status < 300:
