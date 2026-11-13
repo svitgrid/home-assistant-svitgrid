@@ -224,3 +224,27 @@ async def test_run_upload_reports_an_hour_with_no_line_in_the_window_as_missing(
     )
     assert client.parts == []
     assert summary["missing"] == ["2026-11-12T14"]
+
+
+async def test_upload_window_runs_without_taking_the_lock(tmp_path):
+    import asyncio
+
+    from custom_components.svitgrid.log_upload import (
+        _UPLOAD_LOCK,
+        UPLOAD_LOCK,
+        upload_window,
+    )
+
+    assert UPLOAD_LOCK is _UPLOAD_LOCK
+    client = _FakeClient()
+    async with UPLOAD_LOCK:
+        summary = await asyncio.wait_for(
+            upload_window(
+                api_client=client, api_key="k1", command_id="c1",
+                from_ts=_ts(2026, 11, 12, 14), to_ts=_ts(2026, 11, 12, 15),
+                root=str(tmp_path), flush=lambda: None,
+            ),
+            timeout=2,
+        )
+    assert summary["commandId"] == "c1"
+    assert client.summaries == [summary]

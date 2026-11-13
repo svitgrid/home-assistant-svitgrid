@@ -24,6 +24,8 @@ PART_MAX_BYTES = 32768
 
 # One upload at a time per install, as on the ED-1 (a second is refused busy).
 _UPLOAD_LOCK = asyncio.Lock()
+# Exported for callers that hold the lock across several windows.
+UPLOAD_LOCK = _UPLOAD_LOCK
 
 
 def _is_int(v: Any) -> bool:
@@ -123,7 +125,7 @@ def read_parts(
 
 
 
-async def run_upload(
+async def upload_window(
     *,
     api_client: Any,
     api_key: str,
@@ -135,59 +137,78 @@ async def run_upload(
 ) -> dict[str, Any]:
     """Post the window's parts, then the summary. Returns the summary posted.
 
+    Does not take the upload lock: the caller holds `UPLOAD_LOCK`.
+
     A refused or failed part stops the upload; the summary still goes out once,
     with `error` set, so the operator's script is not left waiting.
     """
     from .api_client import LogUploadRefused
 
-    async with _UPLOAD_LOCK:
-        # Lines still queued in the writer thread belong to the current hour.
-        await asyncio.to_thread(flush)
-        hours: list[dict[str, Any]] = []
-        missing: list[str] = []
-        error: str | None = None
-        for label in hours_in_window(from_ts, to_ts):
-            parts = await asyncio.to_thread(read_parts, root, label, from_ts, to_ts)
-            if not parts:
-                missing.append(label)
-                continue
-            sent_bytes = 0
-            for index, text in enumerate(parts):
-                try:
-                    await api_client.post_log_part(
-                        api_key=api_key,
-                        body={"commandId": command_id, "hour": label, "part": index, "text": text},
-                    )
-                except LogUploadRefused:
-                    error = "refused"
-                    break
-                except Exception:  # noqa: BLE001 - stop and report, never retry forever
-                    error = "post_failed"
-                    break
-                sent_bytes += len(text.encode("utf-8"))
-            if error is not None:
+    # Lines still queued in the writer thread belong to the current hour.
+    await asyncio.to_thread(flush)
+    hours: list[dict[str, Any]] = []
+    missing: list[str] = []
+    error: str | None = None
+    for label in hours_in_window(from_ts, to_ts):
+        parts = await asyncio.to_thread(read_parts, root, label, from_ts, to_ts)
+        if not parts:
+            missing.append(label)
+            continue
+        sent_bytes = 0
+        for index, text in enumerate(parts):
+            try:
+                await api_client.post_log_part(
+                    api_key=api_key,
+                    body={"commandId": command_id, "hour": label, "part": index, "text": text},
+                )
+            except LogUploadRefused:
+                error = "refused"
                 break
-            hours.append({"hour": label, "bytes": sent_bytes, "parts": len(parts)})
-        summary = {
-            "commandId": command_id,
-            "done": True,
-            "from": from_ts,
-            "to": to_ts,
-            "hours": hours,
-            "missing": missing,
-            "dropped": 0,
-            "lost": 0,
-        }
-        # The server's schema has `error: z.string().optional()`: a null is
-        # refused with 400. The board, too, sends the key only on a failure.
+            except Exception:  # noqa: BLE001 - stop and report, never retry forever
+                error = "post_failed"
+                break
+            sent_bytes += len(text.encode("utf-8"))
         if error is not None:
-            summary["error"] = error
-        try:
-            await api_client.post_log_summary(api_key=api_key, body=summary)
-        except Exception:  # noqa: BLE001
-            _LOGGER.warning("upload_logs %s: the summary was not accepted", command_id)
-        _LOGGER.info(
-            "upload_logs %s: %d hours sent, %d missing%s",
-            command_id, len(hours), len(missing), f", error {error}" if error else "",
+            break
+        hours.append({"hour": label, "bytes": sent_bytes, "parts": len(parts)})
+    summary = {
+        "commandId": command_id,
+        "done": True,
+        "from": from_ts,
+        "to": to_ts,
+        "hours": hours,
+        "missing": missing,
+        "dropped": 0,
+        "lost": 0,
+    }
+    # The server's schema has `error: z.string().optional()`: a null is
+    # refused with 400. The board, too, sends the key only on a failure.
+    if error is not None:
+        summary["error"] = error
+    try:
+        await api_client.post_log_summary(api_key=api_key, body=summary)
+    except Exception:  # noqa: BLE001
+        _LOGGER.warning("upload_logs %s: the summary was not accepted", command_id)
+    _LOGGER.info(
+        "upload_logs %s: %d hours sent, %d missing%s",
+        command_id, len(hours), len(missing), f", error {error}" if error else "",
+    )
+    return summary
+
+
+async def run_upload(
+    *,
+    api_client: Any,
+    api_key: str,
+    command_id: str,
+    from_ts: int,
+    to_ts: int,
+    root: str,
+    flush: Callable[[], None],
+) -> dict[str, Any]:
+    """Upload one window while holding the install's upload lock."""
+    async with _UPLOAD_LOCK:
+        return await upload_window(
+            api_client=api_client, api_key=api_key, command_id=command_id,
+            from_ts=from_ts, to_ts=to_ts, root=root, flush=flush,
         )
-        return summary
