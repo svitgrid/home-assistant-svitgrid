@@ -3349,3 +3349,85 @@ async def test_the_read_source_view_is_registered(hass: HomeAssistant):
     register_views(hass, store=MagicMock())
     urls = {call.args[0].url for call in hass.http.register_view.call_args_list}
     assert "/api/svitgrid/island/read-source" in urls
+
+
+# ── island log send ─────────────────────────────────────────────────────────
+
+
+async def _send(hass, body=None, **req):
+    from custom_components.svitgrid.island_lan import SvitgridIslandLogsSendView
+
+    return await SvitgridIslandLogsSendView().post(_Req(hass, body or {}, **req))
+
+
+def _send_state(hass, entry, *, queue=None) -> dict:
+    from custom_components.svitgrid.island_send import IslandSendRelay
+
+    state = {
+        "entry_data": {"api_key": "k", "edge_device_id": "ed-1"},
+        "api_client": object(),
+        "edge_queue": queue,
+        "island_relay": IslandSendRelay(),
+    }
+    hass.data[DOMAIN][entry.entry_id] = state
+    return state
+
+
+async def test_send_view_requires_island_key(hass: HomeAssistant):
+    await _keystore(hass, _Admin())
+    _entry(hass)
+    assert (await _send(hass, island_key=None)).status == 401
+    assert (await _send(hass, island_key=OTHER_ISLAND_KEY)).status == 401
+
+
+async def test_send_view_local_only_is_409(hass: HomeAssistant):
+    await _keystore(hass, _Admin())
+    _entry(hass, local_only=True)
+    resp = await _send(hass)
+    assert resp.status == 409
+    assert _body(resp) == {"error": "no_cloud_identity"}
+
+
+async def test_send_view_unknown_box_is_404(hass: HomeAssistant):
+    await _keystore(hass, _Admin())
+    entry = _entry(hass)
+    _send_state(hass, entry)
+    resp = await _send(hass, {"boxId": "edge-nope"})
+    assert resp.status == 404
+    assert _body(resp) == {"error": "unknown_box"}
+
+
+async def test_send_view_busy_is_409(hass: HomeAssistant):
+    from custom_components.svitgrid.log_upload import UPLOAD_LOCK
+
+    await _keystore(hass, _Admin())
+    entry = _entry(hass)
+    _send_state(hass, entry)
+    async with UPLOAD_LOCK:
+        resp = await _send(hass)
+    assert resp.status == 409
+    assert _body(resp) == {"error": "busy"}
+
+
+async def test_send_view_starts_and_returns_202(hass: HomeAssistant):
+    admin = _Admin()
+    ks = await _keystore(hass, admin)
+    await _adopt(hass, admin, "edge-aabbcc", _inv("inv-1"))
+    entry = _entry(hass)
+    state = _send_state(hass, entry, queue="the-queue")
+    hass.data[DOMAIN]["file_log"] = type("F", (), {"flush": staticmethod(lambda: None)})()
+    with patch(
+        "custom_components.svitgrid.island_lan.run_island_send", new=AsyncMock()
+    ) as run:
+        resp = await _send(hass, {"boxId": "edge-aabbcc"})
+        await hass.async_block_till_done()
+    assert resp.status == 202
+    assert _body(resp) == {"started": True}
+    kwargs = run.await_args.kwargs
+    assert kwargs["api_key"] == "k"
+    assert kwargs["box_id"] == "edge-aabbcc"
+    assert kwargs["queue"] == "the-queue"
+    assert kwargs["relay"] is state["island_relay"]
+    assert kwargs["api_client"] is state["api_client"]
+    assert isinstance(kwargs["now_ts"], int)
+    assert ks is not None

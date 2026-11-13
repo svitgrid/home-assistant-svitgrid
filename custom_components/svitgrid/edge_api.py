@@ -37,6 +37,7 @@ from aiohttp import web
 from homeassistant.components.http import HomeAssistantView
 
 from . import bms_roster, edge_reading_pipeline
+from .api_client import LogUploadFailed, LogUploadRefused
 from .bms_packs import valid_report as valid_bms_report
 from .const import ADD_TRUSTED_KEY_COMMAND, DOMAIN
 from .keystore import EdgeBoxEntry, KeystoreState
@@ -961,7 +962,36 @@ class EdgeLogsView(_EdgeView):
         box = await self._box(request)
         if isinstance(box, web.Response):
             return box
-        return self.json({"error": "island"}, status_code=403)
+        try:
+            body = await request.json()
+        except ValueError:
+            body = None
+        local_id = body.get("commandId") if isinstance(body, dict) else None
+        state = _entry_state(request.app["hass"]) or {}
+        relay = state.get("island_relay")
+        cloud_id = relay.cloud_id_for(local_id) if relay and isinstance(local_id, str) else None
+        api_client = state.get("api_client")
+        api_key = (state.get("entry_data") or {}).get("api_key")
+        if cloud_id is None or api_client is None or not api_key:
+            return self.json({"error": "island"}, status_code=403)
+        forwarded = {**body, "commandId": cloud_id}
+        try:
+            if body.get("done") is True:
+                await api_client.post_log_summary(api_key, forwarded)
+                relay.forget(local_id)
+            else:
+                await api_client.post_log_part(api_key, forwarded)
+        except LogUploadRefused:
+            return self.json({"error": "island"}, status_code=403)
+        except LogUploadFailed as err:
+            _LOGGER.warning("Island log relay for box %s refused: %s", box.device_id, err)
+            return self.json({"error": "forward_failed"}, status_code=502)
+        except Exception as err:  # noqa: BLE001 - the box retries on a 502
+            _LOGGER.warning(
+                "Island log relay for box %s failed: %s", box.device_id, type(err).__name__
+            )
+            return self.json({"error": "forward_failed"}, status_code=502)
+        return self.json({"ok": True})
 
 
 class EdgePairAttemptsView(_EdgeView):
