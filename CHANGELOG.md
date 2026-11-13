@@ -11,6 +11,14 @@
   cloud, the same way an ED-1 sends the log from its microSD card. Nothing
   leaves the install until that command arrives.
 
+### Fixed
+- **On a true island, the app can switch an inverter's read source over the
+  LAN.** An island polls no cloud command, so `set_read_source` never reached
+  it, and a station reading its Solarman logger natively could not move to the
+  relay of HA's own Solarman sensors. The add-on now takes the switch at
+  `POST /api/svitgrid/island/read-source`, signed like the other island LAN
+  writes (svitgrid D-1848).
+
 ## 0.28.4 — 2026-11-12
 
 ### Fixed
