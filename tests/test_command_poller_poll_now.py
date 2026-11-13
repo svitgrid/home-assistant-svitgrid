@@ -15,6 +15,9 @@ success: the HA readings publisher already republishes on its own short cadence
 
 from __future__ import annotations
 
+import asyncio
+import time
+
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -142,3 +145,37 @@ async def test_upload_logs_busy_while_one_runs(hass):
     body = api_client.ack_command.await_args.kwargs["body"]
     assert body["success"] is False
     assert body["result"] == {"error": "busy"}
+
+
+async def test_cloud_upload_logs_mid_send_is_busy(hass):
+    """An island send holds the lock while it waits on the box: a cloud
+    upload_logs arriving then is refused busy."""
+    from unittest.mock import MagicMock
+
+    from custom_components.svitgrid.island_send import IslandSendRelay, run_island_send
+
+    api = MagicMock()
+    api.island_logs_start = AsyncMock(side_effect=[[], [{"commandId": "b0", "from": 1, "to": 2}]])
+    release = asyncio.Event()
+
+    async def wait(*_):
+        await release.wait()
+
+    queue = MagicMock()
+    queue.async_enqueue = AsyncMock(return_value="l")
+    queue.async_wait = wait
+    task = asyncio.ensure_future(
+        run_island_send(
+            api_client=api, api_key="k", root="/r", flush=lambda: None,
+            now_ts=int(time.time()), box_id="edge-1", queue=queue, relay=IslandSendRelay(),
+        )
+    )
+    for _ in range(20):
+        await asyncio.sleep(0)
+    now = int(time.time())
+    try:
+        api_client = await _process_upload_logs(hass, {"from": now - 3600, "to": now})
+    finally:
+        release.set()
+        await task
+    assert api_client.ack_command.await_args.kwargs["body"]["result"] == {"error": "busy"}

@@ -50,6 +50,7 @@ from .const import (
     ROLLUP_INTERVAL_S,
 )
 from .edge_command_queue import EdgeCommandQueue
+from .island_send import IslandSendRelay
 from .edge_entities import EdgeEntitiesCoordinator
 from .entry_reload import consume_listener_reload_skip
 from .executors import create_executor
@@ -1353,6 +1354,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "true_island": true_island,
         "settings_snapshots": settings_snapshots,
         "edge_queue": edge_queue,
+        "island_relay": IslandSendRelay(),
         "zigbee_devices": zigbee_devices,
         "bms_packs": bms_packs,
         "edge_entities": edge_entities,
