@@ -68,6 +68,15 @@ class LogUploadRefused(SvitgridApiError):
     """403 from the logs route: no upload_logs command for this device."""
 
 
+class IslandLogsRefused(SvitgridApiError):
+    """403/409 from island-logs/start; `error` is the server's code
+    (closed, already_sent, not_island, not_your_box)."""
+
+    def __init__(self, error: str, message: str | None = None) -> None:
+        super().__init__(message or f"island_logs_start refused: {error}")
+        self.error = error
+
+
 class LogUploadFailed(SvitgridApiError):
     """Any other refusal of a log part or summary."""
 
@@ -423,6 +432,38 @@ class SvitgridApiClient:
                     f"add_inverter failed: HTTP {resp.status}: {await _err(resp)}"
                 )
             return await resp.json()
+
+    async def island_logs_start(
+        self,
+        *,
+        api_key: str,
+        from_ts: int,
+        to_ts: int,
+        for_device_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """POST /api/v1/island-logs/start — returns the unfinished slices
+        [{commandId, from, to}]. Raises IslandLogsRefused on 403/409."""
+        body: dict[str, Any] = {"from": from_ts, "to": to_ts}
+        if for_device_id:
+            body["forDeviceId"] = for_device_id
+        url = f"{self._base}/api/v1/island-logs/start"
+        async with self._session.post(url, headers={"x-api-key": api_key}, json=body) as resp:
+            if resp.status in (403, 409):
+                code = ""
+                try:
+                    data = await resp.json()
+                    if isinstance(data, dict) and isinstance(data.get("error"), str):
+                        code = data["error"]
+                except Exception:  # noqa: BLE001
+                    pass
+                raise IslandLogsRefused(code or f"http_{resp.status}")
+            if resp.status >= 400:
+                raise SvitgridApiError(
+                    f"island_logs_start failed: HTTP {resp.status}: {await _err(resp)}"
+                )
+            data = await resp.json()
+            slices = data.get("slices") if isinstance(data, dict) else None
+            return slices if isinstance(slices, list) else []
 
 
 async def _err(resp: aiohttp.ClientResponse) -> str:
