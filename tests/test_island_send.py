@@ -139,3 +139,29 @@ async def test_api_or_network_error_never_escapes(exc):
     with patch("custom_components.svitgrid.island_send.upload_window", new=AsyncMock()):
         await _run(api, MagicMock(), IslandSendRelay(), box_id="edge-1")
     assert not UPLOAD_LOCK.locked()
+
+
+async def test_own_week_already_sent_still_relays_the_box(caplog):
+    api = _api(IslandLogsRefused("already_sent"), _slices("b", NOW - 86400))
+    queue = MagicMock()
+    queue.async_enqueue = AsyncMock(return_value="local-1")
+    queue.async_wait = AsyncMock(return_value={"state": "success"})
+    relay = IslandSendRelay()
+    with patch("custom_components.svitgrid.island_send.upload_window", new=AsyncMock()) as up:
+        with caplog.at_level(logging.INFO):
+            await _run(api, queue, relay, box_id="edge-1")
+    up.assert_not_awaited()
+    assert api.island_logs_start.await_count == 2
+    assert api.island_logs_start.await_args_list[1].kwargs["for_device_id"] == "edge-1"
+    queue.async_enqueue.assert_awaited_once()
+    assert relay.cloud_id_for("local-1") == "b0"
+
+
+async def test_own_week_other_refusal_still_ends_the_run():
+    api = _api(IslandLogsRefused("closed"), _slices("b", 0))
+    queue = MagicMock()
+    queue.async_enqueue = AsyncMock()
+    with patch("custom_components.svitgrid.island_send.upload_window", new=AsyncMock()):
+        await _run(api, queue, IslandSendRelay(), box_id="edge-1")
+    assert api.island_logs_start.await_count == 1
+    queue.async_enqueue.assert_not_awaited()

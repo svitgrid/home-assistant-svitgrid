@@ -49,9 +49,15 @@ async def run_island_send(
     """Send HA's week, then the box's day. Never raises on a refusal."""
     async with UPLOAD_LOCK:
         try:
-            slices = await api_client.island_logs_start(
-                api_key=api_key, from_ts=now_ts - WEEK_S, to_ts=now_ts
-            )
+            try:
+                slices = await api_client.island_logs_start(
+                    api_key=api_key, from_ts=now_ts - WEEK_S, to_ts=now_ts
+                )
+            except IslandLogsRefused as err:
+                if err.error != "already_sent":
+                    raise
+                _LOGGER.info("island log send: own week already sent, continuing to the box")
+                slices = []
             for item in slices:
                 summary = await upload_window(
                     api_client=api_client, api_key=api_key, command_id=item["commandId"],
