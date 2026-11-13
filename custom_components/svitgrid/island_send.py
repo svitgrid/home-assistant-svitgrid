@@ -7,7 +7,7 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
-from .api_client import IslandLogsRefused
+from .api_client import IslandLogsRefused, SvitgridApiError
 from .edge_command_queue import _DONE_STATES
 from .log_upload import UPLOAD_LOCK, upload_window
 
@@ -71,10 +71,19 @@ async def run_island_send(
                 )
                 relay.remember(local, item["commandId"])
                 row = await queue.async_wait(local, BOX_WAIT_S)
-                if row is None or row.get("state") not in _DONE_STATES:
+                state = None if row is None else row.get("state")
+                if state == "failed":
+                    _LOGGER.warning(
+                        "island log send: box %s failed slice %s", box_id, item["commandId"]
+                    )
+                elif state not in _DONE_STATES:
                     _LOGGER.warning(
                         "island log send: box %s did not answer slice %s in time",
                         box_id, item["commandId"],
                     )
         except IslandLogsRefused as err:
             _LOGGER.warning("island log send refused: %s", err.error)
+        except SvitgridApiError as err:
+            _LOGGER.warning("island log send failed: %s", type(err).__name__)
+        except Exception as err:  # noqa: BLE001 - a background task must not raise into HA
+            _LOGGER.warning("island log send failed: %s", type(err).__name__)

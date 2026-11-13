@@ -6,7 +6,9 @@ import asyncio
 import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from custom_components.svitgrid.api_client import IslandLogsRefused
+import pytest
+
+from custom_components.svitgrid.api_client import IslandLogsRefused, SvitgridApiError
 from custom_components.svitgrid.island_send import IslandSendRelay, run_island_send
 from custom_components.svitgrid.log_upload import UPLOAD_LOCK
 
@@ -56,7 +58,7 @@ async def test_box_slice_is_enqueued_and_mapped():
     api = _api([], _slices("b", NOW - 86400))
     queue = MagicMock()
     queue.async_enqueue = AsyncMock(return_value="local-1")
-    queue.async_wait = AsyncMock(return_value={"state": "acked"})
+    queue.async_wait = AsyncMock(return_value={"state": "success"})
     relay = IslandSendRelay()
     with patch("custom_components.svitgrid.island_send.upload_window", new=AsyncMock()):
         await _run(api, queue, relay, box_id="edge-1")
@@ -117,3 +119,23 @@ async def test_box_silent_releases_lock_after_wait(caplog):
             await asyncio.wait_for(_run(api, queue, IslandSendRelay(), box_id="edge-1"), 5)
     assert not UPLOAD_LOCK.locked()
     assert "edge-1" in caplog.text
+
+
+async def test_failed_box_ack_is_logged_apart_from_a_timeout(caplog):
+    api = _api([], _slices("b", 0, 1))
+    queue = MagicMock()
+    queue.async_enqueue = AsyncMock(return_value="l")
+    queue.async_wait = AsyncMock(return_value={"state": "failed"})
+    with patch("custom_components.svitgrid.island_send.upload_window", new=AsyncMock()):
+        with caplog.at_level(logging.WARNING):
+            await _run(api, queue, IslandSendRelay(), box_id="edge-1")
+    assert "failed slice" in caplog.text and "in time" not in caplog.text
+
+
+@pytest.mark.parametrize("exc", [SvitgridApiError("HTTP 500"), OSError("down")])
+async def test_api_or_network_error_never_escapes(exc):
+    api = MagicMock()
+    api.island_logs_start = AsyncMock(side_effect=exc)
+    with patch("custom_components.svitgrid.island_send.upload_window", new=AsyncMock()):
+        await _run(api, MagicMock(), IslandSendRelay(), box_id="edge-1")
+    assert not UPLOAD_LOCK.locked()

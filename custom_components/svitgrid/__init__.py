@@ -50,12 +50,12 @@ from .const import (
     ROLLUP_INTERVAL_S,
 )
 from .edge_command_queue import EdgeCommandQueue
-from .island_send import IslandSendRelay
 from .edge_entities import EdgeEntitiesCoordinator
 from .entry_reload import consume_listener_reload_skip
 from .executors import create_executor
 from .executors.edge_box import EdgeBoxExecutor
 from .executors.smg_settings_executor import EybondSmgSettingsExecutor
+from .island_send import IslandSendRelay
 from .executors.yaml_dispatcher import YamlDispatcher
 from .eybond_at.setup import is_eybond_harvest, start_eybond_hub
 from .harvest.brand_commands import edge_inverter

@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import asyncio
 import time
-
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -150,8 +149,6 @@ async def test_upload_logs_busy_while_one_runs(hass):
 async def test_cloud_upload_logs_mid_send_is_busy(hass):
     """An island send holds the lock while it waits on the box: a cloud
     upload_logs arriving then is refused busy."""
-    from unittest.mock import MagicMock
-
     from custom_components.svitgrid.island_send import IslandSendRelay, run_island_send
 
     api = MagicMock()
