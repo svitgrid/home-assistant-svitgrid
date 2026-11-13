@@ -22,6 +22,7 @@ from custom_components.svitgrid.api_client import (
     DeviceEvicted,
     DeviceNotFound,
     DeviceStopped,
+    IslandLogsRefused,
     PublicKeyMismatch,
     RateLimited,
     ReadingRejected,
