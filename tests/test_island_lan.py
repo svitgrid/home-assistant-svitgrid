@@ -3431,3 +3431,16 @@ async def test_send_view_starts_and_returns_202(hass: HomeAssistant):
     assert kwargs["api_client"] is state["api_client"]
     assert isinstance(kwargs["now_ts"], int)
     assert ks is not None
+
+
+async def test_send_view_without_api_key_or_client_is_409(hass: HomeAssistant):
+    await _keystore(hass, _Admin())
+    entry = _entry(hass)
+    state = _send_state(hass, entry)
+    state["entry_data"] = {}
+    assert (await _send(hass)).status == 409
+    state["entry_data"] = {"api_key": "k"}
+    state["api_client"] = None
+    resp = await _send(hass)
+    assert resp.status == 409
+    assert _body(resp) == {"error": "no_cloud_identity"}

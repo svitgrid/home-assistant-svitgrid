@@ -676,6 +676,15 @@ class TestLogUpload:
         with pytest.raises(LogUploadFailed):
             await client.post_log_summary(api_key="k1", body={})
 
+    async def test_failed_carries_status_and_error_code(self):
+        from custom_components.svitgrid.api_client import LogUploadFailed
+
+        session, _ = _mock_session_with_response(409, {"error": "already_sent"})
+        client = SvitgridApiClient(session, api_base="https://api.example")
+        with pytest.raises(LogUploadFailed) as info:
+            await client.post_log_part(api_key="k1", body={})
+        assert (info.value.status, info.value.error) == (409, "already_sent")
+
 
 @pytest.mark.asyncio
 class TestIslandLogsStart:

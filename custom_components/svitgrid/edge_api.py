@@ -969,6 +969,8 @@ class EdgeLogsView(_EdgeView):
         local_id = body.get("commandId") if isinstance(body, dict) else None
         state = _entry_state(request.app["hass"]) or {}
         relay = state.get("island_relay")
+        if state and relay is None:
+            return self.json({"error": "no_relay"}, status_code=503)
         cloud_id = relay.cloud_id_for(local_id) if relay and isinstance(local_id, str) else None
         api_client = state.get("api_client")
         api_key = (state.get("entry_data") or {}).get("api_key")
@@ -985,6 +987,10 @@ class EdgeLogsView(_EdgeView):
             return self.json({"error": "island"}, status_code=403)
         except LogUploadFailed as err:
             _LOGGER.warning("Island log relay for box %s refused: %s", box.device_id, err)
+            status = err.status
+            if status is not None and 400 <= status < 500:
+                # Permanent: a retry would be refused the same way.
+                return self.json({"error": err.error or "rejected"}, status_code=status)
             return self.json({"error": "forward_failed"}, status_code=502)
         except Exception as err:  # noqa: BLE001 - the box retries on a 502
             _LOGGER.warning(

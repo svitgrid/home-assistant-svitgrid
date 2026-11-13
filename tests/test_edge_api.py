@@ -2920,3 +2920,52 @@ async def test_edge_logs_forward_failure_is_502():
     assert resp.status == 502
     assert _json(resp) == {"error": "forward_failed"}
     assert relay.cloud_id_for("local-1") == "cloud-1"
+
+
+async def _relay_status(exc, state_edit=None):
+    from custom_components.svitgrid.island_send import IslandSendRelay
+
+    relay = IslandSendRelay()
+    relay.remember("local-1", "cloud-1")
+    hass = _relay_hass(relay, _FakeLogClient(raises=exc))
+    if state_edit:
+        state_edit(hass.data[DOMAIN][ENTRY_ID])
+    body = {"commandId": "local-1", "done": False}
+    return await _call(edge_api.EdgeLogsView, "post", hass, api_key=BOX_KEY, body=body)
+
+
+@pytest.mark.asyncio
+async def test_edge_logs_permanent_cloud_4xx_is_passed_through():
+    from custom_components.svitgrid.api_client import LogUploadFailed
+
+    resp = await _relay_status(LogUploadFailed("x", status=409, error="already_sent"))
+    assert resp.status == 409
+    assert _json(resp) == {"error": "already_sent"}
+    resp = await _relay_status(LogUploadFailed("x", status=400))
+    assert resp.status == 400
+    assert _json(resp) == {"error": "rejected"}
+
+
+@pytest.mark.asyncio
+async def test_edge_logs_cloud_5xx_is_502():
+    from custom_components.svitgrid.api_client import LogUploadFailed
+
+    resp = await _relay_status(LogUploadFailed("x", status=503))
+    assert resp.status == 502
+    assert _json(resp) == {"error": "forward_failed"}
+
+
+@pytest.mark.asyncio
+async def test_edge_logs_refused_is_403():
+    from custom_components.svitgrid.api_client import LogUploadRefused
+
+    resp = await _relay_status(LogUploadRefused("HTTP 403"))
+    assert resp.status == 403
+    assert _json(resp) == {"error": "island"}
+
+
+@pytest.mark.asyncio
+async def test_edge_logs_without_a_relay_is_503():
+    resp = await _relay_status(None, lambda st: st.pop("island_relay"))
+    assert resp.status == 503
+    assert _json(resp) == {"error": "no_relay"}

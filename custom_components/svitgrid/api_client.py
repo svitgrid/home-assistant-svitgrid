@@ -78,7 +78,13 @@ class IslandLogsRefused(SvitgridApiError):
 
 
 class LogUploadFailed(SvitgridApiError):
-    """Any other refusal of a log part or summary."""
+    """Any other refusal of a log part or summary. `status` is the HTTP
+    status and `error` the cloud's error code, when it sent one."""
+
+    def __init__(self, message: str, status: int | None = None, error: str | None = None) -> None:
+        super().__init__(message)
+        self.status = status
+        self.error = error
 
 
 class CommandAckFailed(SvitgridApiError):
@@ -286,7 +292,18 @@ class SvitgridApiClient:
             if resp.status == 403:
                 raise LogUploadRefused(f"HTTP 403: {await _err(resp)}")
             if resp.status >= 400:
-                raise LogUploadFailed(f"HTTP {resp.status}: {await _err(resp)}")
+                code = None
+                try:
+                    payload = await resp.json()
+                    if isinstance(payload, dict) and isinstance(payload.get("error"), str):
+                        code = payload["error"]
+                except Exception:  # noqa: BLE001
+                    pass
+                raise LogUploadFailed(
+                    f"HTTP {resp.status}: {code or '<no error code>'}",
+                    status=resp.status,
+                    error=code,
+                )
 
     async def push_readings_batch(
         self, api_key: str, readings: list[dict[str, Any]]
