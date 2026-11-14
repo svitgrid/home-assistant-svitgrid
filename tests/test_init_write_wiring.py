@@ -143,3 +143,47 @@ async def test_harvest_inverter_gets_write_executor_reusing_spec_holder(
 
     # Exactly two executors, one per inverter.
     assert set(executors.keys()) == {"ha-harvest", "ha-relay"}
+
+
+@pytest.mark.asyncio
+async def test_harvest_inverter_gets_the_charge_cap_guard_and_its_revert_loop(
+    hass, enable_custom_integrations
+):
+    """The WriteExecutor holds the battery charge current guard for its own
+    inverter, and the revert loop runs in cloud mode too: a cap whose restore
+    never arrives from the cloud is exactly what its deadline is for."""
+    from custom_components.svitgrid import async_setup_entry
+    from custom_components.svitgrid.harvest.charge_cap_guard import ChargeCapGuard
+
+    entry = _make_entry()
+    entry.add_to_hass(hass)
+
+    with (
+        patch("custom_components.svitgrid.run_readings_loop", new_callable=AsyncMock),
+        patch("custom_components.svitgrid.run_direct_harvest_loop", new_callable=AsyncMock),
+        patch("custom_components.svitgrid.run_command_loop", new_callable=AsyncMock),
+        patch("custom_components.svitgrid.run_mqtt_wake_loop", new_callable=AsyncMock),
+        patch("custom_components.svitgrid.run_sender_loop", new_callable=AsyncMock),
+        patch(
+            "custom_components.svitgrid.run_charge_cap_guard_loop", new_callable=AsyncMock
+        ) as guard_loop,
+        patch("custom_components.svitgrid.register_views"),
+        patch("custom_components.svitgrid.register_panel", new_callable=AsyncMock),
+        patch("custom_components.svitgrid.remove_panel"),
+        patch.object(
+            hass.config_entries, "async_forward_entry_setups", AsyncMock(return_value=True)
+        ),
+        patch("custom_components.svitgrid.SvitgridApiClient") as mock_cls,
+    ):
+        client = mock_cls.return_value
+        client.get_register_spec = AsyncMock(return_value=dict(_MINIMAL_SPEC))
+        client.get_preset = AsyncMock(return_value=None)
+
+        assert await async_setup_entry(hass, entry) is True
+        await hass.async_block_till_done()
+
+    harvest_exec = hass.data[DOMAIN][entry.entry_id]["executors_by_inverter"]["ha-harvest"]
+    assert isinstance(harvest_exec._guard, ChargeCapGuard)
+    assert harvest_exec._inverter_id == "ha-harvest"
+    guard_loop.assert_called_once()
+    assert guard_loop.call_args.kwargs["guard"] is harvest_exec._guard

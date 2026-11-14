@@ -131,7 +131,11 @@ def _reason_for(exc: BaseException) -> str:
     text = str(exc)
     if text.startswith("prior_read_failed"):
         return "prev_read_failed"
-    if text.startswith(("verify_failed", "verify_read_failed")):
+    if text == "no_prior":
+        return "prev_read_failed"
+    if text == "bad_payload":
+        return "bad_payload"
+    if text.startswith(("verify_failed", "verify_read_failed", "verify_mismatch")):
         return "readback_mismatch"
     return "write_failed"
 
@@ -208,6 +212,8 @@ _PRIOR_CAPTURES = (
     ("prevGenForce", "previousGenForce", _bit),
     ("prevGenPortMode", "previousGenPortMode", _word(0, 2)),
     ("prevEnergyPattern", "previousEnergyPattern", _word(0, 1)),
+    # Max A Charge: the host's held prior, 0-350 A, where 0 is legal.
+    ("prevBatteryChargeCurrentA", "previousBatteryChargeCurrentA", _word(0, 350)),
 )
 
 

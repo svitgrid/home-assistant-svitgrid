@@ -56,6 +56,35 @@ DEYE_REGISTER_WRITABLE_MODELS: frozenset[str] = frozenset(
     }
 )
 
+# battery-charge-current.ts BATTERY_CHARGE_CURRENT_CAPABLE_MODELS: the LV
+# Deye-family models whose Max A Charge register (108 on 3-phase, 210 on
+# 1-phase) is written. The HV family (`*hp3*`, `deye_gb_s20k`) is left out:
+# its charge current registers were never measured. The same 19 ids live in
+# the firmware and the phone harvester, and all of them must stay in step.
+BATTERY_CHARGE_CURRENT_CAPABLE_MODELS: frozenset[str] = frozenset(
+    {
+        "deye_sg04lp3",
+        "deye_sg05lp3",
+        "sunsynk_3phase",
+        "sunsynk_3phase_15k",
+        "deye_sg01lp1",
+        "deye_sg02lp1",
+        "deye_sg03lp1",
+        "deye_sg04lp1",
+        "deye_sg05lp1",
+        "deye_sg01lp1_16k",
+        "deye_sg01lp1_us",
+        "deye_sun_g3",
+        "sunsynk_1phase",
+        "sunsynk_1phase_12k",
+        "sunsynk_1phase_16k",
+        "solark_5k",
+        "solark_12k",
+        "solark_15k",
+        "solark_18k",
+    }
+)
+
 # must-model.ts MUST_MODEL_PREFIX.
 _MUST_MODEL_PREFIX = "must_"
 
@@ -145,6 +174,7 @@ _DEYE_WRITABLE_ACTIONS = (
     "gen_force",
     "gen_port_mode",
     "energy_pattern",
+    "battery_charge_current",
     "tou_slots",
 )
 _DEYE_MODES = ("battery_charge", "use_battery", "sell_to_grid", "gen_force")
@@ -167,7 +197,14 @@ def island_writes(inv: dict) -> dict[str, list[str]]:
 
     kind = brand_kind(inv)
     if kind == "deye":
-        return {"writableActions": list(_DEYE_WRITABLE_ACTIONS), "modes": list(_DEYE_MODES)}
+        # battery_charge_current only on a model whose register was measured.
+        actions = [
+            a
+            for a in _DEYE_WRITABLE_ACTIONS
+            if a != "battery_charge_current"
+            or inv.get("modelId") in BATTERY_CHARGE_CURRENT_CAPABLE_MODELS
+        ]
+        return {"writableActions": actions, "modes": list(_DEYE_MODES)}
     if kind == "priority":
         protocol = priority_profile_protocol(
             inv.get("modelId"), inv.get("transport"), inv.get("protocolId")

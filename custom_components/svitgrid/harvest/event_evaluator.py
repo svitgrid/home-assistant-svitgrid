@@ -26,6 +26,7 @@ from zoneinfo import ZoneInfo
 
 from . import priority_profile as pp
 from .brand_commands import (
+    BATTERY_CHARGE_CURRENT_CAPABLE_MODELS,
     brand_kind,
     must_prior_thresholds,
     pi30_prior_thresholds,
@@ -592,6 +593,7 @@ COMMAND_PRIOR_KEYS = {
     "set_gen_force": "previousGenForce",
     "set_gen_port_mode": "previousGenPortMode",
     "set_energy_pattern": "previousEnergyPattern",
+    "set_battery_charge_current": "previousBatteryChargeCurrentA",
     "set_battery_charge": "prevSlots",
 }
 PRIOR_KEYS = tuple(dict.fromkeys(COMMAND_PRIOR_KEYS.values()))
@@ -607,6 +609,10 @@ _RESTORES = {
     "previousGenForce": lambda v: ("set_gen_force", {"on": bool(v)}),
     "previousGenPortMode": lambda v: ("set_gen_port_mode", {"genPortMode": v}),
     "previousEnergyPattern": lambda v: ("set_energy_pattern", {"energyPattern": v}),
+    "previousBatteryChargeCurrentA": lambda v: (
+        "restore_battery_charge_current",
+        {"batteryChargeCurrentA": v},
+    ),
     "prevSlots": lambda v: (RESTORE_CHARGE, {"prevSlots": v}),
 }
 
@@ -695,7 +701,56 @@ _CUSTOM_ACTIONS = {
     "gen_force": ("set_gen_force", lambda a: {"on": a["on"]}),
     "gen_port_mode": ("set_gen_port_mode", lambda a: {"genPortMode": a["value"]}),
     "energy_pattern": ("set_energy_pattern", lambda a: {"energyPattern": a["value"]}),
+    "battery_charge_current": (
+        "set_battery_charge_current",
+        lambda a: {"batteryChargeCurrentA": a["currentA"]},
+    ),
 }
+
+
+# The custom action that caps the battery charge current (Max A Charge).
+_CHARGE_CAP_ACTION = "battery_charge_current"
+
+# executionState.skipReason while a planned charge holds a cap off (the API's
+# BCC_CHARGE_INTENT_SKIP).
+CHARGE_INTENT_SKIP = "charge_intent_active"
+
+# The calendar modes that charge the battery on purpose (the API's
+# CHARGE_INTENT_MODES). Quick overrides are battery_charge events.
+_CHARGE_INTENT_MODES = frozenset({"battery_charge", "battery_maintenance_charge"})
+
+
+def _has_charge_cap(event: dict) -> bool:
+    if event.get("mode") != "custom":
+        return False
+    actions = (event.get("config") or {}).get("customActions") or []
+    return any(isinstance(a, dict) and a.get("type") == _CHARGE_CAP_ACTION for a in actions)
+
+
+def _charge_intent_active(events, inverter_id: str | None, self_id: str | None) -> bool:
+    """Whether a planned charge is running on *inverter_id* (chargeIntentActive).
+
+    An active ``battery_charge`` or ``battery_maintenance_charge`` event, or an
+    active custom event carrying a ``grid_charge_current`` action. A cap stands
+    down for it whatever the owner's priority order says, because the register
+    families do not overlap and the contention rules never see the conflict.
+    Plain TOU slots are not a charge intent: the cap blocks them by design.
+    """
+    for e in events or ():
+        if e.get("id") == self_id or e.get("inverterId") != inverter_id:
+            continue
+        if (e.get("executionState") or {}).get("status") != "active":
+            continue
+        mode = e.get("mode")
+        if mode in _CHARGE_INTENT_MODES:
+            return True
+        if mode == "custom":
+            actions = (e.get("config") or {}).get("customActions")
+            if isinstance(actions, list) and any(
+                isinstance(a, dict) and a.get("type") == "grid_charge_current" for a in actions
+            ):
+                return True
+    return False
 
 
 def _tou_slot_payload(action: dict) -> dict:
@@ -1072,7 +1127,9 @@ _BRAND_ACTION_COMMANDS = {
 }
 
 
-def _unsupported_command(event: dict, exec_state: dict, kind: str) -> str | None:
+def _unsupported_command(
+    event: dict, exec_state: dict, kind: str, model_id: str | None = None
+) -> str | None:
     """The inverter write *event* needs that an inverter of *kind* cannot get
     from the island, or None when the event writes nothing to the inverter.
 
@@ -1082,6 +1139,10 @@ def _unsupported_command(event: dict, exec_state: dict, kind: str) -> str | None
     partial payload.
     """
     if kind == "deye":
+        # Max A Charge was measured on the LV family only: an HV Deye gets no
+        # battery_charge_current, as the advert says (island_writes).
+        if model_id not in BATTERY_CHARGE_CURRENT_CAPABLE_MODELS and _has_charge_cap(event):
+            return _CUSTOM_ACTIONS[_CHARGE_CAP_ACTION][0]
         return None
     if event.get("mode") == "custom":
         for action in (event.get("config") or {}).get("customActions") or []:
@@ -1159,7 +1220,7 @@ def evaluate_event(
         elif kind == "priority" and _runs_on_thresholds(event, protocol):
             decision = _evaluate_thresholds(event, reading, exec_state, now_utc, tz, settings)
         else:
-            command = _unsupported_command(event, exec_state, kind)
+            command = _unsupported_command(event, exec_state, kind, inverter.get("modelId"))
             if command is not None:
                 return _unsupported(event, exec_state, command, now_utc)
     if decision is None:
@@ -1989,6 +2050,31 @@ def _eval_custom(
 
     decision = _decide_custom_event(now_ms, conditions, signals, sustain_minutes, state_view)
     d_action = decision["action"]
+
+    # A planned charge beats a battery charge current cap, whatever the
+    # owner's order says (the API's evaluateCustom). An active cap releases
+    # through its normal restore; one that would activate waits, and
+    # activates on the first evaluation after the charge ends.
+    if _has_charge_cap(event):
+        if _charge_intent_active(others, event.get("inverterId"), event.get("id")):
+            if exec_state.get("status") == "active":
+                commands, missing = _restore_plan(event, exec_state, reading, others)
+                new_state["status"] = "idle"
+                new_state["conditionLostSince"] = None
+                new_state["skipReason"] = CHARGE_INTENT_SKIP
+                _report_missing(event, new_state, missing, now_utc)
+                _LOGGER.info(
+                    "Event %s: a planned charge is running, the charge current cap stands down",
+                    event.get("id"),
+                )
+                return EvaluatorDecision(
+                    action="deactivate", commands=commands, new_state=new_state
+                )
+            if d_action in ("activate", "start_sustain"):
+                new_state["skipReason"] = CHARGE_INTENT_SKIP
+                return EvaluatorDecision(action="hold", commands=[], new_state=new_state)
+        elif new_state.get("skipReason") == CHARGE_INTENT_SKIP:
+            new_state.pop("skipReason")
 
     if d_action == "start_sustain":
         new_state["status"] = "pending_condition"

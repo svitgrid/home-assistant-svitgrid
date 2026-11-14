@@ -308,6 +308,11 @@ DISPATCHABLE_COMMANDS = frozenset(
         "restore_gen_force",
         "restore_gen_port_mode",
         "restore_energy_pattern",
+        # The battery charge current cap (Max A Charge, register 108 or 210).
+        # WriteExecutor runs both with the held prior and revert deadline of
+        # harvest/charge_cap_guard.py; the restore's value may be omitted.
+        "set_battery_charge_current",
+        "restore_battery_charge_current",
         # SMG II settings screen (Anenji/EASUN over an EyBond collector). A
         # name missing here is rejected before any executor is consulted,
         # and that failure looks identical to a broken executor -- see

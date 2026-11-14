@@ -453,3 +453,105 @@ def test_a_prior_held_for_a_write_the_edited_config_dropped_is_still_restored():
         ("set_work_mode", {"workMode": 1}),
         ("restore_sell_power_cap", {"sellPowerCapW": 9000}),
     ]
+
+
+# ═══════════════════════ Battery charge current cap ═══════════════════════════
+
+_CAP = [{"type": "battery_charge_current", "currentA": 0}]
+
+
+def _charge(status="active", inverter_id="inv-1", mode="battery_charge", config=None):
+    return {
+        "id": "evt-charge",
+        "inverterId": inverter_id,
+        "enabled": True,
+        "mode": mode,
+        "schedule": {"startTime": "10:00", "endTime": "11:00", "recurrence": "daily"},
+        "config": config or {},
+        "executionState": {"status": status},
+    }
+
+
+def test_a_cap_activates_set_battery_charge_current_and_restores_its_prior():
+    decision = evaluate_event(_custom(_CAP), _READING, {"status": "pending_condition"}, _IN, TZ)
+    assert decision.action == "activate"
+    assert decision.commands == [("set_battery_charge_current", {"batteryChargeCurrentA": 0})]
+
+    state = {"status": "active", "previousBatteryChargeCurrentA": 120}
+    commands, _ = restore_decision(_custom(_CAP), state, _OUT)
+    assert commands == [("restore_battery_charge_current", {"batteryChargeCurrentA": 120})]
+
+
+async def test_the_prior_from_the_ack_lands_on_the_cap():
+    inv = _Inverter(batteryChargeCurrentA=120)
+    store = _Store([_custom(_CAP)])
+    readings = _Readings({"batterySoc": 50})
+    await _tick(readings, store, _for(inv), TZ, _IN)
+    await _tick(readings, store, _for(inv), TZ, _IN + timedelta(seconds=15))
+    state = store.events["evt-1"]["executionState"]
+    assert state["status"] == "active"
+    assert state["previousBatteryChargeCurrentA"] == 120
+    assert inv.regs["batteryChargeCurrentA"] == 0
+
+
+def test_an_active_cap_stands_down_for_a_running_charge():
+    state = {"status": "active", "previousBatteryChargeCurrentA": 120}
+    decision = evaluate_event(_custom(_CAP), _READING, state, _IN, TZ, [_charge()])
+    assert decision.action == "deactivate"
+    assert decision.commands == [("restore_battery_charge_current", {"batteryChargeCurrentA": 120})]
+    assert decision.new_state["status"] == "idle"
+    assert decision.new_state["skipReason"] == "charge_intent_active"
+    assert "previousBatteryChargeCurrentA" not in decision.new_state
+
+
+@pytest.mark.parametrize("state", [{"status": "idle"}, {"status": "pending_condition"}])
+def test_a_cap_does_not_activate_while_a_charge_runs(state):
+    decision = evaluate_event(_custom(_CAP), _READING, state, _IN, TZ, [_charge()])
+    assert decision.commands == []
+    assert decision.action == "hold"
+    assert decision.new_state["skipReason"] == "charge_intent_active"
+    assert decision.new_state.get("status") != "active"
+
+
+async def test_the_cap_applies_again_once_the_charge_ends():
+    inv = _Inverter(batteryChargeCurrentA=120)
+    charge = _charge()
+    store = _Store([_custom(_CAP), charge])
+    readings = _Readings({"batterySoc": 50})
+    for s in (0, 15):
+        await _tick(readings, store, _for(inv), TZ, _IN + timedelta(seconds=s))
+    assert store.events["evt-1"]["executionState"].get("status") != "active"
+    assert inv.regs["batteryChargeCurrentA"] == 120
+
+    store.events["evt-charge"]["executionState"] = {"status": "idle"}
+    store.events["evt-charge"]["enabled"] = False
+    for s in (30, 45):
+        await _tick(readings, store, _for(inv), TZ, _IN + timedelta(seconds=s))
+    state = store.events["evt-1"]["executionState"]
+    assert state["status"] == "active"
+    assert state.get("skipReason") is None
+    assert inv.regs["batteryChargeCurrentA"] == 0
+
+
+@pytest.mark.parametrize(
+    ("other", "intent"),
+    [
+        (_charge(), True),
+        (_charge(mode="battery_maintenance_charge"), True),
+        (_charge(status="idle"), False),
+        (_charge(inverter_id="inv-2"), False),
+        (_charge(mode="sell_to_grid"), False),
+        (
+            _charge(mode="custom", config={"customActions": [{"type": "grid_charge_current"}]}),
+            True,
+        ),
+        # A plain TOU slot is not a charge intent: the cap blocks it by design.
+        (_charge(mode="custom", config={"customActions": [{"type": "tou_slots"}]}), False),
+    ],
+)
+def test_charge_intent_is_the_apis_rule(other, intent):
+    from custom_components.svitgrid.harvest.event_evaluator import _charge_intent_active
+
+    assert _charge_intent_active([other], "inv-1", "evt-1") is intent
+    # An event never yields to itself.
+    assert _charge_intent_active([{**other, "id": "evt-1"}], "inv-1", "evt-1") is False

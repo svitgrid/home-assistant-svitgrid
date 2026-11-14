@@ -426,3 +426,58 @@ def test_a_cancelled_threshold_run_restores_the_owners_voltages():
     assert commands == [("restore_pi30_thresholds", _PI30_PRIOR)]
     assert "customSnapshot" not in done
     assert done["status"] == "idle"
+
+
+# The 19 LV Deye-family models whose Max A Charge register is written
+# (register 108 on 3-phase, 210 on 1-phase). The same list lives in the API's
+# BATTERY_CHARGE_CURRENT_CAPABLE_MODELS, the firmware and the phone.
+_BCC_MODELS = {
+    "deye_sg04lp3",
+    "deye_sg05lp3",
+    "sunsynk_3phase",
+    "sunsynk_3phase_15k",
+    "deye_sg01lp1",
+    "deye_sg02lp1",
+    "deye_sg03lp1",
+    "deye_sg04lp1",
+    "deye_sg05lp1",
+    "deye_sg01lp1_16k",
+    "deye_sg01lp1_us",
+    "deye_sun_g3",
+    "sunsynk_1phase",
+    "sunsynk_1phase_12k",
+    "sunsynk_1phase_16k",
+    "solark_5k",
+    "solark_12k",
+    "solark_15k",
+    "solark_18k",
+}
+
+
+def test_battery_charge_current_is_advertised_for_lv_deye_models_only():
+    from custom_components.svitgrid.harvest.brand_commands import (
+        BATTERY_CHARGE_CURRENT_CAPABLE_MODELS,
+        DEYE_REGISTER_WRITABLE_MODELS,
+        island_writes,
+    )
+
+    assert BATTERY_CHARGE_CURRENT_CAPABLE_MODELS == _BCC_MODELS
+    for model_id in DEYE_REGISTER_WRITABLE_MODELS:
+        actions = island_writes({"modelId": model_id})["writableActions"]
+        assert ("battery_charge_current" in actions) is (model_id in _BCC_MODELS), model_id
+    for model_id in ("must_pv18_3224", "solax_x3_hybrid_g4", "solis_30k_5g"):
+        assert (
+            "battery_charge_current" not in island_writes({"modelId": model_id})["writableActions"]
+        )
+
+
+def test_battery_charge_current_on_an_hv_deye_is_unsupported():
+    event = _custom_event({"type": "battery_charge_current", "currentA": 0})
+    hv = {"modelId": "deye_sg01hp3", "transport": "solarman", "protocolId": "solarman_v5"}
+    decision = evaluate_event(event, _READING, {"status": "idle"}, _NOW, TZ, inverter=hv)
+    assert decision.skip_reason == "unsupported_field"
+    assert decision.new_state["lastCommandError"]["command"] == "set_battery_charge_current"
+
+    lv = {**hv, "modelId": "deye_sg04lp3"}
+    decision = evaluate_event(event, _READING, {"status": "idle"}, _NOW, TZ, inverter=lv)
+    assert decision.skip_reason != "unsupported_field"
