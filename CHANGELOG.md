@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.30.0 — unreleased
+## 0.30.0 — 2026-11-14
 
 ### Added
 - **An island station can send its log to support from the app.** Support
@@ -9,6 +9,15 @@
   that reports to it, the board's last 24 hours. The board's parts reach the
   cloud through Home Assistant, which used to refuse them. Nothing leaves the
   install outside an opening.
+- **The add-on reads the Deye battery mode register** (3-phase 111, 1-phase
+  213) with the settings sweep and sends it to the cloud, so a change made on
+  the inverter's screen reaches the app before the next 30-minute heartbeat.
+
+### Fixed
+- **A Deye time-of-use write keeps the Gen battery level.** A slot's SOC
+  register holds Batt in the low byte and Gen in the high byte. A Batt write
+  used to zero Gen; it now keeps the live Gen byte, and a write that
+  finds an invalid live slot word is refused with nothing written.
 
 ## 0.29.0 — 2026-11-12
 
