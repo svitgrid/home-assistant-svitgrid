@@ -839,6 +839,50 @@ def _charge_cap_renewal(
     )
 
 
+# skipReason and lastCommandError reason of a cap on a model outside the 19.
+UNSUPPORTED_MODEL = "unsupported_model"
+
+
+def _refuse_charge_cap(
+    event: dict,
+    reading: dict,
+    exec_state: dict,
+    new_state: dict,
+    now_utc: datetime,
+    others,
+    model_id,
+) -> EvaluatorDecision:
+    """A battery charge current rule on an inverter whose model is unknown or
+    outside the 19 LV models: no set is sent, and a cap already active is
+    restored. Recorded once in ``lastCommandError``, as an unsupported write
+    is."""
+    error = new_state.get("lastCommandError") or {}
+    if error.get("reason") != UNSUPPORTED_MODEL:
+        _LOGGER.warning(
+            "Event %s: battery charge current is not supported on model %r; not applied",
+            event.get("id"),
+            model_id,
+        )
+        new_state["lastCommandError"] = {
+            "command": "set_battery_charge_current",
+            "reason": UNSUPPORTED_MODEL,
+            "at": now_utc.isoformat(),
+        }
+    new_state["skipReason"] = UNSUPPORTED_MODEL
+    if exec_state.get("status") == "active":
+        commands, _missing = _restore_plan(event, exec_state, reading, others)
+        new_state["status"] = "idle"
+        new_state["conditionLostSince"] = None
+        _drop_charge_cap_deadline(new_state)
+        return EvaluatorDecision(action="deactivate", commands=commands, new_state=new_state)
+    if new_state.get("status") == "pending_condition":
+        new_state["status"] = "idle"
+        new_state.pop("conditionMetSince", None)
+    return EvaluatorDecision(
+        action="skip", commands=[], new_state=new_state, skip_reason=UNSUPPORTED_MODEL
+    )
+
+
 def _tou_slot_payload(action: dict) -> dict:
     """The API's single-slot ``tou_slots`` payload. Its whole-program form needs
     the cloud's settings mirror; the restore writes the six slots the write
@@ -2140,6 +2184,12 @@ def _eval_custom(
         if reading_ms is not None and now_ms - reading_ms > _STALE_READING_MS:
             _LOGGER.debug("Event %s: stale reading, deferring", event.get("id"))
             return EvaluatorDecision(action="hold", commands=[], new_state=new_state)
+
+    # Max A Charge is written only on the 19 LV models whose register was
+    # measured; the API's capability gate is that same set. A model the
+    # island does not know is refused, never capped to 0 A.
+    if _has_charge_cap(event) and model_id not in BATTERY_CHARGE_CURRENT_CAPABLE_MODELS:
+        return _refuse_charge_cap(event, reading, exec_state, new_state, now_utc, others, model_id)
 
     signals = _custom_signals(reading)
 
