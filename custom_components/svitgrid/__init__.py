@@ -68,6 +68,7 @@ from .http_views import ensure_hello_view, register_views
 from .inverter_entry import harvest_config_from_api
 from .island_event_store import IslandEventStore
 from .island_lan import _cloud_copy_of, is_true_island
+from .island_report import run_island_report_loop
 from .keystore import (
     ENTRY_ISLAND_DEVICE_IDS,
     ENTRY_TRUSTED_KEY_IDS,
@@ -1028,6 +1029,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     mqtt_wake_task = None
     scheduler_task = None
     settings_sync_task = None
+    island_report_task = None
 
     if loops_active:
         spec_store = RegisterSpecStore(hass)
@@ -1235,6 +1237,27 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 name="svitgrid_event_scheduler",
             )
             _LOGGER.info("Island event scheduler started (pure island mode)")
+
+        # The island's one call to the cloud (svitgrid D-1719): an hourly
+        # status per inverter, so the landing map and the fleet dashboard
+        # count a station whose readings never leave this install. Only a
+        # cloud-paired true island reports: a local-only entry has no key,
+        # and with the cloud copy on the readings already count it.
+        if true_island and not local_only and api_key and store is not None:
+            island_inverters = [
+                (inv["inverter_id"], "ha")
+                for inv in inverters
+                if inv["inverter_id"] not in edge_inverter_ids
+            ] + [(i, "edge") for box in edge_boxes for i in box.inverter_ids]
+            island_report_task = hass.async_create_background_task(
+                run_island_report_loop(
+                    store=store,
+                    api_client=api_client,
+                    api_key=api_key,
+                    inverters=lambda: list(island_inverters),
+                ),
+                name="svitgrid_island_report",
+            )
     elif lifecycle is not None:
         _LOGGER.warning(
             "Svitgrid device is %s (reason=%s); readings/command/wake loops not "
@@ -1341,6 +1364,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "mqtt_wake_task": mqtt_wake_task,
         "scheduler_task": scheduler_task,
         "settings_sync_task": settings_sync_task,
+        "island_report_task": island_report_task,
         "executors_by_inverter": executors_by_inverter,
         "activity": activity,
         "entry_data": dict(data),
@@ -1394,6 +1418,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "sender_task",
         "scheduler_task",
         "settings_sync_task",
+        "island_report_task",
     ):
         task = state.get(key)
         if task and not task.done():

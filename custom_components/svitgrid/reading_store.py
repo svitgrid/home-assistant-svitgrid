@@ -968,6 +968,59 @@ class ReadingStore:
         finally:
             conn.close()
 
+    # The hourly island status report (island_report.py, svitgrid D-1719): the
+    # inverter's raw rows since *since_iso*, oldest first, plus the last row
+    # before it, which is the baseline its daily energy counter rose from.
+    def _island_report_rows_sync(
+        self, inverter_id: str, since_iso: str
+    ) -> tuple[dict | None, list[tuple[str, dict]]]:
+        conn = _connect(self._db_path)
+        try:
+            before = conn.execute(
+                "SELECT payload FROM readings_raw WHERE inverter_id = ? AND ts < ? "
+                "ORDER BY ts DESC LIMIT 1",
+                (inverter_id, since_iso),
+            ).fetchone()
+            rows = conn.execute(
+                "SELECT ts, payload FROM readings_raw WHERE inverter_id = ? AND ts >= ? "
+                "ORDER BY ts",
+                (inverter_id, since_iso),
+            ).fetchall()
+            return (
+                json.loads(before["payload"]) if before else None,
+                [(r["ts"], json.loads(r["payload"])) for r in rows],
+            )
+        finally:
+            conn.close()
+
+    # The cloud's last `{nextReportAfterSec, stop}` and when it was asked, kept
+    # across restarts so a restart neither reports early nor forgets a stop.
+    def _set_island_report_state_sync(self, state: dict) -> None:
+        self._set_meta_sync("island_report", json.dumps(state))
+
+    def _get_island_report_state_sync(self) -> dict | None:
+        value = self._get_meta_sync("island_report")
+        if not value:
+            return None
+        try:
+            state = json.loads(value)
+        except ValueError:
+            return None
+        return state if isinstance(state, dict) else None
+
+    async def island_report_rows(
+        self, inverter_id: str, since_iso: str
+    ) -> tuple[dict | None, list[tuple[str, dict]]]:
+        return await self._hass.async_add_executor_job(
+            self._island_report_rows_sync, inverter_id, since_iso
+        )
+
+    async def set_island_report_state(self, state: dict) -> None:
+        await self._hass.async_add_executor_job(self._set_island_report_state_sync, state)
+
+    async def get_island_report_state(self) -> dict | None:
+        return await self._hass.async_add_executor_job(self._get_island_report_state_sync)
+
     # The last successful settings read per inverter (settings_sync), so the
     # island settings view can answer straight after a restart instead of
     # 404ing until the first read of the new run lands.

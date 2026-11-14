@@ -112,6 +112,7 @@ async def _setup(hass, entry):
         "sender",
         "settings_sync",
         "scheduler",
+        "island_report",
     )
     with ExitStack() as stack:
         mocks = {
@@ -128,6 +129,7 @@ async def _setup(hass, entry):
                     "run_sender_loop",
                     "run_settings_sync_loop",
                     "run_event_scheduler_loop",
+                    "run_island_report_loop",
                 ),
                 strict=True,
             )
@@ -237,6 +239,46 @@ async def test_cloud_copy_on_starts_the_cloud_loops(hass, enable_custom_integrat
     assert m["settings_sync"].call_args.kwargs["cloud_upload"] is True
     m["scheduler"].assert_not_called()
     assert hass.data[DOMAIN][entry.entry_id]["true_island"] is False
+
+
+@pytest.mark.asyncio
+async def test_true_island_reports_its_hourly_status_with_its_cloud_key(
+    hass, enable_custom_integrations
+):
+    """svitgrid D-1719: the island's one call to the cloud, once an hour."""
+    ks = await _seed_keystore(hass)
+    await _adopt_box(ks, "EC-1", "inv-edge-1")
+    entry = _cloud_entry(cloud_ingest=False)
+    _, m = await _setup(hass, entry)
+
+    m["island_report"].assert_called_once()
+    kwargs = m["island_report"].call_args.kwargs
+    assert kwargs["api_key"] == "cloud-api-key"
+    assert kwargs["api_client"] is m["client"]
+    assert kwargs["inverters"]() == [("inv-direct", "ha"), ("inv-edge-1", "edge")]
+    assert hass.data[DOMAIN][entry.entry_id]["island_report_task"] is not None
+
+
+@pytest.mark.asyncio
+async def test_cloud_copy_on_never_reports_an_island_status(hass, enable_custom_integrations):
+    """Its readings already reach the cloud and count it."""
+    await _seed_keystore(hass)
+    entry = _cloud_entry(cloud_ingest=True)
+    _, m = await _setup(hass, entry)
+
+    m["island_report"].assert_not_called()
+    assert hass.data[DOMAIN][entry.entry_id]["island_report_task"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_local_only_entry_reports_no_island_status(hass, enable_custom_integrations):
+    """No account and no key to report with."""
+    from tests.test_local_only_setup import _local_entry
+
+    entry, _, _ = _local_entry()
+    _, m = await _setup(hass, entry)
+
+    m["island_report"].assert_not_called()
 
 
 @pytest.mark.asyncio
