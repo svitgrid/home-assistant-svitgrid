@@ -128,13 +128,59 @@ class _Inverter:
                 self.regs[addr] = value
 
 
-def _executor(model_id, guard, inverter: _Inverter, monkeypatch, inverter_id="inv-1"):
+async def _no_sleep(_seconds):
+    return None
+
+
+def _executor(
+    model_id, guard, inverter: _Inverter, monkeypatch, inverter_id="inv-1", sleep_fn=_no_sleep
+):
     from custom_components.svitgrid.harvest.write_executor import WriteExecutor
 
     monkeypatch.setattr(f"{MODULE}.read_word", inverter.read_word)
     monkeypatch.setattr(f"{MODULE}.write_registers", inverter.write_registers)
     holder = SimpleNamespace(spec=_spec(model_id))
-    return WriteExecutor(object(), holder, _CFG, guard=guard, inverter_id=inverter_id)
+    return WriteExecutor(
+        object(), holder, _CFG, guard=guard, inverter_id=inverter_id, sleep_fn=sleep_fn
+    )
+
+
+async def test_the_readback_waits_two_seconds_after_the_write(guard, monkeypatch):
+    """The board and the phone let the inverter settle 2 s before they read
+    Max A Charge back; a read straight after the write can see the old value."""
+    inv = _Inverter({108: 120})
+    events = []
+    real_read, real_write = inv.read_word, inv.write_registers
+
+    async def read(*a):
+        events.append("read")
+        return await real_read(*a)
+
+    async def write(*a):
+        events.append("write")
+        return await real_write(*a)
+
+    async def sleep(seconds):
+        events.append(("sleep", seconds))
+
+    ex = _executor("deye_sg04lp3", guard, inv, monkeypatch, sleep_fn=sleep)
+    monkeypatch.setattr(f"{MODULE}.read_word", read)
+    monkeypatch.setattr(f"{MODULE}.write_registers", write)
+    await ex.dispatch("set_battery_charge_current", {"batteryChargeCurrentA": 0})
+    assert events == ["read", "write", ("sleep", 2.0), "read"]
+
+
+async def test_a_skipped_write_does_not_wait(guard, monkeypatch):
+    inv = _Inverter({108: 0})
+    slept = []
+
+    async def sleep(seconds):
+        slept.append(seconds)
+
+    ex = _executor("deye_sg04lp3", guard, inv, monkeypatch, sleep_fn=sleep)
+    result = await ex.dispatch("set_battery_charge_current", {"batteryChargeCurrentA": 0})
+    assert result["skipped"] is True
+    assert slept == []
 
 
 async def test_a_set_records_the_prior_before_it_writes(guard, monkeypatch):

@@ -660,6 +660,52 @@ def test_a_cap_with_a_recorded_deadline_still_restores_its_prior():
     assert "customSnapshot" not in new_state
 
 
+@pytest.mark.parametrize(
+    "state",
+    [
+        # The set failed: the ACK carried no prior, so none is stored.
+        {"status": "active"},
+        # The activation failed partway: only landed writes are put back.
+        {"status": "pending_condition"},
+    ],
+)
+def test_a_cap_with_no_stored_prior_still_sends_a_bare_restore(state):
+    """The cloud always sends restore_battery_charge_current {}: the host's
+    guard then writes the prior it holds. The island must do the same, or a
+    cap whose set failed after the guard recorded the prior is never undone."""
+    commands, new_state = restore_decision(_custom(_CAP), state, _OUT)
+    assert commands == [("restore_battery_charge_current", {})]
+    assert "lastCommandError" not in new_state
+
+
+def test_a_cap_beside_a_threshold_action_restores_both():
+    """A threshold rule takes the threshold restore path, which put back the
+    voltages and dropped the cap's restore."""
+    prior = {"backToGridVoltage": 48.0, "backToBatteryVoltage": 51.0}
+    event = _custom(
+        [
+            {"type": "pi30_thresholds", "backToGridVoltage": 46, "backToBatteryVoltage": 54},
+            *_CAP,
+        ]
+    )
+    held = {
+        "status": "active",
+        "customSnapshot": {"previousPi30Thresholds": prior},
+        "previousBatteryChargeCurrentA": 120,
+    }
+    commands, _ = restore_decision(event, held, _OUT)
+    assert commands == [
+        ("restore_pi30_thresholds", prior),
+        ("restore_battery_charge_current", {"batteryChargeCurrentA": 120}),
+    ]
+    bare = {"status": "active", "customSnapshot": {"previousPi30Thresholds": prior}}
+    commands, _ = restore_decision(event, bare, _OUT)
+    assert commands == [
+        ("restore_pi30_thresholds", prior),
+        ("restore_battery_charge_current", {}),
+    ]
+
+
 async def test_the_scheduler_holds_a_cap_to_the_harvested_models_limit():
     inv = _Inverter(batteryChargeCurrentA=120)
     cap = [{"type": "battery_charge_current", "currentA": 200}]

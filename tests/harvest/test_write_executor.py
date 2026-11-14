@@ -682,7 +682,12 @@ async def test_battery_charge_current_writes_the_models_register(model_id, regis
     spec = RegisterSpec.from_dict(json.loads((_BUNDLED_SPECS / f"{model_id}.json").read_text()))
     guard = ChargeCapGuard(str(tmp_path / "g.db"))
     executor = WriteExecutor(
-        object(), SimpleNamespace(spec=spec), _CFG, guard=guard, inverter_id="inv-1"
+        object(),
+        SimpleNamespace(spec=spec),
+        _CFG,
+        guard=guard,
+        inverter_id="inv-1",
+        sleep_fn=AsyncMock(),
     )
     registers = {register: 120}
 

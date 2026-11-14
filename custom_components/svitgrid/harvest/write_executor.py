@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from typing import Any
 
@@ -67,6 +68,10 @@ _REGISTER_MAX = 0xFFFF
 _COMPANIONS = {"set_solar_sell": ("workMode", "set_work_mode")}
 
 _LOGGER = logging.getLogger(__name__)
+
+# Seconds between a battery charge current write and its readback: the edge
+# board and the phone harvester wait the same.
+BCC_SETTLE_S = 2.0
 
 
 def _collect_prior_addresses(
@@ -215,6 +220,7 @@ class WriteExecutor(BaseExecutor):
         *,
         guard: Any = None,
         inverter_id: str | None = None,
+        sleep_fn: Callable[[float], Awaitable[Any]] | None = None,
     ) -> None:
         self._hass = hass
         self._spec_holder = spec_holder
@@ -225,6 +231,9 @@ class WriteExecutor(BaseExecutor):
         self._guard = guard
         self._inverter_id = inverter_id
         self._bcc_lock = asyncio.Lock()
+        # The wait before a battery charge current readback. Tests pass a
+        # fake so they do not sleep.
+        self._sleep = sleep_fn or asyncio.sleep
 
     # ------------------------------------------------------------------
     # Legacy abstract method — routes to dispatch so BaseExecutor is happy
@@ -452,6 +461,9 @@ class WriteExecutor(BaseExecutor):
         except Exception as err:
             _LOGGER.warning("battery charge current: write of reg %s failed: %s", address, err)
             raise BatteryChargeCurrentError("write_failed", known) from err
+        # Let the inverter settle before the readback, as the board and the
+        # phone do: a read straight after the write can return the old value.
+        await self._sleep(BCC_SETTLE_S)
         verify = await read_word(self._hass, spec, self._cfg, unit_id, address)
         if verify is None:
             raise BatteryChargeCurrentError("verify_read_failed", known)

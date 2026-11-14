@@ -717,6 +717,11 @@ _CUSTOM_ACTIONS = {
 # The custom action that caps the battery charge current (Max A Charge).
 _CHARGE_CAP_ACTION = "battery_charge_current"
 
+# The cap's prior key, and the restore sent when no prior is stored: the host
+# writes the prior its guard holds (restore_battery_charge_current {}).
+_CHARGE_CAP_PRIOR_KEY = COMMAND_PRIOR_KEYS["set_battery_charge_current"]
+_CHARGE_CAP_BARE_RESTORE = ("restore_battery_charge_current", {})
+
 # executionState.skipReason while a planned charge holds a cap off (the API's
 # BCC_CHARGE_INTENT_SKIP).
 CHARGE_INTENT_SKIP = "charge_intent_active"
@@ -1070,6 +1075,11 @@ def _restore_plan(
                 commands.append((write.restore[0], dict(write.restore[1])))
             continue
         if write.key is None:
+            continue
+        if prior is None and write.key == _CHARGE_CAP_PRIOR_KEY:
+            # The cloud's restore always goes out, value or not: the host's
+            # guard holds the prior a failed set recorded, and writes it.
+            commands.append(_CHARGE_CAP_BARE_RESTORE)
             continue
         if prior is None or (write.key == "prevSlots" and not prior):
             if not landed_only:
@@ -2605,6 +2615,15 @@ def _threshold_restore_plan(event: dict, exec_state: dict) -> tuple[list, list]:
             missing.append(spec.restore)
         else:
             commands.append((spec.restore, spec.restore_payload(prev)))
+    if _has_charge_cap(event):
+        # A cap beside the thresholds is restored as on its own: the held
+        # prior, else the bare restore the host's guard answers.
+        prior = exec_state.get(_CHARGE_CAP_PRIOR_KEY)
+        commands.append(
+            _RESTORES[_CHARGE_CAP_PRIOR_KEY](prior)
+            if prior is not None
+            else _CHARGE_CAP_BARE_RESTORE
+        )
     return commands, missing
 
 
