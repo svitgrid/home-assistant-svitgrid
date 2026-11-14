@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import sqlite3
 from typing import TYPE_CHECKING, Any
 
@@ -41,6 +42,16 @@ COMMANDS = frozenset({SET_COMMAND, RESTORE_COMMAND})
 # prior: an owner may have set the pack not to charge.
 PRIOR_MAX_A = 350
 
+# How far ahead of now a set's revert deadline lies, and how much of it may
+# remain before an active cap renews it (battery-charge-current.ts
+# BCC_REVERT_HORIZON_MS and BCC_RENEW_BEFORE_MS).
+BCC_REVERT_HORIZON_MS = 6 * 3600_000
+BCC_RENEW_BEFORE_MS = 2 * 3600_000
+
+# Where executionState.customSnapshot records the deadline the last set
+# carried (the API's BCC_REVERT_AT_KEY).
+BCC_REVERT_AT_KEY = "batteryChargeCurrentRevertAtMs"
+
 # How often the revert loop looks for a passed deadline.
 _TICK_INTERVAL_S = 60
 
@@ -52,6 +63,56 @@ def valid_prior(value: object) -> int | None:
     if isinstance(value, bool) or not isinstance(value, int):
         return None
     return value if 0 <= value <= PRIOR_MAX_A else None
+
+
+def bcc_revert_at_ms(now_ms: float) -> int:
+    """bccRevertAtMs: the deadline a set carries."""
+    return int(now_ms) + BCC_REVERT_HORIZON_MS
+
+
+def bcc_renewal_due(snapshot: dict, now_ms: float) -> bool:
+    """bccRenewalDue: no deadline is recorded, or less than 2 h of it remain."""
+    at = (snapshot or {}).get(BCC_REVERT_AT_KEY)
+    if isinstance(at, bool) or not isinstance(at, int | float) or not math.isfinite(at):
+        return True
+    return at < now_ms + BCC_RENEW_BEFORE_MS
+
+
+def _js_round(x: float) -> int:
+    """``Math.round``: halves go up, unlike Python's round."""
+    return math.floor(x + 0.5)
+
+
+def grid_charge_current_cap_a(model_id: str | None) -> int:
+    """gridChargeCurrentCapA (grid-charge-current-cap.ts), with no stored rating:
+    clamp(round(ratedPowerW * 1.2 / nominalV), 0, 250), where nominalV is 400
+    on an HV-battery model and 48 otherwise. A model the reading tables do not
+    know gets 0, as in the API: an unrecognized model cannot be sized."""
+    from ..edge_reading_pipeline import HV_BATTERY_MODELS, MODEL_LIMITS
+
+    limits = MODEL_LIMITS.get(model_id or "")
+    if limits is None:
+        return 0
+    rated = limits.rated_power_w
+    if not rated or rated <= 0:
+        return 0
+    nominal_v = 400 if model_id in HV_BATTERY_MODELS else 48
+    return max(0, min(250, _js_round(rated * 1.2 / nominal_v)))
+
+
+def battery_charge_current_target_a(config_a: float, model_id: str | None, bms_limit_a) -> int:
+    """batteryChargeCurrentTargetA: the rule's amps, held to the model's cap
+    and to the BMS charge limit when that is a positive number. Floored,
+    never below 0."""
+    target = min(config_a, grid_charge_current_cap_a(model_id))
+    if (
+        isinstance(bms_limit_a, int | float)
+        and not isinstance(bms_limit_a, bool)
+        and math.isfinite(bms_limit_a)
+        and bms_limit_a > 0
+    ):
+        target = min(target, bms_limit_a)
+    return max(0, math.floor(target))
 
 
 class BatteryChargeCurrentError(RuntimeError):
@@ -136,6 +197,17 @@ class ChargeCapGuard:
         finally:
             conn.close()
 
+    def _deadline_sync(self, inverter_id: str) -> int | None:
+        conn = _connect(self._db_path)
+        try:
+            row = conn.execute(
+                "SELECT revert_at_ms FROM charge_cap_guard WHERE inverter_id = ?",
+                (inverter_id,),
+            ).fetchone()
+            return int(row["revert_at_ms"]) if row and row["revert_at_ms"] is not None else None
+        finally:
+            conn.close()
+
     def _due_sync(self, now_ms: int) -> list[tuple[str, int]]:
         conn = _connect(self._db_path)
         try:
@@ -196,6 +268,10 @@ class ChargeCapGuard:
         """Arm or move the revert deadline. No-op without a held prior."""
         await self._run(self._set_deadline_sync, inverter_id, int(revert_at_ms))
 
+    async def deadline(self, inverter_id: str) -> int | None:
+        """The armed revert deadline for *inverter_id*, or None."""
+        return await self._run(self._deadline_sync, inverter_id)
+
     async def due(self, now_ms: int) -> list[tuple[str, int]]:
         """``(inverter id, prior)`` for every deadline at or before *now_ms*."""
         return await self._run(self._due_sync, int(now_ms))
@@ -235,8 +311,13 @@ async def charge_cap_guard_tick(guard: ChargeCapGuard, executor_for, now_ms: int
             )
             await guard.clear(inverter_id)
             continue
+        revert = getattr(executor, "revert_battery_charge_current_if_due", None)
         try:
-            await executor.dispatch(RESTORE_COMMAND, {"batteryChargeCurrentA": prev_a})
+            if revert is None:
+                raise NotImplementedError(RESTORE_COMMAND)
+            # Re-checked under the executor's lock: a set or a restore that
+            # landed since `due` was read may have moved or cleared it.
+            reverted = await revert(now_ms)
         except NotImplementedError:
             _LOGGER.error(
                 "Battery charge current revert: inverter %s has no charge current recipe; "
@@ -253,6 +334,8 @@ async def charge_cap_guard_tick(guard: ChargeCapGuard, executor_for, now_ms: int
                 err,
             )
         else:
+            if not reverted:
+                continue
             _LOGGER.warning(
                 "Battery charge current revert: inverter %s back to %s A (no restore by deadline)",
                 inverter_id,

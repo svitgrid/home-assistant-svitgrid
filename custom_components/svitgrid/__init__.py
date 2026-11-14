@@ -1031,6 +1031,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     scheduler_task = None
     settings_sync_task = None
     charge_cap_task = None
+    # The model of each inverter the integration harvests itself, which the
+    # island scheduler holds a battery charge current cap's target to.
+    harvest_models: dict[str, str | None] = {}
 
     if loops_active:
         spec_store = RegisterSpecStore(hass)
@@ -1112,6 +1115,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 # the same spec_holder built above for the read loop, so writes
                 # share the live spec (and any later refresh). This replaces the
                 # YamlDispatcher relay path — an inverter has exactly one executor.
+                harvest_models[inverter_id] = harvest_config.get("model_id")
                 executors_by_inverter[inverter_id] = WriteExecutor(
                     hass=hass,
                     spec_holder=spec_holder,
@@ -1263,6 +1267,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     # The adopted boxes' BMS reports, which a bms_temperature
                     # rule reads the household's battery temperature from.
                     bms_states_for=lambda: _bms_states(hass, entry.entry_id),
+                    model_for=harvest_models.get,
                 ),
                 name="svitgrid_event_scheduler",
             )

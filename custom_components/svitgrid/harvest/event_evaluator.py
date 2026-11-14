@@ -35,6 +35,12 @@ from .brand_commands import (
     valid_must_thresholds,
     valid_pi30_thresholds,
 )
+from .charge_cap_guard import (
+    BCC_REVERT_AT_KEY,
+    battery_charge_current_target_a,
+    bcc_renewal_due,
+    bcc_revert_at_ms,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -717,7 +723,11 @@ CHARGE_INTENT_SKIP = "charge_intent_active"
 
 # The calendar modes that charge the battery on purpose (the API's
 # CHARGE_INTENT_MODES). Quick overrides are battery_charge events.
-_CHARGE_INTENT_MODES = frozenset({"battery_charge", "battery_maintenance_charge"})
+# The island also runs the legacy ``battery_maintenance`` mode, whose grid
+# fallback charges the battery; the cloud has no such mode.
+_CHARGE_INTENT_MODES = frozenset(
+    {"battery_charge", "battery_maintenance_charge", "battery_maintenance"}
+)
 
 
 def _has_charge_cap(event: dict) -> bool:
@@ -751,6 +761,82 @@ def _charge_intent_active(events, inverter_id: str | None, self_id: str | None) 
             ):
                 return True
     return False
+
+
+def _charge_cap_action(event: dict) -> dict | None:
+    for a in (event.get("config") or {}).get("customActions") or []:
+        if isinstance(a, dict) and a.get("type") == _CHARGE_CAP_ACTION:
+            return a
+    return None
+
+
+def _charge_cap_set_payload(action: dict, model_id, reading: dict, now_ms: float) -> dict:
+    """The API's bccSetPayload: the rule's amps held to the model's and the
+    BMS's limits, and a revert deadline 6 h out."""
+    return {
+        "batteryChargeCurrentA": battery_charge_current_target_a(
+            action["currentA"], model_id, (reading or {}).get("bmsChargeCurrentLimit")
+        ),
+        "revertAtMs": bcc_revert_at_ms(now_ms),
+    }
+
+
+def _record_charge_cap_deadline(state: dict, revert_at_ms: int) -> None:
+    snapshot = dict(state.get(CUSTOM_SNAPSHOT_KEY) or {})
+    snapshot[BCC_REVERT_AT_KEY] = revert_at_ms
+    state[CUSTOM_SNAPSHOT_KEY] = snapshot
+
+
+def _drop_charge_cap_deadline(state: dict) -> None:
+    snapshot = state.get(CUSTOM_SNAPSHOT_KEY)
+    if not isinstance(snapshot, dict) or BCC_REVERT_AT_KEY not in snapshot:
+        return
+    snapshot = {k: v for k, v in snapshot.items() if k != BCC_REVERT_AT_KEY}
+    if snapshot:
+        state[CUSTOM_SNAPSHOT_KEY] = snapshot
+    else:
+        state.pop(CUSTOM_SNAPSHOT_KEY, None)
+
+
+def _with_charge_cap_set(
+    commands: list, event: dict, reading: dict, model_id, now_ms: float, new_state: dict
+) -> list:
+    """*commands* with the cap's set carrying its capped target and deadline,
+    which is recorded in ``customSnapshot`` as the API records it."""
+    action = _charge_cap_action(event)
+    out = []
+    for name, payload in commands:
+        if name == "set_battery_charge_current" and action is not None:
+            try:
+                payload = _charge_cap_set_payload(action, model_id, reading, now_ms)
+            except KeyError:
+                continue
+            _record_charge_cap_deadline(new_state, payload["revertAtMs"])
+        out.append((name, payload))
+    return out
+
+
+def _charge_cap_renewal(
+    event: dict, reading: dict, exec_state: dict, model_id, now_ms: float, new_state: dict
+) -> EvaluatorDecision | None:
+    """renewBatteryChargeCurrent: an active cap sends its set again with a
+    fresh deadline once less than 2 h of the last one remain, or none is
+    recorded. The host skips the write (the register is at target) and its
+    ACK keeps the held prior. The deadline is recorded with the update, so
+    one renewal is in flight at a time."""
+    snapshot = exec_state.get(CUSTOM_SNAPSHOT_KEY) or {}
+    if not bcc_renewal_due(snapshot, now_ms):
+        return None
+    action = _charge_cap_action(event)
+    if action is None or "currentA" not in action:
+        return None
+    payload = _charge_cap_set_payload(action, model_id, reading, now_ms)
+    _record_charge_cap_deadline(new_state, payload["revertAtMs"])
+    return EvaluatorDecision(
+        action="update",
+        commands=[("set_battery_charge_current", payload)],
+        new_state=new_state,
+    )
 
 
 def _tou_slot_payload(action: dict) -> dict:
@@ -1034,7 +1120,7 @@ def restore_decision(
     landed_only = exec_state.get("status") != "active"
     if _priority_controlled(exec_state):
         commands, missing = _priority_restore_plan(exec_state, landed_only)
-    elif CUSTOM_SNAPSHOT_KEY in exec_state:
+    elif CUSTOM_SNAPSHOT_KEY in exec_state and needs_settings(event):
         commands, missing = _threshold_restore_plan(event, exec_state)
     else:
         commands, missing = _restore_plan(event, exec_state, reading, others, landed_only)
@@ -1190,6 +1276,7 @@ def evaluate_event(
     others=(),
     inverter: dict | None = None,
     settings: dict | None = None,
+    model_id: str | None = None,
 ) -> EvaluatorDecision:
     """Evaluate a calendar event; see `_evaluate_event`.
 
@@ -1208,7 +1295,14 @@ def evaluate_event(
     *settings* is the edge settings snapshot the box posted for the inverter
     (``settings_sync.find_edge_settings_snapshot``): a threshold rule reads
     the owner's voltages from it when it activates.
+
+    *model_id* is the model of an inverter the integration writes itself
+    (its harvest config). A battery charge current cap holds its target to
+    the model's limit (``battery_charge_current_target_a``); an edge box's
+    inverter takes its model from *inverter*.
     """
+    if model_id is None and inverter is not None:
+        model_id = inverter.get("modelId")
     decision = None
     if inverter is not None and _cloud_skip_reason(event) is None:
         kind = brand_kind(inverter)
@@ -1224,7 +1318,7 @@ def evaluate_event(
             if command is not None:
                 return _unsupported(event, exec_state, command, now_utc)
     if decision is None:
-        decision = _evaluate_event(event, reading, exec_state, now_utc, tz, others)
+        decision = _evaluate_event(event, reading, exec_state, now_utc, tz, others, model_id)
     state = {k: v for k, v in decision.new_state.items() if k != SKIPPED_REASON_KEY}
     if decision.action == "skip" and decision.skip_reason in _NEEDS_CLOUD_SKIPS:
         state[SKIPPED_REASON_KEY] = NEEDS_CLOUD
@@ -1245,6 +1339,7 @@ def _evaluate_event(
     now_utc: datetime,
     tz: str,
     others=(),
+    model_id: str | None = None,
 ) -> EvaluatorDecision:
     """Evaluate a calendar event against a live reading.
 
@@ -1310,7 +1405,9 @@ def _evaluate_event(
         return EvaluatorDecision(action="hold", commands=[], new_state=new_state)
 
     # ── In-window: per-mode evaluation ────────────────────────────────────────
-    decision = _eval_mode(mode, event, reading, exec_state, new_state, now_utc, tz, others)
+    decision = _eval_mode(
+        mode, event, reading, exec_state, new_state, now_utc, tz, others, model_id
+    )
     if decision.action == "activate":
         decision.new_state.pop(RELEASED_KEY, None)
         return decision
@@ -1417,6 +1514,7 @@ def _pause_rule(
     for key in PRIOR_KEYS:
         new_state.pop(key, None)
     new_state.pop(RELEASED_KEY, None)
+    _drop_charge_cap_deadline(new_state)
     _report_missing(rule, new_state, missing, now_utc)
     _LOGGER.info("Rule %s: paused by event %s", rule.get("id"), pauser.get("id"))
     return EvaluatorDecision(action="deactivate", commands=commands, new_state=new_state)
@@ -1469,6 +1567,7 @@ def _undo_partial(
     commands, _missing = _restore_plan(event, exec_state, reading, others, landed_only=True)
     for key in PRIOR_KEYS:
         new_state.pop(key, None)
+    _drop_charge_cap_deadline(new_state)
     _LOGGER.info(
         "Event %s: activation failed partway; putting back what landed (%s)",
         event.get("id"),
@@ -1486,6 +1585,7 @@ def _eval_mode(
     now_utc: datetime,
     tz: str,
     others=(),
+    model_id: str | None = None,
 ) -> EvaluatorDecision:
     if mode == "battery_charge":
         return _eval_battery_charge(event, reading, exec_state, new_state, now_utc)
@@ -1502,7 +1602,7 @@ def _eval_mode(
     if mode == "gen_force":
         return _eval_gen_force(event, reading, exec_state, new_state, now_utc, tz)
     if mode == "custom":
-        return _eval_custom(event, reading, exec_state, new_state, now_utc, others)
+        return _eval_custom(event, reading, exec_state, new_state, now_utc, others, model_id)
     # Unknown mode → hold
     return EvaluatorDecision(action="hold", commands=[], new_state=new_state)
 
@@ -2011,6 +2111,7 @@ def _eval_custom(
     new_state: dict,
     now_utc: datetime,
     others=(),
+    model_id: str | None = None,
 ) -> EvaluatorDecision:
     """Evaluate custom event local conditions (battery_soc, pv_power, load_power, grid).
 
@@ -2062,6 +2163,7 @@ def _eval_custom(
                 new_state["status"] = "idle"
                 new_state["conditionLostSince"] = None
                 new_state["skipReason"] = CHARGE_INTENT_SKIP
+                _drop_charge_cap_deadline(new_state)
                 _report_missing(event, new_state, missing, now_utc)
                 _LOGGER.info(
                     "Event %s: a planned charge is running, the charge current cap stands down",
@@ -2090,16 +2192,16 @@ def _eval_custom(
         new_state["status"] = "active"
         new_state["lastActivatedAt"] = now_utc.isoformat()
         new_state["conditionLostSince"] = None
-        return EvaluatorDecision(
-            action="activate",
-            commands=_activation_commands(event, exec_state),
-            new_state=new_state,
-        )
+        commands = _activation_commands(event, exec_state)
+        if _has_charge_cap(event):
+            commands = _with_charge_cap_set(commands, event, reading, model_id, now_ms, new_state)
+        return EvaluatorDecision(action="activate", commands=commands, new_state=new_state)
 
     if d_action == "deactivate":
         commands, missing = _restore_plan(event, exec_state, reading, others)
         new_state["status"] = "idle"
         new_state["conditionLostSince"] = None
+        _drop_charge_cap_deadline(new_state)
         _report_missing(event, new_state, missing, now_utc)
         return EvaluatorDecision(action="deactivate", commands=commands, new_state=new_state)
 
@@ -2111,6 +2213,10 @@ def _eval_custom(
         and not exec_state.get("conditionLostSince")
     ):
         new_state["conditionLostSince"] = now_utc.isoformat()
+    if exec_state.get("status") == "active" and _has_charge_cap(event):
+        renewal = _charge_cap_renewal(event, reading, exec_state, model_id, now_ms, new_state)
+        if renewal is not None:
+            return renewal
     return EvaluatorDecision(action="hold", commands=[], new_state=new_state)
 
 

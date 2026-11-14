@@ -356,3 +356,28 @@ async def test_a_revert_waits_for_a_spec_that_is_not_loaded_yet(guard):
     await guard.set_deadline("inv-1", _REVERT_AT)
     await charge_cap_guard_tick(guard, {"inv-1": ex}.get, _REVERT_AT)
     assert await guard.due(_REVERT_AT) == [("inv-1", 120)]
+
+
+async def test_a_deadline_moved_after_the_tick_listed_it_is_not_reverted(guard, monkeypatch):
+    """The tick lists due priors outside the executor's lock. A renewal that
+    lands in between moves the deadline, and the revert must not undo it."""
+    inv = _Inverter({108: 120})
+    ex = _executor("deye_sg04lp3", guard, inv, monkeypatch)
+    await ex.dispatch(
+        "set_battery_charge_current", {"batteryChargeCurrentA": 0, "revertAtMs": _REVERT_AT}
+    )
+    listed = guard.due
+
+    async def due_then_renew(now_ms):
+        stale = await listed(now_ms)
+        await ex.dispatch(
+            "set_battery_charge_current",
+            {"batteryChargeCurrentA": 0, "revertAtMs": _REVERT_AT + 6 * 3600_000},
+        )
+        return stale
+
+    monkeypatch.setattr(guard, "due", due_then_renew)
+    await charge_cap_guard_tick(guard, {"inv-1": ex}.get, _REVERT_AT)
+    assert inv.regs[108] == 0
+    assert await guard.prior("inv-1") == 120
+    assert await guard.deadline("inv-1") == _REVERT_AT + 6 * 3600_000

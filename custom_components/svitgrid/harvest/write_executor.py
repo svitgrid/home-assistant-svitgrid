@@ -336,7 +336,37 @@ class WriteExecutor(BaseExecutor):
             result.update(_prev_slot_fields(cmd.slot, prior))
         return result
 
+    async def revert_battery_charge_current_if_due(self, now_ms: int) -> bool:
+        """Write the held prior back when its deadline has passed; True if it did.
+
+        The revert loop's entry point. The deadline is read again under the
+        same lock a set or restore holds, so a set that renewed it, or a
+        restore that cleared it, since the loop listed it is not undone.
+        Raises as a restore does on failure; the prior is then kept.
+        """
+        spec: RegisterSpec | None = self._spec_holder.spec
+        if spec is None:
+            raise RuntimeError("spec_not_loaded")
+        cmd = _find_command(spec, _bcc.RESTORE_COMMAND)
+        if cmd is None or self._guard is None or self._inverter_id is None:
+            raise NotImplementedError(_bcc.RESTORE_COMMAND)
+        async with self._bcc_lock:
+            deadline = await self._guard.deadline(self._inverter_id)
+            if deadline is None or deadline > now_ms:
+                return False
+            await self._battery_charge_current_locked(spec, cmd, _bcc.RESTORE_COMMAND, {})
+            return True
+
     async def _battery_charge_current(
+        self, spec: RegisterSpec, cmd: WriteCommand, command_name: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Run a battery charge current command under the executor's lock."""
+        if self._guard is None or self._inverter_id is None:
+            raise NotImplementedError(f"{command_name}: no charge cap guard")
+        async with self._bcc_lock:
+            return await self._battery_charge_current_locked(spec, cmd, command_name, payload)
+
+    async def _battery_charge_current_locked(
         self, spec: RegisterSpec, cmd: WriteCommand, command_name: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
         """Run a battery charge current set or restore with the held prior.
@@ -356,8 +386,6 @@ class WriteExecutor(BaseExecutor):
         - A restore clears the prior only once its readback confirmed the
           value, or the inverter already held it.
         """
-        if self._guard is None or self._inverter_id is None:
-            raise NotImplementedError(f"{command_name}: no charge cap guard")
         is_set = command_name == _bcc.SET_COMMAND
         raw = payload.get("batteryChargeCurrentA")
         if raw is not None and (isinstance(raw, bool) or not isinstance(raw, int | float)):
@@ -370,50 +398,49 @@ class WriteExecutor(BaseExecutor):
         inverter_id = self._inverter_id
         guard = self._guard
 
-        async with self._bcc_lock:
+        held = await guard.prior(inverter_id)
+        if raw is not None:
+            target = max(0, min(_bcc.PRIOR_MAX_A, int(raw)))
+        elif held is not None:
+            target = held
+        else:
+            raise BatteryChargeCurrentError("no_prior")
+
+        pre = await read_word(self._hass, spec, self._cfg, unit_id, address)
+        if is_set:
+            # No write without a prior: the cap must be revertible.
+            if valid_prior(pre) is None:
+                known = {} if held is None else {"prevBatteryChargeCurrentA": held}
+                raise BatteryChargeCurrentError("prior_read_failed", known)
+            await guard.record_prior(inverter_id, pre)
             held = await guard.prior(inverter_id)
-            if raw is not None:
-                target = max(0, min(_bcc.PRIOR_MAX_A, int(raw)))
-            elif held is not None:
-                target = held
+
+        result: dict[str, Any] = {"register": address}
+        if is_set:
+            result["prevBatteryChargeCurrentA"] = held
+        elif pre is not None:
+            result["prevBatteryChargeCurrentA"] = pre
+        result["targetBatteryChargeCurrentA"] = target
+
+        try:
+            if pre is not None and pre == target:
+                result["skipped"] = True
+                result["verifyBatteryChargeCurrentA"] = pre
             else:
-                raise BatteryChargeCurrentError("no_prior")
-
-            pre = await read_word(self._hass, spec, self._cfg, unit_id, address)
+                await self._write_and_verify(spec, unit_id, address, target, result)
+        finally:
             if is_set:
-                # No write without a prior: the cap must be revertible.
-                if valid_prior(pre) is None:
-                    known = {} if held is None else {"prevBatteryChargeCurrentA": held}
-                    raise BatteryChargeCurrentError("prior_read_failed", known)
-                await guard.record_prior(inverter_id, pre)
-                held = await guard.prior(inverter_id)
-
-            result: dict[str, Any] = {"register": address}
-            if is_set:
-                result["prevBatteryChargeCurrentA"] = held
-            elif pre is not None:
-                result["prevBatteryChargeCurrentA"] = pre
-            result["targetBatteryChargeCurrentA"] = target
-
-            try:
-                if pre is not None and pre == target:
-                    result["skipped"] = True
-                    result["verifyBatteryChargeCurrentA"] = pre
-                else:
-                    await self._write_and_verify(spec, unit_id, address, target, result)
-            finally:
-                if is_set:
-                    revert_at = payload.get("revertAtMs")
-                    if (
-                        isinstance(revert_at, int | float)
-                        and not isinstance(revert_at, bool)
-                        and held is not None
-                        and target < held
-                    ):
-                        await guard.set_deadline(inverter_id, int(revert_at))
-            if not is_set and held is not None:
-                await guard.clear(inverter_id)
-            return result
+                revert_at = payload.get("revertAtMs")
+                if (
+                    isinstance(revert_at, int | float)
+                    and not isinstance(revert_at, bool)
+                    and held is not None
+                    and target < held
+                ):
+                    await guard.set_deadline(inverter_id, int(revert_at))
+        if not is_set and held is not None:
+            await guard.clear(inverter_id)
+        return result
 
     async def _write_and_verify(
         self, spec: RegisterSpec, unit_id: int, address: int, target: int, result: dict
