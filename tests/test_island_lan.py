@@ -2239,6 +2239,94 @@ async def test_box_commands_with_the_island_key_and_owner_only_ones(hass: HomeAs
     assert commands == ["list_devices", "zigbee_restart"]
 
 
+def _mesh_reset_box_command(admin: _Admin, command: str = "zigbee_factory_reset") -> dict:
+    """The phone-signed mesh reset the box itself verifies (monorepo D-1940)."""
+    signed = {
+        "command": command,
+        "confirm": True,
+        "deviceId": "EC-1",
+        "validUntil": "2026-11-16T18:15:00.000Z",
+    }
+    return {
+        "signedEventData": signed,
+        "signature": sign_payload(signed, admin.priv),
+        "signingKeyId": admin.key_id,
+    }
+
+
+async def test_an_owner_mesh_reset_carries_the_phone_signature_to_the_box(
+    hass: HomeAssistant, tmp_path
+):
+    """The S3 runs zigbee_factory_reset only for the owner's signature over
+    a payload naming the command and the board, so the integration forwards
+    the phone's envelope untouched, as it does for set_state."""
+    from custom_components.svitgrid.zigbee_lan import ZigbeeBoxCommandView
+
+    admin, queue, _ = await _zigbee_setup(hass, tmp_path)
+    box_command = _mesh_reset_box_command(admin)
+
+    resp = await ZigbeeBoxCommandView().post(
+        _ZReq(
+            hass,
+            admin.request(
+                "edge_zigbee_box_command",
+                deviceId="EC-1",
+                command="zigbee_factory_reset",
+                boxCommand=box_command,
+            ),
+        )
+    )
+
+    assert resp.status == 200, _body(resp)
+    row = await queue.async_next_pending("EC-1")
+    assert row["command"] == "zigbee_factory_reset"
+    assert row["signing"] == box_command
+
+
+async def test_a_mesh_reset_signed_for_another_command_is_refused(hass: HomeAssistant, tmp_path):
+    """A signature over a board wipe is never forwarded as a mesh reset."""
+    from custom_components.svitgrid.zigbee_lan import ZigbeeBoxCommandView
+
+    admin, queue, _ = await _zigbee_setup(hass, tmp_path)
+
+    resp = await ZigbeeBoxCommandView().post(
+        _ZReq(
+            hass,
+            admin.request(
+                "edge_zigbee_box_command",
+                deviceId="EC-1",
+                command="zigbee_factory_reset",
+                boxCommand=_mesh_reset_box_command(admin, command="factory_reset"),
+            ),
+        )
+    )
+
+    assert (resp.status, _body(resp)) == (400, {"error": "box_signature_invalid"})
+    assert await queue.async_next_pending("EC-1") is None
+
+
+async def test_a_mesh_reset_from_an_older_app_still_queues_unsigned(hass: HomeAssistant, tmp_path):
+    """An app build that predates the signed reset sends no boxCommand. A box
+    that does not check yet still runs it; one that checks refuses it with
+    missing_signature, which the app shows as a failed reset."""
+    from custom_components.svitgrid.zigbee_lan import ZigbeeBoxCommandView
+
+    admin, queue, _ = await _zigbee_setup(hass, tmp_path)
+
+    resp = await ZigbeeBoxCommandView().post(
+        _ZReq(
+            hass,
+            admin.request(
+                "edge_zigbee_box_command", deviceId="EC-1", command="zigbee_factory_reset"
+            ),
+        )
+    )
+
+    assert resp.status == 200, _body(resp)
+    row = await queue.async_next_pending("EC-1")
+    assert (row["command"], row["signing"]) == ("zigbee_factory_reset", None)
+
+
 async def test_appliance_type_is_stored_and_served_back(hass: HomeAssistant, tmp_path):
     from custom_components.svitgrid.zigbee_lan import ZigbeeDevicesView, ZigbeeDeviceView
 

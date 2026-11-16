@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+- **A Zigbee network reset carries the owner's signature to the hub.** The
+  hub firmware that enforces signed commands runs `zigbee_factory_reset`
+  only for the owner's signature over a payload naming the command and the
+  board. The app now sends that signature with the reset, and the add-on
+  forwards it to the box untouched. A signature made for any other command
+  is refused with `box_signature_invalid`. A reset from an older app still
+  goes out unsigned, and a hub that checks refuses it. **Update the add-on
+  before that hub firmware.**
+- The vendored list of commands the hub refuses unsigned now includes
+  `zigbee_factory_reset`, `set_p17_hold` and `restore_p17_hold`.
+
 ## 0.31.0 — 2026-11-16
 
 ### Added

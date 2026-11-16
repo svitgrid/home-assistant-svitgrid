@@ -32,6 +32,7 @@ EDGE_SIGNED_COMMANDS = frozenset(
         "restore_grid_charge_master",
         "restore_grid_charge_toggle",
         "restore_must_thresholds",
+        "restore_p17_hold",
         "restore_peak_shaving",
         "restore_pi30_thresholds",
         "restore_priority_profile",
@@ -47,12 +48,14 @@ EDGE_SIGNED_COMMANDS = frozenset(
         "set_inverter_setting",
         "set_island_endpoint",
         "set_must_thresholds",
+        "set_p17_hold",
         "set_peak_shaving",
         "set_pi30_thresholds",
         "set_sell_power_cap",
         "set_solar_sell",
         "set_state",
         "set_work_mode",
+        "zigbee_factory_reset",
     }
 )
 
