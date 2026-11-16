@@ -396,6 +396,7 @@ async def test_smg_protocol_4_reads_its_own_blocks():
         (679, 12),
         (696, 6),
         (709, 1),
+        (858, 1),
     ]
 
 
@@ -441,6 +442,7 @@ _P3_6 = [
     (679, 12, True),
     (696, 6, True),
     (709, 1, True),
+    (858, 1, True),
 ]
 _SMG_SPANS = {
     11: [(303, 1, False), (313, 31, False), (300, 3, True), (305, 6, True), (344, 11, True)],
@@ -599,7 +601,7 @@ async def test_smg_read_skips_an_optional_block_that_fails():
 
 async def test_smg_read_with_every_optional_block_failing_posts_the_required_ones():
     """Protocols 11 and 4 keep working exactly as before the optional blocks."""
-    session = _FakeSession({184: 4}, failing=(610, 679, 696, 709))
+    session = _FakeSession({184: 4}, failing=(610, 679, 696, 709, 858))
     body = await EybondSmgSettingsExecutor(
         hub=_FakeHub("SN1", session), inverter_serial="SN1"
     ).read_sync_body()

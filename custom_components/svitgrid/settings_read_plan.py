@@ -204,6 +204,7 @@ _SMG_P3_6_SPANS = (
     SmgSpan(679, 12, optional=True),
     SmgSpan(696, 6, optional=True),
     SmgSpan(709, 1, optional=True),
+    SmgSpan(858, 1, optional=True),
 )
 
 # The blocks of each protocol's settings menu, keyed by the protocol number
