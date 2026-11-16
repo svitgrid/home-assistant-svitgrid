@@ -41,7 +41,7 @@ from .api_client import LogUploadFailed, LogUploadRefused
 from .bms_packs import valid_report as valid_bms_report
 from .const import ADD_TRUSTED_KEY_COMMAND, DOMAIN
 from .keystore import EdgeBoxEntry, KeystoreState
-from .settings_read_plan import settings_snapshot_kind_for
+from .settings_read_plan import onboarding_body, settings_snapshot_kind_for
 from .settings_sync import store_edge_settings_snapshot
 from .signing import compute_key_id
 from .zigbee_devices import device_id_for_ieee
@@ -242,7 +242,9 @@ def _snapshot_from_settings_body(box: EdgeBoxEntry, body) -> tuple[dict | None, 
     (`startRegister`, `registers`), or a brand body for LuxPower, MUST,
     SMG II or PI30, each with `inverterId` and `modelId`. It is stored as the
     add-on's own settings read stores it, so the settings view serves the two
-    alike. The brand body is kept as the box sent it.
+    alike. The brand body is kept as the box sent it. An SMG II body must
+    follow its protocol's sync spans (`settings_read_plan.SMG_SYNC_SPANS`):
+    every required block, then any of the optional ones, each complete.
     """
     if not isinstance(body, dict):
         return None, "bad_body"
@@ -272,6 +274,12 @@ def _snapshot_from_settings_body(box: EdgeBoxEntry, body) -> tuple[dict | None, 
             "read_at": read_at,
         }, None
     brand_body = {k: v for k, v in body.items() if k not in ("inverterId", "modelId", "readAt")}
+    if kind == "smg":
+        # The cloud's `validateSmgBlocks` refuses what this refuses, so the
+        # app reads one snapshot shape on either side.
+        brand_body, error = onboarding_body("smg", brand_body)
+        if error is not None:
+            return None, error
     return {
         "inverter_id": inverter_id,
         "model_id": model_id,

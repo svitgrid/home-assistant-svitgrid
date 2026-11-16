@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **The add-on reads the rest of the Anenji settings menu.** Over an EyBond
+  collector it now reads the settings blocks of SMG II protocols 1, 2, 3, 5
+  and 6 as well as 4 and 11, plus the optional blocks that hold the rest of
+  each menu. A block the inverter refuses is left out, and the app shows «—»
+  for its settings instead of a 0. Settings stay writable on protocol 11
+  only (svitgrid D-2013).
+- **An edge island accepts the new hub firmware's Anenji settings.** A hub
+  that reads the whole menu posts the optional blocks after the required
+  ones, and the add-on stores them. A body the cloud would refuse, such as
+  one missing a required block or with a block out of order, is refused here
+  too. The app's onboarding snapshot follows the same rule. **Update the
+  add-on before the hub firmware and the app**: an older add-on refuses an
+  onboarding snapshot that carries the optional blocks.
+
 ## 0.30.0 — 2026-11-14
 
 ### Added

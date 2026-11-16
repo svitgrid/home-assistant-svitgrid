@@ -24,6 +24,7 @@ import pytest
 from custom_components.svitgrid import settings_sync
 from custom_components.svitgrid.api_client import SettingsSyncRejected
 from custom_components.svitgrid.const import DOMAIN
+from custom_components.svitgrid.eybond_at.session import TransactionFailed
 from custom_components.svitgrid.harvest import transport
 from custom_components.svitgrid.harvest.register_spec import RegisterSpec
 from custom_components.svitgrid.http_views import SvitgridSettingsView, register_views
@@ -669,10 +670,17 @@ def _tcp_inv(inverter_id: str, model_id: str, slave_id: int = 1, port: int = 502
 
 
 class _Session:
-    def __init__(self, words: dict[int, int]) -> None:
+    """Answers every register with its own address unless ``words`` says
+    otherwise. With ``answers``, a read starting anywhere else fails as the
+    collector does on a Modbus exception."""
+
+    def __init__(self, words: dict[int, int], *, answers=None) -> None:
         self.words = words
+        self.answers = None if answers is None else set(answers)
 
     async def read_registers(self, address, count, timeout_s=5.0):
+        if self.answers is not None and address not in self.answers:
+            raise TransactionFailed("modbus exception 0x02")
         return [self.words.get(a, a & 0xFFFF) for a in range(address, address + count)]
 
 
@@ -766,7 +774,26 @@ async def test_settings_serves_smg_snapshot_shape():
     assert api.calls == []
     assert set(body) == {"inverterId", "modelId", "readAt", "protocolNumber", "blocks"}
     assert body["protocolNumber"] == 11
-    assert _block_shape(body) == [(303, 1), (313, 31)]
+    assert _block_shape(body) == [(303, 1), (313, 31), (300, 3), (305, 6), (344, 11)]
+
+
+async def test_settings_serves_smg_snapshot_without_an_optional_block_that_failed():
+    """A block the inverter refused is absent from the snapshot, never a run
+    of zeros: the app shows «—» for a missing word, but a 0 as a setting."""
+    inv = {
+        "inverter_id": "inv-smg",
+        "harvest_config": {
+            "protocol": "eybond_at",
+            "model_id": "anenji_anj_6200",
+            "inverter_serial": "SN1",
+        },
+    }
+    session = _Session({184: 11}, answers=(184, 303, 313, 305))
+    _api, body = await _read_and_serve(inv, eybond_hub=_Hub(session))
+
+    assert _block_shape(body) == [(303, 1), (313, 31), (305, 6)]
+    served = {b["startRegister"] + i for b in body["blocks"] for i in range(len(b["registers"]))}
+    assert not served & {300, 301, 302, *range(344, 355)}
 
 
 async def test_settings_serves_solis_snapshot_shape(monkeypatch):
@@ -1010,6 +1037,68 @@ async def test_settings_view_serves_edge_snapshot():
     assert _ISO_Z.match(body["readAt"])
 
 
+async def _post_edge_settings(hass, body: dict):
+    from custom_components.svitgrid.edge_api import EdgeSyncSettingsView
+
+    post = SimpleNamespace(app={"hass": hass}, headers={"X-API-Key": "box-key"}, match_info={})
+
+    async def _json_body():
+        return body
+
+    post.json = _json_body
+    return json.loads((await EdgeSyncSettingsView().post(post)).body)
+
+
+def _smg_hub_blocks(layout) -> list[dict]:
+    return [
+        {"startRegister": start, "registers": list(range(start, start + count))}
+        for start, count in layout
+    ]
+
+
+async def test_edge_island_serves_a_protocol_11_hub_body_with_optional_blocks():
+    """A hub on the firmware that reads the rest of the Anenji menu posts the
+    optional blocks it could read after the required ones (D-2013)."""
+    store = _FakeSnapshotStore()
+    hass = _edge_hass(store, inverters={"inv-e": {"modelId": "anenji_anj_6200"}})
+    blocks = _smg_hub_blocks([(303, 1), (313, 31), (300, 3), (344, 11)])
+    body = {
+        "inverterId": "inv-e",
+        "modelId": "anenji_anj_6200",
+        "protocolNumber": 11,
+        "blocks": blocks,
+    }
+
+    assert await _post_edge_settings(hass, body) == {"ok": True}
+
+    resp = await SvitgridSettingsView(store=None).get(_Req(hass, {"inverter_id": "inv-e"}))
+    assert resp.status == 200
+    served = json.loads(resp.body)
+    assert served["protocolNumber"] == 11
+    assert served["blocks"] == blocks
+
+
+async def test_edge_island_refuses_an_smg_hub_body_the_cloud_would_refuse():
+    """The island stores what the cloud's `validateSmgBlocks` accepts and
+    nothing else, so the app reads the same snapshot either way."""
+    store = _FakeSnapshotStore()
+    hass = _edge_hass(store, inverters={"inv-e": {"modelId": "anenji_anj_6200"}})
+    base = {"inverterId": "inv-e", "modelId": "anenji_anj_6200", "protocolNumber": 11}
+
+    missing_required = {**base, "blocks": _smg_hub_blocks([(303, 1), (300, 3)])}
+    out_of_order = {**base, "blocks": _smg_hub_blocks([(303, 1), (313, 31), (344, 11), (300, 3)])}
+    unknown_protocol = {**base, "protocolNumber": 7, "blocks": _smg_hub_blocks([(303, 1)])}
+
+    assert await _post_edge_settings(hass, missing_required) == {
+        "ok": False,
+        "error": "bad_range",
+    }
+    assert await _post_edge_settings(hass, out_of_order) == {"ok": False, "error": "bad_range"}
+    assert await _post_edge_settings(hass, unknown_protocol) == {"ok": False, "error": "bad_body"}
+    resp = await SvitgridSettingsView(store=None).get(_Req(hass, {"inverter_id": "inv-e"}))
+    assert resp.status == 404
+
+
 async def test_settings_view_serves_a_persisted_edge_snapshot_after_restart():
     """The box posts settings only when they change, so after a restart the
     view serves what the store kept."""
@@ -1090,7 +1179,10 @@ async def _served_body(monkeypatch, vendored: dict) -> dict:
                 "inverter_serial": "SN1",
             },
         }
-        hub = _Hub(_Session({184: snapshot["protocolNumber"]}))
+        # The vendored body carries the blocks the cloud fixture holds; an
+        # inverter that refuses every other block reads to the same shape.
+        answers = {184, *(b["startRegister"] for b in snapshot["blocks"])}
+        hub = _Hub(_Session({184: snapshot["protocolNumber"]}, answers=answers))
         return (await _read_and_serve(inv, eybond_hub=hub))[1]
     assert kind == "pi30", kind
     from custom_components.svitgrid.edge_api import EdgeSyncSettingsView

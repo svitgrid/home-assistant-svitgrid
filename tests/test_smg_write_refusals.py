@@ -131,6 +131,36 @@ async def test_a_locally_rejected_write_reports_no_refusal_and_sends_nothing():
     assert link.writes == []
 
 
+# ── only protocol 11 is writable (svitgrid D-2013) ───────────────────────
+
+
+@pytest.mark.parametrize("protocol", [1, 2, 3, 4, 5, 6])
+async def test_a_protocol_with_no_verified_catalogue_refuses_every_write(protocol):
+    """The add-on now reads the menus of protocols 1-6, but reading a register
+    is not knowing its bounds. Protocol 4 stays unverified; 1, 2, 3, 5 and 6
+    have no catalogue at all (svitgrid #1536). The write is refused before
+    anything reaches the device, as for an unknown key."""
+    link = FakeLink(bench_registers())
+    executor = SmgSettingsExecutor(link=link, protocol_number=protocol, nominal_pack_voltage=24)
+
+    result = await executor.dispatch("set_inverter_setting", {"setting": "buzzerMode", "value": 1})
+
+    assert result["ok"] is False
+    assert result["refusal"] is None
+    assert link.writes == []
+    listed = await executor.dispatch("read_inverter_settings", {})
+    assert listed["settings"] == {}
+
+
+async def test_protocol_11_still_writes():
+    link = FakeLink(bench_registers())
+    result = await _executor(link).dispatch(
+        "set_inverter_setting", {"setting": "buzzerMode", "value": 1}
+    )
+    assert result["ok"] is True
+    assert link.writes
+
+
 # ── writes stay user-initiated ───────────────────────────────────────────
 
 

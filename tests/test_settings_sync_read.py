@@ -130,8 +130,11 @@ from pathlib import Path
 from custom_components.svitgrid.executors.smg_settings_executor import (
     EybondSmgSettingsExecutor,
 )
+from custom_components.svitgrid.eybond_at.session import TransactionFailed
 from custom_components.svitgrid.settings_read_plan import (
+    SMG_SYNC_SPANS,
     SOLIS_SETTINGS_ADDRESSES,
+    onboarding_body,
     settings_read_plan_for,
     settings_snapshot_kind_for,
 )
@@ -319,12 +322,23 @@ async def test_must_read_with_a_missing_block_fails(monkeypatch):
 
 
 class _FakeSession:
-    def __init__(self, words: dict[int, int]) -> None:
+    """Answers every register with its own address unless ``words`` says
+    otherwise. A read starting at an address in ``failing`` raises as the
+    collector does on a timeout or a Modbus exception; one in ``short``
+    comes back a word short."""
+
+    def __init__(self, words: dict[int, int], *, failing=(), short=()) -> None:
         self.words = words
+        self.failing = set(failing)
+        self.short = set(short)
         self.reads: list[tuple[int, int]] = []
 
     async def read_registers(self, address, count, timeout_s=5.0):
         self.reads.append((address, count))
+        if address in self.failing:
+            raise TransactionFailed("timed out waiting for the collector")
+        if address in self.short:
+            count -= 1
         return [self.words.get(a, a & 0xFFFF) for a in range(address, address + count)]
 
 
@@ -342,7 +356,7 @@ def _eybond_cfg(model_id: str = "anenji_anj_6200") -> dict:
 
 
 async def test_smg_plan_reads_the_sync_blocks_over_the_eybond_session():
-    """Protocol 11's sync blocks (`k_smg_ii_blocks` in the firmware's
+    """Protocol 11's sync blocks, required then optional (`k_p11_blocks` in the firmware's
     `smg_settings_sync.c`), read over the collector's live session. Not
     `read_all`: the app maps the raw blocks, not display values."""
     cfg = _eybond_cfg()
@@ -354,12 +368,15 @@ async def test_smg_plan_reads_the_sync_blocks_over_the_eybond_session():
         _FakeHass(), plan, "inv-smg", "anenji_anj_6200", cfg, eybond_hub=_FakeHub("SN1", session)
     )
 
-    assert session.reads == [(184, 1), (303, 1), (313, 31)]
+    assert session.reads == [(184, 1), (303, 1), (313, 31), (300, 3), (305, 6), (344, 11)]
     assert snapshot["body"] == {
         "protocolNumber": 11,
         "blocks": [
             {"startRegister": 303, "registers": [303]},
             {"startRegister": 313, "registers": list(range(313, 344))},
+            {"startRegister": 300, "registers": [300, 301, 302]},
+            {"startRegister": 305, "registers": list(range(305, 311))},
+            {"startRegister": 344, "registers": list(range(344, 355))},
         ],
     }
 
@@ -375,6 +392,10 @@ async def test_smg_protocol_4_reads_its_own_blocks():
         (600, 10),
         (630, 27),
         (677, 2),
+        (610, 2),
+        (679, 12),
+        (696, 6),
+        (709, 1),
     ]
 
 
@@ -403,6 +424,221 @@ async def test_smg_read_fails_without_a_connected_collector_or_a_known_protocol(
 
     assert absent is None and "no collector connected" in errors[0]
     assert unknown is None
+
+
+# ── SMG sync spans (svitgrid D-2013) ───────────────────────────────────
+#
+# The "Sync spans" table in the monorepo's
+# `docs/superpowers/plans/2026-11-13-anenji-smg-protocol-1-settings.md`, which
+# the firmware (`smg_settings_sync.c`), the API (`smgSyncBlocksFor`) and the
+# app (`smgSyncSpans`) all follow: (start, count, optional), in body order.
+
+_P3_6 = [
+    (600, 10, False),
+    (630, 27, False),
+    (677, 2, False),
+    (610, 2, True),
+    (679, 12, True),
+    (696, 6, True),
+    (709, 1, True),
+]
+_SMG_SPANS = {
+    11: [(303, 1, False), (313, 31, False), (300, 3, True), (305, 6, True), (344, 11, True)],
+    1: [(303, 1, False), (313, 31, False), (300, 3, True), (305, 6, True), (351, 1, True)],
+    2: [
+        (303, 1, False),
+        (313, 31, False),
+        (300, 3, True),
+        (305, 8, True),
+        (344, 9, True),
+        (434, 6, True),
+    ],
+    3: _P3_6,
+    4: _P3_6,
+    5: _P3_6,
+    6: _P3_6,
+}
+
+
+def test_smg_sync_spans_follow_the_monorepo_table():
+    assert set(SMG_SYNC_SPANS) == set(_SMG_SPANS)
+    for protocol, expected in _SMG_SPANS.items():
+        spans = [(s.start, s.count, s.optional) for s in SMG_SYNC_SPANS[protocol]]
+        assert spans == expected, protocol
+
+
+def _smg_settings(protocol: int, starts=None, words=None) -> dict:
+    """An SMG onboarding body for ``protocol`` carrying the blocks at
+    ``starts`` (every block when None), each complete unless ``words`` gives
+    a block its own register list."""
+    spans = {s.start: s for s in SMG_SYNC_SPANS[protocol]} if protocol in SMG_SYNC_SPANS else {}
+    if starts is None:
+        starts = list(spans)
+    blocks = []
+    for start in starts:
+        registers = (words or {}).get(start)
+        if registers is None:
+            registers = [7] * spans[start].count
+        blocks.append({"startRegister": start, "registers": registers})
+    return {"protocolNumber": protocol, "blocks": blocks}
+
+
+def _required_starts(protocol: int) -> list[int]:
+    return [s.start for s in SMG_SYNC_SPANS[protocol] if not s.optional]
+
+
+@pytest.mark.parametrize("protocol", sorted(_SMG_SPANS))
+def test_smg_body_with_only_the_required_blocks_is_accepted(protocol):
+    """What a hub or an app from before the optional blocks posts, and what
+    a new one posts when every optional read fails."""
+    settings = _smg_settings(protocol, _required_starts(protocol))
+    body, error = onboarding_body("smg", settings)
+    assert error is None
+    assert body == settings
+
+
+@pytest.mark.parametrize("protocol", sorted(_SMG_SPANS))
+def test_smg_body_with_every_block_is_accepted(protocol):
+    settings = _smg_settings(protocol)
+    body, error = onboarding_body("smg", settings)
+    assert error is None
+    assert body == settings
+
+
+def test_smg_body_with_some_optional_blocks_left_out_is_accepted():
+    settings = _smg_settings(11, [303, 313, 344])
+    assert onboarding_body("smg", settings) == (settings, None)
+    settings = _smg_settings(4, [600, 630, 677, 679, 709])
+    assert onboarding_body("smg", settings) == (settings, None)
+
+
+@pytest.mark.parametrize(
+    ("protocol", "starts"),
+    [
+        (11, [313]),
+        (11, [303]),
+        (11, [303, 300, 305, 344]),
+        (11, []),
+        (4, [600, 630, 610]),
+        (4, [630, 677]),
+    ],
+)
+def test_smg_body_missing_a_required_block_is_refused(protocol, starts):
+    assert onboarding_body("smg", _smg_settings(protocol, starts)) == (None, "bad_range")
+
+
+@pytest.mark.parametrize(
+    ("protocol", "starts", "words"),
+    [
+        # An optional block out of order.
+        (11, [303, 313, 344, 300], None),
+        # An optional block ahead of a required one.
+        (11, [300, 303, 313], None),
+        # A short optional block.
+        (11, [303, 313, 300], {300: [1, 2]}),
+        # A long one.
+        (4, [600, 630, 677, 709], {709: [1, 2]}),
+        # A block that is not in the protocol's table.
+        (11, [303, 313, 351], {351: [1]}),
+        (1, [303, 313, 344], {344: [1] * 11}),
+        # The same block twice.
+        (11, [303, 313, 300, 300], None),
+        (11, [303, 303, 313], None),
+    ],
+)
+def test_smg_body_with_a_bad_optional_block_is_refused(protocol, starts, words):
+    assert onboarding_body("smg", _smg_settings(protocol, starts, words)) == (None, "bad_range")
+
+
+@pytest.mark.parametrize("protocol", [7, 0, 12, "11", True, None])
+def test_smg_body_of_an_unknown_protocol_is_refused(protocol):
+    settings = {"protocolNumber": protocol, "blocks": _smg_settings(11)["blocks"]}
+    assert onboarding_body("smg", settings) == (None, "bad_body")
+
+
+@pytest.mark.parametrize("bad", [-1, 0x10000, 1.5, "1", None])
+def test_smg_body_with_a_word_that_is_not_16_bit_is_refused(bad):
+    settings = _smg_settings(11, [303, 313, 300], {300: [1, bad, 3]})
+    assert onboarding_body("smg", settings) == (None, "bad_registers")
+
+
+@pytest.mark.parametrize("protocol", [1, 2, 3, 5, 6])
+async def test_smg_protocols_without_a_catalogue_still_read_their_spans(protocol):
+    """The app shows these menus read-only from the snapshot (D-2013)."""
+    session = _FakeSession({184: protocol})
+    body = await EybondSmgSettingsExecutor(
+        hub=_FakeHub("SN1", session), inverter_serial="SN1"
+    ).read_sync_body()
+
+    assert body["protocolNumber"] == protocol
+    assert [(b["startRegister"], len(b["registers"])) for b in body["blocks"]] == [
+        (start, count) for start, count, _optional in _SMG_SPANS[protocol]
+    ]
+    assert onboarding_body("smg", body) == (body, None)
+
+
+async def test_smg_read_skips_an_optional_block_that_fails():
+    """A Modbus exception, a timeout or a short reply on an optional block
+    leaves that block out, never zero-filled; the rest still read."""
+    session = _FakeSession({184: 11}, failing=(300,), short=(344,))
+    body = await EybondSmgSettingsExecutor(
+        hub=_FakeHub("SN1", session), inverter_serial="SN1"
+    ).read_sync_body()
+
+    assert session.reads == [(184, 1), (303, 1), (313, 31), (300, 3), (305, 6), (344, 11)]
+    assert body == {
+        "protocolNumber": 11,
+        "blocks": [
+            {"startRegister": 303, "registers": [303]},
+            {"startRegister": 313, "registers": list(range(313, 344))},
+            {"startRegister": 305, "registers": list(range(305, 311))},
+        ],
+    }
+    assert onboarding_body("smg", body) == (body, None)
+
+
+async def test_smg_read_with_every_optional_block_failing_posts_the_required_ones():
+    """Protocols 11 and 4 keep working exactly as before the optional blocks."""
+    session = _FakeSession({184: 4}, failing=(610, 679, 696, 709))
+    body = await EybondSmgSettingsExecutor(
+        hub=_FakeHub("SN1", session), inverter_serial="SN1"
+    ).read_sync_body()
+
+    assert [(b["startRegister"], len(b["registers"])) for b in body["blocks"]] == [
+        (600, 10),
+        (630, 27),
+        (677, 2),
+    ]
+
+
+async def test_smg_read_aborts_when_a_required_block_fails():
+    cfg = _eybond_cfg()
+    plan = settings_read_plan_for("anenji_anj_6200", cfg, True)
+    errors: list[str] = []
+    failing = _FakeSession({184: 11}, failing=(313,))
+
+    snapshot = await read_settings_snapshot(
+        _FakeHass(),
+        plan,
+        "inv-smg",
+        "anenji_anj_6200",
+        cfg,
+        eybond_hub=_FakeHub("SN1", failing),
+        errors_out=errors,
+    )
+
+    assert snapshot is None
+    assert "timed out" in errors[0]
+    # Nothing is read after the failed required block.
+    assert failing.reads == [(184, 1), (303, 1), (313, 31)]
+
+    short = _FakeSession({184: 4}, short=(630,))
+    assert (
+        await EybondSmgSettingsExecutor(
+            hub=_FakeHub("SN1", short), inverter_serial="SN1"
+        ).read_sync_body()
+        is None
+    )
 
 
 def test_solis_plan_reads_catalogue_addresses():

@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Literal, NamedTuple
 
 SnapshotKind = Literal["deye", "pi30", "luxpower", "must", "smg", "solis"]
 
@@ -183,12 +183,63 @@ MUST_PACK_REG = 25275
 # `must_holding_pack`: any other value is no pack voltage at all.
 MUST_PACK_VOLTAGES = (12, 24, 48)
 
-# `k_smg_ii_blocks` and `k_smg_p4_blocks` in the firmware's
-# `components/eybond_at/smg_settings_sync.c`, keyed by the protocol number
-# register 184 holds. Another protocol number has no body.
-SMG_SYNC_BLOCKS = {
-    11: ((303, 1), (313, 31)),
-    4: ((600, 10), (630, 27), (677, 2)),
+
+class SmgSpan(NamedTuple):
+    """One SMG II sync block: ``count`` holding registers from ``start``.
+
+    A body carries every required block. An optional block is one the
+    inverter may refuse; a body leaves it out then, and never zero-fills it.
+    """
+
+    start: int
+    count: int
+    optional: bool = False
+
+
+_SMG_P3_6_SPANS = (
+    SmgSpan(600, 10),
+    SmgSpan(630, 27),
+    SmgSpan(677, 2),
+    SmgSpan(610, 2, optional=True),
+    SmgSpan(679, 12, optional=True),
+    SmgSpan(696, 6, optional=True),
+    SmgSpan(709, 1, optional=True),
+)
+
+# The blocks of each protocol's settings menu, keyed by the protocol number
+# register 184 holds, in body order: required first, then optional, each as
+# listed. The "Sync spans" table in the monorepo's
+# `docs/superpowers/plans/2026-11-13-anenji-smg-protocol-1-settings.md`, which
+# the firmware (`smg_sync_blocks` in `components/eybond_at/smg_settings_sync.c`),
+# the API (`smgSyncBlocksFor`) and the app (`smgSyncSpans`) also follow.
+# Another protocol number has no body.
+SMG_SYNC_SPANS: dict[int, tuple[SmgSpan, ...]] = {
+    11: (
+        SmgSpan(303, 1),
+        SmgSpan(313, 31),
+        SmgSpan(300, 3, optional=True),
+        SmgSpan(305, 6, optional=True),
+        SmgSpan(344, 11, optional=True),
+    ),
+    1: (
+        SmgSpan(303, 1),
+        SmgSpan(313, 31),
+        SmgSpan(300, 3, optional=True),
+        SmgSpan(305, 6, optional=True),
+        SmgSpan(351, 1, optional=True),
+    ),
+    2: (
+        SmgSpan(303, 1),
+        SmgSpan(313, 31),
+        SmgSpan(300, 3, optional=True),
+        SmgSpan(305, 8, optional=True),
+        SmgSpan(344, 9, optional=True),
+        SmgSpan(434, 6, optional=True),
+    ),
+    3: _SMG_P3_6_SPANS,
+    4: _SMG_P3_6_SPANS,
+    5: _SMG_P3_6_SPANS,
+    6: _SMG_P3_6_SPANS,
 }
 
 # Every holding address `SolisSettingsExecutor._readRaw` reads, in read
@@ -219,7 +270,7 @@ class SettingsReadPlan:
 
     ``blocks`` are ``(start, count)`` holding-register ranges, all of which
     must answer in full. They are empty for ``smg``, whose blocks depend on
-    the protocol number the inverter reports (``SMG_SYNC_BLOCKS``).
+    the protocol number the inverter reports (``SMG_SYNC_SPANS``).
     ``extra`` carries what a kind reads besides its blocks.
     """
 
@@ -363,6 +414,42 @@ def _checked_blocks(blocks, expected) -> tuple[list[dict] | None, str | None]:
     ], None
 
 
+def _checked_smg_blocks(blocks, spans) -> tuple[list[dict] | None, str | None]:
+    """``blocks`` copied when they follow ``spans``, or why not.
+
+    The rule of the API's ``validateSmgBlocks``: the blocks are a subset of
+    ``spans`` in table order that holds every required block, and each block
+    present is complete. ``bad_body`` for a value that is not a block list,
+    ``bad_range`` for a block that is unknown, repeated, out of order, short
+    or long, or a required block missing, ``bad_registers`` for a value that
+    is not a register word.
+    """
+    if not isinstance(blocks, list) or not all(
+        isinstance(b, dict) and isinstance(b.get("registers"), list) for b in blocks
+    ):
+        return None, "bad_body"
+    cursor = 0
+    for block in blocks:
+        start = block.get("startRegister")
+        match = None
+        for index in range(cursor, len(spans)):
+            if type(start) is int and spans[index].start == start:
+                match = index
+                break
+            if not spans[index].optional:
+                break  # a required block cannot be skipped
+        if match is None or len(block["registers"]) != spans[match].count:
+            return None, "bad_range"
+        cursor = match + 1
+    if any(not span.optional for span in spans[cursor:]):
+        return None, "bad_range"
+    if not all(_is_word(v) for b in blocks for v in b["registers"]):
+        return None, "bad_registers"
+    return [
+        {"startRegister": b["startRegister"], "registers": list(b["registers"])} for b in blocks
+    ], None
+
+
 def onboarding_body(kind: str, settings: dict) -> tuple[dict | None, str | None]:
     """The brand body of an onboarding snapshot, or the reason it is refused.
 
@@ -409,9 +496,9 @@ def onboarding_body(kind: str, settings: dict) -> tuple[dict | None, str | None]
         return body, None
     if kind == "smg":
         number = settings.get("protocolNumber")
-        if type(number) is not int or number not in SMG_SYNC_BLOCKS:
+        if type(number) is not int or number not in SMG_SYNC_SPANS:
             return None, "bad_body"
-        blocks, error = _checked_blocks(settings.get("blocks"), SMG_SYNC_BLOCKS[number])
+        blocks, error = _checked_smg_blocks(settings.get("blocks"), SMG_SYNC_SPANS[number])
         if error:
             return None, error
         return {"protocolNumber": number, "blocks": blocks}, None
