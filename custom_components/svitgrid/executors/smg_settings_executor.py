@@ -583,4 +583,16 @@ class EybondSmgSettingsExecutor(BaseExecutor):
             nominal_pack_voltage=self._nominal_pack_voltage,
             timeout_s=self._timeout_s,
         )
-        return await inner.dispatch(command_name, payload)
+        result = await inner.dispatch(command_name, payload)
+        if command_name == "read_inverter_settings":
+            # In cloud mode no settings mirror reaches the app, so the raw sync
+            # spans travel with the read: the app's menu shows every program of
+            # the inverter's own screen, most of them outside the catalogue. A
+            # span read that fails leaves them out; the settings still answer.
+            try:
+                body = await read_smg_sync_body(session, timeout_s=self._timeout_s)
+            except Exception:  # noqa: BLE001 — the catalogue answer stands on its own
+                body = None
+            if body is not None:
+                result["blocks"] = body["blocks"]
+        return result
