@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.31.0 — 2026-11-16
 
 ### Added
 - **The add-on reads the rest of the Anenji settings menu.** Over an EyBond
@@ -8,7 +8,7 @@
   and 6 as well as 4 and 11, plus the optional blocks that hold the rest of
   each menu. A block the inverter refuses is left out, and the app shows «—»
   for its settings instead of a 0. Settings stay writable on protocol 11
-  only (svitgrid D-2013).
+  only.
 - **An edge island accepts the new hub firmware's Anenji settings.** A hub
   that reads the whole menu posts the optional blocks after the required
   ones, and the add-on stores them. A body the cloud would refuse, such as
@@ -16,6 +16,12 @@
   too. The app's onboarding snapshot follows the same rule. **Update the
   add-on before the hub firmware and the app**: an older add-on refuses an
   onboarding snapshot that carries the optional blocks.
+- **The settings read sends the whole menu to the app in cloud mode.**
+  Without a settings mirror in the cloud, the app sees an Anenji's settings
+  only through the read command, so its result now carries the raw blocks
+  as well. The app decodes every program of the inverter's own screen from
+  them. A block that fails to read is left out; the named settings still
+  answer.
 
 ## 0.30.0 — 2026-11-14
 
