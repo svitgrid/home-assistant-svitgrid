@@ -11,9 +11,8 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Any
-
-from datetime import datetime, timezone
 
 from .file_log import hour_label, hour_path
 
@@ -75,7 +74,7 @@ def _split_line(line: str) -> list[str]:
 
 def _stamp(ts: int) -> str:
     """The line-prefix form of a timestamp: 2026-11-12T14:05:00.000Z."""
-    return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    return datetime.fromtimestamp(ts, tz=UTC).strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
 
 def _in_window(line: str, start: str, end: str) -> bool:
@@ -122,7 +121,6 @@ def read_parts(
     if current:
         parts.append("".join(current))
     return parts
-
 
 
 async def upload_window(
@@ -191,7 +189,10 @@ async def upload_window(
         _LOGGER.warning("upload_logs %s: the summary was not accepted", command_id)
     _LOGGER.info(
         "upload_logs %s: %d hours sent, %d missing%s",
-        command_id, len(hours), len(missing), f", error {error}" if error else "",
+        command_id,
+        len(hours),
+        len(missing),
+        f", error {error}" if error else "",
     )
     return summary
 
@@ -209,6 +210,11 @@ async def run_upload(
     """Upload one window while holding the install's upload lock."""
     async with _UPLOAD_LOCK:
         return await upload_window(
-            api_client=api_client, api_key=api_key, command_id=command_id,
-            from_ts=from_ts, to_ts=to_ts, root=root, flush=flush,
+            api_client=api_client,
+            api_key=api_key,
+            command_id=command_id,
+            from_ts=from_ts,
+            to_ts=to_ts,
+            root=root,
+            flush=flush,
         )

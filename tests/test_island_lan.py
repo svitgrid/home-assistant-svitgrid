@@ -3504,9 +3504,7 @@ async def test_send_view_starts_and_returns_202(hass: HomeAssistant):
     entry = _entry(hass)
     state = _send_state(hass, entry, queue="the-queue")
     hass.data[DOMAIN]["file_log"] = type("F", (), {"flush": staticmethod(lambda: None)})()
-    with patch(
-        "custom_components.svitgrid.island_lan.run_island_send", new=AsyncMock()
-    ) as run:
+    with patch("custom_components.svitgrid.island_lan.run_island_send", new=AsyncMock()) as run:
         resp = await _send(hass, {"boxId": "edge-aabbcc"})
         await hass.async_block_till_done()
     assert resp.status == 202

@@ -33,7 +33,6 @@ from .bms_temperature import household_bms_states
 from .bootstrap import run_first_time
 from .cloud_endpoint_handler import probe_endpoint_auth
 from .command_poller import run_loop as run_command_loop
-from .file_log import async_ensure_file_log
 from .const import (
     COMMAND_POLL_INTERVAL_S,
     CONF_LOCAL_ONLY,
@@ -55,9 +54,9 @@ from .entry_reload import consume_listener_reload_skip
 from .executors import create_executor
 from .executors.edge_box import EdgeBoxExecutor
 from .executors.smg_settings_executor import EybondSmgSettingsExecutor
-from .island_send import IslandSendRelay
 from .executors.yaml_dispatcher import YamlDispatcher
 from .eybond_at.setup import is_eybond_harvest, start_eybond_hub
+from .file_log import async_ensure_file_log
 from .harvest.brand_commands import edge_inverter
 from .harvest.charge_cap_guard import ChargeCapGuard, run_charge_cap_guard_loop
 from .harvest.engine import run_direct_harvest_loop
@@ -70,6 +69,8 @@ from .http_views import ensure_hello_view, register_views
 from .inverter_entry import harvest_config_from_api
 from .island_event_store import IslandEventStore
 from .island_lan import _cloud_copy_of, is_true_island
+from .island_report import run_island_report_loop
+from .island_send import IslandSendRelay
 from .keystore import (
     ENTRY_ISLAND_DEVICE_IDS,
     ENTRY_TRUSTED_KEY_IDS,
@@ -1034,6 +1035,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # The model of each inverter the integration harvests itself, which the
     # island scheduler holds a battery charge current cap's target to.
     harvest_models: dict[str, str | None] = {}
+    island_report_task = None
 
     if loops_active:
         spec_store = RegisterSpecStore(hass)
@@ -1272,6 +1274,27 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 name="svitgrid_event_scheduler",
             )
             _LOGGER.info("Island event scheduler started (pure island mode)")
+
+        # The island's one call to the cloud (svitgrid D-1719): an hourly
+        # status per inverter, so the landing map and the fleet dashboard
+        # count a station whose readings never leave this install. Only a
+        # cloud-paired true island reports: a local-only entry has no key,
+        # and with the cloud copy on the readings already count it.
+        if true_island and not local_only and api_key and store is not None:
+            island_inverters = [
+                (inv["inverter_id"], "ha")
+                for inv in inverters
+                if inv["inverter_id"] not in edge_inverter_ids
+            ] + [(i, "edge") for box in edge_boxes for i in box.inverter_ids]
+            island_report_task = hass.async_create_background_task(
+                run_island_report_loop(
+                    store=store,
+                    api_client=api_client,
+                    api_key=api_key,
+                    inverters=lambda: list(island_inverters),
+                ),
+                name="svitgrid_island_report",
+            )
     elif lifecycle is not None:
         _LOGGER.warning(
             "Svitgrid device is %s (reason=%s); readings/command/wake loops not "
@@ -1379,6 +1402,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "scheduler_task": scheduler_task,
         "settings_sync_task": settings_sync_task,
         "charge_cap_task": charge_cap_task,
+        "island_report_task": island_report_task,
         "executors_by_inverter": executors_by_inverter,
         "activity": activity,
         "entry_data": dict(data),
@@ -1434,6 +1458,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "scheduler_task",
         "settings_sync_task",
         "charge_cap_task",
+        "island_report_task",
     ):
         task = state.get(key)
         if task and not task.done():

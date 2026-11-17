@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+from pathlib import Path
 
 from custom_components.svitgrid.file_log import (
     HourlyFileHandler,
@@ -13,7 +14,7 @@ from custom_components.svitgrid.file_log import (
     redact,
 )
 
-NOW = datetime(2026, 11, 12, 14, 5, 0, tzinfo=timezone.utc).timestamp()
+NOW = datetime(2026, 11, 12, 14, 5, 0, tzinfo=UTC).timestamp()
 
 
 def _logger(name: str, handler: logging.Handler) -> logging.Logger:
@@ -34,7 +35,7 @@ def test_writes_each_record_to_its_utc_hour_file(tmp_path):
     try:
         log.info("poll ok")
         h.flush()
-        text = open(hour_path(str(tmp_path), "2026-11-12T14")).read()
+        text = Path(hour_path(str(tmp_path), "2026-11-12T14")).read_text()
         assert text == "2026-11-12T14:05:00.000Z I svitgrid.command_poller poll ok\n"
     finally:
         log.removeHandler(h)
@@ -48,7 +49,7 @@ def test_warning_and_error_letters(tmp_path):
         log.warning("w")
         log.error("e")
         h.flush()
-        lines = open(hour_path(str(tmp_path), "2026-11-12T14")).read().splitlines()
+        lines = Path(hour_path(str(tmp_path), "2026-11-12T14")).read_text().splitlines()
         assert [ln.split(" ")[1] for ln in lines] == ["W", "E"]
     finally:
         log.removeHandler(h)
@@ -75,7 +76,7 @@ def test_install_attaches_to_our_logger_only(tmp_path):
         logging.getLogger("custom_components.svitgrid.a").info("ours")
         logging.getLogger("homeassistant.components.other").warning("theirs")
         h.flush()
-        text = open(hour_path(str(tmp_path), "2026-11-12T14")).read()
+        text = Path(hour_path(str(tmp_path), "2026-11-12T14")).read_text()
         assert "ours" in text and "theirs" not in text
     finally:
         detach(h)
@@ -86,10 +87,10 @@ def test_prune_deletes_hours_older_than_7_days(tmp_path):
     for label in ("2026-11-04T13", "2026-11-05T15"):
         p = hour_path(root, label)
         os.makedirs(os.path.dirname(p), exist_ok=True)
-        open(p, "w").write("x\n")
+        Path(p).write_text("x\n")
     h = HourlyFileHandler(root, now=lambda: NOW)
     try:
-        now = datetime(2026, 11, 12, 14, 0, 0, tzinfo=timezone.utc).timestamp()
+        now = datetime(2026, 11, 12, 14, 0, 0, tzinfo=UTC).timestamp()
         assert h.prune(now) == 1
         assert not os.path.exists(hour_path(root, "2026-11-04T13"))
         assert os.path.exists(hour_path(root, "2026-11-05T15"))
@@ -127,7 +128,7 @@ def test_written_lines_are_redacted(tmp_path):
     try:
         log.info("headers x-api-key: sekret42")
         h.flush()
-        assert "sekret42" not in open(hour_path(str(tmp_path), "2026-11-12T14")).read()
+        assert "sekret42" not in Path(hour_path(str(tmp_path), "2026-11-12T14")).read_text()
     finally:
         log.removeHandler(h)
         h.close()
@@ -159,7 +160,7 @@ def test_an_unencodable_character_does_not_stop_the_writer(tmp_path):
         log.info("bad %s", b"\xff".decode("utf-8", "surrogateescape"))
         log.info("next line")
         h.flush()
-        text = open(hour_path(str(tmp_path), "2026-11-12T14"), encoding="utf-8").read()
+        text = Path(hour_path(str(tmp_path), "2026-11-12T14")).read_text(encoding="utf-8")
         assert "next line" in text
     finally:
         log.removeHandler(h)
