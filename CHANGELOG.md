@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.32.0 — 2026-11-17
 
 ### Changed
 - **A Zigbee network reset carries the owner's signature to the hub.** The
