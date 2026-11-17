@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from custom_components.svitgrid.file_log import hour_path
 from custom_components.svitgrid.log_upload import (
@@ -16,7 +16,7 @@ from custom_components.svitgrid.log_upload import (
 
 
 def _ts(*args: int) -> int:
-    return int(datetime(*args, tzinfo=timezone.utc).timestamp())
+    return int(datetime(*args, tzinfo=UTC).timestamp())
 
 
 def test_constants_match_the_edge():
@@ -143,9 +143,13 @@ async def test_run_upload_flushes_before_reading(tmp_path):
         _write(root, "2026-11-12T14", "late line\n")
 
     await run_upload(
-        api_client=client, api_key="k1", command_id="c1",
-        from_ts=_ts(2026, 11, 12, 14), to_ts=_ts(2026, 11, 12, 15),
-        root=root, flush=flush,
+        api_client=client,
+        api_key="k1",
+        command_id="c1",
+        from_ts=_ts(2026, 11, 12, 14),
+        to_ts=_ts(2026, 11, 12, 15),
+        root=root,
+        flush=flush,
     )
     assert [p["text"] for p in client.parts] == ["late line\n"]
 
@@ -158,9 +162,13 @@ async def test_run_upload_stops_on_403_and_reports(tmp_path):
     _write(root, "2026-11-12T15", "z\n")
     client = _FakeClient(refuse_at=0)
     summary = await run_upload(
-        api_client=client, api_key="k1", command_id="c1",
-        from_ts=_ts(2026, 11, 12, 14), to_ts=_ts(2026, 11, 12, 16),
-        root=root, flush=lambda: None,
+        api_client=client,
+        api_key="k1",
+        command_id="c1",
+        from_ts=_ts(2026, 11, 12, 14),
+        to_ts=_ts(2026, 11, 12, 16),
+        root=root,
+        flush=lambda: None,
     )
     assert client.parts == []
     assert len(client.summaries) == 1
@@ -177,9 +185,13 @@ async def test_run_upload_holds_the_lock_while_running(tmp_path):
             seen.append(_UPLOAD_LOCK.locked())
 
     await run_upload(
-        api_client=_Probe(), api_key="k1", command_id="c1",
-        from_ts=_ts(2026, 11, 12, 14), to_ts=_ts(2026, 11, 12, 15),
-        root=str(tmp_path), flush=lambda: None,
+        api_client=_Probe(),
+        api_key="k1",
+        command_id="c1",
+        from_ts=_ts(2026, 11, 12, 14),
+        to_ts=_ts(2026, 11, 12, 15),
+        root=str(tmp_path),
+        flush=lambda: None,
     )
     assert seen == [True]
     assert not _UPLOAD_LOCK.locked()
@@ -199,15 +211,16 @@ async def test_run_upload_sends_only_lines_inside_the_window(tmp_path):
     )
     client = _FakeClient()
     summary = await run_upload(
-        api_client=client, api_key="k1", command_id="c1",
-        from_ts=_ts(2026, 11, 12, 14, 10), to_ts=_ts(2026, 11, 12, 14, 20),
-        root=root, flush=lambda: None,
+        api_client=client,
+        api_key="k1",
+        command_id="c1",
+        from_ts=_ts(2026, 11, 12, 14, 10),
+        to_ts=_ts(2026, 11, 12, 14, 20),
+        root=root,
+        flush=lambda: None,
     )
     text = "".join(p["text"] for p in client.parts)
-    assert text == (
-        "2026-11-12T14:10:00.000Z I a first-in\n"
-        "2026-11-12T14:19:59.999Z I a last-in\n"
-    )
+    assert text == ("2026-11-12T14:10:00.000Z I a first-in\n2026-11-12T14:19:59.999Z I a last-in\n")
     assert summary["hours"] == [{"hour": "2026-11-12T14", "bytes": len(text.encode()), "parts": 1}]
 
 
@@ -218,9 +231,13 @@ async def test_run_upload_reports_an_hour_with_no_line_in_the_window_as_missing(
     _write(root, "2026-11-12T14", "2026-11-12T14:05:00.000Z I a before\n")
     client = _FakeClient()
     summary = await run_upload(
-        api_client=client, api_key="k1", command_id="c1",
-        from_ts=_ts(2026, 11, 12, 14, 10), to_ts=_ts(2026, 11, 12, 14, 20),
-        root=root, flush=lambda: None,
+        api_client=client,
+        api_key="k1",
+        command_id="c1",
+        from_ts=_ts(2026, 11, 12, 14, 10),
+        to_ts=_ts(2026, 11, 12, 14, 20),
+        root=root,
+        flush=lambda: None,
     )
     assert client.parts == []
     assert summary["missing"] == ["2026-11-12T14"]
@@ -240,9 +257,13 @@ async def test_upload_window_runs_without_taking_the_lock(tmp_path):
     async with UPLOAD_LOCK:
         summary = await asyncio.wait_for(
             upload_window(
-                api_client=client, api_key="k1", command_id="c1",
-                from_ts=_ts(2026, 11, 12, 14), to_ts=_ts(2026, 11, 12, 15),
-                root=str(tmp_path), flush=lambda: None,
+                api_client=client,
+                api_key="k1",
+                command_id="c1",
+                from_ts=_ts(2026, 11, 12, 14),
+                to_ts=_ts(2026, 11, 12, 15),
+                root=str(tmp_path),
+                flush=lambda: None,
             ),
             timeout=2,
         )

@@ -35,17 +35,16 @@ from .const import (
     MAX_INVERTERS,
     POLL_NOW_COMMAND,
     READINGS_DB_SUBDIR,
-    UPLOAD_LOGS_COMMAND,
     REVOKE_TRUSTED_KEY_COMMAND,
     SET_CLOUD_ENDPOINT_COMMAND,
     SET_CLOUD_INGEST_COMMAND,
     SET_HARVEST_CONFIG_COMMAND,
     SET_READ_SOURCE_COMMAND,
     TRUSTED_KEY_RESYNC_MIN_INTERVAL_S,
+    UPLOAD_LOGS_COMMAND,
 )
-from .file_log import LOG_SUBDIR
-from .log_upload import _UPLOAD_LOCK, run_upload, window_error
 from .entry_reload import update_entry_skipping_listener_reload
+from .file_log import LOG_SUBDIR
 from .harvest.read_now import find_triggers
 from .harvest_config_apply import (
     apply_add_inverter,
@@ -55,6 +54,7 @@ from .harvest_config_apply import (
 )
 from .inverter_entry import harvest_config_from_api, inverter_entry_from_api
 from .keystore import KeystoreState, SvitgridKeystore
+from .log_upload import _UPLOAD_LOCK, run_upload, window_error
 from .mqtt_control import apply_cadence
 from .signing import sign_payload
 

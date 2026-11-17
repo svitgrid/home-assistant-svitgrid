@@ -74,7 +74,6 @@ def test_poll_now_is_an_internal_command():
 
 # --- upload_logs (collector-logs spec, Stage 1) ---------------------------
 
-import time  # noqa: E402
 from unittest.mock import patch  # noqa: E402
 
 
@@ -163,8 +162,14 @@ async def test_cloud_upload_logs_mid_send_is_busy(hass):
     queue.async_wait = wait
     task = asyncio.ensure_future(
         run_island_send(
-            api_client=api, api_key="k", root="/r", flush=lambda: None,
-            now_ts=int(time.time()), box_id="edge-1", queue=queue, relay=IslandSendRelay(),
+            api_client=api,
+            api_key="k",
+            root="/r",
+            flush=lambda: None,
+            now_ts=int(time.time()),
+            box_id="edge-1",
+            queue=queue,
+            relay=IslandSendRelay(),
         )
     )
     for _ in range(20):

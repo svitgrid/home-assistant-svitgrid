@@ -60,8 +60,13 @@ async def run_island_send(
                 slices = []
             for item in slices:
                 summary = await upload_window(
-                    api_client=api_client, api_key=api_key, command_id=item["commandId"],
-                    from_ts=item["from"], to_ts=item["to"], root=root, flush=flush,
+                    api_client=api_client,
+                    api_key=api_key,
+                    command_id=item["commandId"],
+                    from_ts=item["from"],
+                    to_ts=item["to"],
+                    root=root,
+                    flush=flush,
                 )
                 if summary.get("error"):
                     break
@@ -72,8 +77,13 @@ async def run_island_send(
             )
             for item in slices:
                 local = await queue.async_enqueue(
-                    box_id, "upload_logs", {"from": item["from"], "to": item["to"]},
-                    signing=None, inverter_id=None, source="island_logs", ttl_s=BOX_TTL_S,
+                    box_id,
+                    "upload_logs",
+                    {"from": item["from"], "to": item["to"]},
+                    signing=None,
+                    inverter_id=None,
+                    source="island_logs",
+                    ttl_s=BOX_TTL_S,
                 )
                 relay.remember(local, item["commandId"])
                 row = await queue.async_wait(local, BOX_WAIT_S)
@@ -85,7 +95,8 @@ async def run_island_send(
                 elif state not in _DONE_STATES:
                     _LOGGER.warning(
                         "island log send: box %s did not answer slice %s in time",
-                        box_id, item["commandId"],
+                        box_id,
+                        item["commandId"],
                     )
         except IslandLogsRefused as err:
             _LOGGER.warning("island log send refused: %s", err.error)

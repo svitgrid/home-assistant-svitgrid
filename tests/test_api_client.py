@@ -703,7 +703,11 @@ class TestIslandLogsStart:
         session, _ = _mock_session_with_response(200, {"slices": []})
         client = SvitgridApiClient(session, api_base="https://api.example")
         await client.island_logs_start(api_key="k", from_ts=1, to_ts=2, for_device_id="edge-x")
-        assert session.post.call_args.kwargs["json"] == {"from": 1, "to": 2, "forDeviceId": "edge-x"}
+        assert session.post.call_args.kwargs["json"] == {
+            "from": 1,
+            "to": 2,
+            "forDeviceId": "edge-x",
+        }
 
     async def test_island_logs_start_closed_raises_refused_with_error(self):
         session, _ = _mock_session_with_response(403, {"error": "closed"})

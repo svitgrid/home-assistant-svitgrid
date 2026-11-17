@@ -11,6 +11,7 @@ silently: logging it would feed the failure back into this handler.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import queue
@@ -18,7 +19,7 @@ import re
 import threading
 import time
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 LOGGER_NAME = "custom_components.svitgrid"
 LOG_SUBDIR = "logs"
@@ -47,7 +48,7 @@ def redact(msg: str) -> str:
 
 def hour_label(ts: float) -> str:
     """The UTC hour a timestamp falls in, as YYYY-MM-DDTHH."""
-    return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%dT%H")
+    return datetime.fromtimestamp(ts, tz=UTC).strftime("%Y-%m-%dT%H")
 
 
 def hour_path(root: str, label: str) -> str:
@@ -56,7 +57,7 @@ def hour_path(root: str, label: str) -> str:
 
 
 def _label_ts(label: str) -> float:
-    return datetime.strptime(label, "%Y-%m-%dT%H").replace(tzinfo=timezone.utc).timestamp()
+    return datetime.strptime(label, "%Y-%m-%dT%H").replace(tzinfo=UTC).timestamp()
 
 
 class HourlyFileHandler(logging.Handler):
@@ -66,7 +67,9 @@ class HourlyFileHandler(logging.Handler):
         super().__init__(level=logging.INFO)
         self._root = root
         self._now = now
-        self._queue: queue.Queue[tuple[str, str] | threading.Event | None] = queue.Queue(maxsize=QUEUE_MAX)
+        self._queue: queue.Queue[tuple[str, str] | threading.Event | None] = queue.Queue(
+            maxsize=QUEUE_MAX
+        )
         self._last_label: str | None = None
         self._thread = threading.Thread(target=self._run, name="svitgrid-file-log", daemon=True)
         self._thread.start()
@@ -74,8 +77,8 @@ class HourlyFileHandler(logging.Handler):
     def emit(self, record: logging.LogRecord) -> None:
         try:
             ts = self._now()
-            stamp = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3]
-            name = record.name[len(_PREFIX):] if record.name.startswith(_PREFIX) else record.name
+            stamp = datetime.fromtimestamp(ts, tz=UTC).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3]
+            name = record.name[len(_PREFIX) :] if record.name.startswith(_PREFIX) else record.name
             letter = _LEVEL_LETTER.get(record.levelno, "I")
             line = f"{stamp}Z {letter} {name} {redact(record.getMessage())}\n"
             self._queue.put_nowait((hour_label(ts), line))
@@ -96,10 +99,8 @@ class HourlyFileHandler(logging.Handler):
     def close(self) -> None:
         if self._thread.is_alive():
             self.flush()
-            try:
+            with contextlib.suppress(queue.Full):
                 self._queue.put(None, timeout=5)
-            except queue.Full:
-                pass
             self._thread.join(timeout=5)
         super().close()
 
@@ -143,6 +144,7 @@ class HourlyFileHandler(logging.Handler):
                     f.write(line)
             except Exception:  # noqa: BLE001 - drop the line, keep writing
                 pass
+
 
 def attach(root: str, now: Callable[[], float] = time.time) -> HourlyFileHandler:
     """Attach a handler to the integration's logger and prune once."""

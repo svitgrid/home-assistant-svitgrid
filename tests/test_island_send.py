@@ -21,8 +21,14 @@ def _slices(prefix, start, n=1):
 
 def _run(api, queue, relay, box_id=None, upload=None):
     return run_island_send(
-        api_client=api, api_key="k", root="/r", flush=lambda: None, now_ts=NOW,
-        box_id=box_id, queue=queue, relay=relay,
+        api_client=api,
+        api_key="k",
+        root="/r",
+        flush=lambda: None,
+        now_ts=NOW,
+        box_id=box_id,
+        queue=queue,
+        relay=relay,
     )
 
 
