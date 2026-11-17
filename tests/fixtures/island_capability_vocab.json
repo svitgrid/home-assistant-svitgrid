@@ -11,6 +11,7 @@
     "tou_slots",
     "peak_shaving",
     "grid_charge_current",
+    "battery_charge_current",
     "energy_pattern",
     "smart_device",
     "priority_profile",
@@ -30,6 +31,7 @@
         "gen_force",
         "gen_port_mode",
         "energy_pattern",
+        "battery_charge_current",
         "tou_slots"
       ],
       "modes": ["battery_charge", "use_battery", "sell_to_grid", "gen_force"]

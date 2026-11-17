@@ -131,7 +131,11 @@ def _reason_for(exc: BaseException) -> str:
     text = str(exc)
     if text.startswith("prior_read_failed"):
         return "prev_read_failed"
-    if text.startswith(("verify_failed", "verify_read_failed")):
+    if text == "no_prior":
+        return "prev_read_failed"
+    if text == "bad_payload":
+        return "bad_payload"
+    if text.startswith(("verify_failed", "verify_read_failed", "verify_mismatch")):
         return "readback_mismatch"
     return "write_failed"
 
@@ -208,6 +212,8 @@ _PRIOR_CAPTURES = (
     ("prevGenForce", "previousGenForce", _bit),
     ("prevGenPortMode", "previousGenPortMode", _word(0, 2)),
     ("prevEnergyPattern", "previousEnergyPattern", _word(0, 1)),
+    # Max A Charge: the host's held prior, 0-350 A, where 0 is legal.
+    ("prevBatteryChargeCurrentA", "previousBatteryChargeCurrentA", _word(0, 350)),
 )
 
 
@@ -340,6 +346,7 @@ async def _tick(
     inverter_for: object = None,
     settings_for: object = None,
     bms_states_for: object = None,
+    model_for: object = None,
 ) -> None:
     """Single scheduler tick.
 
@@ -360,6 +367,9 @@ async def _tick(
                    report (``BmsPackStore.async_states``). Read once per tick,
                    and only when an enabled event has a ``bms_temperature``
                    condition, whose value it supplies.
+    model_for    : callable(inverter_id: str) -> str | None, the model of an
+                   inverter the integration harvests itself, which a battery
+                   charge current cap holds its target to.
     """
     # 1. List events; finish any cancel the app asked for first
     all_events = await event_store.async_list_events()
@@ -410,6 +420,9 @@ async def _tick(
         # other one is evaluated with the same call as before.
         inverter = inverter_for(inverter_id) if inverter_for is not None else None
         brand = {"inverter": inverter} if inverter is not None else {}
+        model_id = model_for(inverter_id) if model_for is not None else None
+        if model_id is not None:
+            brand["model_id"] = model_id
         if inverter is not None and settings_for is not None and needs_settings(event):
             brand["settings"] = await settings_for(inverter_id)
         try:
@@ -570,6 +583,7 @@ async def run_event_scheduler_loop(
     inverter_for: object = None,
     settings_for: object = None,
     bms_states_for: object = None,
+    model_for: object = None,
 ) -> None:
     """Island-mode event scheduler loop.
 
@@ -593,6 +607,7 @@ async def run_event_scheduler_loop(
     inverter_for : callable(inverter_id: str) -> dict | None, see ``_tick``.
     settings_for : async callable(inverter_id: str) -> dict | None, see ``_tick``.
     bms_states_for : async callable() -> dict | None, see ``_tick``.
+    model_for    : callable(inverter_id: str) -> str | None, see ``_tick``.
 
     GATED: spawned ONLY when cloud_ingest_enabled=False.  With cloud-sync ON
     the cloud engine handles events; double-fire must not occur.
@@ -610,6 +625,7 @@ async def run_event_scheduler_loop(
                 inverter_for,
                 settings_for,
                 bms_states_for,
+                model_for,
             )
         except Exception:  # noqa: BLE001
             _LOGGER.exception(

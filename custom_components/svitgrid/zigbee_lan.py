@@ -458,7 +458,12 @@ class ZigbeeBoxCommandView(_ZigbeeView):
     "mesh_snapshot", payload?}` needs the island key. `zigbee_restart` and
     `zigbee_factory_reset` are owner-only: a signed request, `signedData`:
     `{action: "edge_zigbee_box_command", deviceId, command, nonce, ts}`;
-    sent with the island key alone they are 403 `owner_only`. A box this
+    sent with the island key alone they are 403 `owner_only`. A
+    `zigbee_factory_reset` may carry `boxCommand`, the phone's signature for
+    the box over `{command: "zigbee_factory_reset", deviceId, validUntil}`;
+    it is forwarded untouched, and one signed for any other command is 400
+    `box_signature_invalid`. Without it the reset is queued unsigned, as
+    older app builds send it, and a box that checks refuses it. A box this
     integration does not hold is 404 `unknown_box`. Answers `{success,
     commandId, status}`.
     """
@@ -472,6 +477,7 @@ class ZigbeeBoxCommandView(_ZigbeeView):
         if not boxes:
             return _no_edge_boxes()
         body = await _body(request)
+        signing = None
         if body is not None and "signedData" in body:
             signed, error = await signed_lan_request(request, ACTION_ZIGBEE_BOX_COMMAND)
             if error is not None:
@@ -480,6 +486,10 @@ class ZigbeeBoxCommandView(_ZigbeeView):
             if command not in OWNER_BOX_COMMANDS:
                 return _json_error(400, "bad_request", detail="unknown command")
             box_id = _device_id(signed)
+            if command == "zigbee_factory_reset" and "boxCommand" in signed:
+                signing = _mesh_reset_command(signed.get("boxCommand"))
+                if signing is None:
+                    return _json_error(400, "box_signature_invalid")
         else:
             gate = await self._gate(request)
             if isinstance(gate, web.Response):
@@ -501,9 +511,25 @@ class ZigbeeBoxCommandView(_ZigbeeView):
         if queue is None:
             return _json_error(503, "unavailable")
         command_id = await queue.async_enqueue(
-            box_id, command, payload, signing=None, inverter_id=None, source="zigbee"
+            box_id, command, payload, signing=signing, inverter_id=None, source="zigbee"
         )
         return web.json_response({"success": True, "commandId": command_id, "status": "pending"})
+
+
+def _mesh_reset_command(raw) -> dict | None:
+    """The `boxCommand` of a `zigbee_factory_reset`: the phone's signature
+    over `{command: "zigbee_factory_reset", deviceId, validUntil}`, or None.
+
+    The box (S3, monorepo D-1940) runs the reset only for an owner's
+    signature over a payload that names this command and its own hardware
+    id, so the integration forwards the envelope untouched. A signature over
+    any other command, a board wipe included, is never forwarded as one."""
+    box_command = _box_command(raw)
+    if box_command is None:
+        return None
+    if box_command["signedEventData"].get("command") != "zigbee_factory_reset":
+        return None
+    return box_command
 
 
 def _permit_join_command(raw) -> dict | None:

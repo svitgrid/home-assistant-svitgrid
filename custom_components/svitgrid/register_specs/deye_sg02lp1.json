@@ -253,6 +253,19 @@
       ]
     },
     {
+      "command": "set_battery_charge_current",
+      "fields": [
+        {
+          "payloadField": "batteryChargeCurrentA",
+          "address": 210,
+          "limits": {
+            "min": 0,
+            "max": 350
+          }
+        }
+      ]
+    },
+    {
       "command": "set_work_mode",
       "fields": [
         {

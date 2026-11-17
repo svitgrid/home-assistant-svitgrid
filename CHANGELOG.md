@@ -1,5 +1,90 @@
 # Changelog
 
+## 0.32.0 — 2026-11-17
+
+### Changed
+- **A Zigbee network reset carries the owner's signature to the hub.** The
+  hub firmware that enforces signed commands runs `zigbee_factory_reset`
+  only for the owner's signature over a payload naming the command and the
+  board. The app now sends that signature with the reset, and the add-on
+  forwards it to the box untouched. A signature made for any other command
+  is refused with `box_signature_invalid`. A reset from an older app still
+  goes out unsigned, and a hub that checks refuses it. **Update the add-on
+  before that hub firmware.**
+- The vendored list of commands the hub refuses unsigned now includes
+  `zigbee_factory_reset`, `set_p17_hold` and `restore_p17_hold`.
+
+## 0.31.0 — 2026-11-16
+
+### Added
+- **The add-on reads the rest of the Anenji settings menu.** Over an EyBond
+  collector it now reads the settings blocks of SMG II protocols 1, 2, 3, 5
+  and 6 as well as 4 and 11, plus the optional blocks that hold the rest of
+  each menu. A block the inverter refuses is left out, and the app shows «—»
+  for its settings instead of a 0. Settings stay writable on protocol 11
+  only.
+- **An edge island accepts the new hub firmware's Anenji settings.** A hub
+  that reads the whole menu posts the optional blocks after the required
+  ones, and the add-on stores them. A body the cloud would refuse, such as
+  one missing a required block or with a block out of order, is refused here
+  too. The app's onboarding snapshot follows the same rule. **Update the
+  add-on before the hub firmware and the app**: an older add-on refuses an
+  onboarding snapshot that carries the optional blocks.
+- **The settings read sends the whole menu to the app in cloud mode.**
+  Without a settings mirror in the cloud, the app sees an Anenji's settings
+  only through the read command, so its result now carries the raw blocks
+  as well. The app decodes every program of the inverter's own screen from
+  them. A block that fails to read is left out; the named settings still
+  answer.
+
+## 0.30.0 — 2026-11-14
+
+### Added
+- **An island station can send its log to support from the app.** Support
+  opens the station for 1 hour, then the owner taps «Надіслати логи в
+  підтримку». Home Assistant uploads its own last 7 days, and for an ED-1
+  that reports to it, the board's last 24 hours. The board's parts reach the
+  cloud through Home Assistant, which used to refuse them. Nothing leaves the
+  install outside an opening.
+- **The add-on reads the Deye battery mode register** (3-phase 111, 1-phase
+  213) with the settings sweep and sends it to the cloud, so a change made on
+  the inverter's screen reaches the app before the next 30-minute heartbeat.
+
+### Fixed
+- **A Deye time-of-use write keeps the Gen battery level.** A slot's SOC
+  register holds Batt in the low byte and Gen in the high byte. A Batt write
+  used to zero Gen; it now keeps the live Gen byte, and a write that
+  finds an invalid live slot word is refused with nothing written.
+
+## 0.29.0 — 2026-11-12
+
+### Added
+- **The integration keeps its own log, and Svitgrid support can fetch an hour
+  of it.** INFO, WARN and ERROR lines from the Svitgrid integration go to hourly
+  files under `<config>/svitgrid/logs/`, kept for 7 days. API keys, tokens and
+  JWTs are removed from every line. When support sends `upload_logs` for a time
+  window of up to 24 hours, the integration posts that window's files to the
+  cloud, the same way an ED-1 sends the log from its microSD card. Nothing
+  leaves the install until that command arrives.
+
+### Fixed
+- **On a true island, the app can switch an inverter's read source over the
+  LAN.** An island polls no cloud command, so `set_read_source` never reached
+  it, and a station reading its Solarman logger natively could not move to the
+  relay of HA's own Solarman sensors. The add-on now takes the switch at
+  `POST /api/svitgrid/island/read-source`, signed like the other island LAN
+  writes (svitgrid D-1848).
+
+## 0.28.4 — 2026-11-12
+
+### Fixed
+- **An edge box on an island gets a clear refusal when it tries to upload its
+  logs.** The box can now send its own hour logs from its SD card, but that
+  upload is an operator command that comes through the cloud, so a box on an
+  island never needs it. The add-on now answers the upload with 403
+  `{"error": "island"}`, and the box records the refusal in its own log
+  (svitgrid D-1844).
+
 ## 0.28.3 — 2026-11-12
 
 ### Fixed

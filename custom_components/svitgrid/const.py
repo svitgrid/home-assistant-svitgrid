@@ -255,6 +255,11 @@ SET_READ_SOURCE_COMMAND = "set_read_source"
 # gate and get dropped as "unsigned", which would leave pendingCommandCount
 # stuck > 0 and the poller re-fetching + re-skipping it every cycle.
 POLL_NOW_COMMAND = "poll_now"
+# Upload a window of the integration's own hourly log (file_log.py) to the
+# cloud, like the ED-1's microSD log. Internal (no admin signature), for
+# parity with the ED-1, which accepts it unsigned: only the server writes the
+# command queue, and the API treats upload_logs as admin-only.
+UPLOAD_LOGS_COMMAND = "upload_logs"
 
 INTERNAL_COMMANDS = frozenset(
     {
@@ -268,6 +273,7 @@ INTERNAL_COMMANDS = frozenset(
         ADD_INVERTER_COMMAND,
         SET_READ_SOURCE_COMMAND,
         POLL_NOW_COMMAND,
+        UPLOAD_LOGS_COMMAND,
     }
 )
 
@@ -302,6 +308,11 @@ DISPATCHABLE_COMMANDS = frozenset(
         "restore_gen_force",
         "restore_gen_port_mode",
         "restore_energy_pattern",
+        # The battery charge current cap (Max A Charge, register 108 or 210).
+        # WriteExecutor runs both with the held prior and revert deadline of
+        # harvest/charge_cap_guard.py; the restore's value may be omitted.
+        "set_battery_charge_current",
+        "restore_battery_charge_current",
         # SMG II settings screen (Anenji/EASUN over an EyBond collector). A
         # name missing here is rejected before any executor is consulted,
         # and that failure looks identical to a broken executor -- see

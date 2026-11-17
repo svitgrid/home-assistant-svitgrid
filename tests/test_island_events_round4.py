@@ -453,3 +453,300 @@ def test_a_prior_held_for_a_write_the_edited_config_dropped_is_still_restored():
         ("set_work_mode", {"workMode": 1}),
         ("restore_sell_power_cap", {"sellPowerCapW": 9000}),
     ]
+
+
+# ═══════════════════════ Battery charge current cap ═══════════════════════════
+
+_CAP = [{"type": "battery_charge_current", "currentA": 0}]
+_IN_MS = int(_IN.timestamp() * 1000)
+_REVERT_AT = _IN_MS + 6 * 3600_000
+_LV = "deye_sg04lp3"
+_MODELS = {"inv-1": _LV}.get
+
+
+def _charge(status="active", inverter_id="inv-1", mode="battery_charge", config=None):
+    return {
+        "id": "evt-charge",
+        "inverterId": inverter_id,
+        "enabled": True,
+        "mode": mode,
+        "schedule": {"startTime": "10:00", "endTime": "11:00", "recurrence": "daily"},
+        "config": config or {},
+        "executionState": {"status": status},
+    }
+
+
+def test_a_cap_activates_set_battery_charge_current_and_restores_its_prior():
+    decision = evaluate_event(
+        _custom(_CAP), _READING, {"status": "pending_condition"}, _IN, TZ, model_id=_LV
+    )
+    assert decision.action == "activate"
+    assert decision.commands == [
+        ("set_battery_charge_current", {"batteryChargeCurrentA": 0, "revertAtMs": _REVERT_AT})
+    ]
+
+    state = {"status": "active", "previousBatteryChargeCurrentA": 120}
+    commands, _ = restore_decision(_custom(_CAP), state, _OUT)
+    assert commands == [("restore_battery_charge_current", {"batteryChargeCurrentA": 120})]
+
+
+async def test_the_prior_from_the_ack_lands_on_the_cap():
+    inv = _Inverter(batteryChargeCurrentA=120)
+    store = _Store([_custom(_CAP)])
+    readings = _Readings({"batterySoc": 50})
+    await _tick(readings, store, _for(inv), TZ, _IN, model_for=_MODELS)
+    await _tick(readings, store, _for(inv), TZ, _IN + timedelta(seconds=15), model_for=_MODELS)
+    state = store.events["evt-1"]["executionState"]
+    assert state["status"] == "active"
+    assert state["previousBatteryChargeCurrentA"] == 120
+    assert inv.regs["batteryChargeCurrentA"] == 0
+
+
+def test_an_active_cap_stands_down_for_a_running_charge():
+    state = {"status": "active", "previousBatteryChargeCurrentA": 120}
+    decision = evaluate_event(_custom(_CAP), _READING, state, _IN, TZ, [_charge()], model_id=_LV)
+    assert decision.action == "deactivate"
+    assert decision.commands == [("restore_battery_charge_current", {"batteryChargeCurrentA": 120})]
+    assert decision.new_state["status"] == "idle"
+    assert decision.new_state["skipReason"] == "charge_intent_active"
+    assert "previousBatteryChargeCurrentA" not in decision.new_state
+
+
+@pytest.mark.parametrize("state", [{"status": "idle"}, {"status": "pending_condition"}])
+def test_a_cap_does_not_activate_while_a_charge_runs(state):
+    decision = evaluate_event(_custom(_CAP), _READING, state, _IN, TZ, [_charge()], model_id=_LV)
+    assert decision.commands == []
+    assert decision.action == "hold"
+    assert decision.new_state["skipReason"] == "charge_intent_active"
+    assert decision.new_state.get("status") != "active"
+
+
+async def test_the_cap_applies_again_once_the_charge_ends():
+    inv = _Inverter(batteryChargeCurrentA=120)
+    charge = _charge()
+    store = _Store([_custom(_CAP), charge])
+    readings = _Readings({"batterySoc": 50})
+    for s in (0, 15):
+        await _tick(readings, store, _for(inv), TZ, _IN + timedelta(seconds=s), model_for=_MODELS)
+    assert store.events["evt-1"]["executionState"].get("status") != "active"
+    assert inv.regs["batteryChargeCurrentA"] == 120
+
+    store.events["evt-charge"]["executionState"] = {"status": "idle"}
+    store.events["evt-charge"]["enabled"] = False
+    for s in (30, 45):
+        await _tick(readings, store, _for(inv), TZ, _IN + timedelta(seconds=s), model_for=_MODELS)
+    state = store.events["evt-1"]["executionState"]
+    assert state["status"] == "active"
+    assert state.get("skipReason") is None
+    assert inv.regs["batteryChargeCurrentA"] == 0
+
+
+@pytest.mark.parametrize(
+    ("other", "intent"),
+    [
+        (_charge(), True),
+        (_charge(mode="battery_maintenance_charge"), True),
+        # The island's legacy maintenance mode charges on its grid fallback.
+        (_charge(mode="battery_maintenance"), True),
+        (_charge(status="idle"), False),
+        (_charge(inverter_id="inv-2"), False),
+        (_charge(mode="sell_to_grid"), False),
+        (
+            _charge(mode="custom", config={"customActions": [{"type": "grid_charge_current"}]}),
+            True,
+        ),
+        # A plain TOU slot is not a charge intent: the cap blocks it by design.
+        (_charge(mode="custom", config={"customActions": [{"type": "tou_slots"}]}), False),
+    ],
+)
+def test_charge_intent_is_the_apis_rule(other, intent):
+    from custom_components.svitgrid.harvest.event_evaluator import _charge_intent_active
+
+    assert _charge_intent_active([other], "inv-1", "evt-1") is intent
+    # An event never yields to itself.
+    assert _charge_intent_active([{**other, "id": "evt-1"}], "inv-1", "evt-1") is False
+
+
+def test_a_cap_activation_carries_and_records_a_6_h_deadline():
+    decision = evaluate_event(
+        _custom(_CAP), _READING, {"status": "pending_condition"}, _IN, TZ, model_id="deye_sg04lp3"
+    )
+    assert decision.commands[0][1]["revertAtMs"] == _REVERT_AT
+    assert decision.new_state["customSnapshot"] == {"batteryChargeCurrentRevertAtMs": _REVERT_AT}
+
+
+@pytest.mark.parametrize(
+    ("model_id", "current_a", "target"),
+    [
+        # round(12000 W * 1.2 / 48 V) = 300 A, clamped to 250 A
+        ("deye_sg04lp3", 350, 250),
+        # round(8000 W * 1.2 / 48 V) = 200 A
+        ("deye_sg03lp1", 350, 200),
+        # round(6000 W * 1.2 / 48 V) = 150 A
+        ("deye_sg04lp1", 200, 150),
+        ("deye_sg04lp1", 100, 100),
+    ],
+)
+def test_a_cap_target_is_held_to_the_models_limit(model_id, current_a, target):
+    cap = [{"type": "battery_charge_current", "currentA": current_a}]
+    decision = evaluate_event(
+        _custom(cap), _READING, {"status": "pending_condition"}, _IN, TZ, model_id=model_id
+    )
+    assert decision.commands[0][1]["batteryChargeCurrentA"] == target
+
+
+@pytest.mark.parametrize(("bms", "target"), [(40, 40), (40.7, 40), (0, 100), (None, 100)])
+def test_a_cap_target_is_held_to_a_positive_bms_limit(bms, target):
+    cap = [{"type": "battery_charge_current", "currentA": 100}]
+    reading = {**_READING, "bmsChargeCurrentLimit": bms}
+    decision = evaluate_event(
+        _custom(cap), reading, {"status": "pending_condition"}, _IN, TZ, model_id="deye_sg04lp3"
+    )
+    assert decision.commands[0][1]["batteryChargeCurrentA"] == target
+
+
+def _active_cap(deadline=None):
+    state = {"status": "active", "previousBatteryChargeCurrentA": 120}
+    if deadline is not None:
+        state["customSnapshot"] = {"batteryChargeCurrentRevertAtMs": deadline}
+    return state
+
+
+@pytest.mark.parametrize(
+    ("deadline", "renews"),
+    [
+        (_IN_MS + 3 * 3600_000, False),
+        (_IN_MS + 2 * 3600_000, False),
+        (_IN_MS + 2 * 3600_000 - 1, True),
+        (_IN_MS - 1, True),
+        (None, True),
+    ],
+)
+def test_an_active_cap_renews_its_deadline_below_2_h(deadline, renews):
+    decision = evaluate_event(
+        _custom(_CAP), _READING, _active_cap(deadline), _IN, TZ, model_id="deye_sg04lp3"
+    )
+    if not renews:
+        assert decision.commands == []
+        assert decision.action == "hold"
+        return
+    assert decision.action == "update"
+    assert decision.commands == [
+        ("set_battery_charge_current", {"batteryChargeCurrentA": 0, "revertAtMs": _REVERT_AT})
+    ]
+    assert decision.new_state["customSnapshot"]["batteryChargeCurrentRevertAtMs"] == _REVERT_AT
+    assert decision.new_state["status"] == "active"
+    assert decision.new_state["previousBatteryChargeCurrentA"] == 120
+
+
+def test_a_cap_never_renews_while_a_charge_runs():
+    decision = evaluate_event(
+        _custom(_CAP),
+        _READING,
+        _active_cap(_IN_MS - 1),
+        _IN,
+        TZ,
+        [_charge()],
+        model_id="deye_sg04lp3",
+    )
+    assert decision.action == "deactivate"
+    assert [c[0] for c in decision.commands] == ["restore_battery_charge_current"]
+    assert "customSnapshot" not in decision.new_state
+
+
+def test_a_cap_with_a_recorded_deadline_still_restores_its_prior():
+    commands, new_state = restore_decision(_custom(_CAP), _active_cap(_REVERT_AT), _OUT)
+    assert commands == [("restore_battery_charge_current", {"batteryChargeCurrentA": 120})]
+    assert "customSnapshot" not in new_state
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        # The set failed: the ACK carried no prior, so none is stored.
+        {"status": "active"},
+        # The activation failed partway: only landed writes are put back.
+        {"status": "pending_condition"},
+    ],
+)
+def test_a_cap_with_no_stored_prior_still_sends_a_bare_restore(state):
+    """The cloud always sends restore_battery_charge_current {}: the host's
+    guard then writes the prior it holds. The island must do the same, or a
+    cap whose set failed after the guard recorded the prior is never undone."""
+    commands, new_state = restore_decision(_custom(_CAP), state, _OUT)
+    assert commands == [("restore_battery_charge_current", {})]
+    assert "lastCommandError" not in new_state
+
+
+def test_a_cap_beside_a_threshold_action_restores_both():
+    """A threshold rule takes the threshold restore path, which put back the
+    voltages and dropped the cap's restore."""
+    prior = {"backToGridVoltage": 48.0, "backToBatteryVoltage": 51.0}
+    event = _custom(
+        [
+            {"type": "pi30_thresholds", "backToGridVoltage": 46, "backToBatteryVoltage": 54},
+            *_CAP,
+        ]
+    )
+    held = {
+        "status": "active",
+        "customSnapshot": {"previousPi30Thresholds": prior},
+        "previousBatteryChargeCurrentA": 120,
+    }
+    commands, _ = restore_decision(event, held, _OUT)
+    assert commands == [
+        ("restore_pi30_thresholds", prior),
+        ("restore_battery_charge_current", {"batteryChargeCurrentA": 120}),
+    ]
+    bare = {"status": "active", "customSnapshot": {"previousPi30Thresholds": prior}}
+    commands, _ = restore_decision(event, bare, _OUT)
+    assert commands == [
+        ("restore_pi30_thresholds", prior),
+        ("restore_battery_charge_current", {}),
+    ]
+
+
+async def test_the_scheduler_holds_a_cap_to_the_harvested_models_limit():
+    inv = _Inverter(batteryChargeCurrentA=120)
+    cap = [{"type": "battery_charge_current", "currentA": 200}]
+    store = _Store([_custom(cap)])
+    readings = _Readings({"batterySoc": 50})
+    models = {"inv-1": "deye_sg04lp1"}
+    for s in (0, 15):
+        await _tick(
+            readings, store, _for(inv), TZ, _IN + timedelta(seconds=s), model_for=models.get
+        )
+    assert inv.regs["batteryChargeCurrentA"] == 150
+
+
+@pytest.mark.parametrize("model_id", [None, "not_a_model", "deye_sg01hp3"])
+def test_a_cap_on_a_model_outside_the_19_sends_no_set(model_id):
+    decision = evaluate_event(
+        _custom(_CAP), _READING, {"status": "pending_condition"}, _IN, TZ, model_id=model_id
+    )
+    assert decision.commands == []
+    assert decision.action == "skip"
+    assert decision.skip_reason == "unsupported_model"
+    assert decision.new_state["skipReason"] == "unsupported_model"
+    assert decision.new_state["lastCommandError"]["reason"] == "unsupported_model"
+    assert decision.new_state.get("status") != "active"
+
+
+def test_an_active_cap_on_a_model_outside_the_19_restores():
+    state = {"status": "active", "previousBatteryChargeCurrentA": 120}
+    decision = evaluate_event(_custom(_CAP), _READING, state, _IN, TZ, model_id=None)
+    assert decision.action == "deactivate"
+    assert decision.commands == [("restore_battery_charge_current", {"batteryChargeCurrentA": 120})]
+    assert decision.new_state["status"] == "idle"
+    assert decision.new_state["skipReason"] == "unsupported_model"
+
+
+async def test_the_scheduler_sends_no_set_for_an_inverter_with_no_model():
+    inv = _Inverter(batteryChargeCurrentA=120)
+    store = _Store([_custom(_CAP)])
+    readings = _Readings({"batterySoc": 50})
+    for s in (0, 15, 30):
+        await _tick(readings, store, _for(inv), TZ, _IN + timedelta(seconds=s))
+    assert inv.calls == []
+    assert inv.regs["batteryChargeCurrentA"] == 120
+    assert store.events["evt-1"]["executionState"]["skipReason"] == "unsupported_model"

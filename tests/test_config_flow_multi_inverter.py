@@ -20,6 +20,7 @@ from homeassistant.core import HomeAssistant
 
 from custom_components.svitgrid.const import DOMAIN
 from tests.cloud_approval import approve_cloud_claims
+from tests.flow_sleep import patch_flow_sleep
 
 
 async def _run_pairing(hass: HomeAssistant, finalize_payload: dict) -> dict:
@@ -39,10 +40,7 @@ async def _run_pairing(hass: HomeAssistant, finalize_payload: dict) -> dict:
             "custom_components.svitgrid.config_flow.generate_keypair",
             return_value=(fake_priv, "04" + "a" * 128),
         ),
-        patch(
-            "custom_components.svitgrid.config_flow.asyncio.sleep",
-            side_effect=_instant_sleep,
-        ),
+        patch_flow_sleep(_instant_sleep),
         patch(
             # The entry's SHAPE is what is under test; skip the real setup so
             # no background task fires.

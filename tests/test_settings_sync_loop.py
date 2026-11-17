@@ -43,9 +43,11 @@ class _FakeApiClient:
         model_id: str,
         start_register: int,
         registers: list[int],
+        battery_mode_register: int | None = None,
     ) -> bool:
         self.calls.append(
             {
+                "battery_mode_register": battery_mode_register,
                 "api_key": api_key,
                 "inverter_id": inverter_id,
                 "model_id": model_id,
@@ -458,3 +460,60 @@ async def test_settings_sync_loop_spawned_and_cancelled_on_unload(hass, enable_c
         await async_unload_entry(hass, entry)
         await hass.async_block_till_done()
         assert task.cancelled() or task.done()
+
+
+def _stub_transport_with_mode(monkeypatch, mode_reg: int, mode_value: int | None, state: dict):
+    """Every config word answers its address; the mode register answers
+    ``state["mode"]`` (or is missing when None)."""
+
+    def fake_read_solarman(cfg, ranges):
+        out: dict = {}
+        for unit_id, start, count, _fc in ranges:
+            slot = out.setdefault(unit_id, {})
+            for addr in range(start, start + count):
+                if addr == mode_reg:
+                    if state["mode"] is not None:
+                        slot[addr] = state["mode"]
+                else:
+                    slot[addr] = addr
+        return out
+
+    state["mode"] = mode_value
+    monkeypatch.setattr(transport, "_read_solarman", fake_read_solarman)
+
+
+async def test_sends_mode_zero_and_reposts_when_only_the_mode_flips(monkeypatch):
+    state: dict = {}
+    _stub_transport_with_mode(monkeypatch, 111, 0, state)
+    hass = _FakeHass()
+    api = _FakeApiClient(ok=True)
+    cache: dict = {}
+    clock = [1000.0]
+
+    await settings_sync_tick(
+        hass, api, "key", [_harvest_inv()], cache, now_monotonic_fn=lambda: clock[0]
+    )
+    assert len(api.calls) == 1
+    assert api.calls[0]["battery_mode_register"] == 0
+    assert api.calls[0]["registers"] == list(range(115, 115 + 77))
+
+    # Same batch, mode flipped on the LCD: the gate must fire well inside the heartbeat.
+    clock[0] += 60
+    state["mode"] = 1
+    await settings_sync_tick(
+        hass, api, "key", [_harvest_inv()], cache, now_monotonic_fn=lambda: clock[0]
+    )
+    assert len(api.calls) == 2
+    assert api.calls[1]["battery_mode_register"] == 1
+
+
+async def test_missing_mode_register_still_posts_the_batch_without_the_key(monkeypatch):
+    state: dict = {}
+    _stub_transport_with_mode(monkeypatch, 111, None, state)
+    hass = _FakeHass()
+    api = _FakeApiClient(ok=True)
+
+    await settings_sync_tick(hass, api, "key", [_harvest_inv()], {}, now_monotonic_fn=lambda: 1.0)
+    assert len(api.calls) == 1
+    assert api.calls[0]["battery_mode_register"] is None
+    assert api.calls[0]["registers"] == list(range(115, 115 + 77))

@@ -664,3 +664,53 @@ async def test_dispatch_accepts_signing_keyword(index):
         await executor.dispatch("nope", {}, signing=_SIGNING)
     with pytest.raises(expected):
         await executor.dispatch("nope", {}, signing=None)
+
+
+# ---------------------------------------------------------------------------
+# set_battery_charge_current: Max A Charge, 108 on 3-phase LV, 210 on 1-phase
+# ---------------------------------------------------------------------------
+
+_BUNDLED_SPECS = Path(__file__).resolve().parents[2] / "custom_components/svitgrid/register_specs"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("model_id", "register"), [("deye_sg04lp3", 108), ("deye_sg03lp1", 210)])
+async def test_battery_charge_current_writes_the_models_register(model_id, register, tmp_path):
+    from custom_components.svitgrid.harvest.charge_cap_guard import ChargeCapGuard
+    from custom_components.svitgrid.harvest.write_executor import WriteExecutor
+
+    spec = RegisterSpec.from_dict(json.loads((_BUNDLED_SPECS / f"{model_id}.json").read_text()))
+    guard = ChargeCapGuard(str(tmp_path / "g.db"))
+    executor = WriteExecutor(
+        object(),
+        SimpleNamespace(spec=spec),
+        _CFG,
+        guard=guard,
+        inverter_id="inv-1",
+        sleep_fn=AsyncMock(),
+    )
+    registers = {register: 120}
+
+    async def read_word(hass, spec_arg, cfg, unit, addr, *a):
+        return registers.get(addr)
+
+    async def write_registers(hass, spec_arg, cfg, writes):
+        for _unit, addr, value in writes:
+            registers[addr] = value
+
+    mock_write = AsyncMock(side_effect=write_registers)
+    with (
+        patch(f"{MODULE}.read_word", read_word),
+        patch(f"{MODULE}.write_registers", mock_write),
+    ):
+        result = await executor.dispatch(
+            "set_battery_charge_current", {"inverterId": "inv-1", "batteryChargeCurrentA": 0}
+        )
+
+    mock_write.assert_awaited_once_with(executor._hass, spec, _CFG, [(1, register, 0)])
+    assert result == {
+        "register": register,
+        "prevBatteryChargeCurrentA": 120,
+        "targetBatteryChargeCurrentA": 0,
+        "verifyBatteryChargeCurrentA": 0,
+    }

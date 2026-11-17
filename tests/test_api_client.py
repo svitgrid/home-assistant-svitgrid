@@ -22,6 +22,7 @@ from custom_components.svitgrid.api_client import (
     DeviceEvicted,
     DeviceNotFound,
     DeviceStopped,
+    IslandLogsRefused,
     PublicKeyMismatch,
     RateLimited,
     ReadingRejected,
@@ -545,6 +546,21 @@ class TestSyncSettings:
         )
         assert ok is True
 
+    async def test_battery_mode_register_is_sent_only_when_given(self):
+        session, _ = _mock_session_with_response(200, {})
+        client = SvitgridApiClient(session, api_base="https://api.example")
+        common = dict(
+            api_key="k" * 64,
+            inverter_id="inv-1",
+            model_id="deye_sg04lp3",
+            start_register=115,
+            registers=[1, 2, 3],
+        )
+        await client.sync_settings(**common, battery_mode_register=0)
+        assert session.post.call_args.kwargs["json"]["batteryModeRegister"] == 0
+        await client.sync_settings(**common)
+        assert "batteryModeRegister" not in session.post.call_args.kwargs["json"]
+
     async def test_5xx_returns_false(self):
         session, _ = _mock_session_with_response(503, {"error": "overloaded"})
         client = SvitgridApiClient(session, api_base="https://api.example")
@@ -627,3 +643,78 @@ class TestBatchHaVersion:
 
         _integration_version.cache_clear()
         assert _integration_version() == _MANIFEST_VERSION
+
+
+@pytest.mark.asyncio
+class TestLogUpload:
+    async def test_part_posts_to_the_logs_route_with_the_key(self):
+        from custom_components.svitgrid.api_client import LogUploadRefused  # noqa: F401
+
+        session, _ = _mock_session_with_response(201, {"gcsPath": "x"})
+        client = SvitgridApiClient(session, api_base="https://api.example")
+        body = {"commandId": "c1", "hour": "2026-11-12T14", "part": 0, "text": "a\n"}
+        await client.post_log_part(api_key="k1", body=body)
+        url = session.post.call_args.args[0]
+        kwargs = session.post.call_args.kwargs
+        assert url == "https://api.example/api/v1/edge-devices/logs"
+        assert kwargs["headers"] == {"x-api-key": "k1"}
+        assert kwargs["json"] == body
+
+    async def test_403_raises_log_upload_refused(self):
+        from custom_components.svitgrid.api_client import LogUploadRefused
+
+        session, _ = _mock_session_with_response(403, {"error": "no upload_logs command"})
+        client = SvitgridApiClient(session, api_base="https://api.example")
+        with pytest.raises(LogUploadRefused):
+            await client.post_log_part(api_key="k1", body={})
+
+    async def test_500_raises_log_upload_failed(self):
+        from custom_components.svitgrid.api_client import LogUploadFailed
+
+        session, _ = _mock_session_with_response(500, {"error": "Upload failed"})
+        client = SvitgridApiClient(session, api_base="https://api.example")
+        with pytest.raises(LogUploadFailed):
+            await client.post_log_summary(api_key="k1", body={})
+
+    async def test_failed_carries_status_and_error_code(self):
+        from custom_components.svitgrid.api_client import LogUploadFailed
+
+        session, _ = _mock_session_with_response(409, {"error": "already_sent"})
+        client = SvitgridApiClient(session, api_base="https://api.example")
+        with pytest.raises(LogUploadFailed) as info:
+            await client.post_log_part(api_key="k1", body={})
+        assert (info.value.status, info.value.error) == (409, "already_sent")
+
+
+@pytest.mark.asyncio
+class TestIslandLogsStart:
+    async def test_island_logs_start_returns_slices(self):
+        sl = [{"commandId": "c1", "from": 1, "to": 2}]
+        session, _ = _mock_session_with_response(200, {"slices": sl})
+        client = SvitgridApiClient(session, api_base="https://api.example")
+        out = await client.island_logs_start(api_key="k", from_ts=1, to_ts=2)
+        assert out == sl
+        call_args = session.post.call_args
+        assert call_args.args[0].endswith("/api/v1/island-logs/start")
+        assert call_args.kwargs["headers"]["x-api-key"] == "k"
+        assert call_args.kwargs["json"] == {"from": 1, "to": 2}
+
+    async def test_island_logs_start_sends_for_device_id(self):
+        session, _ = _mock_session_with_response(200, {"slices": []})
+        client = SvitgridApiClient(session, api_base="https://api.example")
+        await client.island_logs_start(api_key="k", from_ts=1, to_ts=2, for_device_id="edge-x")
+        assert session.post.call_args.kwargs["json"] == {"from": 1, "to": 2, "forDeviceId": "edge-x"}
+
+    async def test_island_logs_start_closed_raises_refused_with_error(self):
+        session, _ = _mock_session_with_response(403, {"error": "closed"})
+        client = SvitgridApiClient(session, api_base="https://api.example")
+        with pytest.raises(IslandLogsRefused) as ei:
+            await client.island_logs_start(api_key="k", from_ts=1, to_ts=2)
+        assert ei.value.error == "closed"
+
+    async def test_island_logs_start_other_failure_is_plain_api_error(self):
+        session, _ = _mock_session_with_response(400, {"error": "bad_payload"})
+        client = SvitgridApiClient(session, api_base="https://api.example")
+        with pytest.raises(SvitgridApiError) as ei:
+            await client.island_logs_start(api_key="k", from_ts=1, to_ts=2)
+        assert not isinstance(ei.value, IslandLogsRefused)

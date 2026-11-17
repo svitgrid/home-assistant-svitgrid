@@ -33,6 +33,7 @@ from .bms_temperature import household_bms_states
 from .bootstrap import run_first_time
 from .cloud_endpoint_handler import probe_endpoint_auth
 from .command_poller import run_loop as run_command_loop
+from .file_log import async_ensure_file_log
 from .const import (
     COMMAND_POLL_INTERVAL_S,
     CONF_LOCAL_ONLY,
@@ -54,9 +55,11 @@ from .entry_reload import consume_listener_reload_skip
 from .executors import create_executor
 from .executors.edge_box import EdgeBoxExecutor
 from .executors.smg_settings_executor import EybondSmgSettingsExecutor
+from .island_send import IslandSendRelay
 from .executors.yaml_dispatcher import YamlDispatcher
 from .eybond_at.setup import is_eybond_harvest, start_eybond_hub
 from .harvest.brand_commands import edge_inverter
+from .harvest.charge_cap_guard import ChargeCapGuard, run_charge_cap_guard_loop
 from .harvest.engine import run_direct_harvest_loop
 from .harvest.event_scheduler_loop import run_event_scheduler_loop
 from .harvest.read_now import ReadNowTrigger
@@ -597,6 +600,8 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     # is for; the config flow registers it as well.
     ensure_hello_view(hass)
     await async_ensure_telegram_views(hass)
+    # The integration's own hourly log, for upload_logs (one per install).
+    await async_ensure_file_log(hass)
 
     conf = config.get(DOMAIN)
     if not conf:
@@ -1026,10 +1031,27 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     mqtt_wake_task = None
     scheduler_task = None
     settings_sync_task = None
+    charge_cap_task = None
+    # The model of each inverter the integration harvests itself, which the
+    # island scheduler holds a battery charge current cap's target to.
+    harvest_models: dict[str, str | None] = {}
     island_report_task = None
 
     if loops_active:
         spec_store = RegisterSpecStore(hass)
+        # The battery charge current cap's held priors and revert deadlines,
+        # for every direct-harvest inverter (harvest/charge_cap_guard.py).
+        from functools import partial
+
+        db_dir = hass.config.path(READINGS_DB_SUBDIR)
+        await hass.async_add_executor_job(partial(os.makedirs, db_dir, exist_ok=True))
+        charge_cap_guard = ChargeCapGuard(os.path.join(db_dir, "charge_cap_guard.db"), hass=hass)
+        try:
+            # An inverter removed from the entry has nothing left to write its
+            # prior back to (the phone's prior store forgets one the same way).
+            await charge_cap_guard.forget_except({inv["inverter_id"] for inv in inverters})
+        except Exception:  # never block setup — fail-open
+            _LOGGER.exception("battery charge current guard cleanup failed")
         for inv in inverters:
             inverter_id = inv["inverter_id"]
             harvest_config = inv.get("harvest_config")
@@ -1095,10 +1117,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 # the same spec_holder built above for the read loop, so writes
                 # share the live spec (and any later refresh). This replaces the
                 # YamlDispatcher relay path — an inverter has exactly one executor.
+                harvest_models[inverter_id] = harvest_config.get("model_id")
                 executors_by_inverter[inverter_id] = WriteExecutor(
                     hass=hass,
                     spec_holder=spec_holder,
                     cfg=harvest_config,
+                    guard=charge_cap_guard,
+                    inverter_id=inverter_id,
                 )
             else:
                 entity_map = dict(inv.get("entity_map") or {})
@@ -1207,6 +1232,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             name="svitgrid_settings_sync",
         )
 
+        # Battery charge current revert: writes a held prior back once its
+        # deadline passes. Cloud mode too: the deadline is there for the
+        # cloud's restore that never arrives. Only a direct-harvest inverter
+        # (WriteExecutor) can hold a cap, so without one there is no loop.
+        if any(isinstance(e, WriteExecutor) for e in executors_by_inverter.values()):
+            charge_cap_task = hass.async_create_background_task(
+                run_charge_cap_guard_loop(
+                    hass=hass,
+                    guard=charge_cap_guard,
+                    executor_for=executors_by_inverter.get,
+                ),
+                name="svitgrid_charge_cap_guard",
+            )
+
         # Island event scheduler — spawned ONLY in pure island mode (cloud-sync off).
         # With cloud_ingest_enabled=True the cloud engine handles calendar events;
         # running both would double-fire commands.
@@ -1230,6 +1269,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     # The adopted boxes' BMS reports, which a bms_temperature
                     # rule reads the household's battery temperature from.
                     bms_states_for=lambda: _bms_states(hass, entry.entry_id),
+                    model_for=harvest_models.get,
                 ),
                 name="svitgrid_event_scheduler",
             )
@@ -1361,6 +1401,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "mqtt_wake_task": mqtt_wake_task,
         "scheduler_task": scheduler_task,
         "settings_sync_task": settings_sync_task,
+        "charge_cap_task": charge_cap_task,
         "island_report_task": island_report_task,
         "executors_by_inverter": executors_by_inverter,
         "activity": activity,
@@ -1374,6 +1415,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "true_island": true_island,
         "settings_snapshots": settings_snapshots,
         "edge_queue": edge_queue,
+        "island_relay": IslandSendRelay(),
         "zigbee_devices": zigbee_devices,
         "bms_packs": bms_packs,
         "edge_entities": edge_entities,
@@ -1415,6 +1457,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "sender_task",
         "scheduler_task",
         "settings_sync_task",
+        "charge_cap_task",
         "island_report_task",
     ):
         task = state.get(key)

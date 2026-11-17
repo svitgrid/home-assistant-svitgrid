@@ -488,3 +488,62 @@ async def test_publishes_nothing_when_the_protocol_register_does_not_answer():
     write = await ex.dispatch("set_inverter_setting", {"setting": "buzzerMode", "value": 0})
     assert write["ok"] is False
     assert link.writes == []
+
+
+# ── The read carries the raw sync spans (D-2013) ──────────────────────────────
+#
+# On a Home Assistant host in cloud mode no settings mirror reaches the app:
+# SMG settings arrive only as this command's result. The app's menu shows
+# every program of the inverter's own screen, most of them outside the
+# catalogue, so the read also carries the raw sync spans for the app to decode.
+
+
+async def test_the_read_carries_the_raw_sync_spans():
+    session = FakeLink(_collector_registers())
+    ex = EybondSmgSettingsExecutor(
+        hub=FakeHub({"99432604107106": session}), inverter_serial="99432604107106"
+    )
+
+    result = await ex.dispatch("read_inverter_settings", {})
+
+    starts = [b["startRegister"] for b in result["blocks"]]
+    assert starts[:2] == [303, 313], "the required blocks come first"
+    assert result["settings"]["buzzerMode"] == 3, "the catalogue values are still answered"
+
+
+async def test_a_protocol_with_no_catalogue_still_carries_its_spans():
+    session = FakeLink({**_collector_registers(), 184: 1})
+    ex = EybondSmgSettingsExecutor(
+        hub=FakeHub({"99432604107106": session}), inverter_serial="99432604107106"
+    )
+
+    result = await ex.dispatch("read_inverter_settings", {})
+
+    assert result["protocolNumber"] == 1
+    assert result["settings"] == {}
+    assert [b["startRegister"] for b in result["blocks"]][:2] == [303, 313]
+
+
+async def test_a_failed_span_read_leaves_the_blocks_out_but_answers_the_settings():
+    class RequiredBlockFails(FakeLink):
+        """Answers the catalogue read, then goes quiet on the sync span's
+        required block 313, which the catalogue read also covers."""
+
+        seen_313 = 0
+
+        async def read_registers(self, address, count, timeout_s=5.0):
+            if address == 313:
+                self.seen_313 += 1
+                if self.seen_313 > 1:
+                    raise TimeoutError("collector went quiet")
+            return await super().read_registers(address, count, timeout_s=timeout_s)
+
+    session = RequiredBlockFails(_collector_registers())
+    ex = EybondSmgSettingsExecutor(
+        hub=FakeHub({"99432604107106": session}), inverter_serial="99432604107106"
+    )
+
+    result = await ex.dispatch("read_inverter_settings", {})
+
+    assert "blocks" not in result
+    assert result["settings"]["buzzerMode"] == 3

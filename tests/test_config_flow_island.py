@@ -44,6 +44,7 @@ from custom_components.svitgrid.pairing_client import PairingClaimed
 from custom_components.svitgrid.reading_store import ReadingStore
 from custom_components.svitgrid.signing import generate_keypair, serialize_private_key
 from tests.cloud_approval import approve_cloud_claims
+from tests.flow_sleep import patch_flow_sleep
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -268,7 +269,7 @@ async def test_island_full_flow_entry_has_cloud_ingest_enabled(
             "custom_components.svitgrid.config_flow.generate_keypair",
             return_value=(fake_priv, "04" + "a" * 128),
         ),
-        patch("custom_components.svitgrid.config_flow.asyncio.sleep", side_effect=_instant_sleep),
+        patch_flow_sleep(_instant_sleep),
         patch(
             "custom_components.svitgrid.config_flow.SvitgridKeystore",
             autospec=True,
@@ -331,7 +332,7 @@ async def test_island_full_flow_finalize_body_excludes_island_key(
             "custom_components.svitgrid.config_flow.generate_keypair",
             return_value=(fake_priv, "04" + "a" * 128),
         ),
-        patch("custom_components.svitgrid.config_flow.asyncio.sleep", side_effect=_instant_sleep),
+        patch_flow_sleep(_instant_sleep),
         patch(
             "custom_components.svitgrid.config_flow.SvitgridKeystore", autospec=True
         ) as mock_ks_cls,

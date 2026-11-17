@@ -34,7 +34,7 @@ from ..eybond_at.smg_settings import (
     unevaluatable_constraints_for,
     validate_smg_settings,
 )
-from ..settings_read_plan import SMG_SYNC_BLOCKS, blocks_body
+from ..settings_read_plan import SMG_SYNC_SPANS, blocks_body
 from .base import BaseExecutor
 
 _LOGGER = logging.getLogger(__name__)
@@ -467,10 +467,15 @@ async def read_smg_sync_body(link: RegisterLink, timeout_s: float = 5.0) -> dict
 
     The body the edge firmware posts to the cloud's ``sync-settings`` route
     (``smg_settings_sync.c``), read over ``link``. Register 184 is read first
-    and picks the blocks (``SMG_SYNC_BLOCKS``). Returns None for a protocol
-    number with no blocks, and for a block that comes back short: the app
-    refuses a partial body as a whole, so none is built. A transport failure
-    raises, as ``read_registers`` does.
+    and picks the blocks (``SMG_SYNC_SPANS``). Returns None for a protocol
+    number with no blocks, and for a required block that comes back short:
+    the app refuses a partial body as a whole, so none is built. A transport
+    failure on a required block raises, as ``read_registers`` does.
+
+    An optional block that fails (a timeout, a Modbus exception or a short
+    reply) is left out of the body, never zero-filled, and the read goes on:
+    an inverter that refuses every optional block still posts what it posted
+    before they existed.
 
     Not ``SmgSettingsExecutor.read_all``: that reads the catalogue's
     addresses and returns display values, while the app maps the raw blocks
@@ -478,17 +483,28 @@ async def read_smg_sync_body(link: RegisterLink, timeout_s: float = 5.0) -> dict
     """
     protocol_words = await link.read_registers(REG_PROTOCOL, 1, timeout_s=timeout_s)
     protocol_number = protocol_words[0] if protocol_words else None
-    blocks = SMG_SYNC_BLOCKS.get(protocol_number)
-    if blocks is None:
+    spans = SMG_SYNC_SPANS.get(protocol_number)
+    if spans is None:
         return None
+    arrived = []
     words: dict[int, int] = {}
-    for start, count in blocks:
-        read = await link.read_registers(start, count, timeout_s=timeout_s)
+    for start, count, optional in spans:
+        try:
+            read = await link.read_registers(start, count, timeout_s=timeout_s)
+        except (TransactionFailed, TimeoutError) as err:
+            if not optional:
+                raise
+            _LOGGER.debug("SMG optional block %d+%d not read: %s", start, count, err)
+            continue
         if len(read) != count:
-            return None
+            if not optional:
+                return None
+            _LOGGER.debug("SMG optional block %d+%d came back short", start, count)
+            continue
+        arrived.append((start, count))
         for i, word in enumerate(read):
             words[start + i] = word
-    return {"protocolNumber": protocol_number, "blocks": blocks_body(blocks, words)}
+    return {"protocolNumber": protocol_number, "blocks": blocks_body(arrived, words)}
 
 
 class NoCollectorConnected(Exception):
@@ -567,4 +583,16 @@ class EybondSmgSettingsExecutor(BaseExecutor):
             nominal_pack_voltage=self._nominal_pack_voltage,
             timeout_s=self._timeout_s,
         )
-        return await inner.dispatch(command_name, payload)
+        result = await inner.dispatch(command_name, payload)
+        if command_name == "read_inverter_settings":
+            # In cloud mode no settings mirror reaches the app, so the raw sync
+            # spans travel with the read: the app's menu shows every program of
+            # the inverter's own screen, most of them outside the catalogue. A
+            # span read that fails leaves them out; the settings still answer.
+            try:
+                body = await read_smg_sync_body(session, timeout_s=self._timeout_s)
+            except Exception:  # noqa: BLE001 — the catalogue answer stands on its own
+                body = None
+            if body is not None:
+                result["blocks"] = body["blocks"]
+        return result

@@ -18,12 +18,17 @@ upstream.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from typing import Any
 
 from ..executors.base import BaseExecutor
+from . import charge_cap_guard as _bcc
+from .charge_cap_guard import BatteryChargeCurrentError, valid_prior
 from .register_spec import FieldWrite, RegisterSpec, SlotSpec, WriteCommand
+from .slot_soc_word import split_slot_soc_word
 from .transport import read_word, read_words, write_registers
 from .write_compute import compute_register_writes, is_set, program_field
 
@@ -41,6 +46,9 @@ _RECIPE_ALIASES = {
     "restore_gen_force": "set_gen_force",
     "restore_gen_port_mode": "set_gen_port_mode",
     "restore_energy_pattern": "set_energy_pattern",
+    # The recipe's limit is 350, the same bound as a prior, so the restore
+    # needs no unclamped entry.
+    "restore_battery_charge_current": "set_battery_charge_current",
 }
 
 # Restores that write back a value the inverter itself reported, so the set
@@ -60,6 +68,10 @@ _REGISTER_MAX = 0xFFFF
 _COMPANIONS = {"set_solar_sell": ("workMode", "set_work_mode")}
 
 _LOGGER = logging.getLogger(__name__)
+
+# Seconds between a battery charge current write and its readback: the edge
+# board and the phone harvester wait the same.
+BCC_SETTLE_S = 2.0
 
 
 def _collect_prior_addresses(
@@ -132,6 +144,11 @@ def _prev_slot_fields(slot: SlotSpec, table: dict[int, int]) -> dict[str, Any]:
     reports 0, as in the firmware. ``end`` is the next slot's start unless the
     recipe has an end register (the firmware reports 0 there; the phone
     harvester reports the next start, as here).
+
+    ``soc`` is Batt and ``genSoc`` Gen, the two bytes of the slot SOC word, so
+    a restore built from this table composes the same word back. An invalid
+    word is reported raw with no ``genSoc``, so a restore built from it
+    refuses instead of writing it. The phone harvester reports the same shape.
     """
 
     def value(key: str, i: int) -> int:
@@ -144,16 +161,19 @@ def _prev_slot_fields(slot: SlotSpec, table: dict[int, int]) -> dict[str, Any]:
     for i in range(slot.count):
         has_end = program_field(slot, "end") is not None
         end = value("end", i) if has_end else value("start", (i + 1) % slot.count)
-        entries.append(
-            {
-                "start": value("start", i),
-                "end": end,
-                "power": value("power", i),
-                "voltage": value("voltage", i),
-                "soc": value("soc", i),
-                "enable": value("enable", i),
-            }
-        )
+        soc = value("soc", i)
+        pair = split_slot_soc_word(soc)
+        entry: dict[str, Any] = {
+            "start": value("start", i),
+            "end": end,
+            "power": value("power", i),
+            "voltage": value("voltage", i),
+            "soc": pair[0] if pair else soc,
+        }
+        if pair:
+            entry["genSoc"] = pair[1]
+        entry["enable"] = value("enable", i)
+        entries.append(entry)
     first = entries[0]
     return {
         "prevSlotStart": first["start"],
@@ -192,10 +212,28 @@ class WriteExecutor(BaseExecutor):
       write_registers → verify read-back → ACK result.
     """
 
-    def __init__(self, hass: Any, spec_holder: Any, cfg: dict[str, Any]) -> None:
+    def __init__(
+        self,
+        hass: Any,
+        spec_holder: Any,
+        cfg: dict[str, Any],
+        *,
+        guard: Any = None,
+        inverter_id: str | None = None,
+        sleep_fn: Callable[[float], Awaitable[Any]] | None = None,
+    ) -> None:
         self._hass = hass
         self._spec_holder = spec_holder
         self._cfg = cfg
+        # The battery charge current cap's held prior lives in *guard*
+        # (charge_cap_guard.ChargeCapGuard), keyed by *inverter_id*. Without
+        # them the two battery charge current commands are not run.
+        self._guard = guard
+        self._inverter_id = inverter_id
+        self._bcc_lock = asyncio.Lock()
+        # The wait before a battery charge current readback. Tests pass a
+        # fake so they do not sleep.
+        self._sleep = sleep_fn or asyncio.sleep
 
     # ------------------------------------------------------------------
     # Legacy abstract method — routes to dispatch so BaseExecutor is happy
@@ -239,6 +277,8 @@ class WriteExecutor(BaseExecutor):
         cmd = _find_command(spec, command_name)
         if cmd is None:
             raise NotImplementedError(command_name)
+        if command_name in _bcc.COMMANDS:
+            return await self._battery_charge_current(spec, cmd, command_name, payload)
         if command_name in _UNCLAMPED_RESTORES:
             cmd = _unclamped(cmd)
 
@@ -304,3 +344,131 @@ class WriteExecutor(BaseExecutor):
         if cmd.slot is not None:
             result.update(_prev_slot_fields(cmd.slot, prior))
         return result
+
+    async def revert_battery_charge_current_if_due(self, now_ms: int) -> bool:
+        """Write the held prior back when its deadline has passed; True if it did.
+
+        The revert loop's entry point. The deadline is read again under the
+        same lock a set or restore holds, so a set that renewed it, or a
+        restore that cleared it, since the loop listed it is not undone.
+        Raises as a restore does on failure; the prior is then kept.
+        """
+        spec: RegisterSpec | None = self._spec_holder.spec
+        if spec is None:
+            raise RuntimeError("spec_not_loaded")
+        cmd = _find_command(spec, _bcc.RESTORE_COMMAND)
+        if cmd is None or self._guard is None or self._inverter_id is None:
+            raise NotImplementedError(_bcc.RESTORE_COMMAND)
+        async with self._bcc_lock:
+            deadline = await self._guard.deadline(self._inverter_id)
+            if deadline is None or deadline > now_ms:
+                return False
+            await self._battery_charge_current_locked(spec, cmd, _bcc.RESTORE_COMMAND, {})
+            return True
+
+    async def _battery_charge_current(
+        self, spec: RegisterSpec, cmd: WriteCommand, command_name: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Run a battery charge current command under the executor's lock."""
+        if self._guard is None or self._inverter_id is None:
+            raise NotImplementedError(f"{command_name}: no charge cap guard")
+        async with self._bcc_lock:
+            return await self._battery_charge_current_locked(spec, cmd, command_name, payload)
+
+    async def _battery_charge_current_locked(
+        self, spec: RegisterSpec, cmd: WriteCommand, command_name: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Run a battery charge current set or restore with the held prior.
+
+        The edge firmware's ``execute_battery_charge_current``, step for step:
+
+        - A set reads the register first and writes nothing when it cannot
+          (``prior_read_failed``). It holds that value as the prior before it
+          writes, keeping one already held, and its ACK reports the held prior,
+          not the fresh read, which may be the cap itself.
+        - A restore writes the payload's value, else the held prior, else
+          fails ``no_prior``.
+        - A register already at the target is not written (``skipped``).
+        - A set with ``revertAtMs`` and a target below the held prior arms the
+          revert deadline, whatever the write's outcome: the revert writes the
+          prior back, which is safe even when the cap never landed.
+        - A restore clears the prior only once its readback confirmed the
+          value, or the inverter already held it.
+        """
+        is_set = command_name == _bcc.SET_COMMAND
+        raw = payload.get("batteryChargeCurrentA")
+        if raw is not None and (isinstance(raw, bool) or not isinstance(raw, int | float)):
+            raise BatteryChargeCurrentError("bad_payload")
+        if is_set and raw is None:
+            raise BatteryChargeCurrentError("bad_payload")
+        field = cmd.fields[0]
+        address = field.address
+        unit_id = spec.default_slave_id
+        inverter_id = self._inverter_id
+        guard = self._guard
+
+        held = await guard.prior(inverter_id)
+        if raw is not None:
+            target = max(0, min(_bcc.PRIOR_MAX_A, int(raw)))
+        elif held is not None:
+            target = held
+        else:
+            raise BatteryChargeCurrentError("no_prior")
+
+        pre = await read_word(self._hass, spec, self._cfg, unit_id, address)
+        if is_set:
+            # No write without a prior: the cap must be revertible.
+            if valid_prior(pre) is None:
+                known = {} if held is None else {"prevBatteryChargeCurrentA": held}
+                raise BatteryChargeCurrentError("prior_read_failed", known)
+            await guard.record_prior(inverter_id, pre)
+            held = await guard.prior(inverter_id)
+
+        result: dict[str, Any] = {"register": address}
+        if is_set:
+            result["prevBatteryChargeCurrentA"] = held
+        elif pre is not None:
+            result["prevBatteryChargeCurrentA"] = pre
+        result["targetBatteryChargeCurrentA"] = target
+
+        try:
+            if pre is not None and pre == target:
+                result["skipped"] = True
+                result["verifyBatteryChargeCurrentA"] = pre
+            else:
+                await self._write_and_verify(spec, unit_id, address, target, result)
+        finally:
+            if is_set:
+                revert_at = payload.get("revertAtMs")
+                if (
+                    isinstance(revert_at, int | float)
+                    and not isinstance(revert_at, bool)
+                    and held is not None
+                    and target < held
+                ):
+                    await guard.set_deadline(inverter_id, int(revert_at))
+        if not is_set and held is not None:
+            await guard.clear(inverter_id)
+        return result
+
+    async def _write_and_verify(
+        self, spec: RegisterSpec, unit_id: int, address: int, target: int, result: dict
+    ) -> None:
+        """Write *target* (FC16) and read it back, filling *result*'s verify."""
+        known = {k: v for k, v in result.items() if k != "register"}
+        try:
+            await write_registers(self._hass, spec, self._cfg, [(unit_id, address, target)])
+        except Exception as err:
+            _LOGGER.warning("battery charge current: write of reg %s failed: %s", address, err)
+            raise BatteryChargeCurrentError("write_failed", known) from err
+        # Let the inverter settle before the readback, as the board and the
+        # phone do: a read straight after the write can return the old value.
+        await self._sleep(BCC_SETTLE_S)
+        verify = await read_word(self._hass, spec, self._cfg, unit_id, address)
+        if verify is None:
+            raise BatteryChargeCurrentError("verify_read_failed", known)
+        result["verifyBatteryChargeCurrentA"] = verify
+        if verify != target:
+            raise BatteryChargeCurrentError(
+                "verify_mismatch", {**known, "verifyBatteryChargeCurrentA": verify}
+            )

@@ -29,6 +29,10 @@
       "method": "POST"
     },
     {
+      "path": "/api/v1/edge-devices/logs",
+      "method": "POST"
+    },
+    {
       "path": "/api/v1/edge-devices/update-inverter-ip",
       "method": "POST"
     },

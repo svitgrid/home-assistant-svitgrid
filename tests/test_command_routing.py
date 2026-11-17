@@ -95,3 +95,48 @@ async def test_rejects_command_for_unknown_inverter(hass):
     assert body["rejected"] is True
     assert body["success"] is False
     assert "no_executor" in body["reason"]
+
+
+@pytest.mark.asyncio
+async def test_a_failed_battery_charge_current_acks_its_code_and_known_values(hass):
+    """A battery charge current failure ACKs a bare `error` code plus the
+    prev/target/verify values it knew, as the board and the phone do."""
+    from custom_components.svitgrid.harvest.charge_cap_guard import BatteryChargeCurrentError
+
+    admin_priv, admin_pub_hex = generate_keypair()
+    our_priv, _ = generate_keypair()
+    signed_event_data = {"commandId": "c1", "command": "set_battery_charge_current"}
+    command = {
+        "commandId": "c1",
+        "command": "set_battery_charge_current",
+        "payload": {"inverterId": "ha-aaa", "batteryChargeCurrentA": 0},
+        "signature": sign_payload(signed_event_data, admin_priv),
+        "signingKeyId": "admin-key-id",
+        "signedEventData": signed_event_data,
+    }
+    ack = {
+        "error": "verify_mismatch",
+        "prevBatteryChargeCurrentA": 120,
+        "targetBatteryChargeCurrentA": 0,
+        "verifyBatteryChargeCurrentA": 120,
+    }
+    executor = AsyncMock()
+    executor.dispatch.side_effect = BatteryChargeCurrentError("verify_mismatch", ack)
+    api_client = AsyncMock()
+
+    await process_command(
+        command=command,
+        api_client=api_client,
+        api_key="k",
+        trusted_public_keys_hex={"admin-key-id": admin_pub_hex},
+        our_private_key=our_priv,
+        our_signing_key_id="our-key",
+        executor_version="0.3.0",
+        keystore=None,
+        executors_by_inverter={"ha-aaa": executor},
+    )
+
+    body = api_client.ack_command.call_args.kwargs["body"]
+    assert body["success"] is False
+    assert body["result"] == ack
+    assert body["reason"] == "executor_error: verify_mismatch"

@@ -37,10 +37,11 @@ from aiohttp import web
 from homeassistant.components.http import HomeAssistantView
 
 from . import bms_roster, edge_reading_pipeline
+from .api_client import LogUploadFailed, LogUploadRefused
 from .bms_packs import valid_report as valid_bms_report
 from .const import ADD_TRUSTED_KEY_COMMAND, DOMAIN
 from .keystore import EdgeBoxEntry, KeystoreState
-from .settings_read_plan import settings_snapshot_kind_for
+from .settings_read_plan import onboarding_body, settings_snapshot_kind_for
 from .settings_sync import store_edge_settings_snapshot
 from .signing import compute_key_id
 from .zigbee_devices import device_id_for_ieee
@@ -241,7 +242,9 @@ def _snapshot_from_settings_body(box: EdgeBoxEntry, body) -> tuple[dict | None, 
     (`startRegister`, `registers`), or a brand body for LuxPower, MUST,
     SMG II or PI30, each with `inverterId` and `modelId`. It is stored as the
     add-on's own settings read stores it, so the settings view serves the two
-    alike. The brand body is kept as the box sent it.
+    alike. The brand body is kept as the box sent it. An SMG II body must
+    follow its protocol's sync spans (`settings_read_plan.SMG_SYNC_SPANS`):
+    every required block, then any of the optional ones, each complete.
     """
     if not isinstance(body, dict):
         return None, "bad_body"
@@ -271,6 +274,12 @@ def _snapshot_from_settings_body(box: EdgeBoxEntry, body) -> tuple[dict | None, 
             "read_at": read_at,
         }, None
     brand_body = {k: v for k, v in body.items() if k not in ("inverterId", "modelId", "readAt")}
+    if kind == "smg":
+        # The cloud's `validateSmgBlocks` refuses what this refuses, so the
+        # app reads one snapshot shape on either side.
+        brand_body, error = onboarding_body("smg", brand_body)
+        if error is not None:
+            return None, error
     return {
         "inverter_id": inverter_id,
         "model_id": model_id,
@@ -949,6 +958,56 @@ class EdgeCoredumpView(_EdgeView):
         return self.json({"stored": False, "reason": "island"})
 
 
+class EdgeLogsView(_EdgeView):
+    """`upload_logs` is an operator command sent through the cloud, so a box
+    in island mode never asked for these parts. The 403 stops the upload and
+    the box reports it in its own log."""
+
+    url = "/api/v1/edge-devices/logs"
+    name = "svitgrid:edge:logs"
+
+    async def post(self, request):
+        box = await self._box(request)
+        if isinstance(box, web.Response):
+            return box
+        try:
+            body = await request.json()
+        except ValueError:
+            body = None
+        local_id = body.get("commandId") if isinstance(body, dict) else None
+        state = _entry_state(request.app["hass"]) or {}
+        relay = state.get("island_relay")
+        if state and relay is None:
+            return self.json({"error": "no_relay"}, status_code=503)
+        cloud_id = relay.cloud_id_for(local_id) if relay and isinstance(local_id, str) else None
+        api_client = state.get("api_client")
+        api_key = (state.get("entry_data") or {}).get("api_key")
+        if cloud_id is None or api_client is None or not api_key:
+            return self.json({"error": "island"}, status_code=403)
+        forwarded = {**body, "commandId": cloud_id}
+        try:
+            if body.get("done") is True:
+                await api_client.post_log_summary(api_key, forwarded)
+                relay.forget(local_id)
+            else:
+                await api_client.post_log_part(api_key, forwarded)
+        except LogUploadRefused:
+            return self.json({"error": "island"}, status_code=403)
+        except LogUploadFailed as err:
+            _LOGGER.warning("Island log relay for box %s refused: %s", box.device_id, err)
+            status = err.status
+            if status is not None and 400 <= status < 500:
+                # Permanent: a retry would be refused the same way.
+                return self.json({"error": err.error or "rejected"}, status_code=status)
+            return self.json({"error": "forward_failed"}, status_code=502)
+        except Exception as err:  # noqa: BLE001 - the box retries on a 502
+            _LOGGER.warning(
+                "Island log relay for box %s failed: %s", box.device_id, type(err).__name__
+            )
+            return self.json({"error": "forward_failed"}, status_code=502)
+        return self.json({"ok": True})
+
+
 class EdgePairAttemptsView(_EdgeView):
     url = "/api/v1/edge-devices/{device_id}/pair-attempts"
     name = "svitgrid:edge:pair-attempts"
@@ -1227,6 +1286,7 @@ EDGE_VIEWS = (
     EdgeFirmwareCheckView,
     EdgeMqttTokenView,
     EdgeCoredumpView,
+    EdgeLogsView,
     EdgePairAttemptsView,
     EdgeUpdateInverterIpView,
     EdgeZigbeeDeviceJoinedView,

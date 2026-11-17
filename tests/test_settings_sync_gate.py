@@ -1,8 +1,10 @@
 """Tests for settings-sync gate functions: hash, upload decision, model ranges."""
 
+from custom_components.svitgrid.settings_read_plan import battery_mode_register_for_model
 from custom_components.svitgrid.settings_sync import (
     config_range_for_model,
     registers_hash,
+    settings_upload_hash,
     should_upload,
 )
 
@@ -53,3 +55,21 @@ def test_range_for_models():
     assert config_range_for_model("deye_sg04lp3") == (115, 77)
     assert config_range_for_model("deye_sg03lp1") == (217, 63)
     assert config_range_for_model("victron_multiplus_ii_gx_6k5") is None
+
+
+def test_battery_mode_register_for_model():
+    assert battery_mode_register_for_model("deye_sg04lp3") == 111
+    assert battery_mode_register_for_model("deye_sg03lp1") == 213
+    assert battery_mode_register_for_model("victron_multiplus_ii_gx_6k5") is None
+
+
+def test_upload_hash_changes_with_the_mode_word_alone():
+    regs = [1, 2, 3]
+    assert settings_upload_hash(regs, 0) != settings_upload_hash(regs, 1)
+    assert settings_upload_hash(regs, 0) != settings_upload_hash(regs, None)
+
+
+def test_upload_hash_without_mode_is_the_plain_batch_hash():
+    regs = [1, 2, 3]
+    assert settings_upload_hash(regs, None) == registers_hash(regs)
+    assert settings_upload_hash(regs, 7) == registers_hash(regs + [7])
