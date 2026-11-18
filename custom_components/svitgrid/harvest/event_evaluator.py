@@ -425,6 +425,23 @@ _INVERTER_TEMPERATURE_MAX_C = 120.0
 # (bms_temperature.bms_temperature_from_states). It is not a reading field.
 BMS_TEMPERATURE_KEY = "bmsTemperatureC"
 
+# The Zigbee devices a rule's conditions name, as signals keyed by device id
+# (``zigbee_devices.zigbee_signal_from_doc``). The island scheduler adds them
+# to the reading it passes for an event with a Zigbee condition (svitgrid
+# D-2161). It is not a reading field.
+ZIGBEE_SIGNALS_KEY = "zigbeeSignals"
+
+# The four Zigbee condition types, and the signal value each numeric one reads
+# (custom-event-decision.ts).
+ZIGBEE_CONDITION_TYPES = frozenset(
+    {"zigbee_temperature", "zigbee_humidity", "zigbee_socket_power", "zigbee_socket_on"}
+)
+_ZIGBEE_NUMERIC = {
+    "zigbee_temperature": ("temperatureC", "thresholdC", "releaseThresholdC"),
+    "zigbee_humidity": ("humidityPct", "thresholdPct", "releaseThresholdPct"),
+    "zigbee_socket_power": ("powerW", "thresholdW", "releaseThresholdW"),
+}
+
 
 def _finite_or_none(v) -> float | None:
     if isinstance(v, bool) or not isinstance(v, int | float):
@@ -522,6 +539,20 @@ def _one_holds(condition: dict, signals: dict, held: bool) -> bool:
             float(condition["thresholdC"]),
             condition.get("releaseThresholdC"),
             held,
+        )
+    if ctype in ZIGBEE_CONDITION_TYPES:
+        # Unknown is not met, even while held: a sensor that stops reporting
+        # must not keep a heater on its last reading (zigbeeValue).
+        device = (signals.get(ZIGBEE_SIGNALS_KEY) or {}).get(condition.get("deviceId")) or {}
+        if ctype == "zigbee_socket_on":
+            on = device.get("on")
+            return isinstance(on, bool) and on == condition.get("on")
+        key, on_key, release_key = _ZIGBEE_NUMERIC[ctype]
+        v = _finite_or_none(device.get(key))
+        if v is None:
+            return False
+        return _numeric_holds(
+            condition["op"], v, float(condition[on_key]), condition.get(release_key), held
         )
     # Cloud-only types are pre-filtered; an unrecognised type must be fail-closed
     # so a future cloud condition type not yet listed in _CLOUD_CONDITION_TYPES
@@ -2300,6 +2331,7 @@ def _custom_signals(reading: dict) -> dict:
         "gridVoltageMaxV": max(voltages) if voltages else None,
         "inverterTemperatureC": plausible_inverter_temperature(reading.get("inverterTemperature")),
         "bmsTemperatureC": _finite_or_none(reading.get(BMS_TEMPERATURE_KEY)),
+        ZIGBEE_SIGNALS_KEY: reading.get(ZIGBEE_SIGNALS_KEY) or {},
         # Cloud-only fields unavailable locally; skip guard already fired
         "outageHourNow": False,
         "forecastTodayKwh": None,

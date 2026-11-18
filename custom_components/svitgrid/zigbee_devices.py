@@ -540,6 +540,13 @@ class ZigbeeDeviceStore:
         finally:
             conn.close()
 
+    def _condition_docs_sync(self, device_ids: list[str]) -> dict[str, dict | None]:
+        conn = _connect(self._db_path)
+        try:
+            return {i: _condition_doc(conn, i) for i in device_ids}
+        finally:
+            conn.close()
+
     def _add_history_sync(self, device_id: str, event: str, state: dict, command_id: str) -> None:
         conn = _connect(self._db_path)
         try:
@@ -667,6 +674,12 @@ class ZigbeeDeviceStore:
         """The device's latest plug reading and latest sensor reading."""
         return await self._run(self._latest_sync, device_id)
 
+    async def async_condition_docs(self, device_ids: list[str]) -> dict[str, dict | None]:
+        """Each device as the cloud's `smartDevices/{id}` document a rule
+        condition reads (`zigbee_signal_from_doc`), or None for a device this
+        store does not hold."""
+        return await self._run(self._condition_docs_sync, list(device_ids))
+
     async def async_add_history(
         self, device_id: str, event: str, state: dict, command_id: str
     ) -> None:
@@ -687,3 +700,123 @@ class ZigbeeDeviceStore:
 def now_iso() -> str:
     """Now, as the store writes its timestamps."""
     return _iso(_utcnow())
+
+
+# ── Rule conditions (svitgrid D-2161, zigbee-condition-signals.ts) ───────────
+
+# `ZIGBEE_SENSOR_STALE_MS`: a sensor reading older than this is unknown, the
+# 30 minutes the app greys a sensor out after.
+ZIGBEE_SENSOR_STALE_MS = 30 * 60_000
+# `ZIGBEE_SOCKET_POWER_STALE_MS`: socket power older than this is unknown.
+ZIGBEE_SOCKET_POWER_STALE_MS = 75 * 60_000
+
+_SENSOR_METRICS = ("temperature", "humidity", "battery")
+
+
+def _condition_doc(conn: sqlite3.Connection, device_id: str) -> dict | None:
+    """One device in the cloud's `smartDevices/{id}` shape, as far as a rule
+    condition reads it.
+
+    A sensor's `lastReading` holds the latest value of each metric, because
+    the cloud merges each upload into it per metric, and `lastReadingAt` the
+    capture time of the latest reading. A socket's `state` holds its on/off
+    and the latest power with that reading's time. The type follows the
+    readings: a device with sensor readings is a sensor.
+    """
+    row = conn.execute("SELECT * FROM zigbee_devices WHERE id = ?", (device_id,)).fetchone()
+    if row is None:
+        return None
+    device = _row_to_dict(row)
+    doc: dict[str, Any] = {"name": device.get("name"), "reachable": device.get("reachable")}
+    latest = conn.execute(
+        "SELECT captured_at FROM zigbee_sensor_readings WHERE zigbee_id = ? "
+        "ORDER BY captured_at DESC, rowid DESC LIMIT 1",
+        (device_id,),
+    ).fetchone()
+    if latest is not None:
+        reading = {}
+        for metric in _SENSOR_METRICS:
+            value = conn.execute(
+                f"SELECT {metric} FROM zigbee_sensor_readings "
+                f"WHERE zigbee_id = ? AND {metric} IS NOT NULL "
+                "ORDER BY captured_at DESC, rowid DESC LIMIT 1",
+                (device_id,),
+            ).fetchone()
+            if value is not None:
+                reading[metric] = value[0]
+        doc.update(type="sensor", lastReading=reading, lastReadingAt=latest["captured_at"])
+        return doc
+    state: dict[str, Any] = {"on": device.get("on")}
+    socket = conn.execute(
+        "SELECT timestamp, power FROM zigbee_socket_readings WHERE zigbee_id = ? "
+        "ORDER BY timestamp DESC, rowid DESC LIMIT 1",
+        (device_id,),
+    ).fetchone()
+    if socket is not None:
+        state.update(power=socket["power"], powerAt=socket["timestamp"])
+    doc.update(type="switch", state=state)
+    return doc
+
+
+def _ms(value) -> float | None:
+    """`toMs` for the store's values: epoch ms or an ISO string."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        return float(value) if math.isfinite(value) else None
+    if isinstance(value, str):
+        try:
+            return _parse_iso(value).timestamp() * 1000
+        except ValueError:
+            return None
+    return None
+
+
+def _finite(value) -> float | int | None:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    return value if math.isfinite(value) else None
+
+
+def _fresh(at, now_ms: float, window_ms: int) -> bool:
+    ms = _ms(at)
+    return ms is not None and now_ms - ms <= window_ms
+
+
+def zigbee_signal_from_doc(doc: dict | None, household_id: str | None, now_ms: float) -> dict:
+    """Port of `zigbeeSignalFromDoc`: what one device says right now, each
+    value None when unknown. A rule reads None as "not met".
+
+    Home Assistant is one household and passes no *household_id*; with one,
+    a document of another household reads as unknown, as in the cloud.
+    """
+    unknown = {"name": None, "temperatureC": None, "humidityPct": None, "powerW": None, "on": None}
+    if not isinstance(doc, dict):
+        return unknown
+    if household_id is not None and doc.get("householdId") != household_id:
+        return unknown
+    name = doc.get("name")
+    name = name if isinstance(name, str) and name.strip() else None
+
+    reading = doc.get("lastReading") if isinstance(doc.get("lastReading"), dict) else {}
+    sensor_fresh = _fresh(doc.get("lastReadingAt"), now_ms, ZIGBEE_SENSOR_STALE_MS)
+    raw_t = _finite(reading.get("temperature")) if sensor_fresh else None
+    raw_h = _finite(reading.get("humidity")) if sensor_fresh else None
+
+    # A socket the hub marked unreachable, or the API offline, says nothing
+    # true about its state or its load.
+    reachable = doc.get("reachable") is not False and doc.get("status") != "offline"
+    state = doc.get("state") if isinstance(doc.get("state"), dict) else {}
+    power = (
+        _finite(state.get("power"))
+        if reachable and _fresh(state.get("powerAt"), now_ms, ZIGBEE_SOCKET_POWER_STALE_MS)
+        else None
+    )
+    on = state.get("on") if reachable and isinstance(state.get("on"), bool) else None
+    return {
+        "name": name,
+        "temperatureC": None if raw_t is None else raw_t / 100,
+        "humidityPct": None if raw_h is None else raw_h / 100,
+        "powerW": power,
+        "on": on,
+    }

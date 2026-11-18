@@ -65,11 +65,14 @@ from datetime import UTC, datetime, timedelta
 
 from ..bms_temperature import bms_temperature_from_states
 from ..operations_journal import SOURCE_INVERTER, now_iso, record_safely
+from ..zigbee_devices import zigbee_signal_from_doc
 from . import priority_profile as pp
 from .event_evaluator import (
     BMS_TEMPERATURE_KEY,
     NEEDS_CLOUD,
     SKIPPED_REASON_KEY,
+    ZIGBEE_CONDITION_TYPES,
+    ZIGBEE_SIGNALS_KEY,
     evaluate_event,
     has_landed_writes,
     needs_cloud,
@@ -412,6 +415,41 @@ async def _bms_temperature(events: list, bms_states_for, now_utc: datetime) -> f
     return bms_temperature_from_states(states, now_utc.timestamp() * 1000)
 
 
+def _zigbee_device_ids(event: dict) -> list[str]:
+    """The devices *event*'s Zigbee conditions name, each once, in order."""
+    ids: list[str] = []
+    for c in (event.get("config") or {}).get("customConditions") or []:
+        if not isinstance(c, dict):
+            continue
+        device_id = c.get("deviceId")
+        if (
+            c.get("type") in ZIGBEE_CONDITION_TYPES
+            and isinstance(device_id, str)
+            and device_id not in ids
+        ):
+            ids.append(device_id)
+    return ids
+
+
+async def _zigbee_signals(events: list, zigbee_docs_for, now_utc: datetime) -> dict:
+    """Every named device's signal, keyed by id (`loadZigbeeSignals`), read
+    once per tick and only when an enabled event has a Zigbee condition. A
+    failed read leaves every device unknown, which is "not met", as the API
+    does."""
+    ids: list[str] = []
+    for event in events:
+        ids.extend(i for i in _zigbee_device_ids(event) if i not in ids)
+    if zigbee_docs_for is None or not ids:
+        return {}
+    try:
+        docs = await zigbee_docs_for(ids)
+    except Exception:  # noqa: BLE001
+        _LOGGER.warning("Island scheduler: Zigbee device lookup failed", exc_info=True)
+        docs = {}
+    now_ms = now_utc.timestamp() * 1000
+    return {i: zigbee_signal_from_doc((docs or {}).get(i), None, now_ms) for i in ids}
+
+
 async def _tick(
     store: object,
     event_store: object,
@@ -424,6 +462,7 @@ async def _tick(
     model_for: object = None,
     journal: object = None,
     on_notice: object = None,
+    zigbee_docs_for: object = None,
 ) -> None:
     """Single scheduler tick.
 
@@ -453,6 +492,11 @@ async def _tick(
                    of each start and end that reached the inverter, for an
                    event whose ``config.notifyOnStartStop`` is set (svitgrid
                    D-2151). The island Telegram bot sends the notice.
+    zigbee_docs_for : async callable(device_ids: list[str]) -> dict, each
+                   device as the cloud's `smartDevices` document
+                   (``ZigbeeDeviceStore.async_condition_docs``). Read once per
+                   tick, and only when an enabled event has a Zigbee
+                   condition, whose signals it supplies (svitgrid D-2161).
     """
     # 1. List events; finish any cancel the app asked for first
     all_events = await event_store.async_list_events()
@@ -475,6 +519,7 @@ async def _tick(
     reading_by_inverter = {r["inverterId"]: r for r in snapshot}
 
     bms_temperature = await _bms_temperature(enabled_events, bms_states_for, now_utc)
+    zigbee = await _zigbee_signals(enabled_events, zigbee_docs_for, now_utc)
 
     # Every event's latest state, so an event sees what the ones before it in
     # this tick wrote (overlap handoff and hand-back, see event_evaluator).
@@ -512,6 +557,8 @@ async def _tick(
             reading = reading_entry["payload"]
             if bms_temperature is not None and _has_bms_condition(event):
                 reading = {**reading, BMS_TEMPERATURE_KEY: bms_temperature}
+            if zigbee and _zigbee_device_ids(event):
+                reading = {**reading, ZIGBEE_SIGNALS_KEY: zigbee}
             decision = evaluate_event(
                 event,
                 reading,
@@ -707,6 +754,7 @@ async def run_event_scheduler_loop(
     model_for: object = None,
     journal: object = None,
     on_notice: object = None,
+    zigbee_docs_for: object = None,
 ) -> None:
     """Island-mode event scheduler loop.
 
@@ -733,6 +781,7 @@ async def run_event_scheduler_loop(
     model_for    : callable(inverter_id: str) -> str | None, see ``_tick``.
     journal      : OperationsJournal or None, see ``_tick``.
     on_notice    : async callable(event, phase), see ``_tick``.
+    zigbee_docs_for : async callable(device_ids), see ``_tick``.
 
     GATED: spawned ONLY when cloud_ingest_enabled=False.  With cloud-sync ON
     the cloud engine handles events; double-fire must not occur.
@@ -753,6 +802,7 @@ async def run_event_scheduler_loop(
                 model_for,
                 journal,
                 on_notice,
+                zigbee_docs_for,
             )
         except Exception:  # noqa: BLE001
             _LOGGER.exception(

@@ -1762,9 +1762,12 @@ async def test_island_status_advertises_each_edge_inverters_writes(hass: HomeAss
     body = _body(await SvitgridIslandStatusView().get(_Req(hass)))
 
     deye = _VOCAB["brandKinds"]["deye"]
+    # An edge island evaluates the boxes' Zigbee devices for every inverter
+    # (svitgrid D-2161).
+    zigbee = {"conditionTypes": _ZIGBEE_CONDITION_TYPES}
     assert body["inverters"] == {
-        "inv-ha": {"host": "ha", "readSource": "native"},
-        "inv-deye": {"host": "edge", **deye},
+        "inv-ha": {"host": "ha", "readSource": "native", **zigbee},
+        "inv-deye": {"host": "edge", **deye, **zigbee},
         # Battery charge and use battery run as priority profiles, and each
         # protocol writes its own thresholds (svitgrid#1255). sell_to_grid has
         # no profile, so the island does not write it.
@@ -1772,17 +1775,19 @@ async def test_island_status_advertises_each_edge_inverters_writes(hass: HomeAss
             "host": "edge",
             "writableActions": ["pi30_thresholds"],
             "modes": ["battery_charge", "use_battery"],
+            **zigbee,
         },
         "inv-must": {
             "host": "edge",
             "writableActions": ["must_thresholds"],
             "modes": ["battery_charge", "use_battery"],
+            **zigbee,
         },
         # An SNA has no battery_first profile.
-        "inv-sna": {"host": "edge", "writableActions": [], "modes": ["battery_charge"]},
+        "inv-sna": {"host": "edge", "writableActions": [], "modes": ["battery_charge"], **zigbee},
         # Review focus 5: SolaX on an edge island offers no writable action.
-        "inv-solax": {"host": "edge", "writableActions": [], "modes": []},
-        "inv-solis": {"host": "edge", "writableActions": [], "modes": []},
+        "inv-solax": {"host": "edge", "writableActions": [], "modes": [], **zigbee},
+        "inv-solis": {"host": "edge", "writableActions": [], "modes": [], **zigbee},
     }
 
 
@@ -3175,6 +3180,13 @@ async def test_edge_status_serves_the_board_state_its_page_needs(hass: HomeAssis
 
 # ── conditionTypes: the temperature conditions the island evaluates (#1328) ──
 
+_ZIGBEE_CONDITION_TYPES = [
+    "zigbee_temperature",
+    "zigbee_humidity",
+    "zigbee_socket_power",
+    "zigbee_socket_on",
+]
+
 
 class _BmsPacks:
     def __init__(self, states) -> None:
@@ -3246,6 +3258,32 @@ async def test_island_status_without_a_labelled_pack_advertises_no_bms_temperatu
     advert = _body(await SvitgridIslandStatusView().get(_Req(hass)))["inverters"]
 
     assert advert["inv-1"] == {"host": "ha", "readSource": "native"}
+
+
+async def test_an_edge_island_advertises_the_zigbee_conditions(hass: HomeAssistant, tmp_path):
+    """With a box adopted, every inverter lists the four Zigbee conditions
+    after its temperature ones: the island evaluates them from the boxes'
+    devices (svitgrid D-2161). They stay inside the vocabulary."""
+    from custom_components.svitgrid.edge_command_queue import EdgeCommandQueue
+
+    admin = _Admin()
+    await _keystore(hass, admin)
+    entry = _ha_entry(hass, "inv-ha")
+    queue = EdgeCommandQueue(str(tmp_path / "edge_commands.db"), None)
+    _entry_state(
+        hass, entry, queue=queue, store=_EdgeStore(live=[_live("inv-ha", inverterTemperature=30)])
+    )
+    await _adopt(hass, admin, "EC-1", _inv("inv-deye"))
+
+    advert = _body(await SvitgridIslandStatusView().get(_Req(hass)))["inverters"]
+
+    assert advert["inv-ha"]["conditionTypes"] == [
+        "inverter_temperature",
+        *_ZIGBEE_CONDITION_TYPES,
+    ]
+    assert advert["inv-deye"]["conditionTypes"] == _ZIGBEE_CONDITION_TYPES
+    for item in advert.values():
+        assert set(item["conditionTypes"]) <= set(_VOCAB["conditionTypes"])
 
 
 # ── read source over the LAN (svitgrid D-1848) ──────────────────────────────

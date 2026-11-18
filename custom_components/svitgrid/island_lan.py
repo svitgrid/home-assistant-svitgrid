@@ -661,7 +661,7 @@ class SvitgridIslandStatusView(HomeAssistantView):
             ]
             body["pendingBoxKeys"] = await keystore.async_list_pending_box_keys()
         inverters = _inverter_adverts(hass, boxes)
-        await _advertise_condition_types(hass, entry, inverters)
+        await _advertise_condition_types(hass, entry, inverters, edge_island=bool(boxes))
         if inverters:
             body["inverters"] = inverters
         return web.json_response(body)
@@ -692,7 +692,19 @@ def _inverter_adverts(hass, boxes: list[EdgeBoxEntry]) -> dict[str, dict]:
     return adverts
 
 
-async def _advertise_condition_types(hass, entry, adverts: dict[str, dict]) -> None:
+# The Zigbee conditions an edge island evaluates from its boxes' devices
+# (svitgrid D-2161), in the app's order.
+_ZIGBEE_CONDITION_TYPES = (
+    "zigbee_temperature",
+    "zigbee_humidity",
+    "zigbee_socket_power",
+    "zigbee_socket_on",
+)
+
+
+async def _advertise_condition_types(
+    hass, entry, adverts: dict[str, dict], *, edge_island: bool = False
+) -> None:
     """Add `conditionTypes`, the temperature conditions the island scheduler
     evaluates, to each inverter's advert (svitgrid#1328).
 
@@ -706,7 +718,12 @@ async def _advertise_condition_types(hass, entry, adverts: dict[str, dict]) -> N
       over `POST /api/svitgrid/island/bms`, reports a pack with a labelled
       cell sensor, fresh or not: it is the household's.
 
-    An inverter with neither has no `conditionTypes`, as before.
+    On an edge island (*edge_island*) every inverter also lists the four
+    Zigbee conditions, after those: the scheduler reads them from the boxes'
+    devices (svitgrid D-2161). A Home Assistant island with no box has no
+    Svitgrid Zigbee device, so its advert is as before.
+
+    An inverter with none has no `conditionTypes`, as before.
     """
     if not adverts:
         return
@@ -740,6 +757,8 @@ async def _advertise_condition_types(hass, entry, adverts: dict[str, dict]) -> N
             for t, has in (("inverter_temperature", inverter_id in hot), ("bms_temperature", bms))
             if has
         ]
+        if edge_island:
+            types.extend(_ZIGBEE_CONDITION_TYPES)
         if types:
             advert["conditionTypes"] = types
 

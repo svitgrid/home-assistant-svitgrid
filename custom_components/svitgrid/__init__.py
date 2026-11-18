@@ -213,6 +213,14 @@ async def _bms_states(hass: HomeAssistant, entry_id: str) -> dict | None:
     )
 
 
+async def _zigbee_condition_docs(hass: HomeAssistant, entry_id: str, device_ids: list[str]):
+    """The adopted boxes' Zigbee devices a rule names, as the cloud's
+    documents (svitgrid D-2161), or none without the store. Looked up on each
+    call: the store is created after the scheduler starts."""
+    devices = (hass.data.get(DOMAIN, {}).get(entry_id) or {}).get("zigbee_devices")
+    return await devices.async_condition_docs(device_ids) if devices is not None else {}
+
+
 async def _start_local_store(
     hass: HomeAssistant,
     api_client,
@@ -1296,6 +1304,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     # A rule's start and stop notices go out through the
                     # island Telegram bot (svitgrid D-2151).
                     on_notice=lambda event, phase: _rule_notice(hass, entry, event, phase),
+                    # The boxes' Zigbee devices, which a Zigbee rule condition
+                    # reads (svitgrid D-2161).
+                    zigbee_docs_for=lambda ids: _zigbee_condition_docs(hass, entry.entry_id, ids),
                 ),
                 name="svitgrid_event_scheduler",
             )

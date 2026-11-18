@@ -1,0 +1,691 @@
+{
+  "_comment": "Zigbee rule conditions, decided from one device document (svitgrid D-2161). Each case is `zigbeeSignalFromDoc(doc, householdId, now)` (services/api/src/calendar/zigbee-condition-signals.ts) then `evaluateConditions([condition], signals, held)` (custom-event-decision.ts). `doc` is the cloud's `smartDevices/{id}` shape, with times as ISO strings, or null for a missing device. Run by services/api/src/__tests__/calendar/zigbee-conditions.test.ts; the Home Assistant integration vendors this file as tests/fixtures/zigbee_condition_cases.json and runs its port over it.",
+  "householdId": "hh-1",
+  "nowMs": 1795003200000,
+  "cases": [
+    {
+      "name": "a fresh sensor reading is scaled from hundredths and trips lte",
+      "doc": {
+        "householdId": "hh-1",
+        "type": "sensor",
+        "name": "Спальня",
+        "lastReading": {
+          "temperature": 1943,
+          "humidity": 5610,
+          "battery": 180
+        },
+        "lastReadingAt": "2026-11-18T11:59:00.000Z"
+      },
+      "condition": {
+        "type": "zigbee_temperature",
+        "deviceId": "dev",
+        "op": "lte",
+        "thresholdC": 20,
+        "releaseThresholdC": 21
+      },
+      "held": false,
+      "signal": {
+        "name": "Спальня",
+        "temperatureC": 19.43,
+        "humidityPct": 56.1,
+        "powerW": null,
+        "on": null
+      },
+      "holds": true
+    },
+    {
+      "name": "a fresh sensor reading above the threshold is not met",
+      "doc": {
+        "householdId": "hh-1",
+        "type": "sensor",
+        "name": "Спальня",
+        "lastReading": {
+          "temperature": 1943,
+          "humidity": 5610,
+          "battery": 180
+        },
+        "lastReadingAt": "2026-11-18T11:59:00.000Z"
+      },
+      "condition": {
+        "type": "zigbee_temperature",
+        "deviceId": "dev",
+        "op": "gte",
+        "thresholdC": 20
+      },
+      "held": false,
+      "signal": {
+        "name": "Спальня",
+        "temperatureC": 19.43,
+        "humidityPct": 56.1,
+        "powerW": null,
+        "on": null
+      },
+      "holds": false
+    },
+    {
+      "name": "held: the release threshold keeps an active rule on",
+      "doc": {
+        "householdId": "hh-1",
+        "type": "sensor",
+        "name": "Спальня",
+        "lastReading": {
+          "temperature": 2050
+        },
+        "lastReadingAt": "2026-11-18T11:59:00.000Z"
+      },
+      "condition": {
+        "type": "zigbee_temperature",
+        "deviceId": "dev",
+        "op": "lte",
+        "thresholdC": 20,
+        "releaseThresholdC": 21
+      },
+      "held": true,
+      "signal": {
+        "name": "Спальня",
+        "temperatureC": 20.5,
+        "humidityPct": null,
+        "powerW": null,
+        "on": null
+      },
+      "holds": true
+    },
+    {
+      "name": "not held: the same value past the threshold does not start it",
+      "doc": {
+        "householdId": "hh-1",
+        "type": "sensor",
+        "name": "Спальня",
+        "lastReading": {
+          "temperature": 2050
+        },
+        "lastReadingAt": "2026-11-18T11:59:00.000Z"
+      },
+      "condition": {
+        "type": "zigbee_temperature",
+        "deviceId": "dev",
+        "op": "lte",
+        "thresholdC": 20,
+        "releaseThresholdC": 21
+      },
+      "held": false,
+      "signal": {
+        "name": "Спальня",
+        "temperatureC": 20.5,
+        "humidityPct": null,
+        "powerW": null,
+        "on": null
+      },
+      "holds": false
+    },
+    {
+      "name": "held: past the release threshold the rule releases",
+      "doc": {
+        "householdId": "hh-1",
+        "type": "sensor",
+        "name": "Спальня",
+        "lastReading": {
+          "temperature": 2120
+        },
+        "lastReadingAt": "2026-11-18T11:59:00.000Z"
+      },
+      "condition": {
+        "type": "zigbee_temperature",
+        "deviceId": "dev",
+        "op": "lte",
+        "thresholdC": 20,
+        "releaseThresholdC": 21
+      },
+      "held": true,
+      "signal": {
+        "name": "Спальня",
+        "temperatureC": 21.2,
+        "humidityPct": null,
+        "powerW": null,
+        "on": null
+      },
+      "holds": false
+    },
+    {
+      "name": "a negative temperature stays negative",
+      "doc": {
+        "householdId": "hh-1",
+        "type": "sensor",
+        "name": "Спальня",
+        "lastReading": {
+          "temperature": -520
+        },
+        "lastReadingAt": "2026-11-18T11:59:00.000Z"
+      },
+      "condition": {
+        "type": "zigbee_temperature",
+        "deviceId": "dev",
+        "op": "lte",
+        "thresholdC": 0
+      },
+      "held": false,
+      "signal": {
+        "name": "Спальня",
+        "temperatureC": -5.2,
+        "humidityPct": null,
+        "powerW": null,
+        "on": null
+      },
+      "holds": true
+    },
+    {
+      "name": "a sensor reading exactly 30 minutes old is still fresh",
+      "doc": {
+        "householdId": "hh-1",
+        "type": "sensor",
+        "name": "Спальня",
+        "lastReading": {
+          "temperature": 1943,
+          "humidity": 5610,
+          "battery": 180
+        },
+        "lastReadingAt": "2026-11-18T11:30:00.000Z"
+      },
+      "condition": {
+        "type": "zigbee_temperature",
+        "deviceId": "dev",
+        "op": "lte",
+        "thresholdC": 20
+      },
+      "held": false,
+      "signal": {
+        "name": "Спальня",
+        "temperatureC": 19.43,
+        "humidityPct": 56.1,
+        "powerW": null,
+        "on": null
+      },
+      "holds": true
+    },
+    {
+      "name": "a sensor reading past 30 minutes is unknown, which is not met even while held",
+      "doc": {
+        "householdId": "hh-1",
+        "type": "sensor",
+        "name": "Спальня",
+        "lastReading": {
+          "temperature": 1943,
+          "humidity": 5610,
+          "battery": 180
+        },
+        "lastReadingAt": "2026-11-18T11:29:59.000Z"
+      },
+      "condition": {
+        "type": "zigbee_temperature",
+        "deviceId": "dev",
+        "op": "lte",
+        "thresholdC": 20,
+        "releaseThresholdC": 21
+      },
+      "held": true,
+      "signal": {
+        "name": "Спальня",
+        "temperatureC": null,
+        "humidityPct": null,
+        "powerW": null,
+        "on": null
+      },
+      "holds": false
+    },
+    {
+      "name": "humidity gte on a fresh reading",
+      "doc": {
+        "householdId": "hh-1",
+        "type": "sensor",
+        "name": "Спальня",
+        "lastReading": {
+          "temperature": 1943,
+          "humidity": 5610,
+          "battery": 180
+        },
+        "lastReadingAt": "2026-11-18T11:59:00.000Z"
+      },
+      "condition": {
+        "type": "zigbee_humidity",
+        "deviceId": "dev",
+        "op": "gte",
+        "thresholdPct": 55
+      },
+      "held": false,
+      "signal": {
+        "name": "Спальня",
+        "temperatureC": 19.43,
+        "humidityPct": 56.1,
+        "powerW": null,
+        "on": null
+      },
+      "holds": true
+    },
+    {
+      "name": "a sensor that never reported humidity is not met",
+      "doc": {
+        "householdId": "hh-1",
+        "type": "sensor",
+        "name": "Спальня",
+        "lastReading": {
+          "temperature": 1943
+        },
+        "lastReadingAt": "2026-11-18T11:59:00.000Z"
+      },
+      "condition": {
+        "type": "zigbee_humidity",
+        "deviceId": "dev",
+        "op": "gte",
+        "thresholdPct": 10
+      },
+      "held": false,
+      "signal": {
+        "name": "Спальня",
+        "temperatureC": 19.43,
+        "humidityPct": null,
+        "powerW": null,
+        "on": null
+      },
+      "holds": false
+    },
+    {
+      "name": "a sensor with no reading time is unknown",
+      "doc": {
+        "householdId": "hh-1",
+        "type": "sensor",
+        "name": "Спальня",
+        "lastReading": {
+          "temperature": 1943
+        }
+      },
+      "condition": {
+        "type": "zigbee_temperature",
+        "deviceId": "dev",
+        "op": "lte",
+        "thresholdC": 20
+      },
+      "held": false,
+      "signal": {
+        "name": "Спальня",
+        "temperatureC": null,
+        "humidityPct": null,
+        "powerW": null,
+        "on": null
+      },
+      "holds": false
+    },
+    {
+      "name": "socket power gte on a fresh value",
+      "doc": {
+        "householdId": "hh-1",
+        "type": "switch",
+        "name": "Бойлер",
+        "status": "online",
+        "reachable": true,
+        "state": {
+          "on": true,
+          "power": 1840,
+          "powerAt": "2026-11-18T11:58:00.000Z"
+        }
+      },
+      "condition": {
+        "type": "zigbee_socket_power",
+        "deviceId": "dev",
+        "op": "gte",
+        "thresholdW": 1500
+      },
+      "held": false,
+      "signal": {
+        "name": "Бойлер",
+        "temperatureC": null,
+        "humidityPct": null,
+        "powerW": 1840,
+        "on": true
+      },
+      "holds": true
+    },
+    {
+      "name": "socket power below the threshold is not met",
+      "doc": {
+        "householdId": "hh-1",
+        "type": "switch",
+        "name": "Бойлер",
+        "status": "online",
+        "reachable": true,
+        "state": {
+          "on": true,
+          "power": 3,
+          "powerAt": "2026-11-18T11:58:00.000Z"
+        }
+      },
+      "condition": {
+        "type": "zigbee_socket_power",
+        "deviceId": "dev",
+        "op": "gte",
+        "thresholdW": 1500
+      },
+      "held": false,
+      "signal": {
+        "name": "Бойлер",
+        "temperatureC": null,
+        "humidityPct": null,
+        "powerW": 3,
+        "on": true
+      },
+      "holds": false
+    },
+    {
+      "name": "socket power exactly 75 minutes old is still fresh",
+      "doc": {
+        "householdId": "hh-1",
+        "type": "switch",
+        "name": "Бойлер",
+        "status": "online",
+        "reachable": true,
+        "state": {
+          "on": true,
+          "power": 1840,
+          "powerAt": "2026-11-18T10:45:00.000Z"
+        }
+      },
+      "condition": {
+        "type": "zigbee_socket_power",
+        "deviceId": "dev",
+        "op": "gte",
+        "thresholdW": 1500
+      },
+      "held": false,
+      "signal": {
+        "name": "Бойлер",
+        "temperatureC": null,
+        "humidityPct": null,
+        "powerW": 1840,
+        "on": true
+      },
+      "holds": true
+    },
+    {
+      "name": "socket power past 75 minutes is unknown, but on/off still reads",
+      "doc": {
+        "householdId": "hh-1",
+        "type": "switch",
+        "name": "Бойлер",
+        "status": "online",
+        "reachable": true,
+        "state": {
+          "on": true,
+          "power": 1840,
+          "powerAt": "2026-11-18T10:44:59.000Z"
+        }
+      },
+      "condition": {
+        "type": "zigbee_socket_power",
+        "deviceId": "dev",
+        "op": "gte",
+        "thresholdW": 1500,
+        "releaseThresholdW": 1000
+      },
+      "held": true,
+      "signal": {
+        "name": "Бойлер",
+        "temperatureC": null,
+        "humidityPct": null,
+        "powerW": null,
+        "on": true
+      },
+      "holds": false
+    },
+    {
+      "name": "socket on matches on",
+      "doc": {
+        "householdId": "hh-1",
+        "type": "switch",
+        "name": "Бойлер",
+        "status": "online",
+        "reachable": true,
+        "state": {
+          "on": true,
+          "power": 1840,
+          "powerAt": "2026-11-18T11:58:00.000Z"
+        }
+      },
+      "condition": {
+        "type": "zigbee_socket_on",
+        "deviceId": "dev",
+        "on": true
+      },
+      "held": false,
+      "signal": {
+        "name": "Бойлер",
+        "temperatureC": null,
+        "humidityPct": null,
+        "powerW": 1840,
+        "on": true
+      },
+      "holds": true
+    },
+    {
+      "name": "socket off matches off",
+      "doc": {
+        "householdId": "hh-1",
+        "type": "switch",
+        "name": "Бойлер",
+        "status": "online",
+        "reachable": true,
+        "state": {
+          "on": false,
+          "power": 0,
+          "powerAt": "2026-11-18T11:58:00.000Z"
+        }
+      },
+      "condition": {
+        "type": "zigbee_socket_on",
+        "deviceId": "dev",
+        "on": false
+      },
+      "held": false,
+      "signal": {
+        "name": "Бойлер",
+        "temperatureC": null,
+        "humidityPct": null,
+        "powerW": 0,
+        "on": false
+      },
+      "holds": true
+    },
+    {
+      "name": "socket on does not match off",
+      "doc": {
+        "householdId": "hh-1",
+        "type": "switch",
+        "name": "Бойлер",
+        "status": "online",
+        "reachable": true,
+        "state": {
+          "on": true,
+          "power": 1840,
+          "powerAt": "2026-11-18T11:58:00.000Z"
+        }
+      },
+      "condition": {
+        "type": "zigbee_socket_on",
+        "deviceId": "dev",
+        "on": false
+      },
+      "held": true,
+      "signal": {
+        "name": "Бойлер",
+        "temperatureC": null,
+        "humidityPct": null,
+        "powerW": 1840,
+        "on": true
+      },
+      "holds": false
+    },
+    {
+      "name": "an unreachable socket says nothing about power or state",
+      "doc": {
+        "householdId": "hh-1",
+        "type": "switch",
+        "name": "Бойлер",
+        "status": "online",
+        "reachable": false,
+        "state": {
+          "on": true,
+          "power": 1840,
+          "powerAt": "2026-11-18T11:58:00.000Z"
+        }
+      },
+      "condition": {
+        "type": "zigbee_socket_on",
+        "deviceId": "dev",
+        "on": true
+      },
+      "held": true,
+      "signal": {
+        "name": "Бойлер",
+        "temperatureC": null,
+        "humidityPct": null,
+        "powerW": null,
+        "on": null
+      },
+      "holds": false
+    },
+    {
+      "name": "a socket the API marked offline says nothing either",
+      "doc": {
+        "householdId": "hh-1",
+        "type": "switch",
+        "name": "Бойлер",
+        "status": "offline",
+        "reachable": true,
+        "state": {
+          "on": true,
+          "power": 1840,
+          "powerAt": "2026-11-18T11:58:00.000Z"
+        }
+      },
+      "condition": {
+        "type": "zigbee_socket_power",
+        "deviceId": "dev",
+        "op": "gte",
+        "thresholdW": 10
+      },
+      "held": true,
+      "signal": {
+        "name": "Бойлер",
+        "temperatureC": null,
+        "humidityPct": null,
+        "powerW": null,
+        "on": null
+      },
+      "holds": false
+    },
+    {
+      "name": "a socket power that is not a number is unknown",
+      "doc": {
+        "householdId": "hh-1",
+        "type": "switch",
+        "name": "Бойлер",
+        "status": "online",
+        "reachable": true,
+        "state": {
+          "on": true,
+          "power": "1840",
+          "powerAt": "2026-11-18T11:58:00.000Z"
+        }
+      },
+      "condition": {
+        "type": "zigbee_socket_power",
+        "deviceId": "dev",
+        "op": "gte",
+        "thresholdW": 10
+      },
+      "held": false,
+      "signal": {
+        "name": "Бойлер",
+        "temperatureC": null,
+        "humidityPct": null,
+        "powerW": null,
+        "on": true
+      },
+      "holds": false
+    },
+    {
+      "name": "a missing device is unknown",
+      "doc": null,
+      "condition": {
+        "type": "zigbee_socket_on",
+        "deviceId": "dev",
+        "on": true
+      },
+      "held": true,
+      "signal": {
+        "name": null,
+        "temperatureC": null,
+        "humidityPct": null,
+        "powerW": null,
+        "on": null
+      },
+      "holds": false
+    },
+    {
+      "name": "a device of another household is unknown",
+      "doc": {
+        "householdId": "hh-2",
+        "type": "sensor",
+        "name": "Спальня",
+        "lastReading": {
+          "temperature": 1943,
+          "humidity": 5610,
+          "battery": 180
+        },
+        "lastReadingAt": "2026-11-18T11:59:00.000Z"
+      },
+      "condition": {
+        "type": "zigbee_temperature",
+        "deviceId": "dev",
+        "op": "lte",
+        "thresholdC": 20
+      },
+      "held": false,
+      "signal": {
+        "name": null,
+        "temperatureC": null,
+        "humidityPct": null,
+        "powerW": null,
+        "on": null
+      },
+      "holds": false
+    },
+    {
+      "name": "a blank name reads as no name",
+      "doc": {
+        "householdId": "hh-1",
+        "type": "sensor",
+        "name": "  ",
+        "lastReading": {
+          "temperature": 1943,
+          "humidity": 5610,
+          "battery": 180
+        },
+        "lastReadingAt": "2026-11-18T11:59:00.000Z"
+      },
+      "condition": {
+        "type": "zigbee_temperature",
+        "deviceId": "dev",
+        "op": "lte",
+        "thresholdC": 20
+      },
+      "held": false,
+      "signal": {
+        "name": null,
+        "temperatureC": 19.43,
+        "humidityPct": 56.1,
+        "powerW": null,
+        "on": null
+      },
+      "holds": true
+    }
+  ]
+}

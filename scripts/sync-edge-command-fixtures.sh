@@ -4,7 +4,9 @@
 # UPDATE_EDGE_COMMAND_PAYLOADS=1 (edge-command-payloads-fixture.test.ts), or
 # firmware_signed_commands.json and edge_paths.json with UPDATE_EDGE_CONTRACT=1
 # (signing-command-parity.test.ts). edge_pair_code.json and
-# island_capability_vocab.json are hand-written there. zigbee_device_profiles.json
+# island_capability_vocab.json are hand-written there, and
+# zigbee_condition_cases.json is pinned against the cloud there
+# (zigbee-conditions.test.ts). zigbee_device_profiles.json
 # (prod's `config/zigbeeDeviceProfiles`) is read at runtime, so it goes into the
 # integration itself.
 set -euo pipefail
@@ -18,7 +20,8 @@ for SRC_REL in \
   fixtures/firmware_signed_commands.json \
   fixtures/edge_paths.json \
   fixtures/edge_pair_code.json \
-  fixtures/island_capability_vocab.json; do
+  fixtures/island_capability_vocab.json \
+  fixtures/zigbee_condition_cases.json; do
   SRC="$INVERTER_PROTOCOL_DIR/$SRC_REL"
   DEST="$FIXTURES_DIR/$(basename "$SRC_REL")"
   [ -f "$SRC" ] || { echo "source not found: $SRC" >&2; exit 1; }
