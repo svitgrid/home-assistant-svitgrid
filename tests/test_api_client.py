@@ -722,3 +722,30 @@ class TestIslandLogsStart:
         with pytest.raises(SvitgridApiError) as ei:
             await client.island_logs_start(api_key="k", from_ts=1, to_ts=2)
         assert not isinstance(ei.value, IslandLogsRefused)
+
+
+@pytest.mark.asyncio
+async def test_post_coredump_sends_the_body_for_the_board_and_returns_the_answer():
+    """svitgrid D-2112: Home Assistant forwards an island board's crash dump."""
+    session, _ = _mock_session_with_response(201, {"id": "d1", "gcsPath": "p"})
+    client = SvitgridApiClient(session, api_base="https://api.example")
+    status, body = await client.post_coredump(
+        api_key="ha-key", body={"version": "1.2.3", "coredumpB64": "AA=="}, for_device_id="EC-1"
+    )
+    assert (status, body) == (201, {"id": "d1", "gcsPath": "p"})
+    call_args = session.post.call_args
+    assert call_args.args[0] == "https://api.example/api/v1/edge-devices/coredump"
+    assert call_args.kwargs["headers"]["x-api-key"] == "ha-key"
+    assert call_args.kwargs["json"] == {
+        "version": "1.2.3",
+        "coredumpB64": "AA==",
+        "forDeviceId": "EC-1",
+    }
+
+
+@pytest.mark.asyncio
+async def test_post_coredump_returns_a_refusal_without_raising():
+    session, _ = _mock_session_with_response(403, {"error": "not_island"})
+    client = SvitgridApiClient(session, api_base="https://api.example")
+    status, body = await client.post_coredump(api_key="k", body={}, for_device_id="EC-1")
+    assert (status, body) == (403, {"error": "not_island"})

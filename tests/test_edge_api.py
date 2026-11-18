@@ -472,6 +472,104 @@ async def test_coredump_with_a_body_that_is_not_json_still_answers_200():
     assert _json(resp) == {"stored": False, "reason": "island"}
 
 
+# ── island coredump: the board's crash dump is relayed to the cloud (D-2112) ──
+
+_DUMP = {
+    "version": "1.4.0",
+    "resetReason": "panic",
+    "crashSummary": "LoadProhibited at 0x4200",
+    "bootCount": 3,
+    "sizeBytes": 4,
+    "crcValid": True,
+    "coredumpB64": "AAAAAA==",
+}
+
+
+class _FakeCoredumpClient:
+    def __init__(self, answer=(201, {"id": "d1", "gcsPath": "coredumps/EC-1/d1"}), raises=None):
+        self.answer, self.raises, self.calls = answer, raises, []
+
+    async def post_coredump(self, api_key, body, *, for_device_id):
+        self.calls.append((api_key, body, for_device_id))
+        if self.raises:
+            raise self.raises
+        return self.answer
+
+
+def _coredump_hass(client, api_key="ha-key"):
+    hass = _hass(_keystore(_box()))
+    hass.data[DOMAIN][ENTRY_ID] = {
+        "store": _StampStore(),
+        "api_client": client,
+        "entry_data": {"api_key": api_key} if api_key else {},
+    }
+    return hass
+
+
+@pytest.mark.asyncio
+async def test_coredump_is_forwarded_for_the_board_with_the_ha_key(caplog):
+    client = _FakeCoredumpClient()
+    hass = _coredump_hass(client)
+    with caplog.at_level(logging.WARNING, logger=edge_api.__name__):
+        resp = await _call(
+            edge_api.EdgeCoredumpView, "post", hass, api_key=BOX_KEY, body=dict(_DUMP)
+        )
+    assert resp.status == 201
+    assert _json(resp) == {"id": "d1", "gcsPath": "coredumps/EC-1/d1"}
+    assert client.calls == [("ha-key", _DUMP, "EC-1")]
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert "LoadProhibited at 0x4200" in warnings[0].getMessage()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [500, 503])
+async def test_coredump_cloud_5xx_answers_502_so_the_board_keeps_it(status):
+    hass = _coredump_hass(_FakeCoredumpClient(answer=(status, {"error": "Upload failed"})))
+    resp = await _call(edge_api.EdgeCoredumpView, "post", hass, api_key=BOX_KEY, body=dict(_DUMP))
+    assert resp.status == 502
+    assert _json(resp) == {"error": "forward_failed"}
+
+
+@pytest.mark.asyncio
+async def test_coredump_cloud_unreachable_answers_502():
+    hass = _coredump_hass(_FakeCoredumpClient(raises=TimeoutError()))
+    resp = await _call(edge_api.EdgeCoredumpView, "post", hass, api_key=BOX_KEY, body=dict(_DUMP))
+    assert resp.status == 502
+    assert _json(resp) == {"error": "forward_failed"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "answer", [(403, {"error": "not_island"}), (413, {"error": "Coredump too large"}), (400, None)]
+)
+async def test_coredump_cloud_4xx_is_passed_through(answer):
+    hass = _coredump_hass(_FakeCoredumpClient(answer=answer))
+    resp = await _call(edge_api.EdgeCoredumpView, "post", hass, api_key=BOX_KEY, body=dict(_DUMP))
+    assert resp.status == answer[0]
+    assert _json(resp) == (answer[1] or {"error": "rejected"})
+
+
+@pytest.mark.asyncio
+async def test_coredump_on_a_guest_entry_is_not_forwarded():
+    client = _FakeCoredumpClient()
+    hass = _coredump_hass(client, api_key=None)
+    resp = await _call(edge_api.EdgeCoredumpView, "post", hass, api_key=BOX_KEY, body=dict(_DUMP))
+    assert resp.status == 200
+    assert _json(resp) == {"stored": False, "reason": "island"}
+    assert client.calls == []
+
+
+@pytest.mark.asyncio
+async def test_coredump_that_is_not_a_json_object_is_not_forwarded():
+    client = _FakeCoredumpClient()
+    hass = _coredump_hass(client)
+    resp = await _call(edge_api.EdgeCoredumpView, "post", hass, api_key=BOX_KEY, body=["x"])
+    assert resp.status == 200
+    assert _json(resp) == {"stored": False, "reason": "island"}
+    assert client.calls == []
+
+
 @pytest.mark.asyncio
 async def test_logs_upload_is_refused_with_403_island():
     """upload_logs is an operator command sent through the cloud, so an

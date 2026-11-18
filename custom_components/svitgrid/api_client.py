@@ -297,6 +297,21 @@ class SvitgridApiClient:
             if resp.status >= 400:
                 raise CommandAckFailed(f"HTTP {resp.status}: {await _err(resp)}")
 
+    async def post_coredump(
+        self, api_key: str, body: dict[str, Any], *, for_device_id: str
+    ) -> tuple[int, dict[str, Any] | None]:
+        """POST an island board's crash dump on its behalf (svitgrid D-2112).
+        Returns the status and the parsed body for every answer, refusals
+        included; the body is None when it is not a JSON object."""
+        url = f"{self._base}/api/v1/edge-devices/coredump"
+        payload = {**body, "forDeviceId": for_device_id}
+        async with self._session.post(url, headers={"x-api-key": api_key}, json=payload) as resp:
+            try:
+                answer = await resp.json(content_type=None)
+            except Exception:  # noqa: BLE001
+                answer = None
+            return resp.status, answer if isinstance(answer, dict) else None
+
     async def post_log_part(self, api_key: str, body: dict[str, Any]) -> None:
         """POST one upload_logs part to the logs route the ED-1 uses."""
         await self._post_log(api_key, body)
