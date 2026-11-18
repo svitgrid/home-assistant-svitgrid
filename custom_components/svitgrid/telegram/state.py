@@ -11,7 +11,7 @@ import asyncio
 import hashlib
 import re
 import secrets
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -45,6 +45,9 @@ class Chat:
     enabled: bool
     language: str
     linked_at: str
+    # What this chat wants (svitgrid D-2150): only the keys the owner set, in
+    # the cloud's names. `prefs.merged` puts the defaults under them.
+    prefs: dict[str, Any] = field(default_factory=dict)
 
 
 class TelegramState:
@@ -115,6 +118,7 @@ class TelegramState:
                         enabled=bool(c.get("enabled", True)),
                         language=str(c.get("language") or "en"),
                         linked_at=str(c.get("linked_at") or ""),
+                        prefs=dict(c["prefs"]) if isinstance(c.get("prefs"), dict) else {},
                     )
                 except (KeyError, TypeError, ValueError, AttributeError):
                     continue
@@ -174,6 +178,14 @@ class TelegramState:
             chat = self._chats.get(device_id)
             if chat is not None:
                 chat.enabled = enabled
+                self._save_later()
+
+    async def set_prefs(self, device_id: str, patch: dict[str, Any]) -> None:
+        """Merge `patch` into a chat's stored preferences."""
+        async with self._lock:
+            chat = self._chats.get(device_id)
+            if chat is not None:
+                chat.prefs = {**chat.prefs, **patch}
                 self._save_later()
 
     async def unlink(self, device_id: str) -> None:

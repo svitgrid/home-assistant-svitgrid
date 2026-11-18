@@ -158,3 +158,18 @@ async def test_drop_codes_for_a_device(state):
 def test_the_store_file_is_private(hass):
     """The bot token's file is written 0600."""
     assert TelegramState(hass)._store._private is True
+
+
+async def test_chat_prefs_persist(hass, state):
+    """A chat keeps its own preferences across a reload (svitgrid D-2150)."""
+    now = datetime(2026, 10, 30, 12, 0, tzinfo=UTC)
+    code = await state.issue_code("phone-1", "uk", now)
+    await state.claim_code(code, 77, "ann", now)
+    assert state.chat_for("phone-1").prefs == {}
+    await state.set_prefs("phone-1", {"dailyReport": True})
+    await state.set_prefs("phone-1", {"mutedAlerts": ["battery_full"]})
+    await state.set_prefs("phone-9", {"dailyReport": True})  # no such chat
+    await state.flush()
+    again = TelegramState(hass)
+    await again.load()
+    assert again.chat_for("phone-1").prefs == {"dailyReport": True, "mutedAlerts": ["battery_full"]}

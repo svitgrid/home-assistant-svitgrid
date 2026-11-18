@@ -1,5 +1,5 @@
 {
-  "description": "The island Telegram LAN contract, written from the ROUTES as implemented (add-on telegram/views.py and the phone station's PhoneTelegramStation.handle), not from the app client. The app client and both stations are held to it. Change all three together.",
+  "description": "The island Telegram LAN contract, written from the ROUTES as implemented (add-on telegram/views.py and the phone station's PhoneTelegramStation.handle), not from the app client. The app client and both stations are held to it. Change all three together. The per-chat preference routes (`me/prefs`, D-2150) are the add-on's alone: the phone station serves none yet, so their cases list only `ha`.",
   "token": "123456:AAbbCCddEEffGGhhIIjjKKllMMnnOOpp_x",
   "botUsername": "my_bot",
   "linkedChat": { "chatId": 77, "username": "ann", "language": "uk" },
@@ -31,7 +31,9 @@
     { "id": "post_link", "method": "POST", "path": "/api/svitgrid/telegram/link", "auth": { "ha": "keyed", "phone": "keyed" } },
     { "id": "patch_me", "method": "PATCH", "path": "/api/svitgrid/telegram/me", "auth": { "ha": "keyed", "phone": "keyed" } },
     { "id": "delete_me", "method": "DELETE", "path": "/api/svitgrid/telegram/me", "auth": { "ha": "keyed", "phone": "keyed" } },
-    { "id": "post_test", "method": "POST", "path": "/api/svitgrid/telegram/test", "auth": { "ha": "keyed", "phone": "keyed" } }
+    { "id": "post_test", "method": "POST", "path": "/api/svitgrid/telegram/test", "auth": { "ha": "keyed", "phone": "keyed" } },
+    { "id": "get_me_prefs", "method": "GET", "path": "/api/svitgrid/telegram/me/prefs", "auth": { "ha": "keyed" } },
+    { "id": "patch_me_prefs", "method": "PATCH", "path": "/api/svitgrid/telegram/me/prefs", "auth": { "ha": "keyed" } }
   ],
   "appErrors": [
     "invalidToken", "botHasWebhook", "telegramUnreachable", "notSigner",
@@ -348,6 +350,39 @@
       "request": { "phone": { "auth": "keyed", "body": null } },
       "reply": { "status": 405, "body": { "error": "method_not_allowed" } },
       "outcome": { "error": "failed" }
+    },
+    {
+      "id": "prefs_defaults", "route": "get_me_prefs", "stations": ["ha"], "setup": "linked",
+      "call": { "method": "prefs" },
+      "request": { "ha": { "auth": "keyed", "body": null } },
+      "reply": { "status": 200, "body": { "prefs": { "mutedAlerts": [], "dailyReport": false, "dailyReportTime": "08:00", "weeklyReport": false, "quietHoursEnabled": false, "quietHoursStart": "22:00", "quietHoursEnd": "07:00" } } },
+      "outcome": { "prefs": "ok" }
+    },
+    {
+      "id": "prefs_patch", "route": "patch_me_prefs", "stations": ["ha"], "setup": "linked",
+      "call": { "method": "setPrefs", "prefs": { "mutedAlerts": ["battery_full"], "dailyReport": true, "dailyReportTime": "09:00", "quietHoursEnabled": true } },
+      "request": { "ha": { "auth": "keyed", "body": { "mutedAlerts": ["battery_full"], "dailyReport": true, "dailyReportTime": "09:00", "quietHoursEnabled": true } } },
+      "reply": { "status": 200, "body": { "prefs": { "mutedAlerts": ["battery_full"], "dailyReport": true, "dailyReportTime": "09:00", "weeklyReport": false, "quietHoursEnabled": true, "quietHoursStart": "22:00", "quietHoursEnd": "07:00" } } },
+      "outcome": { "prefs": "ok" }
+    },
+    {
+      "id": "prefs_bad_time", "route": "patch_me_prefs", "stations": ["ha"], "setup": "linked", "stationOnly": true,
+      "request": { "ha": { "auth": "keyed", "body": { "dailyReportTime": "25:00" } } },
+      "reply": { "status": 400, "body": { "error": "bad_request" } },
+      "outcome": { "error": "failed" }
+    },
+    {
+      "id": "prefs_unknown_key", "route": "patch_me_prefs", "stations": ["ha"], "setup": "linked", "stationOnly": true,
+      "request": { "ha": { "auth": "keyed", "body": { "promotionsEnabled": false } } },
+      "reply": { "status": 400, "body": { "error": "bad_request" } },
+      "outcome": { "error": "failed" }
+    },
+    {
+      "id": "prefs_not_linked", "route": "get_me_prefs", "stations": ["ha"], "setup": "bot",
+      "call": { "method": "prefs" },
+      "request": { "ha": { "auth": "keyed", "body": null } },
+      "reply": { "status": 409, "body": { "error": "not_linked" } },
+      "outcome": { "error": "notLinked" }
     }
   ]
 }

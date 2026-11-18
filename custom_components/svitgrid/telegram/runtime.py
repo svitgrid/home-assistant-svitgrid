@@ -27,7 +27,7 @@ from homeassistant.helpers.event import async_track_time_interval
 
 from ..const import DOMAIN
 from ..island_lan import _cloud_copy_of
-from . import copy
+from . import copy, prefs
 from .bot_api import BotApi, BotInUseElsewhere, InvalidToken, SendResult, TelegramUnreachable
 from .detector import evaluate
 from .liveness import evaluate_liveness
@@ -214,6 +214,16 @@ class TelegramRuntime:
     def _can_poll(self) -> bool:
         return self._can_send() and self._state.has_pending_codes(self._now())
 
+    def _wanting(self, kind: str) -> list:
+        """The enabled chats that want `kind` now (svitgrid D-2150)."""
+        now = self._now()
+        tz = self._hass.config.time_zone
+        return [
+            c
+            for c in self._state.chats()
+            if c.enabled and prefs.wants(prefs.merged(c.prefs), kind, now, tz)
+        ]
+
     def _entry_for(self, household_id: str | None):
         """The config entry of a household, or None."""
         if not household_id:
@@ -287,7 +297,7 @@ class TelegramRuntime:
                     "createdAtMs": now_ms,
                 }
                 for alert in alerts
-                for chat in chats
+                for chat in self._wanting(alert.type)
             ]
             if not added:
                 return
@@ -355,7 +365,7 @@ class TelegramRuntime:
                     "createdAtMs": now_ms,
                 }
                 for alert in alerts
-                for chat in chats
+                for chat in self._wanting(alert.kind)
             ]
             if not added:
                 return
@@ -396,7 +406,7 @@ class TelegramRuntime:
                     "endTime": end_time if isinstance(end_time, str) else None,
                     "createdAtMs": now_ms,
                 }
-                for chat in chats
+                for chat in self._wanting(kind)
             ]
             await self._state.set_queue(_trim([*self._state.queue(), *added], now_ms))
         self._kick_sender()

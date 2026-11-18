@@ -356,6 +356,8 @@ _VIEWS = {
     "patch_me": (tv.SvitgridTelegramMeView, "patch"),
     "delete_me": (tv.SvitgridTelegramMeView, "delete"),
     "post_test": (tv.SvitgridTelegramTestView, "post"),
+    "get_me_prefs": (tv.SvitgridTelegramPrefsView, "get"),
+    "patch_me_prefs": (tv.SvitgridTelegramPrefsView, "patch"),
 }
 
 

@@ -319,6 +319,40 @@ async def test_rule_notice_needs_a_chat(setup):
     assert state.queue() == []
 
 
+async def test_a_chat_gets_only_the_kinds_it_wants(setup):
+    """A muted kind skips that chat, and quiet hours hold back what is not
+    urgent, as the cloud's sender does (svitgrid D-2150)."""
+    rt, state, api, clock, _ = setup
+    state._chats["phone-1"] = Chat(
+        "phone-1",
+        11,
+        None,
+        True,
+        "uk",
+        "2026-10-30T00:00:00+00:00",
+        {"mutedAlerts": ["low_battery"]},
+    )
+    _chat(state, "phone-2", 22)
+    await rt.on_reading("hh1", "inv1", {"gridPresent": True, "batterySoc": 25})
+    clock.now += timedelta(minutes=10)
+    await rt.on_reading("hh1", "inv1", {"gridPresent": True, "batterySoc": 19})
+    assert [(e["chatDeviceId"], e["kind"]) for e in state.queue()] == [("phone-2", "low_battery")]
+
+
+async def test_quiet_hours_hold_a_notice_but_not_an_outage(setup, hass):
+    rt, state, _, clock, _ = setup
+    await hass.config.async_update(time_zone="Europe/Kyiv")
+    quiet = {"quietHoursEnabled": True, "quietHoursStart": "13:00", "quietHoursEnd": "15:00"}
+    state._chats["phone-1"] = Chat(
+        "phone-1", 11, None, True, "uk", "2026-10-30T00:00:00+00:00", quiet
+    )
+    # NOW is 12:00 UTC, 14:00 in Kyiv: inside the window.
+    await rt.on_rule_notice("hh1", {"id": "e", "name": "x"}, "started")
+    assert state.queue() == []
+    await _outage(rt)
+    assert [e["kind"] for e in state.queue()] == ["outage"]
+
+
 async def test_retry_keeps_order_and_sends_after_reconnect(setup):
     rt, state, api, clock, sleeps = setup
     _chat(state, "phone-1", 11)

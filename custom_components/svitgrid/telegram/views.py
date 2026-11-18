@@ -1,7 +1,7 @@
 """LAN routes for island Telegram notifications.
 
 The Svitgrid app calls these to set the owner's bot, make a link code, switch a
-person's chat on or off, unlink it and send a test. The phone station serves the
+person's chat on or off, choose what it receives, unlink it and send a test. The phone station serves the
 same JSON. Per-person routes take the calling phone's island key; the two bot
 routes also need a trusted signature, since they change the station for everyone.
 A station with no bot token makes no outbound call on any route but `PUT /bot`.
@@ -20,6 +20,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from ..const import DOMAIN
 from ..island_lan import _cloud_copy_of, _json_error, signed_lan_request
+from . import prefs as chat_prefs
 from .bot_api import BotApi, InvalidToken, TelegramUnreachable
 from .runtime import TelegramRuntime, TestOutcome
 from .state import CODE_TTL, TelegramState, parse_token
@@ -251,12 +252,47 @@ class SvitgridTelegramTestView(HomeAssistantView):
         return _json({"ok": True})
 
 
+class SvitgridTelegramPrefsView(HomeAssistantView):
+    """GET / PATCH /api/svitgrid/telegram/me/prefs — what the caller's chat gets.
+
+    The cloud's preference names and defaults (svitgrid D-2150). A PATCH sets
+    only the fields it carries; an unknown field or a bad value is a 400.
+    """
+
+    url = "/api/svitgrid/telegram/me/prefs"
+    name = "api:svitgrid:telegram:me:prefs"
+    requires_auth = False
+
+    async def get(self, request) -> web.Response:  # noqa: D102
+        device_id, error = await _caller(request)
+        if error is not None:
+            return error
+        chat = (await telegram_state(request.app["hass"])).chat_for(device_id)
+        if chat is None:
+            return _json_error(409, "not_linked")
+        return _json({"prefs": chat_prefs.merged(chat.prefs)})
+
+    async def patch(self, request) -> web.Response:  # noqa: D102
+        device_id, error = await _caller(request)
+        if error is not None:
+            return error
+        patch = chat_prefs.validate_patch(await _body_dict(request))
+        if patch is None:
+            return _json_error(400, "bad_request")
+        state = await telegram_state(request.app["hass"])
+        if state.chat_for(device_id) is None:
+            return _json_error(409, "not_linked")
+        await state.set_prefs(device_id, patch)
+        return _json({"prefs": chat_prefs.merged(state.chat_for(device_id).prefs)})
+
+
 TELEGRAM_VIEWS = (
     SvitgridTelegramView,
     SvitgridTelegramBotView,
     SvitgridTelegramLinkView,
     SvitgridTelegramMeView,
     SvitgridTelegramTestView,
+    SvitgridTelegramPrefsView,
 )
 
 
