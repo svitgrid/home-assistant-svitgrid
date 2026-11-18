@@ -44,6 +44,7 @@ from homeassistant.components.http import HomeAssistantView
 
 from .const import DOMAIN
 from .edge_api import _entry_state as _edge_entry_state
+from .harvest.socket_actions import EDGE_DEVICE_MISSING, SocketSwitcher
 from .island_lan import _box_command, _device_id, _island_key_ok, _json_error, signed_lan_request
 from .local_time import local_day_of, local_day_window
 
@@ -99,6 +100,43 @@ async def _edge_boxes(hass) -> dict:
     keystore = (hass.data.get(DOMAIN) or {}).get("keystore")
     state = await keystore.load() if keystore is not None else None
     return dict(state.edge_boxes) if state is not None else {}
+
+
+class _RuleSocketSwitcher:
+    """The island scheduler's socket switcher (svitgrid D-2158), resolved on
+    each call: the Zigbee store and the edge queue exist only once a box is
+    adopted, and the scheduler starts before them."""
+
+    def __init__(self, hass) -> None:
+        self._hass = hass
+
+    def _inner(self) -> SocketSwitcher | None:
+        devices, queue = _parts(self._hass)
+        if devices is None or queue is None:
+            return None
+        return SocketSwitcher(devices, queue, self._box_ids)
+
+    async def _box_ids(self) -> set[str]:
+        return set(await _edge_boxes(self._hass))
+
+    async def async_available(self) -> bool:
+        inner = self._inner()
+        return inner is not None and await inner.async_available()
+
+    async def async_roster(self) -> list[dict]:
+        inner = self._inner()
+        return await inner.async_roster() if inner is not None else []
+
+    async def async_switch(self, event: dict, sends) -> list[tuple[str, str]]:
+        inner = self._inner()
+        if inner is None:
+            return [(device["id"], EDGE_DEVICE_MISSING) for device, _ in sends]
+        return await inner.async_switch(event, sends)
+
+
+def rule_socket_switcher(hass) -> _RuleSocketSwitcher:
+    """The switcher through which island rules set Zigbee sockets."""
+    return _RuleSocketSwitcher(hass)
 
 
 def _no_edge_boxes() -> web.Response:

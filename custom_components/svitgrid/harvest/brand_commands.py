@@ -181,6 +181,10 @@ _DEYE_MODES = ("battery_charge", "use_battery", "sell_to_grid", "gen_force")
 # The modes a priority-profile brand runs, each through the profile
 # profile_for_mode names. sell_to_grid has no profile, so it is not written.
 _PRIORITY_MODES = ("battery_charge", "use_battery")
+# Every edge inverter, whatever its brand, also lists these: they switch the
+# adopted boxes' Zigbee sockets, not the inverter (socket_actions, svitgrid
+# D-2158). The vocabulary names them `edgeActions`.
+_EDGE_SOCKET_ACTIONS = ("smart_device", "smart_device_except")
 
 
 def island_writes(inv: dict) -> dict[str, list[str]]:
@@ -189,8 +193,16 @@ def island_writes(inv: dict) -> dict[str, list[str]]:
 
     A priority-profile brand lists a mode only when its protocol has that
     mode's profile (an SNA has no battery_first), and the thresholds action of
-    its own protocol (PI30 or MUST, svitgrid#1255).
+    its own protocol (PI30 or MUST, svitgrid#1255). Every one lists the socket
+    actions too (``_EDGE_SOCKET_ACTIONS``).
     """
+    writes = _brand_writes(inv)
+    writes["writableActions"] += _EDGE_SOCKET_ACTIONS
+    return writes
+
+
+def _brand_writes(inv: dict) -> dict[str, list[str]]:
+    """island_writes for the inverter itself: what its brand is written with."""
     # priority_profile and event_evaluator import this module.
     from .event_evaluator import _THRESHOLDS
     from .priority_profile import PROFILES_BY_PROTOCOL

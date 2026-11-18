@@ -507,6 +507,8 @@ async def test_setup_entry_cloud_ingest_false_scheduler_spawned_and_event_store_
     assert event_store in all_args, (
         "run_event_scheduler_loop must receive the event_store from hass.data"
     )
+    # A rule's sockets are switched through the edge boxes (svitgrid D-2158).
+    assert call_kwargs.kwargs.get("sockets") is not None
 
 
 @pytest.mark.asyncio
@@ -1303,3 +1305,213 @@ async def test_a_failing_notice_never_stops_the_tick():
         on_notice=on_notice,
     )
     assert event_store.state_calls[-1][1]["status"] == "active"
+
+
+# ───────── A rule switches Zigbee sockets on an edge island (svitgrid D-2158) ─────────
+
+
+class _FakeSockets:
+    """The scheduler's socket switcher: a roster, and the switches it queued."""
+
+    def __init__(self, roster, *, available=True, skip=()):
+        self._roster = roster
+        self._available = available
+        self._skip = list(skip)
+        self.switched: list = []
+
+    async def async_available(self):
+        return self._available
+
+    async def async_roster(self):
+        return list(self._roster)
+
+    async def async_switch(self, event, sends):
+        self.switched.append((event.get("id"), [(d["id"], on) for d, on in sends]))
+        return list(self._skip)
+
+
+class _FakeJournal:
+    def __init__(self):
+        self.rows: list[dict] = []
+
+    async def async_record(self, **fields):
+        self.rows.append(fields)
+
+
+def _socket_row(device_id, on=True, adopted=True):
+    return {
+        "id": device_id,
+        "deviceId": "EC-1",
+        "addr": "0x0001",
+        "endpoint": 1,
+        "on": on,
+        "reachable": True,
+        "caps": None,
+        "sensor": False,
+        "pendingOn": False,
+        "boxAdopted": adopted,
+    }
+
+
+def _socket_rule(actions, exec_state=None):
+    # Its condition (none) has held since 10:00, so the rule activates.
+    pending = {"status": "pending_condition", "conditionMetSince": "2026-06-29T10:00:00+00:00"}
+    event = _make_use_battery_event(exec_state=exec_state or pending)
+    event.update(mode="custom", config={"customActions": actions}, signing=_SIGNING)
+    return event
+
+
+_BOILER_OFF = {
+    "type": "smart_device",
+    "deviceIds": ["boiler"],
+    "activeState": False,
+    "restoreState": True,
+}
+
+
+@pytest.mark.asyncio
+async def test_a_rule_switches_its_socket_and_records_the_baseline():
+    from custom_components.svitgrid.harvest.event_scheduler_loop import _tick
+
+    sockets = _FakeSockets([_socket_row("boiler", on=True)])
+    event_store = FakeEventStore([_socket_rule([_BOILER_OFF])])
+
+    await _tick(
+        FakeStore([_reading_at()]),
+        event_store,
+        lambda _i: _ok_executor(),
+        "UTC",
+        _NOW_IN_WINDOW,
+        sockets=sockets,
+    )
+
+    assert sockets.switched == [("evt-1", [("boiler", False)])]
+    state = event_store.state_calls[-1][1]
+    assert state["status"] == "active"
+    assert state["socketBaselines"] == {"boiler": True}
+
+
+@pytest.mark.asyncio
+async def test_a_rule_hands_its_socket_back_when_its_window_ends():
+    from custom_components.svitgrid.harvest.event_scheduler_loop import _tick
+
+    sockets = _FakeSockets([_socket_row("boiler", on=False)])
+    active = {
+        "status": "active",
+        "lastActivatedAt": "2026-06-29T10:00:00+00:00",
+        "socketBaselines": {"boiler": True},
+    }
+    event_store = FakeEventStore([_socket_rule([_BOILER_OFF], exec_state=active)])
+
+    await _tick(
+        FakeStore([_reading_at()]),
+        event_store,
+        lambda _i: _ok_executor(),
+        "UTC",
+        _NOW_OUT_WINDOW,
+        sockets=sockets,
+    )
+
+    assert sockets.switched == [("evt-1", [("boiler", True)])]
+    state = event_store.state_calls[-1][1]
+    assert state["status"] == "idle"
+    assert "socketBaselines" not in state
+
+
+@pytest.mark.asyncio
+async def test_a_socket_on_no_adopted_board_is_skipped_into_the_rules_history():
+    from custom_components.svitgrid.harvest.event_scheduler_loop import _tick
+
+    sockets = _FakeSockets([_socket_row("boiler", adopted=False)])
+    journal = _FakeJournal()
+    action = {**_BOILER_OFF, "deviceIds": ["boiler", "gone"]}
+
+    await _tick(
+        FakeStore([_reading_at()]),
+        FakeEventStore([_socket_rule([action])]),
+        lambda _i: _ok_executor(),
+        "UTC",
+        _NOW_IN_WINDOW,
+        journal=journal,
+        sockets=sockets,
+    )
+
+    assert sockets.switched == [("evt-1", [])]
+    skips = [r for r in journal.rows if r["command"] == "set_state"]
+    assert [(r["status"], r["payload"], r["result"]) for r in skips] == [
+        (
+            "skipped",
+            {"smartDeviceId": "boiler", "on": False},
+            {"rulePhase": "start", "reason": "edge_device_missing"},
+        ),
+        (
+            "skipped",
+            {"smartDeviceId": "gone", "on": False},
+            {"rulePhase": "start", "reason": "socket_not_found"},
+        ),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_no_socket_is_switched_while_the_inverter_write_failed():
+    """The transition is retried, so its sockets go with the retry that lands."""
+    from custom_components.svitgrid.harvest.event_scheduler_loop import _tick
+
+    sockets = _FakeSockets([_socket_row("boiler")])
+    rule = _socket_rule([{"type": "work_mode", "value": 1}, _BOILER_OFF])
+
+    await _tick(
+        FakeStore([_reading_at()]),
+        FakeEventStore([rule]),
+        lambda _i: _failing_executor(RuntimeError("bus busy")),
+        "UTC",
+        _NOW_IN_WINDOW,
+        sockets=sockets,
+    )
+
+    assert sockets.switched == []
+
+
+@pytest.mark.asyncio
+async def test_cancelling_an_active_socket_rule_hands_its_sockets_back():
+    from custom_components.svitgrid.harvest.event_scheduler_loop import (
+        REMOVAL_DELETE,
+        REMOVAL_KEY,
+        _tick,
+    )
+
+    sockets = _FakeSockets([_socket_row("boiler", on=False)])
+    rule = _socket_rule(
+        [{"type": "smart_device_except", "keepIds": []}],
+        exec_state={"status": "active", "switchedOffIds": ["boiler"], REMOVAL_KEY: REMOVAL_DELETE},
+    )
+    event_store = FakeEventStore([rule])
+
+    await _tick(
+        FakeStore([_reading_at()]),
+        event_store,
+        lambda _i: _ok_executor(),
+        "UTC",
+        _NOW_IN_WINDOW,
+        sockets=sockets,
+    )
+
+    assert sockets.switched == [("evt-1", [("boiler", True)])]
+    assert await event_store.async_get_event("evt-1") is None
+
+
+@pytest.mark.asyncio
+async def test_without_a_switcher_a_socket_rule_runs_as_before():
+    """An HA-only island has no Zigbee hub: nothing is switched."""
+    from custom_components.svitgrid.harvest.event_scheduler_loop import _tick
+
+    event_store = FakeEventStore([_socket_rule([_BOILER_OFF])])
+    await _tick(
+        FakeStore([_reading_at()]),
+        event_store,
+        lambda _i: _ok_executor(),
+        "UTC",
+        _NOW_IN_WINDOW,
+    )
+    assert event_store.state_calls[-1][1]["status"] == "active"
+    assert "socketBaselines" not in event_store.state_calls[-1][1]

@@ -67,6 +67,7 @@ from ..bms_temperature import bms_temperature_from_states
 from ..operations_journal import SOURCE_INVERTER, now_iso, record_safely
 from ..zigbee_devices import zigbee_signal_from_doc
 from . import priority_profile as pp
+from . import socket_actions as sa
 from .event_evaluator import (
     BMS_TEMPERATURE_KEY,
     NEEDS_CLOUD,
@@ -248,6 +249,55 @@ async def _journal_skip(journal: object, event: dict, old: dict, new: dict) -> N
         status="skipped",
         result={"rulePhase": "skip", "reason": reason},
     )
+
+
+async def _switch_sockets(
+    sockets: object,
+    journal: object,
+    event: dict,
+    action: str,
+    exec_state: dict,
+    state: dict,
+    others,
+    now_utc: datetime,
+) -> None:
+    """Switch the sockets of a transition that reached the inverter
+    (svitgrid D-2158), recording in *state* what the release needs.
+
+    An activation switches them only from a run that was not active, and a
+    release only from one that was: a partial activation never switched one.
+    Each socket not switched gets a ``skipped`` row in the rule's history.
+    Never raises: a socket must not stop the rule.
+    """
+    if sockets is None or not sa.uses_sockets(event):
+        return
+    was_active = exec_state.get("status") == "active"
+    if action not in ("activate", "deactivate") or was_active is (action == "activate"):
+        return
+    try:
+        roster = await sockets.async_roster()
+        if action == "activate":
+            switches = sa.plan_activation(event, exec_state, state, roster, others)
+        else:
+            now_ms = int(now_utc.timestamp() * 1000)
+            switches = sa.plan_release(event, exec_state, state, others, now_ms)
+        sends, skipped = sa.resolve_switches(switches, roster)
+        skipped += await sockets.async_switch(event, sends)
+    except Exception:  # noqa: BLE001
+        _LOGGER.exception("Event %s: switching its sockets failed", event.get("id"))
+        return
+    wanted = dict(switches)
+    for device_id, reason in skipped:
+        _LOGGER.warning("Event %s: socket %s not switched (%s)", event.get("id"), device_id, reason)
+        await record_safely(
+            journal,
+            **_journal_fields(event),
+            command="set_state",
+            status="skipped",
+            payload={"smartDeviceId": device_id, "on": wanted.get(device_id)},
+            result={"rulePhase": _PHASES[action], "reason": reason},
+            executed_at=now_iso(),
+        )
 
 
 def _valid_work_mode(value: object) -> int | None:
@@ -463,6 +513,7 @@ async def _tick(
     journal: object = None,
     on_notice: object = None,
     zigbee_docs_for: object = None,
+    sockets: object = None,
 ) -> None:
     """Single scheduler tick.
 
@@ -497,13 +548,19 @@ async def _tick(
                    (``ZigbeeDeviceStore.async_condition_docs``). Read once per
                    tick, and only when an enabled event has a Zigbee
                    condition, whose signals it supplies (svitgrid D-2161).
+    sockets      : the island's socket switcher (``socket_actions.SocketSwitcher``)
+                   or None. Once a box is adopted, a rule's socket actions and
+                   the two socket modes switch Zigbee sockets (svitgrid D-2158,
+                   D-2159); without it they switch nothing, as before.
     """
     # 1. List events; finish any cancel the app asked for first
     all_events = await event_store.async_list_events()
     for event in all_events:
         if (event.get("executionState") or {}).get(REMOVAL_KEY):
             try:
-                await _settle(event_store, executor_for, event, now_utc, all_events, journal)
+                await _settle(
+                    event_store, executor_for, event, now_utc, all_events, journal, sockets
+                )
             except Exception:  # noqa: BLE001
                 _LOGGER.exception("Event %s: cancel restore failed", event.get("id"))
     enabled_events = [
@@ -597,6 +654,10 @@ async def _tick(
             if decision.action != "deactivate":
                 # A restore's ACK reads the event's own setting: never a prior.
                 capture_priors(state, results, others)
+            if failure is None:
+                await _switch_sockets(
+                    sockets, journal, event, decision.action, exec_state, state, others, now_utc
+                )
 
             # Persist EVERY tick — guard survival + hysteresis bookkeeping
             await _persist(event_store, latest, event, state, journal)
@@ -690,13 +751,22 @@ async def settle_removal(
     event_id: str,
     now_utc: datetime | None = None,
     journal: object = None,
+    sockets: object = None,
 ) -> None:
     """Run the restore of a cancelled event, then delete or idle it."""
     event = await event_store.async_get_event(event_id)
     if event is None:
         return
     events = await event_store.async_list_events()
-    await _settle(event_store, executor_for, event, now_utc or datetime.now(UTC), events, journal)
+    await _settle(
+        event_store,
+        executor_for,
+        event,
+        now_utc or datetime.now(UTC),
+        events,
+        journal,
+        sockets,
+    )
 
 
 async def _settle(
@@ -706,6 +776,7 @@ async def _settle(
     now_utc: datetime,
     events=(),
     journal: object = None,
+    sockets: object = None,
 ) -> None:
     event_id = event.get("id")
     exec_state = event.get("executionState") or {}
@@ -729,6 +800,9 @@ async def _settle(
             _log_failure(event_id, inverter_id, failure, state["dispatchFailures"])
             await event_store.async_set_execution_state(event_id, state)
             return
+        await _switch_sockets(
+            sockets, journal, event, "deactivate", exec_state, done_state, others, now_utc
+        )
         if removal == REMOVAL_DELETE:
             await event_store.async_delete_event(event_id)
             _LOGGER.info("Event %s: cancelled, restored and deleted", event_id)
@@ -755,6 +829,7 @@ async def run_event_scheduler_loop(
     journal: object = None,
     on_notice: object = None,
     zigbee_docs_for: object = None,
+    sockets: object = None,
 ) -> None:
     """Island-mode event scheduler loop.
 
@@ -782,6 +857,7 @@ async def run_event_scheduler_loop(
     journal      : OperationsJournal or None, see ``_tick``.
     on_notice    : async callable(event, phase), see ``_tick``.
     zigbee_docs_for : async callable(device_ids), see ``_tick``.
+    sockets      : the socket switcher, see ``_tick``.
 
     GATED: spawned ONLY when cloud_ingest_enabled=False.  With cloud-sync ON
     the cloud engine handles events; double-fire must not occur.
@@ -803,6 +879,7 @@ async def run_event_scheduler_loop(
                 journal,
                 on_notice,
                 zigbee_docs_for,
+                sockets,
             )
         except Exception:  # noqa: BLE001
             _LOGGER.exception(

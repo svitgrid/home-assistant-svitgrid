@@ -99,6 +99,7 @@ from .telegram.liveness_source import (
 from .telegram.runtime import TelegramRuntime, household_key
 from .telegram.views import async_ensure_telegram_views, telegram_state, unlink_device
 from .zigbee_devices import ZigbeeDeviceStore
+from .zigbee_lan import rule_socket_switcher
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -1307,6 +1308,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     # The boxes' Zigbee devices, which a Zigbee rule condition
                     # reads (svitgrid D-2161).
                     zigbee_docs_for=lambda ids: _zigbee_condition_docs(hass, entry.entry_id, ids),
+                    # A rule's socket actions set the Zigbee sockets of the
+                    # adopted boxes (svitgrid D-2158).
+                    sockets=rule_socket_switcher(hass),
                 ),
                 name="svitgrid_event_scheduler",
             )

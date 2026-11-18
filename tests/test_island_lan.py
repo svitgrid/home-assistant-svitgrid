@@ -1763,31 +1763,43 @@ async def test_island_status_advertises_each_edge_inverters_writes(hass: HomeAss
 
     deye = _VOCAB["brandKinds"]["deye"]
     # An edge island evaluates the boxes' Zigbee devices for every inverter
-    # (svitgrid D-2161).
+    # (svitgrid D-2161), and every edge inverter switches the boxes' Zigbee
+    # sockets (svitgrid D-2158).
     zigbee = {"conditionTypes": _ZIGBEE_CONDITION_TYPES}
+    sockets = _VOCAB["edgeActions"]
     assert body["inverters"] == {
         "inv-ha": {"host": "ha", "readSource": "native", **zigbee},
-        "inv-deye": {"host": "edge", **deye, **zigbee},
+        "inv-deye": {
+            "host": "edge",
+            "writableActions": [*deye["writableActions"], *sockets],
+            "modes": deye["modes"],
+            **zigbee,
+        },
         # Battery charge and use battery run as priority profiles, and each
         # protocol writes its own thresholds (svitgrid#1255). sell_to_grid has
         # no profile, so the island does not write it.
         "inv-pi30": {
             "host": "edge",
-            "writableActions": ["pi30_thresholds"],
+            "writableActions": ["pi30_thresholds", *sockets],
             "modes": ["battery_charge", "use_battery"],
             **zigbee,
         },
         "inv-must": {
             "host": "edge",
-            "writableActions": ["must_thresholds"],
+            "writableActions": ["must_thresholds", *sockets],
             "modes": ["battery_charge", "use_battery"],
             **zigbee,
         },
         # An SNA has no battery_first profile.
-        "inv-sna": {"host": "edge", "writableActions": [], "modes": ["battery_charge"], **zigbee},
-        # Review focus 5: SolaX on an edge island offers no writable action.
-        "inv-solax": {"host": "edge", "writableActions": [], "modes": [], **zigbee},
-        "inv-solis": {"host": "edge", "writableActions": [], "modes": [], **zigbee},
+        "inv-sna": {
+            "host": "edge",
+            "writableActions": sockets,
+            "modes": ["battery_charge"],
+            **zigbee,
+        },
+        # Review focus 5: SolaX on an edge island offers no inverter write.
+        "inv-solax": {"host": "edge", "writableActions": sockets, "modes": [], **zigbee},
+        "inv-solis": {"host": "edge", "writableActions": sockets, "modes": [], **zigbee},
     }
 
 
@@ -1818,8 +1830,9 @@ async def test_island_status_advert_stays_inside_the_vocabulary(hass: HomeAssist
         item = advert[inv["inverterId"]]
         assert item["host"] in _VOCAB["hosts"]
         ceiling = _VOCAB["brandKinds"][brand_kind(inv)]
-        assert set(item["writableActions"]) <= set(ceiling["writableActions"])
-        assert set(item["writableActions"]) <= set(_VOCAB["actionTypes"])
+        edge = set(_VOCAB["edgeActions"])
+        assert set(item["writableActions"]) <= set(ceiling["writableActions"]) | edge
+        assert set(item["writableActions"]) <= set(_VOCAB["actionTypes"]) | edge
         assert set(item["modes"]) <= set(ceiling["modes"])
         assert set(item["modes"]) <= set(_VOCAB["writingModes"])
     assert advert["inv-ha"]["host"] in _VOCAB["hosts"]
@@ -1854,7 +1867,7 @@ async def test_island_status_advert_matches_what_the_evaluator_writes(
     for inv in inverters:
         kind = brand_kind(inv)
         listed = set(advert[inv["inverterId"]]["writableActions"])
-        for action in _VOCAB["brandKinds"][kind]["writableActions"]:
+        for action in [*_VOCAB["brandKinds"][kind]["writableActions"], *_VOCAB["edgeActions"]]:
             event = {
                 "id": "evt-1",
                 "inverterId": inv["inverterId"],
@@ -1950,6 +1963,58 @@ async def test_set_state_reaches_the_box_with_address_endpoint_and_expiry(
     assert [(h["event"], h["state"], h["commandId"]) for h in history] == [
         ("command_sent", {"on": True}, command_id)
     ]
+
+
+async def test_a_rules_set_state_reaches_the_box_signed_by_the_rules_envelope(
+    hass: HomeAssistant, tmp_path
+):
+    """svitgrid D-2158: the scheduler's socket switcher queues the rule's
+    `set_state` on the socket's box, with the rule's stored envelope and its
+    inverter, which the board's envelope check reads beside the command."""
+    from custom_components.svitgrid.edge_api import _command_for_box
+    from custom_components.svitgrid.zigbee_lan import rule_socket_switcher
+
+    admin, queue, devices = await _zigbee_setup(hass, tmp_path)
+    signed = {
+        "scenarioId": "rule-1",
+        "type": "scenario",
+        "inverterId": "inv-1",
+        "mode": "custom",
+        "authorizedCommands": ["set_state"],
+        "validUntil": "2027-11-18T10:00:00.000Z",
+    }
+    signing = {
+        "signedEventData": signed,
+        "signature": sign_payload(signed, admin.priv),
+        "signingKeyId": admin.key_id,
+    }
+    rule = {"id": "rule-1", "inverterId": "inv-1", "mode": "custom", "signing": signing}
+    switcher = rule_socket_switcher(hass)
+
+    assert await switcher.async_available()
+    roster = await switcher.async_roster()
+    assert [d["id"] for d in roster] == [PLUG_ID]
+    assert await switcher.async_switch(rule, [(roster[0], False)]) == []
+
+    sent = _command_for_box(await queue.async_next_pending("EC-1"))
+    assert sent["command"] == "set_state"
+    assert sent["payload"] == {"on": False}
+    assert sent["inverterId"] == "inv-1"
+    assert (sent["zigbeeAddr"], sent["zigbeeEndpoint"]) == ("0x1234", 1)
+    assert sent["signedEventData"] == signed
+    assert sent["signature"] == signing["signature"]
+    assert sent["signingKeyId"] == admin.key_id
+    history = await devices.async_history(PLUG_ID)
+    assert [(h["event"], h["state"]) for h in history] == [("command_sent", {"on": False})]
+
+
+async def test_the_rule_socket_switcher_is_unavailable_without_a_box(hass: HomeAssistant, tmp_path):
+    from custom_components.svitgrid.zigbee_lan import rule_socket_switcher
+
+    await _zigbee_setup(hass, tmp_path, adopt=False)
+    switcher = rule_socket_switcher(hass)
+    assert not await switcher.async_available()
+    assert await switcher.async_roster() == []
 
 
 async def test_an_unsigned_set_state_is_refused(hass: HomeAssistant, tmp_path):

@@ -80,7 +80,7 @@ from .settings_sync import (
     settings_snapshot_response,
 )
 from .signing import compute_key_id, public_key_from_hex, verify_payload
-from .zigbee_lan import ZIGBEE_LAN_VIEWS
+from .zigbee_lan import ZIGBEE_LAN_VIEWS, rule_socket_switcher
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -1127,6 +1127,7 @@ class _IslandEventViewMixin:
                 executor_for,
                 event_id,
                 journal=hass.data.get(DOMAIN, {}).get("operations_journal"),
+                sockets=rule_socket_switcher(hass),
             ),
             name=f"svitgrid_event_restore_{event_id}",
         )

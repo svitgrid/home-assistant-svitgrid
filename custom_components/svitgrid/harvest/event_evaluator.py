@@ -960,8 +960,9 @@ def _custom_write(action: dict) -> _Write | None:
             (command, dict(restore)) if restore else None,
         )
     kind = action.get("type")
-    if kind == "priority_profile":
-        # Written through the box's priority profile, never a register.
+    if kind in ("priority_profile", "smart_device", "smart_device_except"):
+        # Written through the box's priority profile, never a register; a
+        # socket action is the scheduler's (socket_actions).
         return None
     try:
         if kind == "tou_slots":
