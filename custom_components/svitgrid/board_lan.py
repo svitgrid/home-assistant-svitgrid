@@ -23,6 +23,10 @@ box-wide commands.
 forwarded untouched; one signed for any other command is 400
 `box_signature_invalid`.
 
+`register_dump`, `rs485_discover`, `rescan_logger` and `probe_inverter`
+carry the cloud's payload untouched, and the board's answer comes back in
+the command's `result`.
+
 `add_inverter`, `update_inverter` and `remove_inverter` carry the cloud's
 payload, which names `inverterId`: an inverter another box holds cannot be
 added (409), and one this box does not hold cannot be changed or removed
@@ -81,6 +85,11 @@ SIGNED_BOARD_COMMANDS = {"factory_reset": {"confirm": True}}
 # sends it and naming its `inverterId`. Home Assistant's list for the box
 # follows once the box confirms (`edge_api.apply_board_ack`).
 INVERTER_COMMANDS = ("add_inverter", "update_inverter", "remove_inverter")
+# The board's diagnostics (svitgrid D-2169), each payload as the cloud sends
+# it, passed through. Their answer, a register dump included, comes back in
+# the ack's `result`: the largest dump is 256 register pairs, well inside the
+# ack's 256 KB inflate limit (`edge_api.MAX_INFLATED_BODY_BYTES`).
+DIAGNOSTIC_COMMANDS = ("register_dump", "rs485_discover", "rescan_logger", "probe_inverter")
 
 
 def _held(box) -> set[str]:
@@ -118,6 +127,11 @@ def _payload_for(command: str, signed: dict) -> tuple[dict | None, web.Response 
     if command in INVERTER_COMMANDS:
         # Checked against the box once it is known.
         return {}, None
+    if command in DIAGNOSTIC_COMMANDS:
+        raw = signed.get("payload", {})
+        if not isinstance(raw, dict):
+            return None, _json_error(400, "bad_request", detail="payload must be an object")
+        return dict(raw), None
     return None, _json_error(400, "unknown_command")
 
 
@@ -177,6 +191,8 @@ class SvitgridEdgeBoxCommandView(HomeAssistantView):
             payload, error = _inverter_payload(command, signed.get("payload"), box_id, boxes)
             if error is not None:
                 return error
+            inverter_id = payload["inverterId"]
+        elif command in DIAGNOSTIC_COMMANDS and isinstance(payload.get("inverterId"), str):
             inverter_id = payload["inverterId"]
         queue = (_edge_entry_state(hass) or {}).get("edge_queue")
         if queue is None:

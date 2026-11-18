@@ -545,3 +545,80 @@ async def test_an_inverter_command_must_name_an_inverter_of_this_box(
     assert resp.status in (400, 404)
     assert _body(resp)["error"] == error
     assert await queue.async_pending_count("EC-1") == 0
+
+
+# ── register dump, RS-485 discover, logger rescan, probe (D-2169) ───────────
+
+
+@pytest.mark.parametrize(
+    ("command", "payload", "inverter_id"),
+    [
+        ("register_dump", {"inverterId": "inv-1"}, "inv-1"),
+        ("rs485_discover", None, None),
+        ("rescan_logger", {"inverterId": "inv-1", "subnet": "192.168.1.0/24"}, "inv-1"),
+        (
+            "probe_inverter",
+            {"ipAddress": "192.168.1.20", "loggerSerial": 2712345678, "modelId": "deye_sg04lp3"},
+            None,
+        ),
+    ],
+)
+async def test_a_diagnostic_command_is_queued_as_the_cloud_sends_it(
+    hass: HomeAssistant, tmp_path, command, payload, inverter_id
+):
+    from custom_components.svitgrid.edge_api import _command_for_box
+
+    admin, _, queue, _ = await _setup(hass, tmp_path)
+    fields = {} if payload is None else {"payload": payload}
+
+    resp = await _send(hass, admin, "EC-1", command, **fields)
+
+    assert resp.status == 200, _body(resp)
+    row = await queue.async_next_pending("EC-1")
+    assert row["command"] == command
+    assert row["payload"] == (payload or {})
+    assert row["signing"] is None
+    assert _command_for_box(row)["inverterId"] == inverter_id
+
+
+async def test_a_register_dump_result_comes_back_whole(hass: HomeAssistant, tmp_path):
+    """The board gzips its ack; the largest dump it sends (256 pairs) comes
+    back on the command route as it sent it."""
+    import gzip
+
+    from custom_components.svitgrid.edge_api import EdgeCommandAckView
+
+    admin, _, queue, _ = await _setup(hass, tmp_path)
+    command_id = _body(
+        await _send(hass, admin, "EC-1", "register_dump", payload={"inverterId": "inv-1"})
+    )["commandId"]
+    await queue.async_next_pending("EC-1")
+    result = {
+        "inverterId": "inv-1",
+        "count": 256,
+        "registers": {str(addr): 65535 - addr for addr in range(256)},
+    }
+    raw = gzip.compress(json.dumps({"success": True, "result": result}).encode())
+
+    request = _BoxReq(hass, command_id=command_id)
+    request.headers["Content-Encoding"] = "gzip"
+
+    async def read():
+        return raw
+
+    request.read = read
+    resp = await EdgeCommandAckView().post(request, command_id)
+
+    assert resp.status == 200, _body(resp)
+    state = await _command_state(hass, command_id)
+    assert state["state"] == "success"
+    assert state["result"] == result
+
+
+async def test_a_diagnostic_payload_must_be_an_object(hass: HomeAssistant, tmp_path):
+    admin, _, queue, _ = await _setup(hass, tmp_path)
+
+    resp = await _send(hass, admin, "EC-1", "register_dump", payload=["inv-1"])
+
+    assert resp.status == 400
+    assert await queue.async_pending_count("EC-1") == 0
