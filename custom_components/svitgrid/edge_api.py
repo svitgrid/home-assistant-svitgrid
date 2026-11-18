@@ -40,6 +40,7 @@ from . import bms_roster, edge_reading_pipeline
 from .api_client import LogUploadFailed, LogUploadRefused
 from .bms_packs import valid_report as valid_bms_report
 from .const import ADD_TRUSTED_KEY_COMMAND, DOMAIN
+from .island_auth import app_seen_within
 from .keystore import EdgeBoxEntry, KeystoreState
 from .settings_read_plan import onboarding_body, settings_snapshot_kind_for
 from .settings_sync import store_edge_settings_snapshot
@@ -80,6 +81,17 @@ MAX_INFLATED_BODY_BYTES = 256 * 1024
 # 9-11 ms, so 2000 adds about 0.2 % of one core per box.
 POLL_INTERVAL_PENDING_MS = 1000
 POLL_INTERVAL_IDLE_MS = 2000
+
+# On a true-island station the box's idle poll is the largest request volume
+# of the install (43,200 a day at 2000). There every app command comes from
+# the app on the LAN, so the box idles at the slow interval while no one uses
+# the app, and at POLL_INTERVAL_IDLE_MS for APP_IN_USE_WINDOW_S after any
+# authorized app call (`island_auth`). Opening a screen speeds up the box's
+# next poll, before the user taps; a rule or calendar command may wait out the
+# slow interval (svitgrid D-2117). A cloud station keeps POLL_INTERVAL_IDLE_MS:
+# its app commands reach the queue through the cloud, not the LAN API.
+POLL_INTERVAL_UNWATCHED_MS = 30000
+APP_IN_USE_WINDOW_S = 300
 
 # The `pollingInterval` of the `config` block, in ms: how often the box reads
 # its inverter. The cloud's `buildConfig` default (executor-commands.ts).
@@ -490,10 +502,12 @@ def _entry_state(hass) -> dict | None:
     return None
 
 
-async def _poll_interval_ms(entry_state: dict, box: EdgeBoxEntry) -> int:
+async def _poll_interval_ms(hass, entry_state: dict, box: EdgeBoxEntry) -> int:
     queue = entry_state.get("edge_queue")
     if queue is not None and await queue.async_pending_count(box.device_id) > 0:
         return POLL_INTERVAL_PENDING_MS
+    if entry_state.get("true_island") is True and not app_seen_within(hass, APP_IN_USE_WINDOW_S):
+        return POLL_INTERVAL_UNWATCHED_MS
     return POLL_INTERVAL_IDLE_MS
 
 
@@ -701,7 +715,7 @@ class EdgeIngestBatchView(_EdgeView):
         return self.json(
             {
                 "results": results,
-                "pollIntervalMs": await _poll_interval_ms(entry_state, box),
+                "pollIntervalMs": await _poll_interval_ms(request.app["hass"], entry_state, box),
                 "mqttPublishReadings": False,
                 "ingestMode": "batch",
                 "expectedInverterCount": len(box.inverter_ids),
@@ -791,7 +805,7 @@ class EdgeCommandsPollView(_EdgeView):
             "commands": [_command_for_box(row)] if row is not None else [],
             "serverTime": _server_time(),
             "executorType": "edge",
-            "pollIntervalMs": await _poll_interval_ms(entry_state, box),
+            "pollIntervalMs": await _poll_interval_ms(request.app["hass"], entry_state, box),
             "ingestMode": "batch",
             "periodicPollDisabled": False,
         }
