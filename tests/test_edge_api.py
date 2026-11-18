@@ -2937,6 +2937,67 @@ async def test_telemetry_keeps_the_zigbee_module_version():
     assert store.box_states["EC-1"]["h2FirmwareVersion"] == "0.22.27"
 
 
+_BOARD_STATE = {
+    "harvestPaused": True,
+    "trustedKeyCount": 2,
+    "serialPort": "rs485",
+    "rs485": {"state": "live", "protocol": "modbus", "slaveId": 1},
+    "otaImageState": "valid",
+    "h2OtaImageState": "pending_verify",
+}
+
+
+@pytest.mark.asyncio
+async def test_telemetry_keeps_the_board_state_its_page_needs():
+    """svitgrid D-2164: the pause, the key count, the serial port, the RS-485
+    state and both image states, as the board names them
+    (`heartbeat-canonical.json`)."""
+    store = _FakeIngestStore()
+    hass = _hass_with_store(_keystore(_box(inverters={"inv-1": _INV_1})), store)
+    body = {"readings": [_reading()], "telemetry": {**_BOARD_STATE, "freeHeap": 1}}
+
+    resp = await _call(edge_api.EdgeIngestBatchView, "post", hass, api_key=BOX_KEY, body=body)
+
+    assert resp.status == 200
+    state = store.box_states["EC-1"]
+    assert {k: state[k] for k in _BOARD_STATE} == _BOARD_STATE
+    assert "freeHeap" not in state
+
+
+@pytest.mark.asyncio
+async def test_an_older_board_without_the_state_keeps_what_was_stored():
+    store = _FakeIngestStore()
+    store.box_states["EC-1"] = dict(_BOARD_STATE)
+    hass = _hass_with_store(_keystore(_box(inverters={"inv-1": _INV_1})), store)
+    body = {"readings": [_reading()], "telemetry": {"version": "2.172.0"}}
+
+    resp = await _call(edge_api.EdgeIngestBatchView, "post", hass, api_key=BOX_KEY, body=body)
+
+    assert resp.status == 200
+    state = store.box_states["EC-1"]
+    assert {k: state[k] for k in _BOARD_STATE} == _BOARD_STATE
+
+
+@pytest.mark.asyncio
+async def test_board_state_of_the_wrong_type_is_not_stored():
+    store = _FakeIngestStore()
+    hass = _hass_with_store(_keystore(_box(inverters={"inv-1": _INV_1})), store)
+    telemetry = {
+        "harvestPaused": "yes",
+        "trustedKeyCount": True,
+        "serialPort": 485,
+        "rs485": "live",
+        "otaImageState": None,
+        "h2OtaImageState": ["valid"],
+    }
+    body = {"readings": [_reading()], "telemetry": telemetry}
+
+    resp = await _call(edge_api.EdgeIngestBatchView, "post", hass, api_key=BOX_KEY, body=body)
+
+    assert resp.status == 200
+    assert not set(telemetry) & set(store.box_states["EC-1"])
+
+
 class _RecordingDevices:
     def __init__(self):
         self.updates = []

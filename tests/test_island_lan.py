@@ -3133,6 +3133,40 @@ async def test_edge_status_names_the_zigbee_module_version(hass: HomeAssistant, 
     assert _body(status)["edgeBoxes"][0]["h2FirmwareVersion"] == "0.22.27"
 
 
+async def test_edge_status_serves_the_board_state_its_page_needs(hass: HomeAssistant, tmp_path):
+    """svitgrid D-2164: the board page on an edge island reads the pause, the
+    key count, the serial port, the RS-485 state and the image states from
+    Home Assistant."""
+    from custom_components.svitgrid.edge_command_queue import EdgeCommandQueue
+
+    board_state = {
+        "harvestPaused": True,
+        "trustedKeyCount": 2,
+        "serialPort": "rs485",
+        "rs485": {"state": "live", "protocol": "modbus"},
+        "otaImageState": "valid",
+        "h2OtaImageState": "pending_verify",
+    }
+    admin = _Admin()
+    await _keystore(hass, admin)
+    entry = _entry(hass)
+    queue = EdgeCommandQueue(str(tmp_path / "edge_commands.db"), None)
+    store = _EdgeStore(box_states={"EC-1": dict(board_state), "EC-2": {"version": "2.172.0"}})
+    _entry_state(hass, entry, store=store, queue=queue)
+    await _adopt(hass, admin, "EC-1", _inv("inv-1"))
+    await _adopt(hass, admin, "EC-2", _inv("inv-2"))
+
+    boxes = {b["deviceId"]: b for b in _body(await _edge_status(hass))["boxes"]}
+    assert {k: boxes["EC-1"][k] for k in board_state} == board_state
+    # An older board sent none of it, and the status says nothing of it.
+    assert not set(board_state) & set(boxes["EC-2"])
+
+    status = await SvitgridIslandStatusView().get(_Req(hass))
+    island_boxes = {b["deviceId"]: b for b in _body(status)["edgeBoxes"]}
+    assert {k: island_boxes["EC-1"][k] for k in board_state} == board_state
+    assert not set(board_state) & set(island_boxes["EC-2"])
+
+
 # ── conditionTypes: the temperature conditions the island evaluates (#1328) ──
 
 

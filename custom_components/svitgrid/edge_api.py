@@ -110,6 +110,32 @@ def _monotonic() -> float:
 # (`heartbeat-canonical.json` in the firmware's tests names them).
 _TELEMETRY_STATE_KEYS = ("version", "uptime", "wifiRssi", "otaStatus", "h2FirmwareVersion")
 
+
+def _is_count(value) -> bool:
+    return type(value) is int and value >= 0
+
+
+# The board state the app's board page reads (svitgrid D-2164), each with the
+# type the cloud's `EdgeTelemetrySchema` accepts. A value of another type is
+# not stored, so the last good one stays.
+BOARD_STATE_KEYS = {
+    "harvestPaused": lambda v: isinstance(v, bool),
+    "trustedKeyCount": _is_count,
+    "serialPort": lambda v: isinstance(v, str),
+    "rs485": lambda v: isinstance(v, dict),
+    "otaImageState": lambda v: isinstance(v, str),
+    "h2OtaImageState": lambda v: isinstance(v, str),
+}
+
+
+def board_state_of(telemetry: dict) -> dict:
+    """The keys of `BOARD_STATE_KEYS` that `telemetry` carries with the
+    right type."""
+    return {
+        k: telemetry[k] for k, ok in BOARD_STATE_KEYS.items() if k in telemetry and ok(telemetry[k])
+    }
+
+
 # The per-inverter keys of the cloud's `config` block that the box reads
 # (`config_sync_models_from_block`, the reconcile in `cloud_uploader.c`).
 _CONFIG_INVERTER_KEYS = (
@@ -533,6 +559,7 @@ async def _stamp_contact(store, box: EdgeBoxEntry, telemetry=None) -> None:
     state = dict(await store.get_edge_box_state(box.device_id) or {})
     if isinstance(telemetry, dict):
         state.update({k: telemetry[k] for k in _TELEMETRY_STATE_KEYS if k in telemetry})
+        state.update(board_state_of(telemetry))
     state["lastContactAt"] = _server_time()
     await store.set_edge_box_state(box.device_id, state)
 

@@ -67,7 +67,7 @@ from .const import (
     READINGS_DB_SUBDIR,
     REVOKE_TRUSTED_KEY_COMMAND,
 )
-from .edge_api import EDGE_BOX_LOCK, edge_refusals
+from .edge_api import EDGE_BOX_LOCK, board_state_of, edge_refusals
 from .edge_api import _entry_state as _edge_poll_state
 from .entry_reload import update_entry_skipping_listener_reload
 from .file_log import LOG_SUBDIR
@@ -805,6 +805,13 @@ _ISLAND_STATUS_BOX_KEYS = (
     "pendingCommands",
     "inverterIds",
     "h2FirmwareVersion",
+    # The board page's state (svitgrid D-2164), each only once reported.
+    "harvestPaused",
+    "trustedKeyCount",
+    "serialPort",
+    "rs485",
+    "otaImageState",
+    "h2OtaImageState",
 )
 
 
@@ -1119,6 +1126,9 @@ async def _box_status(hass, box: EdgeBoxEntry) -> dict[str, Any]:
         # Absent until the box reports one, which the app reads as a Zigbee
         # module too old to answer.
         **({"h2FirmwareVersion": h2} if (h2 := contact.get("h2FirmwareVersion")) else {}),
+        # What the board page needs (svitgrid D-2164): absent until the box
+        # reports it, which the app reads as the cloud's value.
+        **board_state_of(contact),
     }
 
 
