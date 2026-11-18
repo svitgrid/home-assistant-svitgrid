@@ -62,6 +62,15 @@ from .island_lan import (
     signed_write_freshness_error,
 )
 from .local_time import local_day_of, local_hour_index
+from .operations_journal import (
+    DEFAULT_LIMIT as DEFAULT_OPERATIONS_LIMIT,
+)
+from .operations_journal import (
+    RETENTION_BY_SOURCE,
+    SOURCE_INVERTER,
+    now_iso,
+    record_safely,
+)
 from .settings_sync import (
     find_edge_settings_snapshot,
     find_settings_snapshot,
@@ -902,6 +911,21 @@ class SvitgridCommandsView(HomeAssistantView):
         # called exactly as before. `type(...) is bool`, because a mock's
         # attribute is truthy.
         relays = getattr(executor, "relays_signature", None)
+        journal = hass.data.get(DOMAIN, {}).get("operations_journal")
+
+        async def _journal(status: str, result) -> None:
+            await record_safely(
+                journal,
+                source=SOURCE_INVERTER,
+                object_id=str(inverter_id),
+                command=signed_command,
+                status=status,
+                payload=signed_payload,
+                result=result,
+                created_by=signing_key_id,
+                executed_at=now_iso(),
+            )
+
         try:
             if type(relays) is bool and relays:
                 result = await executor.dispatch(
@@ -916,15 +940,69 @@ class SvitgridCommandsView(HomeAssistantView):
             else:
                 result = await executor.dispatch(signed_command, signed_payload)
         except NotImplementedError:
+            await _journal("rejected", {"error": "unsupported"})
             return self._json_error(422, "unsupported")
         except Exception as exc:  # noqa: BLE001
+            await _journal("failed", {"error": "executor_error", "detail": str(exc)})
             return self._json_error(502, "executor_error", detail=str(exc))
 
         # Record commandId on success
         if command_id is not None:
             self._seen_commands[command_id] = now
 
+        await _journal("executed", result)
         return self.json({"ok": True, "result": result})
+
+
+class SvitgridOperationsView(HomeAssistantView):
+    """GET /api/svitgrid/operations?before=&limit=&objectId= — the island's
+    journal of what Svitgrid told the station to do (operations_journal).
+
+    Answers the cloud feed's shape, ``{operations, nextBefore, retentionDays}``,
+    newest first. ``before`` is the ``nextBefore`` of the page before;
+    ``objectId`` filters to one inverter or one board.
+
+    Auth: island key OR authenticated HA session, as GET /events.
+    """
+
+    url = "/api/svitgrid/operations"
+    name = "api:svitgrid:operations"
+    requires_auth = False
+
+    @staticmethod
+    def _json_error(status: int, error: str) -> web.Response:
+        return web.Response(
+            status=status, text=json.dumps({"error": error}), content_type="application/json"
+        )
+
+    async def get(self, request) -> web.Response:  # noqa: D102
+        hass = request.app["hass"]
+        keystore = hass.data.get(DOMAIN, {}).get("keystore")
+        island_keys: list[str] = (
+            await keystore.async_get_island_keys() if keystore is not None else []
+        )
+        if not island_request_authorized(request, island_keys):
+            return self._json_error(401, "unauthorized")
+
+        query = request.query
+        try:
+            limit = int(query.get("limit") or DEFAULT_OPERATIONS_LIMIT)
+        except ValueError:
+            return self._json_error(400, "bad_request")
+        journal = hass.data.get(DOMAIN, {}).get("operations_journal")
+        if journal is None:
+            return self.json(
+                {"operations": [], "nextBefore": None, "retentionDays": RETENTION_BY_SOURCE}
+            )
+        try:
+            page = await journal.async_list(
+                before=query.get("before") or None,
+                limit=limit,
+                object_id=query.get("objectId") or None,
+            )
+        except ValueError:
+            return self._json_error(400, "bad_request")
+        return self.json(page)
 
 
 class SvitgridTrustKeyView(HomeAssistantView):
@@ -1043,7 +1121,12 @@ class _IslandEventViewMixin:
             return None
 
         hass.async_create_background_task(
-            settle_removal(event_store, executor_for, event_id),
+            settle_removal(
+                event_store,
+                executor_for,
+                event_id,
+                journal=hass.data.get(DOMAIN, {}).get("operations_journal"),
+            ),
             name=f"svitgrid_event_restore_{event_id}",
         )
 
@@ -1532,6 +1615,7 @@ def register_views(hass: HomeAssistant, store) -> None:
         SvitgridOnboardingSnapshotView(store),
         SvitgridHealthView(store),
         SvitgridCommandsView(),
+        SvitgridOperationsView(),
         SvitgridTrustKeyView(),
         SvitgridTrustKeyDetailView(),
         SvitgridEventsView(),

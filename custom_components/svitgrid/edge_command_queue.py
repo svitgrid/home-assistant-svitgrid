@@ -13,7 +13,9 @@ commands in SQLite, one row per command:
   the command, and a box that keeps dropping it does not see it forever.
 
 A caller awaits the box's answer with `async_wait`, woken by the ack or the
-expiry. Mirrors the `island_event_store.py` pattern: sync `_*_sync` methods
+expiry. With an `OperationsJournal`, every command is mirrored into it as
+its state changes (`edge_device` rows), so the island's operations feed lists
+what the box was sent. Mirrors the `island_event_store.py` pattern: sync `_*_sync` methods
 that open, operate and close the connection, run in HA's executor pool.
 """
 
@@ -22,13 +24,20 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import sqlite3
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
+from .operations_journal import SOURCE_EDGE_DEVICE
+
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
+
+    from .operations_journal import OperationsJournal
+
+_LOGGER = logging.getLogger(__name__)
 
 # A delivered command with no ack after this long goes back to `pending`.
 REDELIVER_AFTER_S = 120
@@ -37,6 +46,9 @@ MAX_DELIVERIES = 2
 DEFAULT_TTL_S = 900
 
 _DONE_STATES = ("success", "failed", "expired")
+
+# The queue's state, in the words of the operations feed the app reads.
+_JOURNAL_STATUS = {"success": "executed", "failed": "failed", "expired": "expired"}
 
 # Tracks db_paths whose schema has already been created in this process.
 _INITIALIZED: set[str] = set()
@@ -129,10 +141,50 @@ class EdgeCommandQueue:
     falls back to ``run_in_executor`` for tests.
     """
 
-    def __init__(self, db_path: str, hass: HomeAssistant | None = None) -> None:
+    def __init__(
+        self,
+        db_path: str,
+        hass: HomeAssistant | None = None,
+        journal: OperationsJournal | None = None,
+    ) -> None:
         self._db_path = db_path
         self._hass = hass
+        self._journal = journal
         self._events: dict[str, asyncio.Event] = {}
+
+    def _mirror_sync(self, command_ids: list[str]) -> None:
+        """Write the commands' rows, as they stand, into the journal. A failed
+        write only logs: the queue never fails on its journal."""
+        if self._journal is None or not command_ids:
+            return
+        try:
+            conn = _connect(self._db_path)
+            try:
+                rows = [_get_sync(conn, command_id) for command_id in command_ids]
+            finally:
+                conn.close()
+            for row in rows:
+                if row is None:
+                    continue
+                status = _JOURNAL_STATUS.get(row["state"], row["state"])
+                if row["state"] == "failed" and row["rejected"]:
+                    status = "rejected"
+                result = row["result"]
+                if result is None and row["reason"]:
+                    result = {"reason": row["reason"]}
+                self._journal.record_sync(
+                    op_id=f"edge-{row['id']}",
+                    source=SOURCE_EDGE_DEVICE,
+                    object_id=row["device_id"],
+                    command=row["command"],
+                    status=status,
+                    payload=row["payload"],
+                    result=result,
+                    created_by=(row["signing"] or {}).get("signingKeyId"),
+                    executed_at=row["acked_at"],
+                )
+        except Exception:  # noqa: BLE001
+            _LOGGER.warning("Could not journal edge commands %s", command_ids, exc_info=True)
 
     # ── sync core ─────────────────────────────────────────────────────────────
 
@@ -368,7 +420,7 @@ class EdgeCommandQueue:
         phone's `signedEventData`, `signature` and `signingKeyId`, untouched.
         `target` holds the fields the box reads beside `payload` (a Zigbee
         `set_state`'s `zigbeeAddr` and `zigbeeEndpoint`)."""
-        return await self._run(
+        command_id = await self._run(
             self._enqueue_sync,
             device_id,
             command,
@@ -379,10 +431,13 @@ class EdgeCommandQueue:
             ttl_s,
             target,
         )
+        await self._run(self._mirror_sync, [command_id])
+        return command_id
 
     async def async_next_pending(self, device_id: str) -> dict[str, Any] | None:
         """The box's oldest pending command, now marked `delivered`."""
         row, expired = await self._run(self._next_pending_sync, device_id)
+        await self._run(self._mirror_sync, [*expired, *([row["id"]] if row else [])])
         for command_id in expired:
             self._wake(command_id)
         return row
@@ -404,6 +459,7 @@ class EdgeCommandQueue:
             self._ack_sync, command_id, success, result, rejected, reason, device_id
         )
         if row is not None:
+            await self._run(self._mirror_sync, [command_id])
             self._wake(command_id)
         return row
 
@@ -443,6 +499,7 @@ class EdgeCommandQueue:
         copy queued next is the only one it runs; returns how many. A waiter
         on one of them wakes and reads it expired."""
         superseded = await self._run(self._supersede_sync, device_id, command)
+        await self._run(self._mirror_sync, superseded)
         for command_id in superseded:
             self._wake(command_id)
         return len(superseded)

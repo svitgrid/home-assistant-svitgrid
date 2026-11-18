@@ -82,6 +82,7 @@ from .lifecycle import DEPROVISIONED, LifecycleState
 from .local_pairing import PAIRING_PHONE_KEY
 from .mqtt_control import MqttControlState
 from .mqtt_wake import run_loop as run_mqtt_wake_loop
+from .operations_journal import OperationsJournal
 from .panel import register_panel, remove_panel
 from .preset_refresh import refresh_entry_inverters
 from .reading_sender import Cadence, run_sender_loop
@@ -900,6 +901,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     executors_by_inverter: dict[str, YamlDispatcher] = {}
     store = None
     event_store = None
+    operations_journal = None
     sender_task = None
     cancel_rollup = None
     lifecycle = None
@@ -983,6 +985,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         event_store = IslandEventStore(os.path.join(_db_dir, "island_events.db"), hass=hass)
         hass.data.setdefault(DOMAIN, {})
         hass.data[DOMAIN]["event_store"] = event_store
+        # What Svitgrid told the station to do, for GET /api/svitgrid/operations
+        # on an island (svitgrid D-2128). Only island paths write to it: LAN
+        # commands, the island scheduler and the edge queue.
+        operations_journal = OperationsJournal(os.path.join(_db_dir, "operations.db"), hass=hass)
+        hass.data[DOMAIN]["operations_journal"] = operations_journal
         # The packs a phone reads and posts over the LAN on a true island
         # (island_lan.SvitgridIslandBmsReportView, svitgrid#1329). Beside the
         # boxes' reports in bms_packs.db, in a table of its own.
@@ -1270,6 +1277,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     # rule reads the household's battery temperature from.
                     bms_states_for=lambda: _bms_states(hass, entry.entry_id),
                     model_for=harvest_models.get,
+                    journal=operations_journal,
                 ),
                 name="svitgrid_event_scheduler",
             )
@@ -1368,7 +1376,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # The commands each box drains on its poll (edge_api). Added to the
         # SAME dict the scheduler holds by reference, so it sees them.
         edge_queue = EdgeCommandQueue(
-            os.path.join(hass.config.path(READINGS_DB_SUBDIR), "edge_commands.db"), hass=hass
+            os.path.join(hass.config.path(READINGS_DB_SUBDIR), "edge_commands.db"),
+            hass=hass,
+            journal=operations_journal,
         )
         # The Zigbee devices the boxes report (edge_api).
         zigbee_devices = ZigbeeDeviceStore(
@@ -1470,6 +1480,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # A subsequent async_setup_entry re-creates it, so the reload path is safe.
     hass.data.get(DOMAIN, {}).pop("event_store", None)
     hass.data.get(DOMAIN, {}).pop("bms_report_store", None)
+    hass.data.get(DOMAIN, {}).pop("operations_journal", None)
     return True
 
 
