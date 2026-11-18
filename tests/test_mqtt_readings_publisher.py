@@ -301,3 +301,82 @@ class TestNoLeakedClients:
         _TrackedClient.connects = True
         assert await c.ensure_connected() is True
         assert len(self._live()) == 1
+
+
+class _CountingApi:
+    """Mints a distinct token per call, so a test can tell a re-mint apart."""
+
+    def __init__(self) -> None:
+        self.mints = 0
+
+    async def get_mqtt_token(self, api_key: str) -> dict:
+        self.mints += 1
+        return {
+            "token": f"jwt-{self.mints}",
+            "broker": {"host": "h", "port": 8883, "deviceId": "kBRkv3"},
+        }
+
+
+class _ReconnectingClient(_TrackedClient):
+    """A _TrackedClient that records the username it logs in with."""
+
+    def username_pw_set(self, username, password):
+        self.username = username
+
+
+@pytest.mark.asyncio
+class TestTokenRemint:
+    """D-2030: the JWT lives 24 h. paho's own network thread reconnects on a
+    drop with the username it was given, so a publisher that never re-mints
+    keeps offering an expired token every 120 s forever."""
+
+    @pytest.fixture(autouse=True)
+    def _fresh(self, monkeypatch):
+        _TrackedClient.instances = []
+        _TrackedClient.connects = True
+        _install_fake_paho(monkeypatch, _ReconnectingClient)
+
+    async def test_disconnect_makes_the_next_call_mint_a_fresh_token(self):
+        api = _CountingApi()
+        c = ReadingsMqttClient(api_client=api, api_key="k")
+        assert await c.ensure_connected() is True
+        first = _TrackedClient.instances[0]
+        # paho's network thread reports the drop (v1 signature: client, userdata, rc).
+        first.on_disconnect(first, None, 7)
+        assert c.publish("{}") is False  # not claiming to be connected
+        assert await c.ensure_connected() is True
+        assert api.mints == 2
+        assert _TrackedClient.instances[-1].username == "jwt-2"
+        assert first.running is False  # the old thread no longer retries the old JWT
+
+    async def test_disconnect_accepts_paho_v2_signature(self):
+        c = ReadingsMqttClient(api_client=_CountingApi(), api_key="k")
+        assert await c.ensure_connected() is True
+        first = _TrackedClient.instances[0]
+        first.on_disconnect(first, None, {}, 7, None)
+        assert c._connected is False
+
+    async def test_stale_disconnect_from_a_replaced_client_is_ignored(self):
+        c = ReadingsMqttClient(api_client=_CountingApi(), api_key="k")
+        assert await c.ensure_connected() is True
+        first = _TrackedClient.instances[0]
+        first.on_disconnect(first, None, 7)
+        assert await c.ensure_connected() is True
+        first.on_disconnect(first, None, 0)  # late event from the stopped client
+        assert c._connected is True
+
+    async def test_a_session_that_never_drops_is_reminted_on_schedule(self, monkeypatch):
+        mod = "custom_components.svitgrid.mqtt_readings_publisher"
+        api = _CountingApi()
+        c = ReadingsMqttClient(api_client=api, api_key="k")
+        now = [1000.0]
+        monkeypatch.setattr(f"{mod}._monotonic", lambda: now[0], raising=False)
+        assert await c.ensure_connected() is True
+        now[0] += 11 * 3600
+        assert await c.ensure_connected() is True
+        assert api.mints == 1  # still fresh
+        now[0] += 2 * 3600  # 13 h old: past the 12 h re-mint interval
+        assert await c.ensure_connected() is True
+        assert api.mints == 2
+        assert _TrackedClient.instances[-1].username == "jwt-2"
+        assert [x.running for x in _TrackedClient.instances] == [False, True]

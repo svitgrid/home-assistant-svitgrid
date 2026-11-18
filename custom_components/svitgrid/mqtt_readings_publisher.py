@@ -12,6 +12,13 @@ local-only), so island readings never reach this publisher.
 
 Connection mirrors ``mqtt_wake.py``: the JWT is sent in the MQTT USERNAME field
 (mosquitto-go-auth ``jwt_userfield=Subject``), TLS via the system trust store.
+Like ``mqtt_wake.py``, the token is re-minted rather than reused (D-2030).
+paho's network thread reconnects a dropped session with the username it was
+given, so a JWT minted once is offered again after its 24 h expiry and refused
+every 120 s forever. A drop marks the client disconnected, so the next
+``ensure_connected`` stops that thread and mints a fresh token, and a session
+that never drops is re-minted every ``TOKEN_REMINT_INTERVAL_S``.
+
 Topic derivation mirrors the edge firmware: prefer the authoritative
 ``broker.deviceId`` the API returns, fall back to swapping the wake topic.
 """
@@ -21,11 +28,16 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import time
 from typing import Any
 
 _LOGGER = logging.getLogger(__name__)
 
 CONNECT_TIMEOUT_S = 10
+# The JWT lives 24 h; re-mint well ahead of that, as mqtt_wake does.
+TOKEN_REMINT_INTERVAL_S = 12 * 3600
+
+_monotonic = time.monotonic
 
 
 def _stop_client(client: Any) -> None:
@@ -72,6 +84,7 @@ class ReadingsMqttClient:
         self._client: Any = None
         self._topic: str | None = None
         self._connected = False
+        self._minted_at = 0.0
         self._loop: asyncio.AbstractEventLoop | None = None
         # PUBACK-wait registry: paho `mid` -> the asyncio.Future awaited by
         # publish_and_wait. Only ever mutated on the asyncio loop thread —
@@ -83,7 +96,11 @@ class ReadingsMqttClient:
     async def ensure_connected(self) -> bool:
         """Idempotent: connect (mint token + open TLS) if not already up.
         Returns True when ready to publish."""
-        if self._connected and self._client is not None:
+        if (
+            self._connected
+            and self._client is not None
+            and _monotonic() - self._minted_at < TOKEN_REMINT_INTERVAL_S
+        ):
             return True
         # A client flagged for reconnect may still have its network thread up.
         # Stop it before a new one logs in under the same client id.
@@ -119,12 +136,23 @@ class ReadingsMqttClient:
                 else:
                     _LOGGER.warning("MQTT readings CONNECT rc=%s", rc)
 
+            def _on_disconnect(c: Any, *_args: Any) -> None:
+                # paho's network thread; v1 passes (userdata, rc), v2 adds
+                # flags/reason/properties. Only the current client counts: a
+                # late event from a stopped one must not flag its successor.
+                # A plain bool store is atomic, and ensure_connected reads it
+                # on the loop thread before reconnecting with a fresh token.
+                if self._client is c:
+                    self._connected = False
+
             client.on_connect = _on_connect
+            client.on_disconnect = _on_disconnect
             client.on_publish = self._on_publish
             client.connect_async(host, port, keepalive=60)
             client.loop_start()
             await asyncio.wait_for(connected.wait(), timeout=CONNECT_TIMEOUT_S)
             self._client, self._topic, self._connected = client, topic, True
+            self._minted_at = _monotonic()
             self._loop = loop
             _LOGGER.info("MQTT readings publish active: topic=%s", topic)
             return True
