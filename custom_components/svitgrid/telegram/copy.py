@@ -20,6 +20,10 @@ Kind = Literal[
     "low_battery",
     "critical_battery",
     "battery_full",
+    "offline",
+    "offline_board",
+    "offline_outage",
+    "offline_board_recovered",
     "test",
     "linked",
 ]
@@ -77,12 +81,14 @@ def render(
     event_at: datetime | None = None,
     tz: str | None = None,
     now: datetime | None = None,
+    minutes_ago: int | None = None,
 ) -> str:
     """Return the Telegram HTML for one message."""
     strings = _strings(language)
     values = {
         "inverterName": html.escape(station),
         "batterySoc": "" if soc is None else html.escape(str(soc)),
+        "minutesAgo": "" if minutes_ago is None else html.escape(str(minutes_ago)),
     }
 
     def fill(key: str) -> str:

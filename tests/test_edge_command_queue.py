@@ -262,3 +262,26 @@ async def test_a_queue_written_before_target_gains_it(tmp_path):
         "zigbeeAddr": "0x1234",
         "zigbeeEndpoint": 1,
     }
+
+
+async def test_last_success_names_the_latest_acked_of_the_commands(tmp_path, clock):
+    """The island liveness check reads whether a board is paused from its last
+    acked pause or resume (svitgrid D-2149)."""
+    q = _queue(tmp_path)
+    assert await q.async_last_success("EC-1", ("pause", "resume")) is None
+
+    async def acked(command, success=True):
+        cid = await q.async_enqueue(
+            "EC-1", command, {}, signing=None, inverter_id=None, source="test"
+        )
+        await q.async_ack(cid, success=success, result=None, rejected=None, reason=None)
+        clock(1)
+
+    await acked("pause")
+    await acked("poll_now")
+    assert await q.async_last_success("EC-1", ("pause", "resume")) == "pause"
+    await acked("resume", success=False)
+    assert await q.async_last_success("EC-1", ("pause", "resume")) == "pause"
+    await acked("resume")
+    assert await q.async_last_success("EC-1", ("pause", "resume")) == "resume"
+    assert await q.async_last_success("EC-2", ("pause", "resume")) is None

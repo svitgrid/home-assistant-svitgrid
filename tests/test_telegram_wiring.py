@@ -460,3 +460,92 @@ async def test_removing_one_of_two_entries_keeps_telegram_state(
     await hass.async_block_till_done()
     assert state.token() == TOKEN
     assert [c.device_id for c in state.chats()] == ["phone-1"]
+
+
+async def _adopt_box(hass, *, bound=True) -> SvitgridKeystore:
+    keystore = SvitgridKeystore(hass)
+    await keystore.save(
+        api_key="k",
+        public_key_hex="pub",
+        private_key_pem="pem",
+        signing_key_id="sk",
+        trusted_key_ids=[],
+        trusted_public_keys_hex={},
+    )
+    await keystore.async_add_edge_box(
+        EdgeBoxEntry(
+            device_id="EC-1",
+            api_key=BOX_KEY if bound else None,
+            inverter_ids=["inv-1"],
+            inverters={"inv-1": _INV_1},
+            added_at="2026-10-30T10:00:00+00:00",
+            pair_code_hash=None,
+            pair_code_expires_at=None,
+        )
+    )
+    return keystore
+
+
+async def _liveness(hass, clock, minutes: int) -> list[str]:
+    clock.now += timedelta(minutes=minutes)
+    await hass.data[DOMAIN]["telegram"].check_liveness()
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+
+async def test_silent_inverter_sends_offline(hass, station, aioclient_mock, clock):
+    """No reading from an HA inverter for 15 minutes while HA runs (svitgrid D-2149)."""
+    await _bot(hass)
+    entry = _entry()
+    await _set_up(hass, entry)
+    await _feed(hass, entry, clock, grid=True)
+    await _liveness(hass, clock, 14)
+    assert _sends(aioclient_mock) == []
+    await _liveness(hass, clock, 1)
+    sends = _sends(aioclient_mock)
+    assert len(sends) == 1 and sends[0].startswith("<b>Інвертор офлайн</b>\nДача")
+    await _liveness(hass, clock, 30)
+    assert len(_sends(aioclient_mock)) == 1
+
+
+async def test_silent_board_sends_offline_board(hass, station, aioclient_mock, clock):
+    await _bot(hass)
+    await _adopt_box(hass)
+    entry = _entry(inverters=(), edge_move=True)
+    await _set_up(hass, entry)
+    store = hass.data[DOMAIN][entry.entry_id]["store"]
+    await store.set_edge_box_state("EC-1", {"lastContactAt": clock.iso()})
+    await _liveness(hass, clock, 16)
+    sends = _sends(aioclient_mock)
+    assert len(sends) == 1
+    assert sends[0].startswith("<b>Модуль Svitgrid не на зв'язку</b>\nВід Дача немає даних 16 хв")
+    await store.set_edge_box_state("EC-1", {"lastContactAt": clock.iso()})
+    await _liveness(hass, clock, 1)
+    assert _sends(aioclient_mock)[-1].startswith("<b>Модуль Svitgrid знову на зв'язку</b>")
+
+
+async def test_paused_board_sends_no_offline(hass, station, aioclient_mock, clock):
+    """A paused board uploads nothing by design, so its inverter's silence is no alert."""
+    await _bot(hass)
+    await _adopt_box(hass)
+    entry = _entry(inverters=(), edge_move=True)
+    await _set_up(hass, entry)
+    state = hass.data[DOMAIN][entry.entry_id]
+    await state["store"].append(
+        {"inverterId": "inv-1", "timestamp": clock.iso(), "gridPresent": True, "batterySoc": 70}
+    )
+    queue = state["edge_queue"]
+    cid = await queue.async_enqueue("EC-1", "pause", {}, signing=None, inverter_id=None, source="t")
+    await queue.async_ack(cid, success=True, result=None, rejected=None, reason=None)
+    for _ in range(3):
+        await state["store"].set_edge_box_state("EC-1", {"lastContactAt": clock.iso()})
+        await _liveness(hass, clock, 10)
+    assert _sends(aioclient_mock) == []
+
+
+async def test_cloud_copy_on_sends_no_offline(hass, station, aioclient_mock, clock):
+    await _bot(hass)
+    entry = _entry(cloud_copy=True)
+    await _set_up(hass, entry)
+    await _feed(hass, entry, clock, grid=True)
+    await _liveness(hass, clock, 60)
+    assert _sends(aioclient_mock) == []

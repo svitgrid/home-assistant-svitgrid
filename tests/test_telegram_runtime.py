@@ -245,6 +245,53 @@ async def test_battery_alert_is_saved_at_once(setup):
     assert state.queue()[0]["inverterId"] == "inv1"
 
 
+async def test_liveness_tick_sends_and_persists_offline(setup):
+    """A silent board is told once per episode (svitgrid D-2149)."""
+    rt, state, api, clock, _ = setup
+    _chat(state, "phone-1", 11)
+    contact = NOW_MS - 20 * 60 * 1000
+    snapshot = [
+        {
+            "householdId": "hh1",
+            "gridOut": False,
+            "inverters": [],
+            "boards": [
+                {"deviceId": "EC-1", "lastContactMs": contact, "paused": False, "inverterIds": []}
+            ],
+        }
+    ]
+
+    async def source():
+        return snapshot
+
+    rt._liveness_source = source
+    rt._started_ms = NOW_MS - 60 * 60 * 1000
+    await rt.start()
+    await rt.check_liveness()
+    await rt.check_liveness()
+    await _settle(rt)
+    assert len(api.sent) == 1
+    assert api.sent[0][1].startswith(
+        "<b>Модуль Svitgrid не на зв'язку</b>\nВід Дача немає даних 20 хв"
+    )
+    assert state.liveness()["households"]["hh1"]["boards"]["EC-1"]["sentAtMs"] == NOW_MS
+    snapshot[0]["boards"][0]["lastContactMs"] = NOW_MS
+    await rt.check_liveness()
+    await _settle(rt)
+    assert api.sent[-1][1].startswith("<b>Модуль Svitgrid знову на зв'язку</b>")
+
+
+async def test_liveness_needs_a_bot_and_a_chat(setup):
+    rt, state, api, _, _ = setup
+
+    async def source():
+        raise AssertionError("not read without an enabled chat")
+
+    rt._liveness_source = source
+    await rt.check_liveness()
+    assert state.liveness() == {}
+
+
 async def test_retry_keeps_order_and_sends_after_reconnect(setup):
     rt, state, api, clock, sleeps = setup
     _chat(state, "phone-1", 11)

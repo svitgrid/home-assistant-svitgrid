@@ -332,6 +332,19 @@ class EdgeCommandQueue:
         finally:
             conn.close()
 
+    def _last_success_sync(self, device_id: str, commands: tuple[str, ...]) -> str | None:
+        conn = _connect(self._db_path)
+        try:
+            marks = ",".join("?" for _ in commands)
+            row = conn.execute(
+                f"SELECT command FROM edge_commands WHERE device_id = ? AND state = 'success' "
+                f"AND command IN ({marks}) ORDER BY acked_at DESC, rowid DESC LIMIT 1",
+                (device_id, *commands),
+            ).fetchone()
+            return row["command"] if row is not None else None
+        finally:
+            conn.close()
+
     def _pending_count_sync(self, device_id: str) -> int:
         conn = _connect(self._db_path)
         try:
@@ -485,6 +498,12 @@ class EdgeCommandQueue:
     async def async_recent(self, device_id: str, limit: int = 20) -> list[dict[str, Any]]:
         """The box's latest commands, newest first."""
         return await self._run(self._recent_sync, device_id, limit)
+
+    async def async_last_success(self, device_id: str, commands: tuple[str, ...]) -> str | None:
+        """Which of `commands` the box last acked as done, or None."""
+        if not commands:
+            return None
+        return await self._run(self._last_success_sync, device_id, tuple(commands))
 
     async def async_pending_count(self, device_id: str) -> int:
         """Commands waiting for the box's next poll."""

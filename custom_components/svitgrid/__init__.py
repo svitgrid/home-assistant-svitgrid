@@ -90,6 +90,7 @@ from .reading_store import ReadingStore
 from .readings_publisher import run_loop as run_readings_loop
 from .settings_sync import find_edge_settings_snapshot
 from .settings_sync import settings_sync_loop as run_settings_sync_loop
+from .telegram.liveness_source import entry_for_inverter, island_liveness
 from .telegram.runtime import TelegramRuntime, household_key
 from .telegram.views import async_ensure_telegram_views, telegram_state, unlink_device
 from .zigbee_devices import ZigbeeDeviceStore
@@ -103,16 +104,8 @@ def _telegram_now() -> datetime:
 
 
 def _telegram_entry_for(hass: HomeAssistant, store_entry: ConfigEntry, inverter_id: str):
-    """The config entry an inverter's household belongs to.
-
-    The entry that lists the inverter, else the entry whose store took the
-    reading: an adopted edge box's inverters are listed by no entry, and their
-    readings land in the first entry's store (`edge_api._entry_state`).
-    """
-    for entry in hass.config_entries.async_entries(DOMAIN):
-        if any(i.get("inverter_id") == inverter_id for i in entry.data.get("inverters") or []):
-            return entry
-    return store_entry
+    """The config entry an inverter's household belongs to (`entry_for_inverter`)."""
+    return entry_for_inverter(hass, store_entry, inverter_id)
 
 
 async def _feed_telegram(hass: HomeAssistant, store_entry: ConfigEntry, reading: dict) -> None:
@@ -145,6 +138,7 @@ async def _start_telegram(hass: HomeAssistant, entry: ConfigEntry, store) -> Non
                 await telegram_state(hass),
                 lambda: aiohttp_client.async_get_clientsession(hass),
                 lambda: _telegram_now(),
+                liveness_source=lambda: island_liveness(hass),
             )
             await runtime.start()
             # Only a started runtime is kept, so a failed start is retried

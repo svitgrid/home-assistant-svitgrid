@@ -1,8 +1,8 @@
 """Persistent state for island Telegram notifications.
 
 One store holds the owner's bot token, the linked chats (one per paired phone),
-one-time link codes, the getUpdates offset, the alert detector's state and the
-send queue. The token never appears in `repr`, `str` or a log line.
+one-time link codes, the getUpdates offset, the alert detector's state, the
+liveness check's state and the send queue. The token never appears in `repr`, `str` or a log line.
 """
 
 from __future__ import annotations
@@ -63,6 +63,7 @@ class TelegramState:
         self._codes: dict[str, dict[str, Any]] = {}
         self._offset = 0
         self._detector: dict[str, Any] = {}
+        self._liveness: dict[str, Any] = {}
         self._queue: list[dict[str, Any]] = []
         self._status: str | None = None
 
@@ -79,6 +80,7 @@ class TelegramState:
             "codes": self._codes,
             "offset": self._offset,
             "detector": self._detector,
+            "liveness": self._liveness,
             "queue": self._queue,
             "status": self._status,
         }
@@ -123,6 +125,8 @@ class TelegramState:
             self._offset = off if isinstance(off, int) else 0
             det = raw.get("detector")
             self._detector = det if isinstance(det, dict) else {}
+            live = raw.get("liveness")
+            self._liveness = live if isinstance(live, dict) else {}
             q = raw.get("queue")
             self._queue = q if isinstance(q, list) else []
             st = raw.get("status")
@@ -254,6 +258,14 @@ class TelegramState:
     async def set_detector(self, detector: dict[str, Any]) -> None:
         async with self._lock:
             self._detector = detector
+            self._save_later()
+
+    def liveness(self) -> dict[str, Any]:
+        return self._liveness
+
+    async def set_liveness(self, liveness: dict[str, Any]) -> None:
+        async with self._lock:
+            self._liveness = liveness
             self._save_later()
 
     def queue(self) -> list[dict[str, Any]]:

@@ -2,7 +2,8 @@
 
 `on_reading` feeds the detector and writes one queue entry per alert and
 enabled chat before anything is sent, so an alert survives a restart or a
-Telegram outage. One sender task drains the queue oldest first and waits 60 s
+Telegram outage. A timer runs the liveness check once a minute, for the
+boards and inverters that stop reporting (svitgrid D-2149). One sender task drains the queue oldest first and waits 60 s
 after a failed send. One poller task long-polls `getUpdates`, but only while a
 link code is pending, and links the chat that sends `/start <code>`.
 
@@ -18,14 +19,18 @@ import logging
 import re
 import uuid
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
+
+from homeassistant.core import callback
+from homeassistant.helpers.event import async_track_time_interval
 
 from ..const import DOMAIN
 from ..island_lan import _cloud_copy_of
 from . import copy
 from .bot_api import BotApi, BotInUseElsewhere, InvalidToken, SendResult, TelegramUnreachable
 from .detector import evaluate
+from .liveness import evaluate_liveness
 from .state import TelegramState
 
 _LOGGER = logging.getLogger(__name__)
@@ -43,10 +48,17 @@ ALERT_KINDS = (
     "low_battery",
     "critical_battery",
     "battery_full",
+    "offline",
+    "offline_board",
+    "offline_outage",
+    "offline_board_recovered",
 )
 # Kinds whose latch must reach disk at once: HA does not unload entries on
 # shutdown, so a delayed save can be lost to a power cut and the alert told again.
-_FLUSH_KINDS = frozenset(ALERT_KINDS) - {"grid_restored"}
+_FLUSH_KINDS = frozenset(ALERT_KINDS) - {"grid_restored", "offline_board_recovered"}
+LIVENESS_TICK_S = 60
+
+LivenessSource = Callable[[], Awaitable[list[dict]]]
 
 STATUS_INVALID_TOKEN = "invalid_token"
 STATUS_IN_USE = "bot_in_use_elsewhere"
@@ -114,6 +126,7 @@ class TelegramRuntime:
         *,
         sleep: Callable[[float], Awaitable[Any]] = asyncio.sleep,
         api_factory: Callable[[Any, str], BotApi] = BotApi,
+        liveness_source: LivenessSource | None = None,
     ) -> None:
         self._hass = hass
         self._state = state
@@ -125,28 +138,45 @@ class TelegramRuntime:
         self._lock = asyncio.Lock()
         self._sender: asyncio.Task | None = None
         self._poller: asyncio.Task | None = None
+        self._unsub_tick: Callable[[], None] | None = None
+        self._tick: asyncio.Task | None = None
         self._running = False
+        # Every island household's boards and inverters, read once a tick.
+        self._liveness_source = liveness_source
+        self._started_ms: int | None = None
 
     # Lifecycle
 
     async def start(self) -> None:
         self._running = True
+        if self._started_ms is None:
+            self._started_ms = self._now_ms()
         self._hass.data.setdefault(DOMAIN, {})["telegram_wake"] = self.wake
         self._kick_sender()
         self.wake()
+        if self._liveness_source is not None and self._unsub_tick is None:
+            # A timer, not a task: a task that sleeps forever would hold every
+            # `async_block_till_done(wait_background_tasks=True)`.
+            self._unsub_tick = async_track_time_interval(
+                self._hass, self._on_tick, timedelta(seconds=LIVENESS_TICK_S)
+            )
 
     async def stop(self) -> None:
         self._running = False
         domain = self._hass.data.get(DOMAIN)
         if domain is not None and domain.get("telegram_wake") == self.wake:
             domain["telegram_wake"] = _noop
-        for task in (self._sender, self._poller):
+        if self._unsub_tick is not None:
+            self._unsub_tick()
+            self._unsub_tick = None
+        for task in (self._sender, self._poller, self._tick):
             if task is not None and not task.done():
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
         self._sender = None
         self._poller = None
+        self._tick = None
 
     def wake(self) -> None:
         """Start the link poller if a code is pending, and retry the queue."""
@@ -258,6 +288,74 @@ class TelegramRuntime:
                 await self._state.flush()
         self._kick_sender()
 
+    # Liveness
+
+    @callback
+    def _on_tick(self, _now=None) -> None:
+        if not self._running or (self._tick is not None and not self._tick.done()):
+            return
+        self._tick = self._hass.async_create_background_task(
+            self._tick_once(), "svitgrid_telegram_liveness"
+        )
+
+    async def _tick_once(self) -> None:
+        try:
+            await self.check_liveness()
+        except Exception:  # noqa: BLE001
+            # One bad tick must not stop the next.
+            _LOGGER.exception("The island liveness check failed; retrying")
+
+    async def check_liveness(self) -> None:
+        """Run the liveness check once and queue what it finds.
+
+        As with readings, nothing runs without a bot and an enabled chat, so
+        an owner who links a chat during a long silence hears of the next one.
+        """
+        source = self._liveness_source
+        if source is None:
+            return
+        if self._state.token() is None or not any(c.enabled for c in self._state.chats()):
+            return
+        households = await source()
+        now_ms = self._now_ms()
+        async with self._lock:
+            chats = [c for c in self._state.chats() if c.enabled]
+            if not chats:
+                return
+            detector = self._state.detector()
+            out = detector.get("households") if isinstance(detector, dict) else None
+            out = out if isinstance(out, dict) else {}
+            households = [
+                {**hh, "gridOut": bool((out.get(hh["householdId"]) or {}).get("out"))}
+                for hh in households
+            ]
+            liveness, alerts = evaluate_liveness(
+                self._state.liveness(), households, now_ms, self._started_ms or now_ms
+            )
+            if liveness != self._state.liveness():
+                await self._state.set_liveness(liveness)
+            added = [
+                {
+                    "id": uuid.uuid4().hex,
+                    "chatDeviceId": chat.device_id,
+                    "kind": alert.kind,
+                    "householdId": alert.household_id,
+                    "eventAtMs": alert.event_at_ms,
+                    "soc": None,
+                    "inverterId": alert.subject_id,
+                    "minutesAgo": alert.minutes_ago,
+                    "createdAtMs": now_ms,
+                }
+                for alert in alerts
+                for chat in chats
+            ]
+            if not added:
+                return
+            await self._state.set_queue(_trim([*self._state.queue(), *added], now_ms))
+            if any(alert.kind in _FLUSH_KINDS for alert in alerts):
+                await self._state.flush()
+        self._kick_sender()
+
     # Sender
 
     def _kick_sender(self) -> None:
@@ -327,6 +425,7 @@ class TelegramRuntime:
             language,
             station=self._station(entry.get("householdId")),
             soc=entry.get("soc"),
+            minutes_ago=entry.get("minutesAgo"),
             event_at=event_at,
             tz=self._hass.config.time_zone,
             now=self._now(),

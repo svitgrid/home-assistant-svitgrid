@@ -79,3 +79,15 @@ def test_unknown_or_missing_tz_falls_back_to_utc():
             now=NOW,
         )
         assert out.endswith("\n🕑 09:05")
+
+
+def test_offline_copy_carries_minutes():
+    """The liveness messages (svitgrid D-2149) fill `{minutesAgo}`."""
+    out = copy.render("offline_board", "uk", station="Дача", minutes_ago=16)
+    assert out.startswith("<b>Модуль Svitgrid не на зв'язку</b>\nВід Дача немає даних 16 хв")
+    assert copy.render("offline", "en", station="Home", minutes_ago=15) == (
+        "<b>Inverter Offline</b>\nHome has been offline for 15 minutes"
+    )
+    assert copy.render("offline_board_recovered", "uk", station="Дача") == (
+        "<b>Модуль Svitgrid знову на зв'язку</b>\nВід Дача знову надходять дані."
+    )
