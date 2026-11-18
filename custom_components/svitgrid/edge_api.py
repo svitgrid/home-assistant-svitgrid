@@ -15,9 +15,9 @@ Two rules hold on every view here:
   key is 401 `{"error":"unauthorized"}`.
 
 The paths only the cloud can serve (bootstrap, MQTT, firmware offers,
-coredumps, EV chargers) get a fixed answer, 2xx wherever the box only needs to hear
+EV chargers) get a fixed answer, 2xx wherever the box only needs to hear
 that the call landed: its cloud-contact watchdog restarts it after two hours
-without a 2xx. The box's Zigbee roster and readings are kept here
+without a 2xx. A crash dump is forwarded to the cloud (`EdgeCoredumpView`). The box's Zigbee roster and readings are kept here
 (`zigbee_devices.py`), and its battery-pack reports (`bms_packs.py`).
 """
 
@@ -964,7 +964,12 @@ class EdgeMqttTokenView(_EdgeView):
 
 
 class EdgeCoredumpView(_EdgeView):
-    """Not stored; the WARNING is the only crash trace an island owner sees."""
+    """Forwarded to the cloud under the box's id with Home Assistant's own
+    key (svitgrid D-2112). The box erases its dump on any 2xx and keeps it
+    for the next boot otherwise, so a cloud 5xx or no answer is a 502 and a
+    4xx is passed through. A guest entry (no key) or a body that is not a
+    JSON object is not forwarded and answers 200. The WARNING is the crash
+    trace the owner sees in the Home Assistant log either way."""
 
     url = "/api/v1/edge-devices/coredump"
     name = "svitgrid:edge:coredump"
@@ -977,15 +982,41 @@ class EdgeCoredumpView(_EdgeView):
             body = await request.json()
         except ValueError:
             body = None
-        if not isinstance(body, dict):
-            body = {}
+        dump = body if isinstance(body, dict) else {}
         _LOGGER.warning(
             "Edge box %s crashed: resetReason=%s crashSummary=%s",
             box.device_id,
-            body.get("resetReason"),
-            body.get("crashSummary"),
+            dump.get("resetReason"),
+            dump.get("crashSummary"),
         )
-        return self.json({"stored": False, "reason": "island"})
+        state = _entry_state(request.app["hass"]) or {}
+        api_client = state.get("api_client")
+        api_key = (state.get("entry_data") or {}).get("api_key")
+        if not isinstance(body, dict) or api_client is None or not api_key:
+            return self.json({"stored": False, "reason": "island"})
+        try:
+            status, answer = await api_client.post_coredump(
+                api_key, body, for_device_id=box.device_id
+            )
+        except Exception as err:  # noqa: BLE001 - the box retries on a 502
+            _LOGGER.warning(
+                "Island coredump relay for box %s failed: %s", box.device_id, type(err).__name__
+            )
+            return self.json({"error": "forward_failed"}, status_code=502)
+        if status >= 500:
+            _LOGGER.warning(
+                "Island coredump relay for box %s: cloud HTTP %s", box.device_id, status
+            )
+            return self.json({"error": "forward_failed"}, status_code=502)
+        if status >= 400:
+            _LOGGER.warning(
+                "Island coredump relay for box %s refused: HTTP %s %s",
+                box.device_id,
+                status,
+                answer,
+            )
+            return self.json(answer or {"error": "rejected"}, status_code=status)
+        return self.json(answer or {"stored": True}, status_code=status)
 
 
 class EdgeLogsView(_EdgeView):
