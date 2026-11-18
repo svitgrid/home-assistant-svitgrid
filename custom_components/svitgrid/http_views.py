@@ -59,6 +59,7 @@ from .island_lan import (
     ISLAND_LAN_VIEWS,
     revoke_signed_key,
     signed_lan_request,
+    signed_write_freshness_error,
 )
 from .local_time import local_day_of, local_hour_index
 from .settings_sync import (
@@ -706,7 +707,8 @@ class SvitgridCommandsView(HomeAssistantView):
 
     Auth: island key ONLY (no HA session bypass).
     Body: {command, payload, signingKeyId, signedEventData, signature, commandId?}.
-    Replay protection: in-memory TTL dict keyed on commandId (5-min window).
+    Replay protection: in-memory TTL dict keyed on commandId (5-min window),
+    then the signed `nonce` and `ts` (`signed_write_freshness_error`).
     Dispatch: executors aggregated from all config entries in hass.data[DOMAIN].
     """
 
@@ -864,11 +866,16 @@ class SvitgridCommandsView(HomeAssistantView):
             return self._json_error(403, "command_mismatch")
 
         # --- Replay protection ---
+        # A retry of the same commandId within five minutes is answered, not
+        # run again. Anything else must carry a fresh signed nonce and ts.
         now = time.monotonic()
         if command_id is not None:
             self._prune_seen(now)
             if command_id in self._seen_commands:
                 return self.json({"ok": True, "deduped": True})
+        stale = signed_write_freshness_error(hass, signed_event_data, "POST /commands")
+        if stale is not None:
+            return stale
 
         # --- Integration-level commands (no inverter, no executor) ---
         # Branch BEFORE the executor lookup: these act on the ConfigEntry, and
@@ -1127,10 +1134,15 @@ class SvitgridEventsView(_IslandEventViewMixin, HomeAssistantView):
         if event != signed_event_data:
             return self._json_error(403, "event_mismatch")
 
-        # --- Store the signed copy (authoritative source) ---
         event_store = await self._get_event_store(hass)
         if event_store is None:
             return self._json_error(503, "event_store_unavailable")
+
+        stale = signed_write_freshness_error(hass, signed_event_data, "POST /events")
+        if stale is not None:
+            return stale
+
+        # --- Store the signed copy (authoritative source) ---
 
         # The phone's signature is kept untouched beside the event: on an edge
         # box the scheduler hands it on with the event's commands.
@@ -1228,6 +1240,10 @@ class SvitgridEventDetailView(_IslandEventViewMixin, HomeAssistantView):
         if event_store is None:
             return self._json_error(503, "event_store_unavailable")
 
+        stale = signed_write_freshness_error(hass, signed_event_data, "PUT /events/{id}")
+        if stale is not None:
+            return stale
+
         # The phone's signature is kept untouched beside the event: on an edge
         # box the scheduler hands it on with the event's commands.
         await event_store.async_upsert_event(
@@ -1278,6 +1294,10 @@ class SvitgridEventDetailView(_IslandEventViewMixin, HomeAssistantView):
         event_store = await self._get_event_store(hass)
         if event_store is None:
             return self._json_error(503, "event_store_unavailable")
+
+        stale = signed_write_freshness_error(hass, signed_event_data, "DELETE /events/{id}")
+        if stale is not None:
+            return stale
 
         # An active event is restored first (the same restore its window end
         # runs), then deleted; see request_removal.

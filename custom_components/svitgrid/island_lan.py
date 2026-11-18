@@ -91,6 +91,12 @@ MAX_CLOCK_SKEW_MS = 5 * 60 * 1000
 # the five-minute `ts` window bounds what a replay after a restart can reach.
 NONCE_MEMORY = 500
 _NONCES_KEY = "_island_lan_nonces"
+# The transition switch for signed LAN writes without a `nonce` and `ts`
+# (svitgrid D-2127). False: `/commands` and the event writes accept such a
+# request from an older app and log a warning. Set it True in the add-on
+# release that follows the minimum app build signing both; then they refuse
+# it with 400 `bad_request`. A request that carries them is checked either way.
+REQUIRE_SIGNED_WRITE_FRESHNESS = False
 
 # What GET /api/svitgrid/island/status advertises. The app picks the LAN path
 # for a job only when its capability is listed here. `rules`: the island
@@ -243,17 +249,57 @@ async def signed_lan_request(request, action: str) -> tuple[dict | None, web.Res
 
     if signed.get("action") != action:
         return None, _json_error(400, "bad_request", detail=f"action must be {action}")
+    error = _freshness_error(hass, signed)
+    if error is not None:
+        return None, error
+    return signed, None
+
+
+def _freshness_error(hass, signed: Mapping) -> web.Response | None:
+    """Check the signed `nonce` and `ts`, and spend the nonce.
+
+    None when both are well formed, `ts` is within the clock-skew window and
+    the nonce is new; otherwise the error response. Call it only after the
+    signature and every binding passed, so an unsigned request spends nothing.
+    """
     nonce = signed.get("nonce")
     ts = signed.get("ts")
     if not isinstance(nonce, str) or not nonce or len(nonce) > 256:
-        return None, _json_error(400, "bad_request", detail="nonce must be a string")
+        return _json_error(400, "bad_request", detail="nonce must be a string")
     if isinstance(ts, bool) or not isinstance(ts, int | float):
-        return None, _json_error(400, "bad_request", detail="ts must be epoch milliseconds")
+        return _json_error(400, "bad_request", detail="ts must be epoch milliseconds")
     if abs(_now_ms() - ts) > MAX_CLOCK_SKEW_MS:
-        return None, _json_error(403, "stale_request")
+        return _json_error(403, "stale_request")
     if not _remember_nonce(hass, nonce):
-        return None, _json_error(403, "replayed")
-    return signed, None
+        return _json_error(403, "replayed")
+    return None
+
+
+def signed_write_freshness_error(hass, signed: Mapping, route: str) -> web.Response | None:
+    """Refuse a replayed or stale signed LAN write (svitgrid D-2127).
+
+    For `POST /api/svitgrid/commands` and the signed event writes
+    (`POST /api/svitgrid/events`, `PUT` and `DELETE /api/svitgrid/events/{id}`),
+    which sign `{command, payload}` or the event itself rather than a
+    `signedData` with an `action`. The app signs a `nonce` and `ts` into it
+    from the build that fixed D-2127; this applies the same checks as
+    `signed_lan_request`: `403 stale_request` and `403 replayed`.
+
+    A signed body with neither key comes from an app that predates them. It
+    is accepted and logged while `REQUIRE_SIGNED_WRITE_FRESHNESS` is False,
+    and refused as `400 bad_request` once it is True. A body with only one of
+    the two is malformed either way.
+    """
+    if "nonce" not in signed and "ts" not in signed:
+        if REQUIRE_SIGNED_WRITE_FRESHNESS:
+            return _json_error(400, "bad_request", detail="ts must be epoch milliseconds")
+        _LOGGER.warning(
+            "%s: signed request carries no nonce or ts (app predates svitgrid D-2127); "
+            "accepted during the transition, but it could be replayed",
+            route,
+        )
+        return None
+    return _freshness_error(hass, signed)
 
 
 def _entries(hass) -> list:
