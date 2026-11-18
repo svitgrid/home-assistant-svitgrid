@@ -373,6 +373,49 @@ def test_lower_consumption_deactivate_when_soc_recovers():
     assert result.new_state["status"] == "idle"
 
 
+# On an edge island the scheduler switches the mode's sockets (svitgrid
+# D-2159), so the mode runs the cloud's evaluateLowerConsumption.
+
+
+def _lower(**config) -> dict:
+    return {
+        "mode": "lower_consumption",
+        "schedule": _in_window_schedule(),
+        "config": {"socThreshold": 30, "smartDeviceIds": ["boiler"], **config},
+    }
+
+
+def test_lower_consumption_activates_with_socket_control_when_soc_low():
+    result = evaluate_event(_lower(), {"batterySoc": 20}, _idle(), _NOW, TZ, socket_control=True)
+    assert result.action == "activate"
+    assert result.commands == []
+    assert result.new_state["status"] == "active"
+    assert result.new_state["lastActivatedAt"] == _NOW.isoformat()
+
+
+def test_lower_consumption_with_socket_control_reads_a_zero_soc_as_low():
+    result = evaluate_event(_lower(), {"batterySoc": 0}, _idle(), _NOW, TZ, socket_control=True)
+    assert result.action == "activate"
+
+
+def test_lower_consumption_with_socket_control_holds_without_a_soc_or_a_socket():
+    assert evaluate_event(_lower(), {}, _idle(), _NOW, TZ, socket_control=True).action == "hold"
+    no_sockets = _lower(smartDeviceIds=[])
+    result = evaluate_event(no_sockets, {"batterySoc": 20}, _idle(), _NOW, TZ, socket_control=True)
+    assert result.action == "hold"
+
+
+def test_lower_consumption_with_socket_control_releases_when_soc_recovers():
+    result = evaluate_event(_lower(), {"batterySoc": 30}, _active(), _NOW, TZ, socket_control=True)
+    assert result.action == "deactivate"
+    assert result.new_state["status"] == "idle"
+
+
+def test_lower_consumption_with_socket_control_holds_while_active_and_low():
+    result = evaluate_event(_lower(), {"batterySoc": 20}, _active(), _NOW, TZ, socket_control=True)
+    assert result.action == "hold"
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # consume_from_sun
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1090,3 +1133,57 @@ def test_custom_load_power_still_reads_a_real_zero():
     r1 = evaluate_event(_low_load_rule(), reading, _idle(), _NOW, TZ)
     r2 = evaluate_event(_low_load_rule(), reading, r1.new_state, _NOW, TZ)
     assert r2.action == "activate"
+
+
+# ─── consume_from_sun with socket control (svitgrid D-2159) ───────────────────
+
+
+def _sun(**config) -> dict:
+    return {
+        "mode": "consume_from_sun",
+        "schedule": _in_window_schedule(),
+        "config": {
+            "socOnThreshold": 95,
+            "socOffThreshold": 80,
+            "solarFloorW": 500,
+            "minDurationMinutes": 5,
+            "smartDeviceIds": ["boiler"],
+            **config,
+        },
+    }
+
+
+def test_consume_from_sun_activates_with_socket_control_after_the_sustain():
+    state = {"status": "pending_condition", "conditionMetSince": _ago(10)}
+    reading = {"batterySoc": 96, "pvPower": 300, "pvVoltage1": 380, "batteryPower": 0}
+    result = evaluate_event(_sun(), reading, state, _NOW, TZ, socket_control=True)
+    assert result.action == "activate"
+    assert result.commands == []
+    assert result.new_state["status"] == "active"
+    assert result.new_state["lastActivatedAt"] == _NOW.isoformat()
+
+
+def test_consume_from_sun_with_socket_control_reads_the_sun_from_pv_voltage():
+    """A full battery curtails PV power to the load, so the cloud reads the
+    panels' voltage instead (PV_VOLTAGE_FLOOR_V 50)."""
+    curtailed = {"batterySoc": 100, "pvPower": 120, "pvVoltage1": 410, "batteryPower": 0}
+    dark = {"batterySoc": 100, "pvPower": 0, "pvVoltage1": 3, "batteryPower": 0}
+    started = evaluate_event(_sun(), curtailed, _idle(), _NOW, TZ, socket_control=True)
+    assert started.new_state["status"] == "pending_condition"
+    waiting = evaluate_event(_sun(), dark, _idle(), _NOW, TZ, socket_control=True)
+    assert waiting.new_state["status"] == "idle"
+
+
+def test_consume_from_sun_with_socket_control_releases_after_the_off_sustain():
+    active = _active(conditionLostSince=_ago(6))
+    reading = {"batterySoc": 70, "pvPower": 2000, "pvVoltage1": 400, "batteryPower": 0}
+    result = evaluate_event(_sun(), reading, active, _NOW, TZ, socket_control=True)
+    assert result.action == "deactivate"
+    assert result.new_state["status"] == "idle"
+
+
+def test_consume_from_sun_with_socket_control_and_no_socket_holds():
+    state = {"status": "pending_condition", "conditionMetSince": _ago(10)}
+    reading = {"batterySoc": 96, "pvVoltage1": 380, "batteryPower": 0}
+    result = evaluate_event(_sun(smartDeviceIds=[]), reading, state, _NOW, TZ, socket_control=True)
+    assert result.action == "hold"

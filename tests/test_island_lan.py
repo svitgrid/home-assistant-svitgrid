@@ -1764,15 +1764,16 @@ async def test_island_status_advertises_each_edge_inverters_writes(hass: HomeAss
     deye = _VOCAB["brandKinds"]["deye"]
     # An edge island evaluates the boxes' Zigbee devices for every inverter
     # (svitgrid D-2161), and every edge inverter switches the boxes' Zigbee
-    # sockets (svitgrid D-2158).
+    # sockets (D-2158) and runs the two modes that only switch sockets (D-2159).
     zigbee = {"conditionTypes": _ZIGBEE_CONDITION_TYPES}
     sockets = _VOCAB["edgeActions"]
+    socket_modes = _VOCAB["edgeModes"]
     assert body["inverters"] == {
         "inv-ha": {"host": "ha", "readSource": "native", **zigbee},
         "inv-deye": {
             "host": "edge",
             "writableActions": [*deye["writableActions"], *sockets],
-            "modes": deye["modes"],
+            "modes": [*deye["modes"], *socket_modes],
             **zigbee,
         },
         # Battery charge and use battery run as priority profiles, and each
@@ -1781,25 +1782,35 @@ async def test_island_status_advertises_each_edge_inverters_writes(hass: HomeAss
         "inv-pi30": {
             "host": "edge",
             "writableActions": ["pi30_thresholds", *sockets],
-            "modes": ["battery_charge", "use_battery"],
+            "modes": ["battery_charge", "use_battery", *socket_modes],
             **zigbee,
         },
         "inv-must": {
             "host": "edge",
             "writableActions": ["must_thresholds", *sockets],
-            "modes": ["battery_charge", "use_battery"],
+            "modes": ["battery_charge", "use_battery", *socket_modes],
             **zigbee,
         },
         # An SNA has no battery_first profile.
         "inv-sna": {
             "host": "edge",
             "writableActions": sockets,
-            "modes": ["battery_charge"],
+            "modes": ["battery_charge", *socket_modes],
             **zigbee,
         },
         # Review focus 5: SolaX on an edge island offers no inverter write.
-        "inv-solax": {"host": "edge", "writableActions": sockets, "modes": [], **zigbee},
-        "inv-solis": {"host": "edge", "writableActions": sockets, "modes": [], **zigbee},
+        "inv-solax": {
+            "host": "edge",
+            "writableActions": sockets,
+            "modes": socket_modes,
+            **zigbee,
+        },
+        "inv-solis": {
+            "host": "edge",
+            "writableActions": sockets,
+            "modes": socket_modes,
+            **zigbee,
+        },
     }
 
 
@@ -1833,8 +1844,9 @@ async def test_island_status_advert_stays_inside_the_vocabulary(hass: HomeAssist
         edge = set(_VOCAB["edgeActions"])
         assert set(item["writableActions"]) <= set(ceiling["writableActions"]) | edge
         assert set(item["writableActions"]) <= set(_VOCAB["actionTypes"]) | edge
-        assert set(item["modes"]) <= set(ceiling["modes"])
-        assert set(item["modes"]) <= set(_VOCAB["writingModes"])
+        edge_modes = set(_VOCAB["edgeModes"])
+        assert set(item["modes"]) <= set(ceiling["modes"]) | edge_modes
+        assert set(item["modes"]) <= set(_VOCAB["writingModes"]) | edge_modes
     assert advert["inv-ha"]["host"] in _VOCAB["hosts"]
 
 

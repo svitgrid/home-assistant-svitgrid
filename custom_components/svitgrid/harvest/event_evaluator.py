@@ -1368,6 +1368,7 @@ def evaluate_event(
     inverter: dict | None = None,
     settings: dict | None = None,
     model_id: str | None = None,
+    socket_control: bool = False,
 ) -> EvaluatorDecision:
     """Evaluate a calendar event; see `_evaluate_event`.
 
@@ -1391,6 +1392,11 @@ def evaluate_event(
     (its harvest config). A battery charge current cap holds its target to
     the model's limit (``battery_charge_current_target_a``); an edge box's
     inverter takes its model from *inverter*.
+
+    *socket_control* is True on an island that switches Zigbee sockets (an
+    adopted edge box). The ``lower_consumption`` and ``consume_from_sun``
+    modes then run as the cloud's do, and the scheduler switches their
+    sockets (svitgrid D-2159); without it they never act, as before.
     """
     if model_id is None and inverter is not None:
         model_id = inverter.get("modelId")
@@ -1409,7 +1415,9 @@ def evaluate_event(
             if command is not None:
                 return _unsupported(event, exec_state, command, now_utc)
     if decision is None:
-        decision = _evaluate_event(event, reading, exec_state, now_utc, tz, others, model_id)
+        decision = _evaluate_event(
+            event, reading, exec_state, now_utc, tz, others, model_id, socket_control
+        )
     state = {k: v for k, v in decision.new_state.items() if k != SKIPPED_REASON_KEY}
     if decision.action == "skip" and decision.skip_reason in _NEEDS_CLOUD_SKIPS:
         state[SKIPPED_REASON_KEY] = NEEDS_CLOUD
@@ -1431,6 +1439,7 @@ def _evaluate_event(
     tz: str,
     others=(),
     model_id: str | None = None,
+    socket_control: bool = False,
 ) -> EvaluatorDecision:
     """Evaluate a calendar event against a live reading.
 
@@ -1496,9 +1505,12 @@ def _evaluate_event(
         return EvaluatorDecision(action="hold", commands=[], new_state=new_state)
 
     # ── In-window: per-mode evaluation ────────────────────────────────────────
-    decision = _eval_mode(
-        mode, event, reading, exec_state, new_state, now_utc, tz, others, model_id
-    )
+    if socket_control and mode in _SOCKET_MODE_EVALUATORS:
+        decision = _SOCKET_MODE_EVALUATORS[mode](event, reading, exec_state, new_state, now_utc)
+    else:
+        decision = _eval_mode(
+            mode, event, reading, exec_state, new_state, now_utc, tz, others, model_id
+        )
     if decision.action == "activate":
         decision.new_state.pop(RELEASED_KEY, None)
         return decision
@@ -2027,6 +2039,118 @@ def _eval_consume_from_sun(
     new_state["conditionMetSince"] = None
     new_state["conditionLostSince"] = None
     return EvaluatorDecision(action="deactivate", commands=[], new_state=new_state)
+
+
+# ─────────────────── The two socket modes on an edge island (D-2159) ─────────
+#
+# The scheduler switches the sockets of each transition (socket_actions); these
+# decide the transitions, as evaluateLowerConsumption and evaluateConsumeFromSun
+# do. Neither writes the inverter, so the decisions carry no command.
+
+# evaluateConsumeFromSun's ON gate: the panels' voltage, which a full battery
+# does not curtail, unlike PV power.
+_PV_VOLTAGE_FLOOR_V = 50.0
+_PV_VOLTAGE_KEYS = ("pvVoltage1", "pvVoltage2", "pvVoltage3", "pvVoltage4")
+
+
+def _socket_ids(event: dict) -> list:
+    ids = (event.get("config") or {}).get("smartDeviceIds") or []
+    return [i for i in ids if isinstance(i, str) and i]
+
+
+def _activate_sockets(new_state: dict, now_utc: datetime) -> EvaluatorDecision:
+    new_state["status"] = "active"
+    new_state["lastActivatedAt"] = now_utc.isoformat()
+    new_state["conditionLostSince"] = None
+    return EvaluatorDecision(action="activate", commands=[], new_state=new_state)
+
+
+def _eval_lower_consumption_sockets(
+    event: dict, reading: dict, exec_state: dict, new_state: dict, now_utc: datetime
+) -> EvaluatorDecision:
+    """SOC below ``socThreshold`` switches the sockets off; at or above it
+    they go back on. A reading with no SOC changes nothing."""
+    soc = _finite_or_none(reading.get("batterySoc"))
+    if not _socket_ids(event) or soc is None:
+        return EvaluatorDecision(action="hold", commands=[], new_state=new_state)
+    threshold = float((event.get("config") or {}).get("socThreshold", 30))
+    active = exec_state.get("status") == "active"
+    if soc < threshold and not active:
+        return _activate_sockets(new_state, now_utc)
+    if soc >= threshold and active:
+        new_state["status"] = "idle"
+        return EvaluatorDecision(action="deactivate", commands=[], new_state=new_state)
+    return EvaluatorDecision(action="hold", commands=[], new_state=new_state)
+
+
+def _sun_is_up(reading: dict, solar_floor: float) -> bool:
+    """The cloud's ON gate reads the panels' voltage. A reading that carries
+    none falls back to PV power, as the island did before."""
+    voltages = [_finite_or_none(reading.get(k)) for k in _PV_VOLTAGE_KEYS]
+    voltages = [v for v in voltages if v is not None]
+    if voltages:
+        return max(voltages) >= _PV_VOLTAGE_FLOOR_V
+    return float(_finite_or_none(reading.get("pvPower")) or 0) >= solar_floor
+
+
+def _eval_consume_from_sun_sockets(
+    event: dict, reading: dict, exec_state: dict, new_state: dict, now_utc: datetime
+) -> EvaluatorDecision:
+    """A full battery and the sun up for ``minDurationMinutes`` switch the
+    sockets on. SOC below ``socOffThreshold``, or PV below ``solarFloorW``
+    while the battery discharges, for as long switches them off."""
+    hold = EvaluatorDecision(action="hold", commands=[], new_state=new_state)
+    soc = _finite_or_none(reading.get("batterySoc"))
+    if not _socket_ids(event) or soc is None:
+        return hold
+    config = event.get("config") or {}
+    soc_on = float(config.get("socOnThreshold", 95))
+    soc_off = float(config.get("socOffThreshold", 80))
+    if soc_off >= soc_on:
+        soc_off = soc_on - 10
+    solar_floor = float(config.get("solarFloorW", 500))
+    min_duration = float(config.get("minDurationMinutes", 5))
+    now_ms = _now_ms(now_utc)
+    status = exec_state.get("status", "idle")
+    condition_met = soc >= soc_on and _sun_is_up(reading, solar_floor)
+
+    if status == "idle":
+        if condition_met:
+            new_state["status"] = "pending_condition"
+            new_state["conditionMetSince"] = now_utc.isoformat()
+        return hold
+
+    if status == "pending_condition":
+        if not condition_met:
+            new_state["status"] = "idle"
+            new_state["conditionMetSince"] = None
+            return hold
+        since = _iso_to_ms(exec_state.get("conditionMetSince"))
+        if since is not None and (now_ms - since) / 60_000 >= min_duration:
+            return _activate_sockets(new_state, now_utc)
+        return hold
+
+    pv_power = float(_finite_or_none(reading.get("pvPower")) or 0)
+    discharging = float(_finite_or_none(reading.get("batteryPower")) or 0) < -50
+    if not (soc < soc_off or (pv_power < solar_floor and discharging)):
+        new_state["conditionLostSince"] = None
+        return hold
+    lost = _iso_to_ms(exec_state.get("conditionLostSince"))
+    if lost is None:
+        new_state["conditionLostSince"] = now_utc.isoformat()
+        return hold
+    if (now_ms - lost) / 60_000 < min_duration:
+        return hold
+    new_state["status"] = "idle"
+    new_state["conditionMetSince"] = None
+    new_state["conditionLostSince"] = None
+    return EvaluatorDecision(action="deactivate", commands=[], new_state=new_state)
+
+
+_SOCKET_MODE_EVALUATORS = {
+    "lower_consumption": _eval_lower_consumption_sockets,
+    "consume_from_sun": _eval_consume_from_sun_sockets,
+}
 
 
 # ─────────────────── battery_maintenance ─────────────────────────────────────

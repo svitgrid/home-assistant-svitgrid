@@ -185,6 +185,9 @@ _PRIORITY_MODES = ("battery_charge", "use_battery")
 # adopted boxes' Zigbee sockets, not the inverter (socket_actions, svitgrid
 # D-2158). The vocabulary names them `edgeActions`.
 _EDGE_SOCKET_ACTIONS = ("smart_device", "smart_device_except")
+# The modes that only switch sockets run on every edge island too (svitgrid
+# D-2159). The vocabulary names them `edgeModes`.
+_EDGE_SOCKET_MODES = ("lower_consumption", "consume_from_sun")
 
 
 def island_writes(inv: dict) -> dict[str, list[str]]:
@@ -194,10 +197,11 @@ def island_writes(inv: dict) -> dict[str, list[str]]:
     A priority-profile brand lists a mode only when its protocol has that
     mode's profile (an SNA has no battery_first), and the thresholds action of
     its own protocol (PI30 or MUST, svitgrid#1255). Every one lists the socket
-    actions too (``_EDGE_SOCKET_ACTIONS``).
+    actions and modes too (``_EDGE_SOCKET_ACTIONS``, ``_EDGE_SOCKET_MODES``).
     """
     writes = _brand_writes(inv)
     writes["writableActions"] += _EDGE_SOCKET_ACTIONS
+    writes["modes"] += _EDGE_SOCKET_MODES
     return writes
 
 

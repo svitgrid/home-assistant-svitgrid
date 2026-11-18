@@ -300,6 +300,18 @@ async def _switch_sockets(
         )
 
 
+async def _socket_control(sockets: object, events: list) -> bool:
+    """Whether a box can switch sockets this tick. Asked only when an event
+    switches sockets; a failed answer is no."""
+    if sockets is None or not any(sa.uses_sockets(e) for e in events):
+        return False
+    try:
+        return bool(await sockets.async_available())
+    except Exception:  # noqa: BLE001
+        _LOGGER.warning("Island scheduler: the socket switcher failed", exc_info=True)
+        return False
+
+
 def _valid_work_mode(value: object) -> int | None:
     # Deye work modes are 0-2. Anything else is a corrupt read, which the API
     # also refuses to trust; the restore then reports it rather than guess.
@@ -577,6 +589,8 @@ async def _tick(
 
     bms_temperature = await _bms_temperature(enabled_events, bms_states_for, now_utc)
     zigbee = await _zigbee_signals(enabled_events, zigbee_docs_for, now_utc)
+    # The socket modes run only where a box can switch their sockets.
+    socket_control = await _socket_control(sockets, enabled_events)
 
     # Every event's latest state, so an event sees what the ones before it in
     # this tick wrote (overlap handoff and hand-back, see event_evaluator).
@@ -610,6 +624,8 @@ async def _tick(
             brand["model_id"] = model_id
         if inverter is not None and settings_for is not None and needs_settings(event):
             brand["settings"] = await settings_for(inverter_id)
+        if socket_control:
+            brand["socket_control"] = True
         try:
             reading = reading_entry["payload"]
             if bms_temperature is not None and _has_bms_condition(event):

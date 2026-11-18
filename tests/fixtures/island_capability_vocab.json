@@ -1,5 +1,5 @@
 {
-  "_comment": "The vocabulary of the `inverters` field of the Home Assistant integration's GET /api/svitgrid/island/status (edge island plan, Task 35). Each inverter reports {host, writableActions, modes}. host is one of `hosts`; writableActions names custom action types from `actionTypes`; modes names writing modes from `writingModes`; conditionTypes (optional, #1328) names the rule condition types the integration evaluates on a true island, from `conditionTypes`, which the app would otherwise treat as cloud-only; an edge island lists the four Zigbee types for every inverter (D-2161). `brandKinds` is what each value of the integration's brand_kind (Task 13) advertises; for `priority`, an inverter lists only the thresholds action of its own protocol. Every `edge` inverter, whatever its brand, also lists `edgeActions`: they switch the adopted boxes' Zigbee sockets, not the inverter (svitgrid D-2158). `smart_device_except` is not in `actionTypes`, because no editor offers it: only «Критичні пристрої» writes it. The integration vendors this file as tests/fixtures/island_capability_vocab.json. Pinned by apps/mobile/test/features/calendar/data/island_custom_capabilities_test.dart.",
+  "_comment": "The vocabulary of the `inverters` field of the Home Assistant integration's GET /api/svitgrid/island/status (edge island plan, Task 35). Each inverter reports {host, writableActions, modes}. host is one of `hosts`; writableActions names custom action types from `actionTypes`; modes names writing modes from `writingModes`; conditionTypes (optional, #1328) names the rule condition types the integration evaluates on a true island, from `conditionTypes`, which the app would otherwise treat as cloud-only; an edge island lists the four Zigbee types for every inverter (D-2161). `brandKinds` is what each value of the integration's brand_kind (Task 13) advertises; for `priority`, an inverter lists only the thresholds action of its own protocol. Every `edge` inverter, whatever its brand, also lists `edgeActions`: they switch the adopted boxes' Zigbee sockets, not the inverter (svitgrid D-2158). `smart_device_except` is not in `actionTypes`, because no editor offers it: only «Критичні пристрої» writes it. Every `edge` inverter also lists `edgeModes` in its `modes`: the two modes that only switch sockets run there (svitgrid D-2159). Without them the app treats both as modes the island never acts on. The integration vendors this file as tests/fixtures/island_capability_vocab.json. Pinned by apps/mobile/test/features/calendar/data/island_custom_capabilities_test.dart.",
   "hosts": ["edge", "ha"],
   "actionTypes": [
     "work_mode",
@@ -21,6 +21,7 @@
     "must_thresholds"
   ],
   "edgeActions": ["smart_device", "smart_device_except"],
+  "edgeModes": ["lower_consumption", "consume_from_sun"],
   "writingModes": ["battery_charge", "use_battery", "sell_to_grid", "gen_force"],
   "conditionTypes": [
     "inverter_temperature",

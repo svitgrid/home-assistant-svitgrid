@@ -1515,3 +1515,78 @@ async def test_without_a_switcher_a_socket_rule_runs_as_before():
     )
     assert event_store.state_calls[-1][1]["status"] == "active"
     assert "socketBaselines" not in event_store.state_calls[-1][1]
+
+
+# ───────── The two socket modes run on an edge island (svitgrid D-2159) ─────────
+
+
+def _lower_consumption_event(exec_state=None) -> dict:
+    event = _make_use_battery_event(exec_state=exec_state)
+    event.update(
+        mode="lower_consumption",
+        config={"socThreshold": 60, "smartDeviceIds": ["boiler"]},
+        signing=_SIGNING,
+    )
+    return event
+
+
+@pytest.mark.asyncio
+async def test_lower_consumption_switches_its_sockets_off_on_an_edge_island():
+    from custom_components.svitgrid.harvest.event_scheduler_loop import _tick
+
+    sockets = _FakeSockets([_socket_row("boiler")])
+    event_store = FakeEventStore([_lower_consumption_event()])
+
+    await _tick(
+        FakeStore([_reading_at()]),  # SOC 50 < 60
+        event_store,
+        lambda _i: _ok_executor(),
+        "UTC",
+        _NOW_IN_WINDOW,
+        sockets=sockets,
+    )
+
+    assert sockets.switched == [("evt-1", [("boiler", False)])]
+    assert event_store.state_calls[-1][1]["status"] == "active"
+
+
+@pytest.mark.asyncio
+async def test_lower_consumption_switches_its_sockets_back_on_at_window_end():
+    from custom_components.svitgrid.harvest.event_scheduler_loop import _tick
+
+    sockets = _FakeSockets([_socket_row("boiler", on=False)])
+    active = {"status": "active", "lastActivatedAt": "2026-06-29T10:05:00+00:00"}
+    event_store = FakeEventStore([_lower_consumption_event(exec_state=active)])
+
+    await _tick(
+        FakeStore([_reading_at()]),
+        event_store,
+        lambda _i: _ok_executor(),
+        "UTC",
+        _NOW_OUT_WINDOW,
+        sockets=sockets,
+    )
+
+    assert sockets.switched == [("evt-1", [("boiler", True)])]
+    assert event_store.state_calls[-1][1]["status"] == "idle"
+
+
+@pytest.mark.asyncio
+async def test_without_an_adopted_box_lower_consumption_stays_inert():
+    """An HA-only island has no Zigbee hub: the mode is skipped as before."""
+    from custom_components.svitgrid.harvest.event_scheduler_loop import _tick
+
+    sockets = _FakeSockets([], available=False)
+    event_store = FakeEventStore([_lower_consumption_event()])
+
+    await _tick(
+        FakeStore([_reading_at()]),
+        event_store,
+        lambda _i: _ok_executor(),
+        "UTC",
+        _NOW_IN_WINDOW,
+        sockets=sockets,
+    )
+
+    assert sockets.switched == []
+    assert event_store.state_calls[-1][1].get("status", "idle") == "idle"
