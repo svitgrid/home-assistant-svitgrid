@@ -1187,3 +1187,243 @@ def test_consume_from_sun_with_socket_control_and_no_socket_holds():
     reading = {"batterySoc": 96, "pvVoltage1": 380, "batteryPower": 0}
     result = evaluate_event(_sun(smartDeviceIds=[]), reading, state, _NOW, TZ, socket_control=True)
     assert result.action == "hold"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# battery_maintenance_charge: the cloud's due check on both paths (svitgrid D-2163)
+# ══════════════════════════════════════════════════════════════════════════════
+
+_DEYE = "deye_sg04lp3"
+_MAINT = {
+    "enabled": True,
+    "intervalDays": 21,
+    "lastRunAt": None,
+    "lastRunOutcome": None,
+    "gridFallbackOffsetMinutes": 120,
+    "fillStartTime": None,
+    "drainEnabled": False,
+    "drainStartTime": None,
+    "drainEndTime": None,
+    "drainTargetSocPercent": None,
+    "forcedNextRunDate": None,
+}
+# Three days before _NOW: inside a 21-day interval.
+_RAN_RECENTLY = "2026-06-26T09:00:00.000Z"
+
+
+def _maint_event(state: dict | None = None, **schedule) -> dict:
+    return {
+        "id": "maint-1",
+        "inverterId": "inv-1",
+        "enabled": True,
+        "mode": "battery_maintenance_charge",
+        "schedule": {**_in_window_schedule(), **schedule},
+        "config": {},
+        "executionState": state or {},
+    }
+
+
+def _maint(event, reading, state, maintenance=None, now=_NOW, **kw):
+    kw.setdefault("model_id", _DEYE)
+    return evaluate_event(event, reading, state, now, TZ, maintenance=maintenance, **kw)
+
+
+def test_maintenance_with_no_settings_is_held_with_its_reason():
+    """The live bug's guard: without the interval, a daily event would charge daily."""
+    decision = _maint(_maint_event(), {"batterySoc": 50}, _idle())
+    assert decision.action == "skip"
+    assert decision.commands == []
+    assert decision.skip_reason == "maintenance_settings_missing"
+    assert decision.new_state["skippedReason"] == "maintenance_settings_missing"
+
+
+def test_maintenance_due_activates_with_solar_sell_off():
+    decision = _maint(_maint_event(), {"batterySoc": 50}, _idle(), _MAINT)
+    assert decision.action == "activate"
+    assert decision.commands == [("set_solar_sell", {"solarSell": 0})]
+    assert "skippedReason" not in decision.new_state
+
+
+def test_maintenance_inside_its_interval_is_not_due():
+    settings = {**_MAINT, "lastRunAt": _RAN_RECENTLY}
+    decision = _maint(_maint_event(), {"batterySoc": 50}, _idle(), settings)
+    assert decision.action == "skip"
+    assert decision.skip_reason == "maintenance_not_due"
+    assert decision.commands == []
+    assert "skippedReason" not in decision.new_state
+
+
+def test_maintenance_disabled_in_settings_is_not_due():
+    decision = _maint(_maint_event(), {"batterySoc": 50}, _idle(), {**_MAINT, "enabled": False})
+    assert decision.skip_reason == "maintenance_not_due"
+
+
+def test_maintenance_forced_for_today_runs_inside_its_interval():
+    # 2026-06-29 in Kyiv.
+    settings = {**_MAINT, "lastRunAt": _RAN_RECENTLY, "forcedNextRunDate": "2026-06-29"}
+    decision = _maint(_maint_event(), {"batterySoc": 50}, _idle(), settings)
+    assert decision.action == "activate"
+
+
+def test_maintenance_run_now_bypasses_the_due_check():
+    """A run-now event (recurrence none) is the owner's explicit tap, as in the cloud."""
+    event = _maint_event(recurrence="none", startDate="2026-06-29")
+    decision = _maint(event, {"batterySoc": 50}, _idle())
+    assert decision.action == "activate"
+
+
+def test_maintenance_run_in_progress_is_not_regated():
+    """Its own completion stamps today; the run must still hold to its window end."""
+    settings = {**_MAINT, "lastRunAt": _NOW.isoformat()}
+    state = _active(completed=True, maintenancePriorSolarSell=True)
+    decision = _maint(_maint_event(state), {"batterySoc": 99}, state, settings)
+    assert decision.action == "hold"
+    assert decision.skip_reason is None
+
+
+def test_maintenance_grid_fallback_hour_comes_from_the_offset():
+    """19 - ceil(offset / 60), as deriveMaintenanceFallbackHour: 240 min -> 15:00."""
+    state = _active(maintenancePriorSolarSell=False)
+    late = _maint(
+        _maint_event(state), {"batterySoc": 70}, state, {**_MAINT, "gridFallbackOffsetMinutes": 240}
+    )
+    assert late.action == "update"
+    [(name, payload)] = late.commands
+    assert name == "set_battery_charge"
+    assert payload["gridChargeEnabled"] is True
+    assert payload["gridChargeSoc"] == 100
+
+    # The default 120 min gives 17:00, still ahead at 15:00 Kyiv.
+    early = _maint(_maint_event(state), {"batterySoc": 70}, state, _MAINT)
+    assert early.commands == []
+
+
+def test_maintenance_event_fallback_hour_wins_over_the_offset():
+    state = _active(maintenancePriorSolarSell=False)
+    event = {**_maint_event(state), "config": {"gridFallbackHour": 20}}
+    decision = _maint(
+        event, {"batterySoc": 70}, state, {**_MAINT, "gridFallbackOffsetMinutes": 360}
+    )
+    assert decision.commands == []
+
+
+def test_maintenance_completion_is_recorded_once():
+    state = _active(maintenancePriorSolarSell=False)
+    first = _maint(_maint_event(state), {"batterySoc": 99}, state, _MAINT)
+    assert first.new_state["completed"] is True
+    assert first.maintenance_run == "completed"
+
+    again = _maint(_maint_event(first.new_state), {"batterySoc": 100}, first.new_state, _MAINT)
+    assert again.maintenance_run is None
+
+
+def test_maintenance_window_end_without_completion_is_incomplete():
+    state = _active(maintenancePriorSolarSell=True)
+    event = _maint_event(state, **_out_window_schedule())
+    decision = _maint(event, {"batterySoc": 80}, state, _MAINT)
+    assert decision.action == "deactivate"
+    assert decision.commands == [("set_solar_sell", {"solarSell": 1})]
+    assert decision.maintenance_run == "incomplete"
+
+
+def test_maintenance_window_end_after_completion_records_nothing_more():
+    state = _active(maintenancePriorSolarSell=True, completed=True)
+    event = _maint_event(state, **_out_window_schedule())
+    decision = _maint(event, {"batterySoc": 95}, state, _MAINT)
+    assert decision.action == "deactivate"
+    assert decision.maintenance_run is None
+
+
+def test_maintenance_with_fill_windows_is_held_on_the_register_path():
+    """The cloud's fill/drain phase machine is not ported: no charge, and the app
+    keeps its warning, rather than a charge the owner did not set up."""
+    settings = {**_MAINT, "fillStartTime": "02:00"}
+    decision = _maint(_maint_event(), {"batterySoc": 50}, _idle(), settings)
+    assert decision.action == "skip"
+    assert decision.commands == []
+    assert decision.skip_reason == "maintenance_windows_unsupported"
+    assert decision.new_state["skippedReason"] == "maintenance_windows_unsupported"
+
+
+def test_maintenance_on_a_model_the_cloud_does_not_write_is_held():
+    for model_id in ("huawei_sun2000_10ktl", None):
+        decision = _maint(_maint_event(), {"batterySoc": 50}, _idle(), _MAINT, model_id=model_id)
+        assert decision.action == "skip"
+        assert decision.commands == []
+        assert decision.skip_reason == "unsupported_model"
+
+
+def test_maintenance_on_an_edge_deye_runs_the_register_path():
+    inverter = {"modelId": _DEYE, "transport": "solarman_v5", "protocolId": None}
+    decision = _maint(
+        _maint_event(), {"batterySoc": 50}, _idle(), _MAINT, inverter=inverter, model_id=None
+    )
+    assert decision.action == "activate"
+    assert decision.commands == [("set_solar_sell", {"solarSell": 0})]
+
+
+# ─── the edge box's priority-profile path ────────────────────────────────────
+
+_PI30_PREV = {"protocol": "pi30", "outputPriority": 2, "chargerPriority": 3}
+
+
+def test_priority_maintenance_with_no_settings_is_held():
+    decision = _maint(_maint_event(), {"batterySoc": 50}, _idle(), inverter=_PI30, model_id=None)
+    assert decision.action == "skip"
+    assert decision.commands == []
+    assert decision.skip_reason == "maintenance_settings_missing"
+
+
+def test_priority_maintenance_inside_its_interval_does_not_charge():
+    """The live bug: a daily event copied from the cloud charged every day."""
+    settings = {**_MAINT, "lastRunAt": _RAN_RECENTLY}
+    decision = _maint(
+        _maint_event(), {"batterySoc": 50}, _idle(), settings, inverter=_PI30, model_id=None
+    )
+    assert decision.action == "skip"
+    assert decision.skip_reason == "maintenance_not_due"
+    assert decision.commands == []
+
+
+def test_priority_maintenance_due_applies_grid_charge():
+    settings = {**_MAINT, "fillStartTime": "02:00"}  # windows do not apply on this path
+    decision = _maint(
+        _maint_event(), {"batterySoc": 50}, _idle(), settings, inverter=_PI30, model_id=None
+    )
+    assert decision.action == "activate"
+    [(name, payload)] = decision.commands
+    assert name == "apply_priority_profile"
+    assert payload["profile"] == "grid_charge"
+
+
+def test_priority_maintenance_completion_is_recorded():
+    state = {"status": "active", "priorityProfilePrev": _PI30_PREV, "priorityApplyCmdId": "c1"}
+    decision = _maint(
+        _maint_event(state), {"batterySoc": 99}, state, _MAINT, inverter=_PI30, model_id=None
+    )
+    assert decision.commands == [("restore_priority_profile", {"prev": _PI30_PREV, "cmdId": "c1"})]
+    assert decision.maintenance_run == "completed"
+
+
+def test_priority_maintenance_full_before_any_apply_is_completed():
+    decision = _maint(
+        _maint_event(), {"batterySoc": 100}, _idle(), _MAINT, inverter=_PI30, model_id=None
+    )
+    assert decision.commands == []
+    assert decision.maintenance_run == "completed"
+
+
+def test_priority_maintenance_window_end_without_completion_is_incomplete():
+    state = {"status": "active", "priorityProfilePrev": _PI30_PREV, "priorityApplyCmdId": "c1"}
+    event = _maint_event(state, **_out_window_schedule())
+    decision = _maint(event, {"batterySoc": 80}, state, _MAINT, inverter=_PI30, model_id=None)
+    assert decision.action == "deactivate"
+    assert decision.maintenance_run == "incomplete"
+
+
+def test_priority_maintenance_completion_marker_ends_with_the_window():
+    state = {"status": "idle", "completed": True, "priorityTargetReachedAt": 1}
+    event = _maint_event(state, **_out_window_schedule())
+    decision = _maint(event, {"batterySoc": 80}, state, _MAINT, inverter=_PI30, model_id=None)
+    assert decision.action == "hold"
+    assert "completed" not in decision.new_state

@@ -1,0 +1,80 @@
+{
+  "_comment": "Whether a battery maintenance charge is due (svitgrid D-2163). Each case is `isMaintenanceDue(args)` (services/api/src/calendar/maintenance-due.ts), `today` an ISO instant. Run by services/api/src/__tests__/maintenance-due.test.ts; the Home Assistant integration vendors this file as tests/fixtures/maintenance_due_cases.json and runs its port (battery_maintenance.is_maintenance_due) over it.",
+  "cases": [
+    {
+      "name": "never run is due",
+      "args": { "enabled": true, "intervalDays": 24, "lastRunAt": null, "today": "2026-07-25T12:00:00Z" },
+      "due": true
+    },
+    {
+      "name": "disabled is never due, even never run",
+      "args": { "enabled": false, "intervalDays": 7, "lastRunAt": null, "today": "2026-07-25T12:00:00Z" },
+      "due": false
+    },
+    {
+      "name": "disabled ignores a forced date of today",
+      "args": { "enabled": false, "intervalDays": 7, "lastRunAt": null, "today": "2026-07-25T12:00:00Z", "forcedNextRunDate": "2026-07-25", "todayLocalDateStr": "2026-07-25" },
+      "due": false
+    },
+    {
+      "name": "interval elapsed is due",
+      "args": { "enabled": true, "intervalDays": 24, "lastRunAt": "2026-07-01T00:00:00Z", "today": "2026-07-25T12:00:00Z" },
+      "due": true
+    },
+    {
+      "name": "one day short of the interval is not due",
+      "args": { "enabled": true, "intervalDays": 24, "lastRunAt": "2026-07-02T00:00:00Z", "today": "2026-07-25T12:00:00Z" },
+      "due": false
+    },
+    {
+      "name": "ran today is not due",
+      "args": { "enabled": true, "intervalDays": 7, "lastRunAt": "2026-07-25T08:00:00.000Z", "today": "2026-07-25T12:00:00Z" },
+      "due": false
+    },
+    {
+      "name": "days count by UTC calendar day, not by 24 hours",
+      "args": { "enabled": true, "intervalDays": 7, "lastRunAt": "2026-07-18T23:59:00.000Z", "today": "2026-07-25T00:01:00Z" },
+      "due": true
+    },
+    {
+      "name": "an offset in lastRunAt is read as its UTC instant",
+      "args": { "enabled": true, "intervalDays": 7, "lastRunAt": "2026-07-19T01:00:00+03:00", "today": "2026-07-25T12:00:00Z" },
+      "due": true
+    },
+    {
+      "name": "a forced date of today is due inside the interval",
+      "args": { "enabled": true, "intervalDays": 24, "lastRunAt": "2026-07-10T00:00:00Z", "today": "2026-07-12T12:00:00Z", "forcedNextRunDate": "2026-07-12", "todayLocalDateStr": "2026-07-12" },
+      "due": true
+    },
+    {
+      "name": "a future forced date holds an elapsed interval",
+      "args": { "enabled": true, "intervalDays": 7, "lastRunAt": "2026-07-01T00:00:00Z", "today": "2026-07-12T12:00:00Z", "forcedNextRunDate": "2026-07-20", "todayLocalDateStr": "2026-07-12" },
+      "due": false
+    },
+    {
+      "name": "a future forced date holds a battery never charged",
+      "args": { "enabled": true, "intervalDays": 7, "lastRunAt": null, "today": "2026-07-12T12:00:00Z", "forcedNextRunDate": "2026-07-20", "todayLocalDateStr": "2026-07-12" },
+      "due": false
+    },
+    {
+      "name": "a past forced date falls through to an elapsed interval",
+      "args": { "enabled": true, "intervalDays": 24, "lastRunAt": "2026-06-01T00:00:00Z", "today": "2026-07-12T12:00:00Z", "forcedNextRunDate": "2026-07-01", "todayLocalDateStr": "2026-07-12" },
+      "due": true
+    },
+    {
+      "name": "a past forced date does not force a run inside the interval",
+      "args": { "enabled": true, "intervalDays": 24, "lastRunAt": "2026-07-10T00:00:00Z", "today": "2026-07-12T12:00:00Z", "forcedNextRunDate": "2026-07-01", "todayLocalDateStr": "2026-07-12" },
+      "due": false
+    },
+    {
+      "name": "a forced date with no local date is ignored",
+      "args": { "enabled": true, "intervalDays": 24, "lastRunAt": "2026-07-10T00:00:00Z", "today": "2026-07-12T12:00:00Z", "forcedNextRunDate": "2026-07-12" },
+      "due": false
+    },
+    {
+      "name": "the local date, not the UTC date, matches the forced date",
+      "args": { "enabled": true, "intervalDays": 24, "lastRunAt": "2026-07-10T00:00:00Z", "today": "2026-07-12T22:30:00Z", "forcedNextRunDate": "2026-07-13", "todayLocalDateStr": "2026-07-13" },
+      "due": true
+    }
+  ]
+}

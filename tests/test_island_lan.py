@@ -532,6 +532,7 @@ async def test_status_of_a_true_island(hass: HomeAssistant):
             "rule_notices",
             "edge_box_commands",
             "string_outage",
+            "maintenance_charge",
         ],
     }
 
@@ -1253,6 +1254,7 @@ async def test_island_status_without_edge_boxes_is_unchanged(hass: HomeAssistant
             "rule_notices",
             "edge_box_commands",
             "string_outage",
+            "maintenance_charge",
         ],
     }
 
@@ -1721,6 +1723,7 @@ async def test_island_status_without_edge_boxes_lists_ha_inverters_only(hass: Ho
             "rule_notices",
             "edge_box_commands",
             "string_outage",
+            "maintenance_charge",
         ],
         "inverters": {
             "inv-ha-1": {"host": "ha", "readSource": "native"},

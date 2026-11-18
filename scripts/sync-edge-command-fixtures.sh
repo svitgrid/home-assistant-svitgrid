@@ -5,8 +5,9 @@
 # firmware_signed_commands.json and edge_paths.json with UPDATE_EDGE_CONTRACT=1
 # (signing-command-parity.test.ts). edge_pair_code.json and
 # island_capability_vocab.json are hand-written there, and
-# zigbee_condition_cases.json and bms_sync_version_cases.json are pinned
-# against the cloud there (zigbee-conditions.test.ts, bms-roster-model.test.ts). zigbee_device_profiles.json
+# zigbee_condition_cases.json, bms_sync_version_cases.json and
+# maintenance_due_cases.json are pinned against the cloud there
+# (zigbee-conditions.test.ts, bms-roster-model.test.ts, maintenance-due.test.ts). zigbee_device_profiles.json
 # (prod's `config/zigbeeDeviceProfiles`) is read at runtime, so it goes into the
 # integration itself.
 set -euo pipefail
@@ -22,7 +23,8 @@ for SRC_REL in \
   fixtures/edge_pair_code.json \
   fixtures/island_capability_vocab.json \
   fixtures/zigbee_condition_cases.json \
-  fixtures/bms_sync_version_cases.json; do
+  fixtures/bms_sync_version_cases.json \
+  fixtures/maintenance_due_cases.json; do
   SRC="$INVERTER_PROTOCOL_DIR/$SRC_REL"
   DEST="$FIXTURES_DIR/$(basename "$SRC_REL")"
   [ -f "$SRC" ] || { echo "source not found: $SRC" >&2; exit 1; }

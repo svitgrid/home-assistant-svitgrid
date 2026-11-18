@@ -24,9 +24,11 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
+from ..battery_maintenance import is_maintenance_due
 from . import priority_profile as pp
 from .brand_commands import (
     BATTERY_CHARGE_CURRENT_CAPABLE_MODELS,
+    DEYE_REGISTER_WRITABLE_MODELS,
     brand_kind,
     must_prior_thresholds,
     pi30_prior_thresholds,
@@ -175,12 +177,17 @@ class EvaluatorDecision:
     commands   : list[tuple[str, dict]] — (command_name, payload) to dispatch
     new_state  : updated executionState dict (always a deep copy)
     skip_reason: non-None only when action == 'skip'
+    maintenance_run: 'completed' | 'incomplete' | None — a battery
+                 maintenance run that ended with this decision, which the
+                 scheduler records once the decision's state is kept
+                 (``BatteryMaintenanceStore.async_record_run``).
     """
 
     action: str
     commands: list
     new_state: dict
     skip_reason: str | None = None
+    maintenance_run: str | None = None
 
 
 # ──────────────────────── Constants (derive-grid-present.ts) ─────────────────
@@ -1001,7 +1008,7 @@ def _event_writes(event: dict, exec_state: dict) -> list[_Write]:
                 "previousGenForce", "set_gen_force", {"on": True}, ("set_gen_force", {"on": False})
             )
         ]
-    if mode == "battery_maintenance":
+    if mode in _MAINTENANCE_MODES:
         writes = [_Write("maintenancePriorSolarSell", "set_solar_sell", {"solarSell": 0})]
         if exec_state.get("gridFallbackFired"):
             payload = _charge_payload(config, schedule, 100, True)
@@ -1369,6 +1376,7 @@ def evaluate_event(
     settings: dict | None = None,
     model_id: str | None = None,
     socket_control: bool = False,
+    maintenance: dict | None = None,
 ) -> EvaluatorDecision:
     """Evaluate a calendar event; see `_evaluate_event`.
 
@@ -1397,6 +1405,10 @@ def evaluate_event(
     adopted edge box). The ``lower_consumption`` and ``consume_from_sun``
     modes then run as the cloud's do, and the scheduler switches their
     sockets (svitgrid D-2159); without it they never act, as before.
+    *maintenance* is the inverter's battery maintenance settings the app sent
+    (``battery_maintenance.BatteryMaintenanceStore.settings``), or None. A
+    ``battery_maintenance_charge`` event runs the cloud's due check on them
+    (``_maintenance_gate``); with none, a recurring one is held.
     """
     if model_id is None and inverter is not None:
         model_id = inverter.get("modelId")
@@ -1407,7 +1419,9 @@ def evaluate_event(
             inverter.get("modelId"), inverter.get("transport"), inverter.get("protocolId")
         )
         if kind == "priority" and _runs_on_priority_profile(event):
-            decision = _evaluate_priority(event, reading, exec_state, now_utc, tz, others, protocol)
+            decision = _evaluate_priority(
+                event, reading, exec_state, now_utc, tz, others, protocol, maintenance
+            )
         elif kind == "priority" and _runs_on_thresholds(event, protocol):
             decision = _evaluate_thresholds(event, reading, exec_state, now_utc, tz, settings)
         else:
@@ -1416,11 +1430,18 @@ def evaluate_event(
                 return _unsupported(event, exec_state, command, now_utc)
     if decision is None:
         decision = _evaluate_event(
-            event, reading, exec_state, now_utc, tz, others, model_id, socket_control
+            event, reading, exec_state, now_utc, tz, others, model_id, socket_control, maintenance
         )
     state = {k: v for k, v in decision.new_state.items() if k != SKIPPED_REASON_KEY}
     if decision.action == "skip" and decision.skip_reason in _NEEDS_CLOUD_SKIPS:
         state[SKIPPED_REASON_KEY] = NEEDS_CLOUD
+    elif (
+        decision.action == "skip"
+        and event.get("mode") == MAINTENANCE_MODE
+        and decision.skip_reason in MAINTENANCE_GAP_SKIPS
+    ):
+        # The app keeps its maintenance warning while this is set.
+        state[SKIPPED_REASON_KEY] = decision.skip_reason
     # The run's times, which the app shows as the event's history on a true
     # island. The scheduler keeps this state only when the dispatch succeeds.
     if decision.action == "activate":
@@ -1440,6 +1461,7 @@ def _evaluate_event(
     others=(),
     model_id: str | None = None,
     socket_control: bool = False,
+    maintenance: dict | None = None,
 ) -> EvaluatorDecision:
     """Evaluate a calendar event against a live reading.
 
@@ -1492,7 +1514,10 @@ def _evaluate_event(
         if has_landed_writes(exec_state):
             restore_cmds, new_state = restore_decision(event, exec_state, now_utc, reading, others)
             return EvaluatorDecision(
-                action="deactivate", commands=restore_cmds, new_state=new_state
+                action="deactivate",
+                commands=restore_cmds,
+                new_state=new_state,
+                maintenance_run=_maintenance_window_end(event, exec_state),
             )
         if current_status == "pending_condition":
             new_state["status"] = "idle"
@@ -1509,7 +1534,7 @@ def _evaluate_event(
         decision = _SOCKET_MODE_EVALUATORS[mode](event, reading, exec_state, new_state, now_utc)
     else:
         decision = _eval_mode(
-            mode, event, reading, exec_state, new_state, now_utc, tz, others, model_id
+            mode, event, reading, exec_state, new_state, now_utc, tz, others, model_id, maintenance
         )
     if decision.action == "activate":
         decision.new_state.pop(RELEASED_KEY, None)
@@ -1689,6 +1714,7 @@ def _eval_mode(
     tz: str,
     others=(),
     model_id: str | None = None,
+    maintenance: dict | None = None,
 ) -> EvaluatorDecision:
     if mode == "battery_charge":
         return _eval_battery_charge(event, reading, exec_state, new_state, now_utc)
@@ -1700,6 +1726,10 @@ def _eval_mode(
         return _eval_consume_from_sun(event, reading, exec_state, new_state, now_utc)
     if mode == "battery_maintenance":
         return _eval_battery_maintenance(event, reading, exec_state, new_state, now_utc, tz, others)
+    if mode == MAINTENANCE_MODE:
+        return _eval_maintenance_charge(
+            event, reading, exec_state, new_state, now_utc, tz, others, model_id, maintenance
+        )
     if mode == "use_battery":
         return _eval_use_battery(event, exec_state, new_state, now_utc)
     if mode == "gen_force":
@@ -2164,6 +2194,7 @@ def _eval_battery_maintenance(
     now_utc: datetime,
     tz: str,
     others=(),
+    fallback_hour: int | None = None,
 ) -> EvaluatorDecision:
     """Periodic full-charge cycle: the legacy body of the API's
     evaluateBatteryMaintenanceCharge (no fill/drain windows, no due-gate).
@@ -2181,7 +2212,8 @@ def _eval_battery_maintenance(
     """
     config = event.get("config") or {}
     schedule = event.get("schedule") or {}
-    fallback_hour = int(config.get("gridFallbackHour", 17))
+    if fallback_hour is None:
+        fallback_hour = int(config.get("gridFallbackHour", 17))
     now_hour = _local_hour(now_utc, tz)
     soc = float(reading.get("batterySoc", 0) or 0)
     activating = exec_state.get("status", "idle") != "active"
@@ -2212,11 +2244,131 @@ def _eval_battery_maintenance(
         cmds.append(("set_battery_charge", _charge_payload(config, schedule, 100, True)))
         new_state["gridFallbackFired"] = True
 
+    # The first reading at 99 % ends the run (stampMaintenanceLastRun).
+    run = "completed" if soc >= 99 and not exec_state.get("completed") else None
     if activating:
-        return EvaluatorDecision(action="activate", commands=cmds, new_state=new_state)
+        return EvaluatorDecision(
+            action="activate", commands=cmds, new_state=new_state, maintenance_run=run
+        )
     if cmds:
-        return EvaluatorDecision(action="update", commands=cmds, new_state=new_state)
-    return EvaluatorDecision(action="hold", commands=[], new_state=new_state)
+        return EvaluatorDecision(
+            action="update", commands=cmds, new_state=new_state, maintenance_run=run
+        )
+    return EvaluatorDecision(action="hold", commands=[], new_state=new_state, maintenance_run=run)
+
+
+# ─────────────────── battery_maintenance_charge (svitgrid D-2163) ────────────
+
+# The cloud's mode, and the island's own legacy one, which writes the same.
+MAINTENANCE_MODE = "battery_maintenance_charge"
+_MAINTENANCE_MODES = frozenset({"battery_maintenance", MAINTENANCE_MODE})
+
+# skip_reason values of a maintenance event the island holds.
+MAINTENANCE_NOT_DUE = "maintenance_not_due"
+MAINTENANCE_SETTINGS_MISSING = "maintenance_settings_missing"
+MAINTENANCE_WINDOWS_UNSUPPORTED = "maintenance_windows_unsupported"
+# The ones that mean the island cannot run the charge at all. Recorded as
+# ``skippedReason``, which the app reads to keep its maintenance warning.
+MAINTENANCE_GAP_SKIPS = frozenset(
+    {MAINTENANCE_SETTINGS_MISSING, MAINTENANCE_WINDOWS_UNSUPPORTED, "unsupported_model"}
+)
+
+
+def _maintenance_skip(new_state: dict, reason: str) -> EvaluatorDecision:
+    new_state["skipReason"] = reason
+    return EvaluatorDecision(action="skip", commands=[], new_state=new_state, skip_reason=reason)
+
+
+def _maintenance_gate(
+    event: dict,
+    exec_state: dict,
+    new_state: dict,
+    maintenance: dict | None,
+    now_utc: datetime,
+    tz: str,
+) -> EvaluatorDecision | None:
+    """The cloud's due gate (evaluateBatteryMaintenanceCharge), or None to run.
+
+    A run already active is never gated again: its own completion stamps
+    today's date, and the run holds to its window end. A run-now event
+    (recurrence ``none``) is the owner's tap and always runs. Any other
+    recurrence runs only when ``isMaintenanceDue`` says so, and is held when
+    the app never sent the settings: without ``intervalDays`` a daily event
+    would charge every day.
+    """
+    if exec_state.get("status") == "active":
+        return None
+    if (event.get("schedule") or {}).get("recurrence") == "none":
+        return None
+    if maintenance is None:
+        return _maintenance_skip(new_state, MAINTENANCE_SETTINGS_MISSING)
+    due = is_maintenance_due(
+        enabled=maintenance.get("enabled") is True,
+        interval_days=maintenance.get("intervalDays") or 0,
+        last_run_at=maintenance.get("lastRunAt"),
+        today=now_utc,
+        forced_next_run_date=maintenance.get("forcedNextRunDate"),
+        today_local_date_str=now_utc.astimezone(ZoneInfo(tz)).date().isoformat(),
+    )
+    if not due:
+        return _maintenance_skip(new_state, MAINTENANCE_NOT_DUE)
+    if new_state.get("skipReason") in (MAINTENANCE_NOT_DUE, *MAINTENANCE_GAP_SKIPS):
+        new_state.pop("skipReason", None)
+    return None
+
+
+def _maintenance_fallback_hour(config: dict, maintenance: dict | None) -> int:
+    """The event's gridFallbackHour, else deriveMaintenanceFallbackHour: a
+    constant sunset of 19 less the offset in whole hours, clamped to 0-23."""
+    hour = config.get("gridFallbackHour")
+    if isinstance(hour, int | float) and not isinstance(hour, bool):
+        return int(hour)
+    offset = (maintenance or {}).get("gridFallbackOffsetMinutes")
+    if isinstance(offset, bool) or not isinstance(offset, int | float):
+        offset = 120
+    return max(0, min(23, 19 - math.ceil(offset / 60)))
+
+
+def _maintenance_window_end(event: dict, exec_state: dict) -> str | None:
+    """``incomplete`` for a maintenance run its window ends before 99 %."""
+    if event.get("mode") != MAINTENANCE_MODE or exec_state.get("completed"):
+        return None
+    held = exec_state.get("status") == "active" or pp.is_held(exec_state.get(pp.PREV_KEY))
+    return "incomplete" if held else None
+
+
+def _eval_maintenance_charge(
+    event: dict,
+    reading: dict,
+    exec_state: dict,
+    new_state: dict,
+    now_utc: datetime,
+    tz: str,
+    others,
+    model_id: str | None,
+    maintenance: dict | None,
+) -> EvaluatorDecision:
+    """battery_maintenance_charge on the register path (svitgrid D-2163).
+
+    The cloud's legacy body: solar sell off for the run, a grid charge to
+    100 % from the fallback hour, and the charge program handed back at 99 %
+    (``_eval_battery_maintenance``), the window end restoring solar sell. Only
+    on a model the cloud writes (DEYE_REGISTER_WRITABLE_MODELS). Settings with
+    a fill window drive the cloud's fill/drain phase machine, which the
+    island does not run, so such an event is held.
+    """
+    if exec_state.get("status") != "active":
+        if model_id not in DEYE_REGISTER_WRITABLE_MODELS:
+            return _maintenance_skip(new_state, UNSUPPORTED_MODEL)
+        if maintenance is not None and maintenance.get("fillStartTime"):
+            return _maintenance_skip(new_state, MAINTENANCE_WINDOWS_UNSUPPORTED)
+    gated = _maintenance_gate(event, exec_state, new_state, maintenance, now_utc, tz)
+    if gated is not None:
+        return gated
+    fallback_hour = _maintenance_fallback_hour(event.get("config") or {}, maintenance)
+    return _eval_battery_maintenance(
+        event, reading, exec_state, new_state, now_utc, tz, others, fallback_hour
+    )
 
 
 # ─────────────────── use_battery ─────────────────────────────────────────────
@@ -2516,6 +2668,7 @@ def _evaluate_priority(
     tz: str,
     others,
     protocol: str | None,
+    maintenance: dict | None = None,
 ) -> EvaluatorDecision:
     """An event on a priority-profile inverter of an edge box.
 
@@ -2527,11 +2680,21 @@ def _evaluate_priority(
     schedule = event.get("schedule") or {}
     if not is_event_in_window(schedule, now_utc, tz):
         if has_landed_writes(exec_state):
-            return _priority_restore(event, exec_state, new_state, now_utc)
+            out = _priority_restore(event, exec_state, new_state, now_utc)
+            out.maintenance_run = _maintenance_window_end(event, exec_state)
+            out.new_state.pop("completed", None)
+            return out
         if new_state.get("status") == "pending_condition":
             new_state["status"] = "idle"
             new_state.pop("conditionMetSince", None)
+        # A maintenance run's marker ends with its window, as on the register path.
+        new_state.pop("completed", None)
         return EvaluatorDecision(action="hold", commands=[], new_state=new_state)
+    if event.get("mode") == MAINTENANCE_MODE and not pp.is_held(exec_state.get(pp.PREV_KEY)):
+        # The cloud's due gate runs before its priority-profile path too.
+        gated = _maintenance_gate(event, exec_state, new_state, maintenance, now_utc, tz)
+        if gated is not None:
+            return gated
     if event.get("mode") == "custom":
         return _eval_priority_rule(event, reading, exec_state, new_state, now_utc, tz, protocol)
     return _eval_priority_mode(event, reading, exec_state, new_state, now_utc, tz, protocol)
@@ -2582,16 +2745,24 @@ def _eval_priority_mode(
     )
     now_ms = _now_ms(now_utc)
 
+    # onTargetReached: the first sight of the target ends a maintenance run.
+    maintenance_done = "completed" if mode == "battery_maintenance_charge" else None
     if decision["kind"] == "restore":
         out = _priority_restore(event, exec_state, new_state, now_utc)
         if reached_at is None or reached_at < start_ms:
             out.new_state[pp.TARGET_REACHED_AT_KEY] = now_ms
+            if maintenance_done is not None:
+                out.new_state["completed"] = True
+            out.maintenance_run = maintenance_done
         return out
 
     if decision["kind"] == "idle":
         if decision.get("targetReached"):
             new_state[pp.TARGET_REACHED_AT_KEY] = now_ms
             new_state["status"] = "idle"
+            if maintenance_done is not None:
+                new_state["completed"] = True
+            hold.maintenance_run = maintenance_done
         return hold
 
     # Ruling R13: one apply per occurrence; the box reverts at revertAt.

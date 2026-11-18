@@ -70,6 +70,8 @@ from . import priority_profile as pp
 from . import socket_actions as sa
 from .event_evaluator import (
     BMS_TEMPERATURE_KEY,
+    MAINTENANCE_GAP_SKIPS,
+    MAINTENANCE_MODE,
     NEEDS_CLOUD,
     SKIPPED_REASON_KEY,
     ZIGBEE_CONDITION_TYPES,
@@ -559,6 +561,8 @@ async def _tick(
     on_notice: object = None,
     zigbee_docs_for: object = None,
     sockets: object = None,
+    maintenance_for: object = None,
+    record_maintenance_run: object = None,
 ) -> None:
     """Single scheduler tick.
 
@@ -597,6 +601,15 @@ async def _tick(
                    or None. Once a box is adopted, a rule's socket actions and
                    the two socket modes switch Zigbee sockets (svitgrid D-2158,
                    D-2159); without it they switch nothing, as before.
+    maintenance_for : callable(inverter_id: str) -> dict | None, the battery
+                   maintenance settings the app sent for the inverter
+                   (``BatteryMaintenanceStore.settings``). A
+                   battery_maintenance_charge event runs the cloud's due check
+                   on them; without it, a recurring one is held (svitgrid D-2163).
+    record_maintenance_run : async callable(inverter_id, at, outcome), told
+                   of each maintenance run that completed or ended incomplete,
+                   once the decision's state is kept
+                   (``BatteryMaintenanceStore.async_record_run``).
     """
     # 1. List events; finish any cancel the app asked for first
     all_events = await event_store.async_list_events()
@@ -659,6 +672,10 @@ async def _tick(
             brand["settings"] = await settings_for(inverter_id)
         if socket_control:
             brand["socket_control"] = True
+        if event.get("mode") == MAINTENANCE_MODE:
+            brand["maintenance"] = (
+                maintenance_for(inverter_id) if maintenance_for is not None else None
+            )
         try:
             reading = reading_entry["payload"]
             if bms_temperature is not None and _has_bms_condition(event):
@@ -686,6 +703,7 @@ async def _tick(
                 for key in _RETRY_KEYS:
                     state.pop(key, None)
                 await _persist(event_store, latest, event, state, journal)
+                await _record_run(record_maintenance_run, inverter_id, decision, now_utc)
                 continue
 
             retry_at = _parse_iso(exec_state.get("dispatchRetryAt"))
@@ -717,6 +735,7 @@ async def _tick(
             await _persist(event_store, latest, event, state, journal)
             if failure is None:
                 await _notify(on_notice, event, decision.action)
+                await _record_run(record_maintenance_run, inverter_id, decision, now_utc)
 
         except Exception:  # noqa: BLE001
             _LOGGER.exception(
@@ -726,6 +745,18 @@ async def _tick(
 
 
 _NOTICE_PHASES = {"activate": "started", "deactivate": "ended"}
+
+
+async def _record_run(record: object, inverter_id: object, decision, now_utc: datetime) -> None:
+    """Record a maintenance run the decision ended. Never raises: a lost
+    record makes the next run due early, which is the safe side."""
+    outcome = getattr(decision, "maintenance_run", None)
+    if record is None or outcome is None:
+        return
+    try:
+        await record(inverter_id, now_utc, outcome)
+    except Exception:  # noqa: BLE001
+        _LOGGER.exception("Inverter %s: recording the maintenance run failed", inverter_id)
 
 
 async def _notify(on_notice: object, event: dict, action: str) -> None:
@@ -757,7 +788,10 @@ async def _sync_skip_reason(
 ) -> None:
     """Set or clear `skippedReason` without evaluating; write only on a change."""
     want = NEEDS_CLOUD if needs_cloud(event) else None
-    if state.get(SKIPPED_REASON_KEY) == want:
+    current = state.get(SKIPPED_REASON_KEY)
+    if want is None and current in MAINTENANCE_GAP_SKIPS:
+        return  # set by the evaluator, which needs a reading to clear it
+    if current == want:
         return
     new_state = {k: v for k, v in state.items() if k != SKIPPED_REASON_KEY}
     if want is not None:
@@ -884,6 +918,8 @@ async def run_event_scheduler_loop(
     on_notice: object = None,
     zigbee_docs_for: object = None,
     sockets: object = None,
+    maintenance_for: object = None,
+    record_maintenance_run: object = None,
 ) -> None:
     """Island-mode event scheduler loop.
 
@@ -912,6 +948,8 @@ async def run_event_scheduler_loop(
     on_notice    : async callable(event, phase), see ``_tick``.
     zigbee_docs_for : async callable(device_ids), see ``_tick``.
     sockets      : the socket switcher, see ``_tick``.
+    maintenance_for : callable(inverter_id), see ``_tick``.
+    record_maintenance_run : async callable(inverter_id, at, outcome), see ``_tick``.
 
     GATED: spawned ONLY when cloud_ingest_enabled=False.  With cloud-sync ON
     the cloud engine handles events; double-fire must not occur.
@@ -934,6 +972,8 @@ async def run_event_scheduler_loop(
                 on_notice,
                 zigbee_docs_for,
                 sockets,
+                maintenance_for,
+                record_maintenance_run,
             )
         except Exception:  # noqa: BLE001
             _LOGGER.exception(

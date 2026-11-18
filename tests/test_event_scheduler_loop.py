@@ -1700,3 +1700,113 @@ async def test_a_member_that_waited_drops_the_wait_once_it_runs():
     assert state["status"] == "active"
     assert "skipReason" not in state
     assert sockets.switched == [("ess-today", [("boiler", False)])]
+
+
+# ─── battery_maintenance_charge: settings in, runs recorded (svitgrid D-2163) ─
+
+
+def _maintenance_event(exec_state: dict | None = None) -> dict:
+    return {
+        "id": "maint-1",
+        "inverterId": "inv-1",
+        "enabled": True,
+        "mode": "battery_maintenance_charge",
+        "config": {"gridFallbackHour": 23},
+        "schedule": {"startTime": "10:00", "endTime": "11:00", "recurrence": "daily"},
+        "executionState": exec_state or {},
+    }
+
+
+_MAINTENANCE = {
+    "enabled": True,
+    "intervalDays": 21,
+    "lastRunAt": None,
+    "lastRunOutcome": None,
+    "gridFallbackOffsetMinutes": 120,
+    "fillStartTime": None,
+}
+
+
+class _Recorder:
+    def __init__(self) -> None:
+        self.runs: list[tuple[str, datetime, str]] = []
+
+    async def __call__(self, inverter_id: str, at: datetime, outcome: str) -> None:
+        self.runs.append((inverter_id, at, outcome))
+
+
+def _snapshot(soc: int) -> FakeStore:
+    reading = _reading_at()
+    return FakeStore([{**reading, "payload": {**reading["payload"], "batterySoc": soc}}])
+
+
+@pytest.mark.asyncio
+async def test_a_maintenance_event_without_settings_writes_nothing():
+    from custom_components.svitgrid.harvest.event_scheduler_loop import _tick
+
+    event_store = FakeEventStore([_maintenance_event()])
+    executor = AsyncMock()
+
+    await _tick(
+        _snapshot(50),
+        event_store,
+        lambda _i: executor,
+        "UTC",
+        _NOW_IN_WINDOW,
+        model_for=lambda _i: "deye_sg04lp3",
+    )
+
+    executor.dispatch.assert_not_awaited()
+    state = event_store._events["maint-1"]["executionState"]
+    assert state["skippedReason"] == "maintenance_settings_missing"
+
+
+@pytest.mark.asyncio
+async def test_a_maintenance_run_reads_the_settings_and_records_its_completion():
+    from custom_components.svitgrid.harvest.event_scheduler_loop import _tick
+
+    event_store = FakeEventStore([_maintenance_event()])
+    executor = AsyncMock()
+    executor.dispatch = AsyncMock(return_value={"written": [], "verified": True})
+    recorder = _Recorder()
+    kw = {
+        "model_for": lambda _i: "deye_sg04lp3",
+        "maintenance_for": lambda inverter_id: _MAINTENANCE if inverter_id == "inv-1" else None,
+        "record_maintenance_run": recorder,
+    }
+
+    await _tick(_snapshot(60), event_store, lambda _i: executor, "UTC", _NOW_IN_WINDOW, **kw)
+    assert executor.dispatch.call_args.args == ("set_solar_sell", {"solarSell": 0})
+    assert recorder.runs == []
+
+    later = datetime(2026, 6, 29, 10, 40, 0, tzinfo=UTC)
+    await _tick(_snapshot(99), event_store, lambda _i: executor, "UTC", later, **kw)
+    assert recorder.runs == [("inv-1", later, "completed")]
+
+    # Once only: the next reading at 100 % records nothing more.
+    await _tick(_snapshot(100), event_store, lambda _i: executor, "UTC", later, **kw)
+    assert len(recorder.runs) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_maintenance_window_end_that_fails_records_nothing_yet():
+    from custom_components.svitgrid.harvest.event_scheduler_loop import _tick
+
+    state = {"status": "active", "maintenancePriorSolarSell": True}
+    event_store = FakeEventStore([_maintenance_event(state)])
+    recorder = _Recorder()
+    kw = {
+        "model_for": lambda _i: "deye_sg04lp3",
+        "maintenance_for": lambda _i: _MAINTENANCE,
+        "record_maintenance_run": recorder,
+    }
+
+    failing = _failing_executor(OSError("bus busy"))
+    await _tick(_snapshot(80), event_store, lambda _i: failing, "UTC", _NOW_OUT_WINDOW, **kw)
+    assert recorder.runs == []
+
+    ok = AsyncMock()
+    ok.dispatch = AsyncMock(return_value={"written": [], "verified": True})
+    later = datetime(2026, 6, 29, 11, 45, 0, tzinfo=UTC)
+    await _tick(_snapshot(80), event_store, lambda _i: ok, "UTC", later, **kw)
+    assert recorder.runs == [("inv-1", later, "incomplete")]

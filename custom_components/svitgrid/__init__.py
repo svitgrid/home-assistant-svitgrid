@@ -27,6 +27,7 @@ from homeassistant.helpers.typing import ConfigType
 
 from .activity import ActivityTracker
 from .api_client import SvitgridApiClient, async_integration_version
+from .battery_maintenance import battery_maintenance_store
 from .battery_sign import preset_is_discharge_positive
 from .bms_packs import BmsPackStore
 from .bms_temperature import household_bms_states
@@ -1281,6 +1282,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # With cloud_ingest_enabled=True the cloud engine handles calendar events;
         # running both would double-fire commands.
         if not cloud_ingest_enabled and store is not None and event_store is not None:
+            # The maintenance settings the app sent, and the runs recorded on
+            # them (svitgrid D-2163).
+            maintenance_store = await battery_maintenance_store(hass)
             scheduler_task = hass.async_create_background_task(
                 run_event_scheduler_loop(
                     hass=hass,
@@ -1311,6 +1315,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     # A rule's socket actions set the Zigbee sockets of the
                     # adopted boxes (svitgrid D-2158).
                     sockets=rule_socket_switcher(hass),
+                    # A battery_maintenance_charge event runs the cloud's due
+                    # check on them, and records each run's date here.
+                    maintenance_for=maintenance_store.settings,
+                    record_maintenance_run=maintenance_store.async_record_run,
                 ),
                 name="svitgrid_event_scheduler",
             )

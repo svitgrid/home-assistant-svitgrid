@@ -57,6 +57,7 @@ from homeassistant.components.http import HomeAssistantView
 from homeassistant.config_entries import ConfigEntryState
 
 from .api_client import async_integration_version
+from .battery_maintenance import battery_maintenance_store, valid_settings
 from .bms_packs import valid_report as valid_bms_report
 from .bms_temperature import has_bms_temperature, household_bms_states
 from .command_auth import verify_signed_command
@@ -137,6 +138,12 @@ CAPABILITIES = (
     # setup, and the island Telegram bot runs the cloud's string-outage rule
     # on it (svitgrid D-2155). The app sends the strings only when listed.
     "string_outage",
+    # POST /api/svitgrid/island/battery-maintenance keeps each inverter's
+    # maintenance settings, and the island runs the cloud's due check on a
+    # battery_maintenance_charge event, on the register path and an edge
+    # box's priority profile alike (svitgrid D-2163). The app sends the
+    # settings, and stops calling the charge a gap, only when listed.
+    "maintenance_charge",
 )
 
 ACTION_SET_CLOUD_COPY = "set_cloud_copy"
@@ -151,6 +158,7 @@ ACTION_EDGE_LEAVE = "edge_leave"
 ACTION_EDGE_KEY_ADD = "edge_key_add"
 ACTION_BMS_REPORT = "bms_report"
 ACTION_SOLAR_STRINGS = "solar_strings"
+ACTION_BATTERY_MAINTENANCE = "battery_maintenance"
 # The box command `/edge/leave` queues (`edge_pair_code.json` `commands.clear`).
 EDGE_LEAVE_COMMAND = "clear_island_endpoint"
 
@@ -871,6 +879,44 @@ class SvitgridIslandSolarStringsView(HomeAssistantView):
         return web.json_response({"ok": True, "stringCount": len(strings)})
 
 
+class SvitgridIslandBatteryMaintenanceView(HomeAssistantView):
+    """POST /api/svitgrid/island/battery-maintenance — one inverter's maintenance settings.
+
+    `signedData`: `{action: "battery_maintenance", inverterId, settings, nonce,
+    ts}`, `settings` the inverter's `batteryMaintenance` as the cloud holds it,
+    or null to drop them. Home Assistant keeps them (`battery_maintenance.py`)
+    and records each run's date itself; a send never moves a later recorded
+    run back. The evaluator reads them for a battery_maintenance_charge event
+    (svitgrid D-2163). Answers the `lastRunAt` kept.
+
+    404 `unknown_inverter` for an inverter this station does not serve.
+    """
+
+    url = "/api/svitgrid/island/battery-maintenance"
+    name = "api:svitgrid:island:battery-maintenance"
+    requires_auth = False
+
+    async def post(self, request) -> web.Response:  # noqa: D102
+        signed, error = await signed_lan_request(request, ACTION_BATTERY_MAINTENANCE)
+        if error is not None:
+            return error
+        hass = request.app["hass"]
+        inverter_id = signed.get("inverterId")
+        if not isinstance(inverter_id, str) or not inverter_id:
+            return _json_error(400, "bad_request", detail="inverterId must be a string")
+        raw = signed.get("settings")
+        settings = None if raw is None else valid_settings(raw)
+        if raw is not None and settings is None:
+            return _json_error(400, "bad_request", detail="settings are not maintenance settings")
+        keystore = hass.data.get(DOMAIN, {}).get("keystore")
+        state = await keystore.load() if keystore is not None else None
+        boxes = list(state.edge_boxes.values()) if state is not None else []
+        if inverter_id not in _inverter_adverts(hass, boxes):
+            return _json_error(404, "unknown_inverter")
+        kept = await (await battery_maintenance_store(hass)).async_set(inverter_id, settings)
+        return web.json_response({"ok": True, "lastRunAt": (kept or {}).get("lastRunAt")})
+
+
 # What `/island/status` says of each edge box; `/edge/status` says more.
 _ISLAND_STATUS_BOX_KEYS = (
     "deviceId",
@@ -1448,6 +1494,7 @@ ISLAND_LAN_VIEWS = (
     SvitgridIslandStatusView,
     SvitgridIslandBmsReportView,
     SvitgridIslandSolarStringsView,
+    SvitgridIslandBatteryMaintenanceView,
     SvitgridEdgeAdoptView,
     SvitgridEdgeForgetView,
     SvitgridEdgeStatusView,
