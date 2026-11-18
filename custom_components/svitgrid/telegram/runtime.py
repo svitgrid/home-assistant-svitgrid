@@ -32,6 +32,7 @@ from .bot_api import BotApi, BotInUseElsewhere, InvalidToken, SendResult, Telegr
 from .detector import evaluate
 from .liveness import evaluate_liveness
 from .state import TelegramState
+from .summaries import due_summaries
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -54,7 +55,10 @@ ALERT_KINDS = (
     "offline_board_recovered",
     "calendar_event_started",
     "calendar_event_ended",
+    "daily_summary",
+    "weekly_summary",
 )
+_SUMMARY_KINDS = frozenset({"daily_summary", "weekly_summary"})
 _NOTICE_KINDS = {"started": "calendar_event_started", "ended": "calendar_event_ended"}
 # Kinds whose latch must reach disk at once: HA does not unload entries on
 # shutdown, so a delayed save can be lost to a power cut and the alert told again.
@@ -63,10 +67,14 @@ _FLUSH_KINDS = frozenset(ALERT_KINDS) - {
     "offline_board_recovered",
     "calendar_event_started",
     "calendar_event_ended",
+    "daily_summary",
+    "weekly_summary",
 }
 LIVENESS_TICK_S = 60
 
 LivenessSource = Callable[[], Awaitable[list[dict]]]
+# A household's energy over local days `from_day`..`to_day`, or None.
+SummaryTotals = Callable[[str, str, str], Awaitable[dict | None]]
 
 STATUS_INVALID_TOKEN = "invalid_token"
 STATUS_IN_USE = "bot_in_use_elsewhere"
@@ -135,6 +143,7 @@ class TelegramRuntime:
         sleep: Callable[[float], Awaitable[Any]] = asyncio.sleep,
         api_factory: Callable[[Any, str], BotApi] = BotApi,
         liveness_source: LivenessSource | None = None,
+        summary_totals: SummaryTotals | None = None,
     ) -> None:
         self._hass = hass
         self._state = state
@@ -152,6 +161,7 @@ class TelegramRuntime:
         # Every island household's boards and inverters, read once a tick.
         self._liveness_source = liveness_source
         self._started_ms: int | None = None
+        self._summary_totals = summary_totals
 
     # Lifecycle
 
@@ -317,13 +327,64 @@ class TelegramRuntime:
         )
 
     async def _tick_once(self) -> None:
+        households: list[str] = []
         try:
-            await self.check_liveness()
+            households = await self.check_liveness()
         except Exception:  # noqa: BLE001
             # One bad tick must not stop the next.
             _LOGGER.exception("The island liveness check failed; retrying")
+        try:
+            await self.check_summaries(households)
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception("The island energy reports failed; retrying")
 
-    async def check_liveness(self) -> None:
+    async def check_summaries(self, household_ids: list[str]) -> None:
+        """Queue each chat's daily and weekly report that is due (svitgrid D-2152).
+
+        A report goes out once per period, chat and household: its stamp is
+        saved when it is queued. A period with no energy is tried again on the
+        next tick and is never sent as 0.
+        """
+        read = self._summary_totals
+        if read is None or not household_ids or self._state.token() is None:
+            return
+        now = self._now()
+        tz = self._hass.config.time_zone
+        added = False
+        for chat in list(self._state.chats()):
+            if not chat.enabled:
+                continue
+            chat_prefs = prefs.merged(chat.prefs)
+            for household_id in household_ids:
+                stamps = self._state.summary_stamps(chat.device_id, household_id)
+                for due in due_summaries(chat_prefs, stamps, now, tz):
+                    if not prefs.wants(chat_prefs, due.kind, now, tz):
+                        continue
+                    totals = await read(household_id, due.from_day, due.to_day)
+                    if totals is None:
+                        continue
+                    now_ms = self._now_ms()
+                    async with self._lock:
+                        entry = {
+                            "id": uuid.uuid4().hex,
+                            "chatDeviceId": chat.device_id,
+                            "kind": due.kind,
+                            "householdId": household_id,
+                            "eventAtMs": now_ms,
+                            "soc": None,
+                            "summary": dict(totals),
+                            "createdAtMs": now_ms,
+                        }
+                        await self._state.set_queue(_trim([*self._state.queue(), entry], now_ms))
+                        await self._state.set_summary_stamp(
+                            chat.device_id, household_id, due.stamp_key, due.period
+                        )
+                    added = True
+        if added:
+            await self._state.flush()
+            self._kick_sender()
+
+    async def check_liveness(self) -> list[str]:
         """Run the liveness check once and queue what it finds.
 
         As with readings, nothing runs without a bot and an enabled chat, so
@@ -331,15 +392,16 @@ class TelegramRuntime:
         """
         source = self._liveness_source
         if source is None:
-            return
+            return []
         if self._state.token() is None or not any(c.enabled for c in self._state.chats()):
-            return
+            return []
         households = await source()
+        ids = [hh["householdId"] for hh in households]
         now_ms = self._now_ms()
         async with self._lock:
             chats = [c for c in self._state.chats() if c.enabled]
             if not chats:
-                return
+                return ids
             detector = self._state.detector()
             out = detector.get("households") if isinstance(detector, dict) else None
             out = out if isinstance(out, dict) else {}
@@ -368,11 +430,12 @@ class TelegramRuntime:
                 for chat in self._wanting(alert.kind)
             ]
             if not added:
-                return
+                return ids
             await self._state.set_queue(_trim([*self._state.queue(), *added], now_ms))
             if any(alert.kind in _FLUSH_KINDS for alert in alerts):
                 await self._state.flush()
         self._kick_sender()
+        return ids
 
     # Rule notices
 
@@ -471,6 +534,11 @@ class TelegramRuntime:
             return live[0] if live else None
 
     def _render(self, entry: dict[str, Any], language: str) -> str:
+        if entry.get("kind") in _SUMMARY_KINDS:
+            summary = entry.get("summary")
+            return copy.render_summary(
+                entry["kind"], language, summary if isinstance(summary, dict) else {}
+            )
         if entry.get("kind") in _NOTICE_KINDS.values():
             return copy.render_rule_notice(
                 entry["kind"],

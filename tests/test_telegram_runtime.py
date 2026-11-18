@@ -353,6 +353,59 @@ async def test_quiet_hours_hold_a_notice_but_not_an_outage(setup, hass):
     assert [e["kind"] for e in state.queue()] == ["outage"]
 
 
+async def test_daily_report_goes_out_once_per_day(setup, hass):
+    """At the chat's report time, once per day even across a restart (svitgrid D-2152)."""
+    rt, state, api, clock, _ = setup
+    await hass.config.async_update(time_zone="Europe/Kyiv")
+    state._chats["phone-1"] = Chat(
+        "phone-1", 11, None, True, "uk", "2026-10-30T00:00:00+00:00", {"dailyReport": True}
+    )
+    _chat(state, "phone-2", 22)  # reports off
+    asked = []
+
+    async def totals(household_id, from_day, to_day):
+        asked.append((household_id, from_day, to_day))
+        return {"pv": 12.0, "load": 9.0, "import": 1.0, "export": 2.0}
+
+    rt._summary_totals = totals
+    await rt.start()
+    # NOW is 2026-10-30 12:00 UTC, 14:00 in Kyiv: yesterday's report is due.
+    await rt.check_summaries(["hh1"])
+    await _settle(rt)
+    assert [c for c, _, _ in api.sent] == [11]
+    assert api.sent[0][1].startswith("<b>Щоденний звіт</b>\nЗа вчора: 12.0 кВт·год згенеровано")
+    assert asked == [("hh1", "2026-10-29", "2026-10-29")]
+    await state.flush()
+    again = tv.TelegramState(hass)
+    await again.load()
+    rt._state = again
+    await rt.check_summaries(["hh1"])
+    await _settle(rt)
+    assert len(api.sent) == 1
+
+
+async def test_a_period_with_no_energy_is_tried_again(setup, hass):
+    rt, state, api, clock, _ = setup
+    await hass.config.async_update(time_zone="Europe/Kyiv")
+    state._chats["phone-1"] = Chat(
+        "phone-1", 11, None, True, "uk", "2026-10-30T00:00:00+00:00", {"dailyReport": True}
+    )
+    answer = {"value": None}
+
+    async def totals(household_id, from_day, to_day):
+        return answer["value"]
+
+    rt._summary_totals = totals
+    await rt.start()
+    await rt.check_summaries(["hh1"])
+    await _settle(rt)
+    assert api.sent == []
+    answer["value"] = {"pv": 1.0, "load": 1.0, "import": 0.0, "export": 0.0}
+    await rt.check_summaries(["hh1"])
+    await _settle(rt)
+    assert len(api.sent) == 1
+
+
 async def test_retry_keeps_order_and_sends_after_reconnect(setup):
     rt, state, api, clock, sleeps = setup
     _chat(state, "phone-1", 11)

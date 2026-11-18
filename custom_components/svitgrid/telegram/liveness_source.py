@@ -14,6 +14,7 @@ from typing import Any
 from ..const import DOMAIN
 from ..island_lan import _cloud_copy_of
 from .runtime import household_key
+from .summaries import summary_totals
 
 # A board is paused from its last acked `pause` until its next acked `resume`.
 _PAUSE_COMMANDS = ("pause", "resume")
@@ -124,3 +125,29 @@ async def island_liveness(hass) -> list[dict]:
         )
 
     return list(households.values())
+
+
+async def island_summary_totals(hass, household_id: str, from_day: str, to_day: str):
+    """An island household's energy over local days `from_day`..`to_day`, from
+    the sealed daily rollups of every store (svitgrid D-2152). None when no day
+    holds energy."""
+    households = await island_liveness(hass)
+    inverters = [
+        inv["id"]
+        for hh in households
+        if hh["householdId"] == household_id
+        for inv in hh["inverters"]
+    ]
+    domain = hass.data.get(DOMAIN) or {}
+    stores = [
+        s["store"]
+        for e in hass.config_entries.async_entries(DOMAIN)
+        if isinstance(s := domain.get(e.entry_id), dict) and s.get("store") is not None
+    ]
+    rows = []
+    for inverter_id in inverters:
+        found: list[dict] = []
+        for store in stores:
+            found += await store.history_range(inverter_id, from_day, to_day)
+        rows.append(found)
+    return summary_totals(rows)

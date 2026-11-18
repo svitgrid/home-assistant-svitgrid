@@ -10,6 +10,7 @@ from __future__ import annotations
 import html
 import json
 from datetime import UTC, datetime
+from decimal import ROUND_HALF_UP, Decimal
 from importlib import resources
 from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -135,3 +136,37 @@ def render_rule_notice(
     if kind == "calendar_event_started" and not rule and end_time:
         text += f"\n{strings['calendar_until']}: {html.escape(end_time)}"
     return text
+
+
+def _to_fixed(value: float, digits: int) -> str:
+    """JavaScript's `toFixed`: a tie on the exact binary value rounds up, where
+    Python's format rounds it to even (7.25 is "7.3" in the cloud's push)."""
+    step = Decimal(1).scaleb(-digits)
+    return str(Decimal(value).quantize(step, rounding=ROUND_HALF_UP))
+
+
+def render_summary(kind: str, language: str | None, totals: dict) -> str:
+    """The Telegram HTML for a daily or weekly report: the cloud's push copy."""
+    strings = _strings(language)
+
+    def kwh(key: str) -> str:
+        value = totals.get(key)
+        return _to_fixed(value if isinstance(value, int | float) else 0, 1)
+
+    pv = totals.get("pv") if isinstance(totals.get("pv"), int | float) else 0
+    export = totals.get("export") if isinstance(totals.get("export"), int | float) else 0
+    values = {
+        "totalPvKwh": kwh("pv"),
+        "totalLoadKwh": kwh("load"),
+        "totalImportKwh": kwh("import"),
+        "totalExportKwh": kwh("export"),
+        "selfConsumption": _to_fixed((pv - export) / pv * 100, 0) if pv > 0 else "0",
+    }
+
+    def fill(key: str) -> str:
+        text = strings[key]
+        for name, value in values.items():
+            text = text.replace("{" + name + "}", value)
+        return text
+
+    return f"<b>{fill(kind + '_title')}</b>\n{fill(kind + '_body')}"

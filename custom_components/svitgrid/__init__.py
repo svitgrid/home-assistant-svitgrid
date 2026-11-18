@@ -90,7 +90,11 @@ from .reading_store import ReadingStore
 from .readings_publisher import run_loop as run_readings_loop
 from .settings_sync import find_edge_settings_snapshot
 from .settings_sync import settings_sync_loop as run_settings_sync_loop
-from .telegram.liveness_source import entry_for_inverter, island_liveness
+from .telegram.liveness_source import (
+    entry_for_inverter,
+    island_liveness,
+    island_summary_totals,
+)
 from .telegram.runtime import TelegramRuntime, household_key
 from .telegram.views import async_ensure_telegram_views, telegram_state, unlink_device
 from .zigbee_devices import ZigbeeDeviceStore
@@ -151,6 +155,9 @@ async def _start_telegram(hass: HomeAssistant, entry: ConfigEntry, store) -> Non
                 lambda: aiohttp_client.async_get_clientsession(hass),
                 lambda: _telegram_now(),
                 liveness_source=lambda: island_liveness(hass),
+                summary_totals=lambda household_id, from_day, to_day: island_summary_totals(
+                    hass, household_id, from_day, to_day
+                ),
             )
             await runtime.start()
             # Only a started runtime is kept, so a failed start is retried

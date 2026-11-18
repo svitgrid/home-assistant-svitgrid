@@ -67,6 +67,7 @@ class TelegramState:
         self._offset = 0
         self._detector: dict[str, Any] = {}
         self._liveness: dict[str, Any] = {}
+        self._summaries: dict[str, Any] = {}
         self._queue: list[dict[str, Any]] = []
         self._status: str | None = None
 
@@ -84,6 +85,7 @@ class TelegramState:
             "offset": self._offset,
             "detector": self._detector,
             "liveness": self._liveness,
+            "summaries": self._summaries,
             "queue": self._queue,
             "status": self._status,
         }
@@ -131,6 +133,8 @@ class TelegramState:
             self._detector = det if isinstance(det, dict) else {}
             live = raw.get("liveness")
             self._liveness = live if isinstance(live, dict) else {}
+            sums = raw.get("summaries")
+            self._summaries = sums if isinstance(sums, dict) else {}
             q = raw.get("queue")
             self._queue = q if isinstance(q, list) else []
             st = raw.get("status")
@@ -278,6 +282,21 @@ class TelegramState:
     async def set_liveness(self, liveness: dict[str, Any]) -> None:
         async with self._lock:
             self._liveness = liveness
+            self._save_later()
+
+    def summary_stamps(self, device_id: str, household_id: str) -> dict[str, Any]:
+        """The last report periods sent to a chat for a household (svitgrid D-2152)."""
+        stamps = (self._summaries.get(device_id) or {}).get(household_id)
+        return stamps if isinstance(stamps, dict) else {}
+
+    async def set_summary_stamp(
+        self, device_id: str, household_id: str, key: str, period: str
+    ) -> None:
+        async with self._lock:
+            chat = self._summaries.setdefault(device_id, {})
+            if not isinstance(chat, dict):
+                chat = self._summaries[device_id] = {}
+            chat[household_id] = {**self.summary_stamps(device_id, household_id), key: period}
             self._save_later()
 
     def queue(self) -> list[dict[str, Any]]:

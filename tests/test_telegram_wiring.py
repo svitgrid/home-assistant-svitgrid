@@ -571,3 +571,34 @@ async def test_rule_notice_with_cloud_copy_sends_nothing(hass, station, aioclien
     await svitgrid._rule_notice(hass, entry, {"id": "e1", "inverterId": "ha-aaa"}, "started")
     await hass.async_block_till_done(wait_background_tasks=True)
     assert _sends(aioclient_mock) == []
+
+
+async def test_daily_report_reads_the_sealed_day(hass, station, aioclient_mock, clock):
+    """The report sums the store's sealed day for the island's inverters (svitgrid D-2152)."""
+    await hass.config.async_update(time_zone="Europe/Kyiv")
+    await _bot(hass)
+    state = await tv.telegram_state(hass)
+    state._chats["phone-1"].prefs = {"dailyReport": True}
+    entry = _entry()
+    await _set_up(hass, entry)
+    store = hass.data[DOMAIN][entry.entry_id]["store"]
+    # 2026-10-29 in Kyiv: two readings, the counters' last value counts.
+    for ts, pv, load in (
+        ("2026-10-29T08:00:00.000Z", 4.0, 3.0),
+        ("2026-10-29T15:00:00.000Z", 9.5, 7.25),
+    ):
+        await store.append(
+            {
+                "inverterId": "ha-aaa",
+                "timestamp": ts,
+                "pvPower": 1200,
+                "dailyPvEnergy": pv,
+                "dailyLoadEnergy": load,
+            }
+        )
+    await store.rollup(clock.iso(), "Europe/Kyiv")
+    await hass.data[DOMAIN]["telegram"].check_summaries(["hh1"])
+    await hass.async_block_till_done(wait_background_tasks=True)
+    assert _sends(aioclient_mock)[-1] == (
+        "<b>Щоденний звіт</b>\nЗа вчора: 9.5 кВт·год згенеровано, 7.3 кВт·год спожито"
+    )
