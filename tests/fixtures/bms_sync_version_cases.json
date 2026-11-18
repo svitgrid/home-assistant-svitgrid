@@ -1,0 +1,23 @@
+{
+  "_comment": "Whether a board may be sent bms_sync (svitgrid D-2157): its S3 AND its H2 at or above the floors, and an unknown or unparseable version counts as old. Each case is `supportsBmsSync(board)` with the default floors (services/api/src/services/bms-roster/bms-roster-model.ts). Run by services/api/src/__tests__/bms-roster-model.test.ts; the Home Assistant integration vendors this file as tests/fixtures/bms_sync_version_cases.json and runs its port over it.",
+  "floors": { "s3": "2.149.0", "h2": "0.19.0" },
+  "cases": [
+    { "name": "both on the floor", "board": { "version": "2.149.0", "h2FirmwareVersion": "0.19.0" }, "supports": true },
+    { "name": "both above the floor", "board": { "version": "2.161.1", "h2FirmwareVersion": "0.21.3" }, "supports": true },
+    { "name": "a new S3 on an old H2", "board": { "version": "2.161.1", "h2FirmwareVersion": "0.18.8" }, "supports": false },
+    { "name": "an old S3 on a new H2", "board": { "version": "2.148.4", "h2FirmwareVersion": "0.19.0" }, "supports": false },
+    { "name": "a patch below the S3 floor", "board": { "version": "2.148.99", "h2FirmwareVersion": "0.20.0" }, "supports": false },
+    { "name": "a higher major S3 with a lower minor", "board": { "version": "3.0.0", "h2FirmwareVersion": "0.19.0" }, "supports": true },
+    { "name": "a pre-release label compares as its core", "board": { "version": "2.149.0-beta.1", "h2FirmwareVersion": "0.19.0-rc1" }, "supports": true },
+    { "name": "a leading v is ignored", "board": { "version": "v2.150.0", "h2FirmwareVersion": "V0.19.1" }, "supports": true },
+    { "name": "surrounding spaces are ignored", "board": { "version": " 2.150.0 ", "h2FirmwareVersion": "0.19.1" }, "supports": true },
+    { "name": "no H2 version is old", "board": { "version": "2.161.1" }, "supports": false },
+    { "name": "no S3 version is old", "board": { "h2FirmwareVersion": "0.21.0" }, "supports": false },
+    { "name": "no versions at all is old", "board": {}, "supports": false },
+    { "name": "an unparseable S3 version is old", "board": { "version": "garbage", "h2FirmwareVersion": "0.21.0" }, "supports": false },
+    { "name": "four numbers do not parse", "board": { "version": "2.150.0.1", "h2FirmwareVersion": "0.21.0" }, "supports": false },
+    { "name": "two numbers do not parse", "board": { "version": "2.150", "h2FirmwareVersion": "0.21.0" }, "supports": false },
+    { "name": "a number instead of a string is old", "board": { "version": 2150, "h2FirmwareVersion": "0.21.0" }, "supports": false },
+    { "name": "an empty string is old", "board": { "version": "2.150.0", "h2FirmwareVersion": "" }, "supports": false }
+  ]
+}

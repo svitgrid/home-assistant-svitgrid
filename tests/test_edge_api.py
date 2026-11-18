@@ -2797,7 +2797,12 @@ def _hass_with_roster(tmp_path):
     hass, packs = _hass_with_bms(_keystore(_box()), tmp_path)
     queue = EdgeCommandQueue(str(tmp_path / "edge_commands.db"), None)
     hass.data[DOMAIN][ENTRY_ID]["edge_queue"] = queue
+    # Firmware that handles `bms_sync` on both chips (svitgrid D-2157).
+    hass.data[DOMAIN][ENTRY_ID]["store"].box_states["EC-1"] = dict(_SYNC_FIRMWARE)
     return hass, packs, queue
+
+
+_SYNC_FIRMWARE = {"version": "2.161.1", "h2FirmwareVersion": "0.21.0"}
 
 
 async def _drain(queue, device_id="EC-1") -> list[dict]:
@@ -2821,7 +2826,7 @@ async def test_a_box_behind_the_roster_epoch_gets_bms_sync_again(tmp_path, monke
     roster = await packs.async_change_roster(
         "EC-1", lambda ps: [p for p in ps if p["packId"] != _PACK_2]
     )
-    sent = await bms_roster.async_deliver(packs, queue, ENTRY_ID, "EC-1")
+    sent = await bms_roster.async_deliver(packs, queue, ENTRY_ID, "EC-1", board=_SYNC_FIRMWARE)
     [sync] = await _drain(queue)
     assert sync["id"] == sent
     assert (roster["generation"], roster["n"]) == ("g-7f3a", 4)

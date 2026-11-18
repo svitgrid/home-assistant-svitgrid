@@ -708,8 +708,14 @@ async def _store_bms(hass, entry_state: dict, box: EdgeBoxEntry, value) -> None:
     if queue is None:
         return
     try:
+        board = await bms_roster.async_board(entry_state.get("store"), box.device_id)
         await bms_roster.async_converge(
-            packs, queue, _household_id(hass), box.device_id, report.get("rosterEpoch")
+            packs,
+            queue,
+            _household_id(hass),
+            box.device_id,
+            report.get("rosterEpoch"),
+            board=board,
         )
     except Exception:  # noqa: BLE001 - the next report re-drives the roster
         _LOGGER.warning("Edge box %s: bms roster not sent", box.device_id, exc_info=True)

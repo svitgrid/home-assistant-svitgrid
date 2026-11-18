@@ -2605,7 +2605,11 @@ async def test_bms_views_need_the_island_key(hass: HomeAssistant, tmp_path):
 # ── Battery pack roster and commands over the LAN (edge island plan, Task 45) ─
 
 
-async def _roster_setup(hass, tmp_path):
+# Firmware that handles `bms_sync` on both chips (svitgrid D-2157).
+_SYNC_FIRMWARE = {"version": "2.161.1", "h2FirmwareVersion": "0.21.0"}
+
+
+async def _roster_setup(hass, tmp_path, *, ec2=_SYNC_FIRMWARE):
     from custom_components.svitgrid.bms_packs import BmsPackStore
     from custom_components.svitgrid.edge_command_queue import EdgeCommandQueue
 
@@ -2614,7 +2618,8 @@ async def _roster_setup(hass, tmp_path):
     entry = _entry(hass)
     packs = BmsPackStore(str(tmp_path / "bms_packs.db"), None)
     queue = EdgeCommandQueue(str(tmp_path / "edge_commands.db"), None)
-    _entry_state(hass, entry, queue=queue)["bms_packs"] = packs
+    store = _EdgeStore(box_states={"EC-1": dict(_SYNC_FIRMWARE), "EC-2": dict(ec2)})
+    _entry_state(hass, entry, store=store, queue=queue)["bms_packs"] = packs
     await _adopt(hass, admin, "EC-1", _inv("inv-1"))
     await _adopt(hass, admin, "EC-2", _inv("inv-2"))
     await packs.async_store_report("EC-1", _BMS_REPORT)
@@ -2691,6 +2696,108 @@ async def test_adopting_a_pack_sends_bms_sync_with_the_next_generation(
     listed = _body(await BmsPacksView().get(_ZReq(hass)))
     new = next(p for p in listed["packs"] if p["packId"] == "c0ffee000004")
     assert (new["assignedEdgeId"], new["label"]) == ("EC-2", "Підвал")
+
+
+_SYNC_CASES = json.loads(
+    (Path(__file__).parent / "fixtures" / "bms_sync_version_cases.json").read_text()
+)
+
+
+def test_bms_sync_floors_match_the_cloud():
+    from custom_components.svitgrid import bms_roster
+
+    assert _SYNC_CASES["floors"] == {
+        "s3": bms_roster.BMS_SYNC_MIN_S3_VERSION,
+        "h2": bms_roster.BMS_SYNC_MIN_H2_VERSION,
+    }
+
+
+@pytest.mark.parametrize(
+    "case", _SYNC_CASES["cases"], ids=[c["name"] for c in _SYNC_CASES["cases"]]
+)
+def test_supports_bms_sync_decides_each_case_as_the_cloud(case):
+    from custom_components.svitgrid.bms_roster import supports_bms_sync
+
+    assert supports_bms_sync(case["board"]) is case["supports"]
+
+
+_OLD_FIRMWARE = {"version": "2.161.1", "h2FirmwareVersion": "0.18.8"}
+
+
+@pytest.mark.parametrize(
+    ("command", "payload"),
+    [
+        ("bms_adopt", {"packId": "c0ffee000004"}),
+        ("bms_set_driver", {"packId": "a4c138000003", "driver": "daly"}),
+    ],
+)
+async def test_a_pack_change_on_old_firmware_is_refused_with_a_reason(
+    hass: HomeAssistant, tmp_path, command, payload
+):
+    """A board below S3 2.149.0 or H2 0.19.0 does not know `bms_sync`, so the
+    set would never change and nobody would be told (svitgrid D-2157). The
+    island has no legacy per-pack path: it refuses, and changes nothing."""
+    _, packs, queue = await _roster_setup(hass, tmp_path, ec2=_OLD_FIRMWARE)
+    await packs.async_store_report("EC-2", _report_with("a4c138000003"))
+
+    resp = await _bms_command(hass, "EC-2", command, **payload)
+
+    assert resp.status == 409
+    assert _body(resp) == {"error": "BOARD_FIRMWARE_TOO_OLD", "edgeDeviceId": "EC-2"}
+    assert await _drain_box(queue, "EC-2") == []
+    assert await packs.async_rosters() == {}
+
+
+async def test_a_board_with_no_reported_firmware_counts_as_old(hass: HomeAssistant, tmp_path):
+    _, _, queue = await _roster_setup(hass, tmp_path, ec2={})
+
+    resp = await _bms_command(hass, "EC-2", "bms_adopt", packId="c0ffee000004")
+
+    assert _body(resp)["error"] == "BOARD_FIRMWARE_TOO_OLD"
+    assert await _drain_box(queue, "EC-2") == []
+
+
+async def test_a_move_to_a_board_on_old_firmware_is_refused(hass: HomeAssistant, tmp_path):
+    _, packs, queue = await _roster_setup(hass, tmp_path, ec2=_OLD_FIRMWARE)
+
+    resp = await _bms_command(hass, "EC-1", "bms_move", packId=PACK_ID, toDeviceId="EC-2")
+
+    assert resp.status == 409
+    assert _body(resp) == {"error": "BOARD_FIRMWARE_TOO_OLD", "edgeDeviceId": "EC-2"}
+    assert await _drain_box(queue, "EC-1") == []
+    assert await packs.async_rosters() == {}
+
+
+async def test_a_rename_on_old_firmware_still_works(hass: HomeAssistant, tmp_path):
+    """A label stays in Home Assistant: the box hears nothing."""
+    _, packs, queue = await _roster_setup(hass, tmp_path, ec2=_OLD_FIRMWARE)
+    await packs.async_store_report("EC-2", _report_with("a4c138000003"))
+
+    resp = await _bms_command(hass, "EC-2", "bms_rename", packId="a4c138000003", label="Льох")
+
+    assert resp.status == 200, _body(resp)
+    assert await _drain_box(queue, "EC-2") == []
+
+
+async def test_a_board_on_old_firmware_is_never_sent_bms_sync(hass: HomeAssistant, tmp_path):
+    """A roster Home Assistant held before the board was found old is not
+    re-sent from its reports, nor delivered."""
+    from custom_components.svitgrid import bms_roster
+
+    _, packs, queue = await _roster_setup(hass, tmp_path)
+    await _bms_command(hass, "EC-1", "bms_adopt", packId="c0ffee000004")
+    await _drain_box(queue)
+
+    epoch = {"generation": "g-other", "n": 1}
+    assert (
+        await bms_roster.async_converge(packs, queue, None, "EC-1", epoch, board=_OLD_FIRMWARE)
+        is None
+    )
+    assert (
+        await bms_roster.async_deliver(packs, queue, None, "EC-1", force=True, board=_OLD_FIRMWARE)
+        is None
+    )
+    assert await _drain_box(queue) == []
 
 
 async def test_a_pack_another_box_reads_is_not_adopted_twice(hass: HomeAssistant, tmp_path):
@@ -2992,7 +3099,10 @@ async def test_a_pending_import_never_creates_a_roster(hass: HomeAssistant, tmp_
 
     assert await packs.async_rosters() == {}
     assert (
-        await bms_roster.async_converge(packs, queue, None, "EC-1", report["rosterEpoch"]) is None
+        await bms_roster.async_converge(
+            packs, queue, None, "EC-1", report["rosterEpoch"], board=_SYNC_FIRMWARE
+        )
+        is None
     )
     assert await _drain_box(queue) == []
 
@@ -3055,7 +3165,10 @@ async def test_bms_import_never_creates_a_roster(hass: HomeAssistant, tmp_path):
     assert await packs.async_rosters() == {}
     # So the box's reports still leave it alone.
     epoch = {"generation": "g-old", "n": 1}
-    assert await bms_roster.async_converge(packs, queue, None, "EC-1", epoch) is None
+    assert (
+        await bms_roster.async_converge(packs, queue, None, "EC-1", epoch, board=_SYNC_FIRMWARE)
+        is None
+    )
 
 
 async def test_bms_import_on_a_managed_box_changes_its_roster(hass: HomeAssistant, tmp_path):

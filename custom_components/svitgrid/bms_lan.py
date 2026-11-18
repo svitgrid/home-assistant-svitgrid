@@ -237,6 +237,9 @@ class BmsCommandView(_BmsView):
       box's set (409 `PACK_READ_BY_OTHER_BOARD`, `BOARD_ROSTER_FULL`);
       `bms_rename {packId, label}`, `bms_set_driver {packId, driver}` (null
       lets the box identify it) and `bms_move {packId, toDeviceId}` change it.
+      A board whose firmware does not run `bms_sync` (below S3 2.149.0 or
+      H2 0.19.0, or not reported) is 409 `BOARD_FIRMWARE_TOO_OLD` with its
+      `edgeDeviceId`, and nothing changes; a rename still works.
 
     `bms_forget {packId}` is owner-only: a signed request, `signedData`:
     `{action: "edge_bms_command", deviceId, command: "bms_forget", payload,
@@ -401,6 +404,18 @@ class BmsCommandView(_BmsView):
                         ],
                     }
 
+        store = (_edge_entry_state(hass) or {}).get("store")
+        boards = {}
+        if command != "bms_rename":
+            # Every box the change is sent to must run `bms_sync`; an older
+            # one would never change its set (svitgrid D-2157).
+            targets = [box_id]
+            if command == "bms_move" and payload.get("toDeviceId") != box_id:
+                targets.append(payload["toDeviceId"])
+            for target in targets:
+                boards[target] = await bms_roster.async_board(store, target)
+                if not bms_roster.supports_bms_sync(boards[target]):
+                    return _json_error(409, bms_roster.BOARD_FIRMWARE_TOO_OLD, edgeDeviceId=target)
         changed = await packs.async_change_rosters(change)
         if command == "bms_rename":
             # `bms_sync` carries no label: the box has nothing to hear.
@@ -408,8 +423,9 @@ class BmsCommandView(_BmsView):
         household = _household_id(hass)
         sent = {}
         for changed_box in changed:
+            board = boards.get(changed_box) or await bms_roster.async_board(store, changed_box)
             command_id = await bms_roster.async_deliver(
-                packs, queue, household, changed_box, force=True
+                packs, queue, household, changed_box, board=board, force=True
             )
             if command_id is not None:
                 sent[changed_box] = command_id
@@ -498,8 +514,11 @@ class BmsImportView(_BmsView):
             changed = (await packs.async_change_rosters(change)).get(box_id)
             # A label is not part of `bms_sync`: only a new driver is sent.
             if changed is not None and changed["n"] != roster["n"]:
+                board = await bms_roster.async_board(
+                    (_edge_entry_state(hass) or {}).get("store"), box_id
+                )
                 await bms_roster.async_deliver(
-                    packs, queue, _household_id(hass), box_id, force=True
+                    packs, queue, _household_id(hass), box_id, board=board, force=True
                 )
         return web.json_response(
             {"imported": list(wanted), "pending": list(pending), "skipped": skipped}
