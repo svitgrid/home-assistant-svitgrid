@@ -247,11 +247,17 @@ async def _json_body(request):
         return None
 
 
+def _is_register_word(value) -> bool:
+    """A 16-bit Modbus register value: an int (never a bool) in 0..65535."""
+    return type(value) is int and 0 <= value <= 0xFFFF
+
+
 def _snapshot_from_settings_body(box: EdgeBoxEntry, body) -> tuple[dict | None, str | None]:
     """The settings snapshot a `sync-settings` body stores, or why not.
 
     The body is one of the firmware's five: the Deye register batch
-    (`startRegister`, `registers`), or a brand body for LuxPower, MUST,
+    (`startRegister`, `registers`, optionally `batteryModeRegister` and
+    `ratedPowerRegisters`), or a brand body for LuxPower, MUST,
     SMG II or PI30, each with `inverterId` and `modelId`. It is stored as the
     add-on's own settings read stores it, so the settings view serves the two
     alike. The brand body is kept as the box sent it. An SMG II body must
@@ -278,13 +284,23 @@ def _snapshot_from_settings_body(box: EdgeBoxEntry, body) -> tuple[dict | None, 
         registers = body.get("registers")
         if type(start_register) is not int or not isinstance(registers, list):
             return None, "bad_body"
-        return {
+        snapshot = {
             "inverter_id": inverter_id,
             "model_id": model_id,
             "start_register": start_register,
             "registers": list(registers),
             "read_at": read_at,
-        }, None
+        }
+        # D-2126: the S3 sends the battery-mode word and the rated-power
+        # registers beside the batch (`settings_sync_body.c`). A value that is
+        # not a register word is dropped, as if the box had not sent it.
+        mode_word = body.get("batteryModeRegister")
+        if _is_register_word(mode_word):
+            snapshot["battery_mode_register"] = mode_word
+        rated = body.get("ratedPowerRegisters")
+        if isinstance(rated, list) and rated and all(_is_register_word(w) for w in rated):
+            snapshot["rated_power_registers"] = list(rated)
+        return snapshot, None
     brand_body = {k: v for k, v in body.items() if k not in ("inverterId", "modelId", "readAt")}
     if kind == "smg":
         # The cloud's `validateSmgBlocks` refuses what this refuses, so the

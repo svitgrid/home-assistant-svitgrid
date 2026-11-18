@@ -1212,6 +1212,11 @@ async def test_served_snapshot_matches_vendored_shape(monkeypatch, vendored):
     body = await _served_body(monkeypatch, vendored)
 
     assert body["modelId"] == vendored["snapshot"]["modelId"]
+    if vendored["kind"] == "deye" and "batteryModeRegister" not in vendored["snapshot"]:
+        # D-2126: the Deye mode word is optional; the app reads it beside the
+        # batch (`island_data_service.dart`, D-1942) and shows % without it.
+        # The vendored body is a %-mode read, so compare the rest.
+        assert type(body.pop("batteryModeRegister", 0)) is int
     assert _shape(body) == _shape(vendored["snapshot"])
 
 

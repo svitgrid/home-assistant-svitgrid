@@ -171,18 +171,24 @@ def settings_snapshot_response(snapshot: dict) -> dict:
 
     A Deye snapshot (no ``kind``, as every row stored before other brands
     were read) answers ``{"inverterId", "modelId", "startRegister",
-    "registers", "readAt"}``, unchanged. Any other kind answers
+    "registers", "readAt"}``, plus ``batteryModeRegister`` when the snapshot
+    holds the mode word. Any other kind answers
     ``{"inverterId", "modelId", "readAt"}`` plus its brand body, the keys the
     harvester would POST to the cloud's ``sync-settings`` route.
     """
     if snapshot.get("kind", "deye") == "deye":
-        return {
+        response = {
             "inverterId": snapshot["inverter_id"],
             "modelId": snapshot["model_id"],
             "startRegister": snapshot["start_register"],
             "registers": list(snapshot["registers"]),
-            "readAt": snapshot["read_at"],
         }
+        # D-2126: the battery-mode word (111 / 213) read beside the batch, so
+        # the app shows a voltage-mode Deye's levels in V. Absent, it shows %.
+        if snapshot.get("battery_mode_register") is not None:
+            response["batteryModeRegister"] = snapshot["battery_mode_register"]
+        response["readAt"] = snapshot["read_at"]
+        return response
     return {
         "inverterId": snapshot["inverter_id"],
         "modelId": snapshot["model_id"],
@@ -792,14 +798,19 @@ async def sync_inverter_once(
         return False
     start, _count = config_range
 
+    mode_word = next(iter(mode_words.values()), None)
+
     if snapshots is not None:
-        snapshots[inverter_id] = {
+        snapshot = {
             "inverter_id": inverter_id,
             "model_id": model_id,
             "start_register": start,
             "registers": list(registers),
             "read_at": _utc_now_iso(),
         }
+        if mode_word is not None:
+            snapshot["battery_mode_register"] = mode_word
+        snapshots[inverter_id] = snapshot
 
     if not cloud_ingest_enabled:
         _LOGGER.debug(
@@ -808,7 +819,6 @@ async def sync_inverter_once(
         )
         return False
 
-    mode_word = next(iter(mode_words.values()), None)
     new_hash = settings_upload_hash(registers, mode_word)
     cached_hash, last_uploaded = cache.get(inverter_id, (0, 0))
 

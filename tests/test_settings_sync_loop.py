@@ -517,3 +517,51 @@ async def test_missing_mode_register_still_posts_the_batch_without_the_key(monke
     assert len(api.calls) == 1
     assert api.calls[0]["battery_mode_register"] is None
     assert api.calls[0]["registers"] == list(range(115, 115 + 77))
+
+
+async def test_own_read_with_cloud_ingest_off_keeps_the_mode_word_in_the_snapshot(monkeypatch):
+    """D-2126: a voltage-mode Deye on an island. The snapshot the settings view
+    serves holds the mode word the read took, though nothing goes to the cloud."""
+    from custom_components.svitgrid.settings_sync import settings_snapshot_response
+
+    state: dict = {}
+    _stub_transport_with_mode(monkeypatch, 111, 1, state)
+    api = _FakeApiClient(ok=True)
+    snapshots: dict = {}
+
+    await settings_sync_tick(
+        _FakeHass(),
+        api,
+        "key",
+        [_harvest_inv()],
+        {},
+        now_monotonic_fn=lambda: 1.0,
+        cloud_ingest_enabled=False,
+        snapshots=snapshots,
+    )
+    assert api.calls == []
+    assert snapshots["inv-1"]["battery_mode_register"] == 1
+    served = settings_snapshot_response(snapshots["inv-1"])
+    assert served["batteryModeRegister"] == 1
+    assert served["registers"] == list(range(115, 115 + 77))
+
+
+async def test_own_read_without_the_mode_word_serves_no_mode_key(monkeypatch):
+    from custom_components.svitgrid.settings_sync import settings_snapshot_response
+
+    state: dict = {}
+    _stub_transport_with_mode(monkeypatch, 111, None, state)
+    snapshots: dict = {}
+
+    await settings_sync_tick(
+        _FakeHass(),
+        _FakeApiClient(ok=True),
+        "key",
+        [_harvest_inv()],
+        {},
+        now_monotonic_fn=lambda: 1.0,
+        cloud_ingest_enabled=False,
+        snapshots=snapshots,
+    )
+    assert "battery_mode_register" not in snapshots["inv-1"]
+    assert "batteryModeRegister" not in settings_snapshot_response(snapshots["inv-1"])
