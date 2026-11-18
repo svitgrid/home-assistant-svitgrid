@@ -37,7 +37,16 @@ MAX_QUEUE = 50
 MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
 
 OPEN_URL = "https://svitgrid.app/open?route=/"
-ALERT_KINDS = ("outage", "grid_restored")
+ALERT_KINDS = (
+    "outage",
+    "grid_restored",
+    "low_battery",
+    "critical_battery",
+    "battery_full",
+)
+# Kinds whose latch must reach disk at once: HA does not unload entries on
+# shutdown, so a delayed save can be lost to a power cut and the alert told again.
+_FLUSH_KINDS = frozenset(ALERT_KINDS) - {"grid_restored"}
 
 STATUS_INVALID_TOKEN = "invalid_token"
 STATUS_IN_USE = "bot_in_use_elsewhere"
@@ -236,6 +245,7 @@ class TelegramRuntime:
                     "householdId": alert.household_id,
                     "eventAtMs": alert.event_at_ms,
                     "soc": alert.battery_soc,
+                    "inverterId": alert.inverter_id,
                     "createdAtMs": now_ms,
                 }
                 for alert in alerts
@@ -244,9 +254,7 @@ class TelegramRuntime:
             if not added:
                 return
             await self._state.set_queue(_trim([*self._state.queue(), *added], now_ms))
-            if any(alert.type == "outage" for alert in alerts):
-                # HA does not unload entries on shutdown, so a delayed save can
-                # be lost to a power cut and the outage told again.
+            if any(alert.type in _FLUSH_KINDS for alert in alerts):
                 await self._state.flush()
         self._kick_sender()
 

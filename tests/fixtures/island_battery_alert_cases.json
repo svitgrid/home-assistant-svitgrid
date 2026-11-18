@@ -1,0 +1,635 @@
+[
+  {
+    "name": "low_battery_fires_on_crossing_20",
+    "description": "Low battery fires once when SoC crosses below 20 %, not while it stays below.",
+    "steps": [
+      {
+        "atMs": 1793181600000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 25
+          }
+        }
+      },
+      {
+        "atMs": 1793182200000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 20
+          }
+        }
+      },
+      {
+        "atMs": 1793182800000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 19.6
+          }
+        }
+      },
+      {
+        "atMs": 1793183400000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 18
+          }
+        }
+      },
+      {
+        "atMs": 1793184000000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 15
+          }
+        }
+      }
+    ],
+    "expect": [
+      {
+        "atStep": 2,
+        "type": "low_battery",
+        "inverterId": "inv1",
+        "eventAt": "2026-10-28T10:20:00.000Z",
+        "batterySoc": 20
+      }
+    ]
+  },
+  {
+    "name": "low_battery_needs_a_previous_reading",
+    "description": "A first reading already under 20 % is no crossing, and neither is one after a 0.",
+    "steps": [
+      {
+        "atMs": 1793181600000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 15
+          }
+        }
+      },
+      {
+        "atMs": 1793182200000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 25
+          }
+        }
+      },
+      {
+        "atMs": 1793182800000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 0
+          }
+        }
+      },
+      {
+        "atMs": 1793183400000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 14
+          }
+        }
+      }
+    ],
+    "expect": []
+  },
+  {
+    "name": "low_battery_cooldown_6_hours",
+    "description": "A second crossing within 6 hours of the first sends nothing; one after 6 hours does.",
+    "steps": [
+      {
+        "atMs": 1793181600000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 21
+          }
+        }
+      },
+      {
+        "atMs": 1793182200000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 19
+          }
+        }
+      },
+      {
+        "atMs": 1793185200000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 30
+          }
+        }
+      },
+      {
+        "atMs": 1793188800000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 19
+          }
+        }
+      },
+      {
+        "atMs": 1793199600000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 30
+          }
+        }
+      },
+      {
+        "atMs": 1793205600000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 18
+          }
+        }
+      }
+    ],
+    "expect": [
+      {
+        "atStep": 1,
+        "type": "low_battery",
+        "inverterId": "inv1",
+        "eventAt": "2026-10-28T10:10:00.000Z",
+        "batterySoc": 19
+      },
+      {
+        "atStep": 5,
+        "type": "low_battery",
+        "inverterId": "inv1",
+        "eventAt": "2026-10-28T16:40:00.000Z",
+        "batterySoc": 18
+      }
+    ]
+  },
+  {
+    "name": "soc_glitch_fires_nothing",
+    "description": "A drop of more than 30 points in one frame, or off a BMS figure, is a glitch for low and critical.",
+    "steps": [
+      {
+        "atMs": 1793181600000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 50
+          }
+        }
+      },
+      {
+        "atMs": 1793181660000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 5
+          }
+        }
+      },
+      {
+        "atMs": 1793181720000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 32,
+            "batterySocSource": "bms"
+          }
+        }
+      },
+      {
+        "atMs": 1793181780000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 15
+          }
+        }
+      },
+      {
+        "atMs": 1793181840000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 30
+          }
+        }
+      }
+    ],
+    "expect": []
+  },
+  {
+    "name": "critical_fires_under_8_and_rearms_at_12",
+    "description": "Critical fires under 8 %, holds while SoC stays under 12 %, and fires again after a re-arm past the cooldown.",
+    "steps": [
+      {
+        "atMs": 1793181600000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 10
+          }
+        }
+      },
+      {
+        "atMs": 1793182200000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 9
+          }
+        }
+      },
+      {
+        "atMs": 1793182800000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 8
+          }
+        }
+      },
+      {
+        "atMs": 1793183400000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 7.6
+          }
+        }
+      },
+      {
+        "atMs": 1793184000000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 7
+          }
+        }
+      },
+      {
+        "atMs": 1793184600000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 11
+          }
+        }
+      },
+      {
+        "atMs": 1793185200000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 7
+          }
+        }
+      },
+      {
+        "atMs": 1793185800000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 12
+          }
+        }
+      },
+      {
+        "atMs": 1793186400000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 7
+          }
+        }
+      },
+      {
+        "atMs": 1793205600000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 12
+          }
+        }
+      },
+      {
+        "atMs": 1793206200000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 6
+          }
+        }
+      }
+    ],
+    "expect": [
+      {
+        "atStep": 3,
+        "type": "critical_battery",
+        "inverterId": "inv1",
+        "eventAt": "2026-10-28T10:30:00.000Z",
+        "batterySoc": 8
+      },
+      {
+        "atStep": 10,
+        "type": "critical_battery",
+        "inverterId": "inv1",
+        "eventAt": "2026-10-28T16:50:00.000Z",
+        "batterySoc": 6
+      }
+    ]
+  },
+  {
+    "name": "full_waits_for_the_charge_to_taper",
+    "description": "At 100 % the full alert waits for two readings under 500 W of charge, then holds until SoC drops under 70 %.",
+    "steps": [
+      {
+        "atMs": 1793181600000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 98,
+            "batteryPower": 3000
+          }
+        }
+      },
+      {
+        "atMs": 1793182200000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 100,
+            "batteryPower": 3000
+          }
+        }
+      },
+      {
+        "atMs": 1793182800000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 100,
+            "batteryPower": 400
+          }
+        }
+      },
+      {
+        "atMs": 1793183400000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 100,
+            "batteryPower": 300
+          }
+        }
+      },
+      {
+        "atMs": 1793184000000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 99,
+            "batteryPower": 0
+          }
+        }
+      },
+      {
+        "atMs": 1793184600000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 100,
+            "batteryPower": 0
+          }
+        }
+      },
+      {
+        "atMs": 1793185200000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 100,
+            "batteryPower": 0
+          }
+        }
+      },
+      {
+        "atMs": 1793199600000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 69,
+            "batteryPower": -2000
+          }
+        }
+      },
+      {
+        "atMs": 1793205600000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 100,
+            "batteryPower": 100
+          }
+        }
+      },
+      {
+        "atMs": 1793206200000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 100,
+            "batteryPower": 100
+          }
+        }
+      }
+    ],
+    "expect": [
+      {
+        "atStep": 3,
+        "type": "battery_full",
+        "inverterId": "inv1",
+        "eventAt": "2026-10-28T10:30:00.000Z",
+        "batterySoc": 100
+      },
+      {
+        "atStep": 9,
+        "type": "battery_full",
+        "inverterId": "inv1",
+        "eventAt": "2026-10-28T16:50:00.000Z",
+        "batterySoc": 100
+      }
+    ]
+  },
+  {
+    "name": "full_taper_run_breaks_on_a_charge_spike",
+    "description": "A reading back over 500 W breaks the taper run, so the count starts again.",
+    "steps": [
+      {
+        "atMs": 1793181600000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 100,
+            "batteryPower": 200
+          }
+        }
+      },
+      {
+        "atMs": 1793182200000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 100,
+            "batteryPower": 900
+          }
+        }
+      },
+      {
+        "atMs": 1793182800000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 100,
+            "batteryPower": 200
+          }
+        }
+      },
+      {
+        "atMs": 1793183400000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 100,
+            "batteryPower": 200
+          }
+        }
+      }
+    ],
+    "expect": [
+      {
+        "atStep": 3,
+        "type": "battery_full",
+        "inverterId": "inv1",
+        "eventAt": "2026-10-28T10:30:00.000Z",
+        "batterySoc": 100
+      }
+    ]
+  },
+  {
+    "name": "full_without_flow_figures_fires_on_soc",
+    "description": "With no battery power at all, 100 % alone fires the full alert.",
+    "steps": [
+      {
+        "atMs": 1793181600000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 95
+          }
+        }
+      },
+      {
+        "atMs": 1793182200000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 100
+          }
+        }
+      },
+      {
+        "atMs": 1793182800000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 100
+          }
+        }
+      }
+    ],
+    "expect": [
+      {
+        "atStep": 1,
+        "type": "battery_full",
+        "inverterId": "inv1",
+        "eventAt": "2026-10-28T10:10:00.000Z",
+        "batterySoc": 100
+      }
+    ]
+  },
+  {
+    "name": "battery_alerts_are_per_inverter",
+    "description": "Each inverter keeps its own crossing, latch and cooldown.",
+    "steps": [
+      {
+        "atMs": 1793181600000,
+        "inverters": {
+          "invA": {
+            "gridPresent": true,
+            "batterySoc": 21
+          },
+          "invB": {
+            "gridPresent": true,
+            "batterySoc": 9
+          }
+        }
+      },
+      {
+        "atMs": 1793182200000,
+        "inverters": {
+          "invA": {
+            "gridPresent": true,
+            "batterySoc": 19
+          },
+          "invB": {
+            "gridPresent": true,
+            "batterySoc": 7
+          }
+        }
+      },
+      {
+        "atMs": 1793182800000,
+        "inverters": {
+          "invA": {
+            "gridPresent": true,
+            "batterySoc": 18
+          },
+          "invB": {
+            "gridPresent": true,
+            "batterySoc": 6
+          }
+        }
+      }
+    ],
+    "expect": [
+      {
+        "atStep": 1,
+        "type": "low_battery",
+        "inverterId": "invA",
+        "eventAt": "2026-10-28T10:10:00.000Z",
+        "batterySoc": 19
+      },
+      {
+        "atStep": 1,
+        "type": "critical_battery",
+        "inverterId": "invB",
+        "eventAt": "2026-10-28T10:10:00.000Z",
+        "batterySoc": 7
+      }
+    ]
+  }
+]

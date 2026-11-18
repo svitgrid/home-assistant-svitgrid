@@ -14,7 +14,15 @@ from importlib import resources
 from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-Kind = Literal["outage", "grid_restored", "test", "linked"]
+Kind = Literal[
+    "outage",
+    "grid_restored",
+    "low_battery",
+    "critical_battery",
+    "battery_full",
+    "test",
+    "linked",
+]
 
 _FIXTURE = json.loads(
     resources.files(__package__)

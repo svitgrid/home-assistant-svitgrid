@@ -254,6 +254,8 @@ async def test_restart_mid_outage_sends_no_second_outage(hass, station, aioclien
     assert len(_sends(aioclient_mock)) == 1
     clock.now += timedelta(minutes=1)
     await _feed(hass, entry, clock, grid=True, soc=80)
+    clock.now += timedelta(minutes=5)
+    await _feed(hass, entry, clock, grid=True, soc=80)
     assert len(_sends(aioclient_mock)) == 2
 
 

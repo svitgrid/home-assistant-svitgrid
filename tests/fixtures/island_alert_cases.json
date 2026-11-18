@@ -47,6 +47,15 @@
             "batterySoc": 60
           }
         }
+      },
+      {
+        "atMs": 1793183700000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 61
+          }
+        }
       }
     ],
     "expect": [
@@ -57,10 +66,10 @@
         "batterySoc": 75
       },
       {
-        "atStep": 4,
+        "atStep": 5,
         "type": "grid_restored",
         "eventAt": "2026-10-28T10:30:00.000Z",
-        "batterySoc": 60
+        "batterySoc": 61
       }
     ]
   },
@@ -148,6 +157,15 @@
             "batterySoc": 80
           }
         }
+      },
+      {
+        "atMs": 1793183100000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 80
+          }
+        }
       }
     ],
     "expect": [
@@ -158,7 +176,7 @@
         "batterySoc": 88
       },
       {
-        "atStep": 2,
+        "atStep": 3,
         "type": "grid_restored",
         "eventAt": "2026-10-28T10:20:00.000Z",
         "batterySoc": 80
@@ -240,6 +258,15 @@
             "batterySoc": 64
           }
         }
+      },
+      {
+        "atMs": 1793183400000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 64
+          }
+        }
       }
     ],
     "expect": [
@@ -250,7 +277,7 @@
         "batterySoc": 66
       },
       {
-        "atStep": 6,
+        "atStep": 8,
         "type": "grid_restored",
         "eventAt": "2026-10-28T10:25:00.000Z",
         "batterySoc": 64
@@ -289,6 +316,15 @@
         }
       },
       {
+        "atMs": 1793182500000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 78
+          }
+        }
+      },
+      {
         "atMs": 1793182800000,
         "inverters": {
           "inv1": {
@@ -314,6 +350,15 @@
             "batterySoc": 75
           }
         }
+      },
+      {
+        "atMs": 1793183700000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 75
+          }
+        }
       }
     ],
     "expect": [
@@ -324,7 +369,7 @@
         "batterySoc": 79
       },
       {
-        "atStep": 2,
+        "atStep": 3,
         "type": "grid_restored",
         "eventAt": "2026-10-28T10:10:00.000Z",
         "batterySoc": 78
@@ -504,6 +549,19 @@
             "batterySoc": 41
           }
         }
+      },
+      {
+        "atMs": 1793183700000,
+        "inverters": {
+          "invA": {
+            "gridPresent": true,
+            "batterySoc": 83
+          },
+          "invB": {
+            "gridPresent": true,
+            "batterySoc": 42
+          }
+        }
       }
     ],
     "expect": [
@@ -514,10 +572,93 @@
         "batterySoc": 85
       },
       {
-        "atStep": 6,
+        "atStep": 7,
         "type": "grid_restored",
         "eventAt": "2026-10-28T10:30:00.000Z",
-        "batterySoc": 41
+        "batterySoc": 42
+      }
+    ]
+  },
+  {
+    "name": "flicker_inside_restore_wait_is_one_outage",
+    "description": "The grid comes back and drops again inside the 5-minute restore wait: one outage, then one restore once it holds.",
+    "steps": [
+      {
+        "atMs": 1793181600000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": false,
+            "batterySoc": 80
+          }
+        }
+      },
+      {
+        "atMs": 1793181900000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": false,
+            "batterySoc": 79
+          }
+        }
+      },
+      {
+        "atMs": 1793182200000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 78
+          }
+        }
+      },
+      {
+        "atMs": 1793182320000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": false,
+            "batterySoc": 78
+          }
+        }
+      },
+      {
+        "atMs": 1793182440000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 77
+          }
+        }
+      },
+      {
+        "atMs": 1793182680000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 77
+          }
+        }
+      },
+      {
+        "atMs": 1793182740000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 77
+          }
+        }
+      }
+    ],
+    "expect": [
+      {
+        "atStep": 1,
+        "type": "outage",
+        "eventAt": "2026-10-28T10:00:00.000Z",
+        "batterySoc": 79
+      },
+      {
+        "atStep": 6,
+        "type": "grid_restored",
+        "eventAt": "2026-10-28T10:14:00.000Z",
+        "batterySoc": 77
       }
     ]
   },
@@ -587,6 +728,15 @@
             "batterySoc": 75
           }
         }
+      },
+      {
+        "atMs": 1793183100000,
+        "inverters": {
+          "inv1": {
+            "gridPresent": true,
+            "batterySoc": 75
+          }
+        }
       }
     ],
     "expect": [
@@ -597,7 +747,7 @@
         "batterySoc": 78
       },
       {
-        "atStep": 6,
+        "atStep": 7,
         "type": "grid_restored",
         "eventAt": "2026-10-28T10:20:00.000Z",
         "batterySoc": 75

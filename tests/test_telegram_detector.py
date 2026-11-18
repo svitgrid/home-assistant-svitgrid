@@ -64,7 +64,10 @@ def test_missing_grid_present_is_derived_and_first_down_is_held():
     assert [(a.type, a.event_at_ms, a.battery_soc) for a in alerts] == [
         ("outage", t0 + 2 * MIN_MS, 70)
     ]
+    # The restore waits five minutes of steady grid and is timed at its start.
     state, alerts = evaluate(state, "hh1", "inv1", live, t0 + 9 * MIN_MS)
+    assert alerts == []
+    state, alerts = evaluate(state, "hh1", "inv1", live, t0 + 14 * MIN_MS)
     assert [(a.type, a.event_at_ms) for a in alerts] == [("grid_restored", t0 + 9 * MIN_MS)]
 
 
@@ -112,7 +115,8 @@ def test_restore_uses_reading_timestamp_when_present():
     state, alerts = evaluate({}, "hh1", "inv1", edge, t0)
     assert [a.type for a in alerts] == ["outage"]
     up = {"gridPresent": True, "batterySoc": 51, "timestamp": "2026-10-28T10:20:00.000Z"}
-    _, alerts = evaluate(state, "hh1", "inv1", up, t0 + 25 * MIN_MS)
+    state, _ = evaluate(state, "hh1", "inv1", up, t0 + 25 * MIN_MS)
+    _, alerts = evaluate(state, "hh1", "inv1", {"gridPresent": True}, t0 + 30 * MIN_MS)
     assert alerts[0].event_at_ms == _ms("2026-10-28T10:20:00.000Z")
 
 
@@ -123,7 +127,8 @@ def _edge(**extra):
 def test_restore_without_soc_carries_none():
     t0 = 1_793_181_600_000
     state, _ = evaluate({}, "hh1", "inv1", _edge(batterySoc=50), t0)
-    _, alerts = evaluate(state, "hh1", "inv1", {"gridPresent": True}, t0 + MIN_MS)
+    state, _ = evaluate(state, "hh1", "inv1", {"gridPresent": True}, t0 + MIN_MS)
+    _, alerts = evaluate(state, "hh1", "inv1", {"gridPresent": True}, t0 + 6 * MIN_MS)
     assert [(a.type, a.battery_soc) for a in alerts] == [("grid_restored", None)]
 
 
@@ -134,7 +139,8 @@ def test_restore_event_at_falls_back_to_now(stamp):
     up = {"gridPresent": True, "batterySoc": 50}
     if stamp is not None:
         up["timestamp"] = stamp
-    _, alerts = evaluate(state, "hh1", "inv1", up, t0 + MIN_MS)
+    state, _ = evaluate(state, "hh1", "inv1", up, t0 + MIN_MS)
+    _, alerts = evaluate(state, "hh1", "inv1", {"gridPresent": True}, t0 + 6 * MIN_MS)
     assert alerts[0].event_at_ms == t0 + MIN_MS
 
 
@@ -147,3 +153,38 @@ def test_edge_without_confirmed_at_uses_down_since_then_now():
     state, _ = evaluate({}, "hh1", "b", {"gridPresent": False, "batterySoc": 50}, t0)
     _, alerts = evaluate(state, "hh1", "b", _edge(batterySoc=50), t0 + 2 * MIN_MS)
     assert alerts[0].event_at_ms == t0
+
+
+BATTERY_CASES = json.loads(
+    (Path(__file__).parent / "fixtures" / "island_battery_alert_cases.json").read_text()
+)
+BATTERY_KINDS = {"low_battery", "critical_battery", "battery_full"}
+
+
+def _run_battery(steps, round_trip=False):
+    state: dict = {}
+    got = []
+    for index, step in enumerate(steps):
+        for inv_id, reading in step["inverters"].items():
+            state, alerts = evaluate(state, "hh1", inv_id, dict(reading), step["atMs"])
+            if round_trip:
+                state = json.loads(json.dumps(state))
+            got += [(index, a) for a in alerts if a.type in BATTERY_KINDS]
+    return got
+
+
+@pytest.mark.parametrize("case", BATTERY_CASES, ids=[c["name"] for c in BATTERY_CASES])
+@pytest.mark.parametrize("round_trip", [False, True], ids=["live", "json"])
+def test_shared_battery_cases(case, round_trip):
+    got = _run_battery(case["steps"], round_trip)
+    assert [(i, a.type, a.inverter_id, a.event_at_ms, a.battery_soc) for i, a in got] == [
+        (e["atStep"], e["type"], e["inverterId"], _ms(e["eventAt"]), e["batterySoc"])
+        for e in case["expect"]
+    ]
+
+
+def test_battery_alert_without_soc_fires_nothing():
+    t0 = 1_793_181_600_000
+    state, alerts = evaluate({}, "hh1", "inv1", {"gridPresent": True, "batterySoc": 25}, t0)
+    _, alerts = evaluate(state, "hh1", "inv1", {"gridPresent": True}, t0 + MIN_MS)
+    assert alerts == []

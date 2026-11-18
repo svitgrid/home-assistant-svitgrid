@@ -122,6 +122,14 @@ async def _outage(rt, household="hh1"):
     await rt.on_reading(household, "inv1", {"gridPresent": False, "batterySoc": 86})
 
 
+async def _restore(rt, household="hh1", **extra):
+    """Two grid-up readings five minutes apart: the restore waits for the grid to hold."""
+    clock = rt._now
+    await rt.on_reading(household, "inv1", {"gridPresent": True, **extra})
+    clock.now = clock.now + timedelta(minutes=5)
+    await rt.on_reading(household, "inv1", {"gridPresent": True})
+
+
 async def test_outage_reaches_every_enabled_chat_once(setup):
     rt, state, api, clock, _ = setup
     _chat(state, "phone-1", 11)
@@ -154,8 +162,10 @@ async def test_queue_entry_shape(setup):
         "householdId",
         "eventAtMs",
         "soc",
+        "inverterId",
         "createdAtMs",
     }
+    assert entry["inverterId"] is None  # an outage is household-level
     assert entry["chatDeviceId"] == "phone-1"
     assert entry["kind"] == "outage"
     assert entry["householdId"] == "hh1"
@@ -185,6 +195,56 @@ async def test_no_token_queues_nothing(setup):
     assert state.queue() == [] and api.sent == []
 
 
+async def test_battery_alerts_reach_every_enabled_chat(setup):
+    """Low, critical and full go out with the cloud's copy (svitgrid D-2147)."""
+    rt, state, api, clock, _ = setup
+    _chat(state, "phone-1", 11)
+    _chat(state, "phone-2", 22, language="en")
+    await rt.start()
+    for soc in (25, 19, 7):
+        await rt.on_reading("hh1", "inv1", {"gridPresent": True, "batterySoc": soc})
+        clock.now += timedelta(minutes=10)
+    await _settle(rt)
+    uk = [h for c, h, _ in api.sent if c == 11]
+    en = [h for c, h, _ in api.sent if c == 22]
+    assert uk[0].startswith("<b>Низький заряд</b>\nБатарея Дача на рівні 19%")
+    assert uk[1].startswith("<b>Критичний заряд</b>\nБатарея Дача критично розряджена — 7%")
+    assert en[0].startswith("<b>Low Battery</b>\nДача battery is at 19%")
+    for soc, power in ((100, 200), (100, 100)):
+        await rt.on_reading(
+            "hh1", "inv1", {"gridPresent": True, "batterySoc": soc, "batteryPower": power}
+        )
+        clock.now += timedelta(minutes=10)
+    await _settle(rt)
+    assert api.sent[-1][1].startswith("<b>Battery Fully Charged</b>") or api.sent[-1][1].startswith(
+        "<b>Батарея заряджена</b>"
+    )
+    assert len(api.sent) == 6
+    assert state.queue() == []
+
+
+async def test_battery_alert_is_saved_at_once(setup):
+    """A battery alert flushes the state like an outage, so a power cut does not
+    lose the latch and tell it again."""
+    rt, state, _, clock, _ = setup
+    _chat(state, "phone-1", 11)
+    flushes = []
+    real = state.flush
+
+    async def flush():
+        flushes.append(1)
+        await real()
+
+    state.flush = flush
+    await rt.on_reading("hh1", "inv1", {"gridPresent": True, "batterySoc": 25})
+    assert flushes == []
+    clock.now += timedelta(minutes=1)
+    await rt.on_reading("hh1", "inv1", {"gridPresent": True, "batterySoc": 19})
+    assert flushes == [1]
+    assert [e["kind"] for e in state.queue()] == ["low_battery"]
+    assert state.queue()[0]["inverterId"] == "inv1"
+
+
 async def test_retry_keeps_order_and_sends_after_reconnect(setup):
     rt, state, api, clock, sleeps = setup
     _chat(state, "phone-1", 11)
@@ -192,7 +252,7 @@ async def test_retry_keeps_order_and_sends_after_reconnect(setup):
     api.retry_after_s = None
     await _outage(rt)
     clock.now += timedelta(minutes=10)
-    await rt.on_reading("hh1", "inv1", {"gridPresent": True, "timestamp": clock.now.isoformat()})
+    await _restore(rt, timestamp=clock.now.isoformat())
     assert [e["kind"] for e in state.queue()] == ["outage", "grid_restored"]
     await rt.start()
     await _settle(rt)
@@ -222,7 +282,7 @@ async def test_blocked_chat_unlinks_without_stalling_others(setup):
     api.results[11] = [SendResult.BLOCKED]
     await _outage(rt)
     clock.now += timedelta(minutes=10)
-    await rt.on_reading("hh1", "inv1", {"gridPresent": True})
+    await _restore(rt)
     assert len(state.queue()) == 4
     await rt.start()
     await _settle(rt)
@@ -374,12 +434,12 @@ async def test_setup_mid_outage_sends_outage_not_lone_restore(setup):
     assert state.detector() == {}
     _chat(state, "phone-1", 11)
     clock.now += timedelta(minutes=1)
-    await rt.on_reading("hh1", "inv1", {"gridPresent": True})
+    await _restore(rt)
     await _settle(rt)
     assert api.sent == []  # no lone restore
     await _outage(rt)
     clock.now += timedelta(minutes=1)
-    await rt.on_reading("hh1", "inv1", {"gridPresent": True})
+    await _restore(rt)
     await _settle(rt)
     assert ["<b>Відключення" in h for _, h, _ in api.sent] == [True, False]
 
