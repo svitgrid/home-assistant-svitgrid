@@ -91,3 +91,23 @@ def test_offline_copy_carries_minutes():
     assert copy.render("offline_board_recovered", "uk", station="Дача") == (
         "<b>Модуль Svitgrid знову на зв'язку</b>\nВід Дача знову надходять дані."
     )
+
+
+def test_rule_notice_copy():
+    """A rule's start and stop notices (svitgrid D-2151)."""
+    named = copy.render_rule_notice(
+        "calendar_event_started", "uk", name="Бойлер", rule=True, end_time=None
+    )
+    assert named == ("<b>▶️ Подія «Бойлер» почалася</b>\nЗапланована автоматизація розпочалася")
+    unnamed_rule = copy.render_rule_notice(
+        "calendar_event_ended", "en", name=None, rule=True, end_time="18:00"
+    )
+    assert unnamed_rule == "<b>Rule triggered</b>\nA scheduled automation has completed"
+    scheduled = copy.render_rule_notice(
+        "calendar_event_started", "en", name=" ", rule=False, end_time="18:00"
+    )
+    assert scheduled == ("<b>Schedule Started</b>\nA scheduled automation has begun\nUntil: 18:00")
+    escaped = copy.render_rule_notice(
+        "calendar_event_started", "en", name="<i>x</i>", rule=True, end_time=None
+    )
+    assert "&lt;i&gt;x&lt;/i&gt;" in escaped

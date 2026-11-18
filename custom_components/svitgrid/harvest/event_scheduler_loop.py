@@ -423,6 +423,7 @@ async def _tick(
     bms_states_for: object = None,
     model_for: object = None,
     journal: object = None,
+    on_notice: object = None,
 ) -> None:
     """Single scheduler tick.
 
@@ -448,6 +449,10 @@ async def _tick(
                    charge current cap holds its target to.
     journal      : OperationsJournal or None; every command a rule run sends,
                    and a run the island skips, gets a row.
+    on_notice    : async callable(event: dict, phase: "started" | "ended"), told
+                   of each start and end that reached the inverter, for an
+                   event whose ``config.notifyOnStartStop`` is set (svitgrid
+                   D-2151). The island Telegram bot sends the notice.
     """
     # 1. List events; finish any cancel the app asked for first
     all_events = await event_store.async_list_events()
@@ -548,12 +553,32 @@ async def _tick(
 
             # Persist EVERY tick — guard survival + hysteresis bookkeeping
             await _persist(event_store, latest, event, state, journal)
+            if failure is None:
+                await _notify(on_notice, event, decision.action)
 
         except Exception:  # noqa: BLE001
             _LOGGER.exception(
                 "Event %s evaluation/dispatch failed; skipping to next event",
                 event_id,
             )
+
+
+_NOTICE_PHASES = {"activate": "started", "deactivate": "ended"}
+
+
+async def _notify(on_notice: object, event: dict, action: str) -> None:
+    """Tell `on_notice` of a start or an end, as the cloud's notifyEventStarted
+    and notifyEventEnded do after a dispatch. An update sends nothing. Never
+    raises: a notice must not stop the rule."""
+    phase = _NOTICE_PHASES.get(action)
+    if on_notice is None or phase is None:
+        return
+    if (event.get("config") or {}).get("notifyOnStartStop") is not True:
+        return
+    try:
+        await on_notice(event, phase)
+    except Exception:  # noqa: BLE001
+        _LOGGER.exception("Event %s: the %s notice failed", event.get("id"), phase)
 
 
 def _others(events: dict, event: dict) -> list:
@@ -681,6 +706,7 @@ async def run_event_scheduler_loop(
     bms_states_for: object = None,
     model_for: object = None,
     journal: object = None,
+    on_notice: object = None,
 ) -> None:
     """Island-mode event scheduler loop.
 
@@ -706,6 +732,7 @@ async def run_event_scheduler_loop(
     bms_states_for : async callable() -> dict | None, see ``_tick``.
     model_for    : callable(inverter_id: str) -> str | None, see ``_tick``.
     journal      : OperationsJournal or None, see ``_tick``.
+    on_notice    : async callable(event, phase), see ``_tick``.
 
     GATED: spawned ONLY when cloud_ingest_enabled=False.  With cloud-sync ON
     the cloud engine handles events; double-fire must not occur.
@@ -725,6 +752,7 @@ async def run_event_scheduler_loop(
                 bms_states_for,
                 model_for,
                 journal,
+                on_notice,
             )
         except Exception:  # noqa: BLE001
             _LOGGER.exception(

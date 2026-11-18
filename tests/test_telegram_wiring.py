@@ -549,3 +549,25 @@ async def test_cloud_copy_on_sends_no_offline(hass, station, aioclient_mock, clo
     await _feed(hass, entry, clock, grid=True)
     await _liveness(hass, clock, 60)
     assert _sends(aioclient_mock) == []
+
+
+async def test_rule_notice_reaches_the_chat(hass, station, aioclient_mock, clock):
+    """The scheduler's notice for a rule reaches the island bot (svitgrid D-2151)."""
+    await _bot(hass)
+    entry = _entry()
+    await _set_up(hass, entry)
+    event = {"id": "e1", "inverterId": "ha-aaa", "name": "Бойлер", "config": {}}
+    await svitgrid._rule_notice(hass, entry, event, "ended")
+    await hass.async_block_till_done(wait_background_tasks=True)
+    assert _sends(aioclient_mock) == [
+        "<b>⏹ Подія «Бойлер» закінчилася</b>\nЗапланована автоматизація завершилася"
+    ]
+
+
+async def test_rule_notice_with_cloud_copy_sends_nothing(hass, station, aioclient_mock, clock):
+    await _bot(hass)
+    entry = _entry(cloud_copy=True)
+    await _set_up(hass, entry)
+    await svitgrid._rule_notice(hass, entry, {"id": "e1", "inverterId": "ha-aaa"}, "started")
+    await hass.async_block_till_done(wait_background_tasks=True)
+    assert _sends(aioclient_mock) == []

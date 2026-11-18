@@ -529,6 +529,7 @@ async def test_status_of_a_true_island(hass: HomeAssistant):
             "settings_lan",
             "bms_report_lan",
             "read_source_lan",
+            "rule_notices",
         ],
     }
 
@@ -1247,6 +1248,7 @@ async def test_island_status_without_edge_boxes_is_unchanged(hass: HomeAssistant
             "settings_lan",
             "bms_report_lan",
             "read_source_lan",
+            "rule_notices",
         ],
     }
 
@@ -1712,6 +1714,7 @@ async def test_island_status_without_edge_boxes_lists_ha_inverters_only(hass: Ho
             "settings_lan",
             "bms_report_lan",
             "read_source_lan",
+            "rule_notices",
         ],
         "inverters": {
             "inv-ha-1": {"host": "ha", "readSource": "native"},

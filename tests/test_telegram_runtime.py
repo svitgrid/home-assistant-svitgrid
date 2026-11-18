@@ -292,6 +292,33 @@ async def test_liveness_needs_a_bot_and_a_chat(setup):
     assert state.liveness() == {}
 
 
+async def test_rule_notice_reaches_every_enabled_chat(setup):
+    """A rule with notifyOnStartStop tells every chat (svitgrid D-2151)."""
+    rt, state, api, _, _ = setup
+    _chat(state, "phone-1", 11)
+    _chat(state, "phone-2", 22, language="en")
+    await rt.start()
+    event = {
+        "id": "evt-1",
+        "name": "Бойлер",
+        "mode": "custom",
+        "schedule": {"recurrence": "always"},
+        "config": {"notifyOnStartStop": True},
+    }
+    await rt.on_rule_notice("hh1", event, "started")
+    await _settle(rt)
+    by_chat = {c: h for c, h, _ in api.sent}
+    assert by_chat[11].startswith("<b>▶️ Подія «Бойлер» почалася</b>")
+    assert by_chat[22].startswith("<b>▶️ Event “Бойлер” started</b>")
+    assert state.queue() == []
+
+
+async def test_rule_notice_needs_a_chat(setup):
+    rt, state, _, _, _ = setup
+    await rt.on_rule_notice("hh1", {"id": "e", "name": "x"}, "ended")
+    assert state.queue() == []
+
+
 async def test_retry_keeps_order_and_sends_after_reconnect(setup):
     rt, state, api, clock, sleeps = setup
     _chat(state, "phone-1", 11)

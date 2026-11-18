@@ -120,6 +120,9 @@ CAPABILITIES = (
     # native harvest and the relay of HA's own sensors (svitgrid D-1848). Each
     # Home Assistant inverter's advert names its `readSource`.
     "read_source_lan",
+    # The island Telegram bot sends a rule's start and stop notices
+    # (svitgrid D-2151), so the app stops saying they need the cloud.
+    "rule_notices",
 )
 
 ACTION_SET_CLOUD_COPY = "set_cloud_copy"

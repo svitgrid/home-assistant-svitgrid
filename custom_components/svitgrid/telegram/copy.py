@@ -24,6 +24,8 @@ Kind = Literal[
     "offline_board",
     "offline_outage",
     "offline_board_recovered",
+    "calendar_event_started",
+    "calendar_event_ended",
     "test",
     "linked",
 ]
@@ -103,4 +105,33 @@ def render(
         text = f"<b>{fill(kind + '_title')}</b>\n{fill(kind + '_body')}"
     if event_at is not None:
         text += _time_line(event_at, tz, now)
+    return text
+
+
+def render_rule_notice(
+    kind: str,
+    language: str | None,
+    *,
+    name: str | None,
+    rule: bool,
+    end_time: str | None,
+) -> str:
+    """The Telegram HTML for a rule's start or stop notice (svitgrid D-2151).
+
+    The cloud's Telegram headline names the event when it has a name. An
+    unnamed rule takes the cloud's rule title, and any other unnamed event the
+    catalogue's title. A scheduled event's start carries its end time, the
+    cloud's «until» fact.
+    """
+    strings = _strings(language)
+    named = (name or "").strip()
+    if named:
+        title = strings[kind + "_named"].replace("{eventName}", html.escape(named))
+    elif rule:
+        title = strings["calendar_rule_title"]
+    else:
+        title = strings[kind + "_title"]
+    text = f"<b>{title}</b>\n{strings[kind + '_body']}"
+    if kind == "calendar_event_started" and not rule and end_time:
+        text += f"\n{strings['calendar_until']}: {html.escape(end_time)}"
     return text

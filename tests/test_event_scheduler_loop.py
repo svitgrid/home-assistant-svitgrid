@@ -1217,3 +1217,89 @@ async def test_edge_threshold_event_reads_the_owners_voltages_from_the_box_setti
     mock_executor.dispatch.assert_awaited_once()
     assert mock_executor.dispatch.call_args.args == ("restore_pi30_thresholds", prior)
     assert "customSnapshot" not in event_store._events["evt-1"]["executionState"]
+
+
+# ───────────── Start and stop notices (svitgrid D-2151) ─────────────
+
+
+def _ok_executor():
+    executor = AsyncMock()
+    executor.dispatch = AsyncMock(return_value={"written": [], "verified": True})
+    return executor
+
+
+@pytest.mark.asyncio
+async def test_notify_on_start_stop_reports_each_applied_transition():
+    """The notice follows a transition that reached the inverter, as the
+    cloud's notifyEventStarted and notifyEventEnded do."""
+    from custom_components.svitgrid.harvest.event_scheduler_loop import _tick
+
+    notices = []
+
+    async def on_notice(event, phase):
+        notices.append((event["id"], phase))
+
+    event = _make_use_battery_event()
+    event["config"] = {"notifyOnStartStop": True}
+    event_store = FakeEventStore([event])
+    store = FakeStore([_reading_at()])
+    executor = _ok_executor()
+
+    await _tick(store, event_store, lambda _i: executor, "UTC", _NOW_IN_WINDOW, on_notice=on_notice)
+    await _tick(store, event_store, lambda _i: executor, "UTC", _NOW_IN_WINDOW, on_notice=on_notice)
+    await _tick(
+        store, event_store, lambda _i: executor, "UTC", _NOW_OUT_WINDOW, on_notice=on_notice
+    )
+    assert notices == [("evt-1", "started"), ("evt-1", "ended")]
+
+
+@pytest.mark.asyncio
+async def test_no_notice_without_the_setting_or_on_a_failed_dispatch():
+    from custom_components.svitgrid.harvest.event_scheduler_loop import _tick
+
+    notices = []
+
+    async def on_notice(event, phase):
+        notices.append((event["id"], phase))
+
+    quiet = _make_use_battery_event()
+    await _tick(
+        FakeStore([_reading_at()]),
+        FakeEventStore([quiet]),
+        lambda _i: _ok_executor(),
+        "UTC",
+        _NOW_IN_WINDOW,
+        on_notice=on_notice,
+    )
+    loud = _make_use_battery_event()
+    loud["config"] = {"notifyOnStartStop": True}
+    await _tick(
+        FakeStore([_reading_at()]),
+        FakeEventStore([loud]),
+        lambda _i: _failing_executor(KeyError("powerLimit")),
+        "UTC",
+        _NOW_IN_WINDOW,
+        on_notice=on_notice,
+    )
+    assert notices == []
+
+
+@pytest.mark.asyncio
+async def test_a_failing_notice_never_stops_the_tick():
+    from custom_components.svitgrid.harvest.event_scheduler_loop import _tick
+
+    async def on_notice(event, phase):
+        raise RuntimeError("telegram down")
+
+    event = _make_use_battery_event()
+    event["config"] = {"notifyOnStartStop": True}
+    event_store = FakeEventStore([event])
+    await _tick(
+        FakeStore([_reading_at()]),
+        event_store,
+        lambda _i: _ok_executor(),
+        "UTC",
+        _NOW_IN_WINDOW,
+        on_notice=on_notice,
+    )
+    assert event_store.state_calls[-1][1]["status"] == "active"

@@ -52,10 +52,18 @@ ALERT_KINDS = (
     "offline_board",
     "offline_outage",
     "offline_board_recovered",
+    "calendar_event_started",
+    "calendar_event_ended",
 )
+_NOTICE_KINDS = {"started": "calendar_event_started", "ended": "calendar_event_ended"}
 # Kinds whose latch must reach disk at once: HA does not unload entries on
 # shutdown, so a delayed save can be lost to a power cut and the alert told again.
-_FLUSH_KINDS = frozenset(ALERT_KINDS) - {"grid_restored", "offline_board_recovered"}
+_FLUSH_KINDS = frozenset(ALERT_KINDS) - {
+    "grid_restored",
+    "offline_board_recovered",
+    "calendar_event_started",
+    "calendar_event_ended",
+}
 LIVENESS_TICK_S = 60
 
 LivenessSource = Callable[[], Awaitable[list[dict]]]
@@ -356,6 +364,43 @@ class TelegramRuntime:
                 await self._state.flush()
         self._kick_sender()
 
+    # Rule notices
+
+    async def on_rule_notice(self, household_id: str, event: dict, phase: str) -> None:
+        """Queue a rule's start or stop notice for every enabled chat (svitgrid D-2151).
+
+        The scheduler calls this only for an event whose `notifyOnStartStop`
+        is set, once its start or end reached the inverter.
+        """
+        kind = _NOTICE_KINDS.get(phase)
+        if kind is None:
+            return
+        schedule = event.get("schedule") if isinstance(event.get("schedule"), dict) else {}
+        name = event.get("name")
+        end_time = schedule.get("endTime")
+        now_ms = self._now_ms()
+        async with self._lock:
+            chats = [c for c in self._state.chats() if c.enabled]
+            if self._state.token() is None or not chats:
+                return
+            added = [
+                {
+                    "id": uuid.uuid4().hex,
+                    "chatDeviceId": chat.device_id,
+                    "kind": kind,
+                    "householdId": household_id,
+                    "eventAtMs": now_ms,
+                    "soc": None,
+                    "eventName": name if isinstance(name, str) else None,
+                    "rule": schedule.get("recurrence") == "always",
+                    "endTime": end_time if isinstance(end_time, str) else None,
+                    "createdAtMs": now_ms,
+                }
+                for chat in chats
+            ]
+            await self._state.set_queue(_trim([*self._state.queue(), *added], now_ms))
+        self._kick_sender()
+
     # Sender
 
     def _kick_sender(self) -> None:
@@ -416,6 +461,14 @@ class TelegramRuntime:
             return live[0] if live else None
 
     def _render(self, entry: dict[str, Any], language: str) -> str:
+        if entry.get("kind") in _NOTICE_KINDS.values():
+            return copy.render_rule_notice(
+                entry["kind"],
+                language,
+                name=entry.get("eventName") if isinstance(entry.get("eventName"), str) else None,
+                rule=entry.get("rule") is True,
+                end_time=entry.get("endTime") if isinstance(entry.get("endTime"), str) else None,
+            )
         event_ms = entry.get("eventAtMs")
         event_at = (
             datetime.fromtimestamp(event_ms / 1000, UTC) if isinstance(event_ms, int) else None

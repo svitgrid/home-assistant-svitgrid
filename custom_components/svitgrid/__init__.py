@@ -124,6 +124,18 @@ async def _feed_telegram(hass: HomeAssistant, store_entry: ConfigEntry, reading:
     await runtime.on_reading(household_key(entry), inverter_id, reading)
 
 
+async def _rule_notice(hass: HomeAssistant, entry: ConfigEntry, event: dict, phase: str) -> None:
+    """Hand a rule's start or stop to the Telegram runtime, for a full island only."""
+    runtime = (hass.data.get(DOMAIN) or {}).get("telegram")
+    if not isinstance(runtime, TelegramRuntime):
+        return
+    inverter_id = event.get("inverterId")
+    owner = _telegram_entry_for(hass, entry, inverter_id) if isinstance(inverter_id, str) else entry
+    if _cloud_copy_of(owner):
+        return
+    await runtime.on_rule_notice(household_key(owner), event, phase)
+
+
 async def _start_telegram(hass: HomeAssistant, entry: ConfigEntry, store) -> None:
     """Start the install's one Telegram runtime and feed it this entry's readings.
 
@@ -1272,6 +1284,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     bms_states_for=lambda: _bms_states(hass, entry.entry_id),
                     model_for=harvest_models.get,
                     journal=operations_journal,
+                    # A rule's start and stop notices go out through the
+                    # island Telegram bot (svitgrid D-2151).
+                    on_notice=lambda event, phase: _rule_notice(hass, entry, event, phase),
                 ),
                 name="svitgrid_event_scheduler",
             )
