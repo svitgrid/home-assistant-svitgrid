@@ -343,3 +343,71 @@ class SocketSwitcher:
                 )
                 skipped.append((device["id"], "queue_failed"))
         return skipped
+
+
+# ── «Критичні пристрої»: a today setting overrides the standing one ─────────
+
+
+def _member_of_template(event: dict) -> bool:
+    return (
+        event.get("templateId") == OUTAGE_ESSENTIALS_TEMPLATE_ID and event.get("mode") == "custom"
+    )
+
+
+def _recurrence(event: dict):
+    return (event.get("schedule") or {}).get("recurrence")
+
+
+def _active_member(event: dict, others, recurrence: str) -> dict | None:
+    """activeTemplateMember: an enabled, active member of *event*'s template
+    with *recurrence*."""
+    for other in others or ():
+        if other.get("id") == event.get("id") or other.get("enabled") is False:
+            continue
+        if not _member_of_template(other) or _recurrence(other) != recurrence:
+            continue
+        if (other.get("executionState") or {}).get("status") == "active":
+            return other
+    return None
+
+
+def template_gate(event: dict, others, now_utc: datetime, tz: str) -> tuple[str, str] | None:
+    """What the «Критичні пристрої» hand-over asks of *event* this tick, as
+    the cloud's evaluateSingleEvent gates it, or None.
+
+    - ``("stand_down", id)``: a standing (``always``) member while an
+      enabled today member is in its window (templateSiblingInWindow). It
+      releases if active and stays idle until that window ends.
+    - ``("wait", id)``: a member that would activate while the other side's
+      member is still active. Its release has not been queued yet, so the
+      sockets it is about to switch on would read as off and be left on.
+    """
+    if not _member_of_template(event):
+        return None
+    # The evaluator's window test (event_evaluator imports nothing from here).
+    from .event_evaluator import is_event_in_window
+
+    active = (event.get("executionState") or {}).get("status") == "active"
+    recurrence = _recurrence(event)
+    if recurrence == "always":
+        for other in others or ():
+            if other.get("id") == event.get("id") or other.get("enabled") is False:
+                continue
+            if other.get("templateId") != OUTAGE_ESSENTIALS_TEMPLATE_ID:
+                continue
+            if _recurrence(other) != "none":
+                continue
+            if is_event_in_window(other.get("schedule") or {}, now_utc, tz):
+                return ("stand_down", other.get("id"))
+        if not active:
+            holder = _active_member(event, others, "none")
+            if holder is not None:
+                return ("wait", holder.get("id"))
+        return None
+    if recurrence == "none" and not active:
+        if not is_event_in_window(event.get("schedule") or {}, now_utc, tz):
+            return None
+        holder = _active_member(event, others, "always")
+        if holder is not None:
+            return ("wait", holder.get("id"))
+    return None

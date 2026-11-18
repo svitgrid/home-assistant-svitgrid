@@ -1590,3 +1590,113 @@ async def test_without_an_adopted_box_lower_consumption_stays_inert():
 
     assert sockets.switched == []
     assert event_store.state_calls[-1][1].get("status", "idle") == "idle"
+
+
+# ───────── «Критичні пристрої» on an edge island (svitgrid D-2160) ─────────
+
+
+def _essentials(event_id, scope, exec_state=None, start="10:00"):
+    event = _make_use_battery_event(event_id=event_id, exec_state=exec_state)
+    event.update(
+        mode="custom",
+        templateId="outage_essentials",
+        memberKey="final",
+        signing=_SIGNING,
+        config={
+            "customConditions": [],
+            "customActions": [{"type": "smart_device_except", "keepIds": ["fridge"]}],
+        },
+        schedule=(
+            {"recurrence": "always"}
+            if scope == "always"
+            else {
+                "recurrence": "none",
+                "startDate": "2026-06-29",
+                "startTime": start,
+                "endTime": "23:59",
+            }
+        ),
+    )
+    return event
+
+
+@pytest.mark.asyncio
+async def test_a_today_setting_stands_the_standing_one_down_and_hands_its_sockets_back():
+    from custom_components.svitgrid.harvest.event_scheduler_loop import _tick
+
+    sockets = _FakeSockets([_socket_row("fridge"), _socket_row("boiler", on=False)])
+    always = _essentials(
+        "ess-always", "always", exec_state={"status": "active", "switchedOffIds": ["boiler"]}
+    )
+    today = _essentials("ess-today", "today")
+    event_store = FakeEventStore([always, today])
+
+    await _tick(
+        FakeStore([_reading_at()]),
+        event_store,
+        lambda _i: _ok_executor(),
+        "UTC",
+        _NOW_IN_WINDOW,
+        sockets=sockets,
+    )
+
+    assert sockets.switched[0] == ("ess-always", [("boiler", True)])
+    state = dict(event_store.state_calls)["ess-always"]
+    assert state["status"] == "idle"
+    assert state["skipReason"] == "paused_by_event:ess-today"
+    assert len(sockets.switched) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_today_setting_waits_while_the_standing_one_still_holds():
+    """The other half of the hand-over: the today member does not activate on
+    a tick the standing member is still active. Evaluated first, it waits,
+    and the standing member stands down after it."""
+    from custom_components.svitgrid.harvest.event_scheduler_loop import _tick
+
+    sockets = _FakeSockets([_socket_row("boiler")])
+    pending = {"status": "pending_condition", "conditionMetSince": "2026-06-29T10:00:00+00:00"}
+    always = _essentials("ess-always", "always", exec_state={"status": "active"})
+    today = _essentials("ess-today", "today", exec_state=pending)
+    event_store = FakeEventStore([today, always])
+
+    await _tick(
+        FakeStore([_reading_at()]),
+        event_store,
+        lambda _i: _ok_executor(),
+        "UTC",
+        _NOW_IN_WINDOW,
+        sockets=sockets,
+    )
+
+    state = dict(event_store.state_calls)["ess-today"]
+    assert state["status"] == "pending_condition"
+    assert state["skipReason"] == "awaiting_rule_restore"
+    assert all(event_id != "ess-today" for event_id, _ in sockets.switched)
+
+
+@pytest.mark.asyncio
+async def test_a_member_that_waited_drops_the_wait_once_it_runs():
+    from custom_components.svitgrid.harvest.event_scheduler_loop import _tick
+
+    sockets = _FakeSockets([_socket_row("boiler")])
+    waited = {
+        "status": "pending_condition",
+        "conditionMetSince": "2026-06-29T10:00:00+00:00",
+        "skipReason": "awaiting_rule_restore",
+    }
+    event_store = FakeEventStore([_essentials("ess-today", "today", exec_state=waited)])
+
+    await _tick(
+        FakeStore([_reading_at()]),
+        event_store,
+        lambda _i: _ok_executor(),
+        "UTC",
+        _NOW_IN_WINDOW,
+        sockets=sockets,
+    )
+
+    state = event_store.state_calls[-1][1]
+    assert state["status"] == "active"
+    assert "skipReason" not in state
+    assert sockets.switched == [("ess-today", [("boiler", False)])]

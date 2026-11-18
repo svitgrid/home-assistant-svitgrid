@@ -380,3 +380,66 @@ async def test_switcher_roster_marks_sensors_boards_and_unfinished_ons():
 async def test_switcher_is_unavailable_without_an_adopted_board():
     switcher = SocketSwitcher(_Devices([]), _Queue(), lambda: set())
     assert not await switcher.async_available()
+
+
+# ── «Критичні пристрої»: today overrides always (svitgrid D-2160) ─────────────
+
+
+def _member(event_id, scope, *, status="idle", enabled=True, start="10:00"):
+    schedule = (
+        {"recurrence": "always"}
+        if scope == "always"
+        else {
+            "recurrence": "none",
+            "startDate": "2026-11-18",
+            "startTime": start,
+            "endTime": "23:59",
+        }
+    )
+    return {
+        "id": event_id,
+        "inverterId": "inv-1",
+        "enabled": enabled,
+        "mode": "custom",
+        "templateId": "outage_essentials",
+        "memberKey": "final",
+        "schedule": schedule,
+        "config": {"customActions": [{"type": "smart_device_except", "keepIds": []}]},
+        "executionState": {"status": status},
+    }
+
+
+def test_a_today_member_in_its_window_stands_the_always_member_down():
+    """templateSiblingInWindow."""
+    from custom_components.svitgrid.harvest.socket_actions import template_gate
+
+    always = _member("a", "always", status="active")
+    today = _member("t", "today")
+    assert template_gate(always, [today], _NOW, "UTC") == ("stand_down", "t")
+    later = _member("t", "today", start="13:00")
+    assert template_gate(always, [later], _NOW, "UTC") is None
+    paused = _member("t", "today", enabled=False)
+    assert template_gate(always, [paused], _NOW, "UTC") is None
+
+
+def test_each_side_of_the_hand_over_waits_for_the_other_to_let_go():
+    """activeTemplateMember: an always member waits for an active today
+    member whose window is over, and a today member does not activate while
+    an always member is still active."""
+    from custom_components.svitgrid.harvest.socket_actions import template_gate
+
+    ended_today = _member("t", "today", status="active", start="09:00")
+    ended_today["schedule"]["endTime"] = "11:00"
+    assert template_gate(_member("a", "always"), [ended_today], _NOW, "UTC") == ("wait", "t")
+    active_always = _member("a", "always", status="active")
+    assert template_gate(_member("t", "today"), [active_always], _NOW, "UTC") == ("wait", "a")
+    # An active today member is left alone.
+    today_active = _member("t", "today", status="active")
+    assert template_gate(today_active, [active_always], _NOW, "UTC") is None
+
+
+def test_the_gate_leaves_every_other_event_alone():
+    from custom_components.svitgrid.harvest.socket_actions import template_gate
+
+    rule = _rule([_plug(["a"])])
+    assert template_gate(rule, [_member("t", "today")], _NOW, "UTC") is None

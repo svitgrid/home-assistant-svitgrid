@@ -74,6 +74,7 @@ from .event_evaluator import (
     SKIPPED_REASON_KEY,
     ZIGBEE_CONDITION_TYPES,
     ZIGBEE_SIGNALS_KEY,
+    EvaluatorDecision,
     evaluate_event,
     has_landed_writes,
     needs_cloud,
@@ -298,6 +299,38 @@ async def _switch_sockets(
             result={"rulePhase": _PHASES[action], "reason": reason},
             executed_at=now_iso(),
         )
+
+
+# skipReason of a «Критичні пристрої» member that stands down for, or waits
+# on, the other side of the hand-over (the API's values).
+_PAUSED_BY_EVENT = "paused_by_event:"
+_AWAITING_RESTORE = "awaiting_rule_restore"
+
+
+def _template_decision(
+    event: dict, reading: dict, exec_state: dict, others, now_utc: datetime, tz: str
+) -> EvaluatorDecision | None:
+    """The «Критичні пристрої» hand-over (svitgrid D-2160), or None for an
+    event it does not hold back. A standing member releases while a today
+    member is in its window, and each side waits for the other's active
+    member to let go before it activates (socket_actions.template_gate)."""
+    gate = sa.template_gate(event, others, now_utc, tz)
+    if gate is None:
+        return None
+    verdict, other_id = gate
+    if verdict == "stand_down" and exec_state.get("status") == "active":
+        commands, state = restore_decision(event, exec_state, now_utc, reading, others)
+        state["skipReason"] = f"{_PAUSED_BY_EVENT}{other_id}"
+        return EvaluatorDecision(action="deactivate", commands=commands, new_state=state)
+    state = copy.deepcopy(exec_state)
+    if verdict == "stand_down":
+        if state.get("status") == "pending_condition":
+            state["status"] = "idle"
+            state.pop("conditionMetSince", None)
+        state["skipReason"] = f"{_PAUSED_BY_EVENT}{other_id}"
+    else:
+        state["skipReason"] = _AWAITING_RESTORE
+    return EvaluatorDecision(action="hold", commands=[], new_state=state)
 
 
 async def _socket_control(sockets: object, events: list) -> bool:
@@ -632,15 +665,20 @@ async def _tick(
                 reading = {**reading, BMS_TEMPERATURE_KEY: bms_temperature}
             if zigbee and _zigbee_device_ids(event):
                 reading = {**reading, ZIGBEE_SIGNALS_KEY: zigbee}
-            decision = evaluate_event(
-                event,
-                reading,
-                exec_state,
-                now_utc,
-                tz,
-                others,
-                **brand,
-            )
+            decision = _template_decision(event, reading, exec_state, others, now_utc, tz)
+            if decision is None:
+                if exec_state.get("skipReason") == _AWAITING_RESTORE:
+                    # The other side let go: the wait is over.
+                    exec_state = {k: v for k, v in exec_state.items() if k != "skipReason"}
+                decision = evaluate_event(
+                    event,
+                    reading,
+                    exec_state,
+                    now_utc,
+                    tz,
+                    others,
+                    **brand,
+                )
 
             if decision.action not in ("activate", "update", "deactivate"):
                 # Not a transition: a stale retry schedule has nothing left to retry.
