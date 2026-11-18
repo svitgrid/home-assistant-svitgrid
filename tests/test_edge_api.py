@@ -742,6 +742,58 @@ async def test_sync_settings_stores_snapshot_with_read_at():
 
 
 @pytest.mark.asyncio
+async def test_sync_settings_keeps_the_deye_mode_word_and_rated_power():
+    """D-2126: the S3 sends `batteryModeRegister` (and `ratedPowerRegisters`)
+    beside the Deye batch; the stored snapshot keeps both and the settings view
+    serves the mode word, so a voltage-mode Deye shows volts on an island."""
+    store = _FakeReadingStore()
+    hass = _hass_with_store(_keystore(_box(inverters={"inv-1": _INV_1})), store)
+    body = {
+        "inverterId": "inv-1",
+        "modelId": "deye_sg04lp3",
+        "startRegister": 115,
+        "registers": [1, 2, 3],
+        "ratedPowerRegisters": [0, 8000],
+        "batteryModeRegister": 0,
+    }
+    resp = await _call(edge_api.EdgeSyncSettingsView, "post", hass, api_key=BOX_KEY, body=body)
+    assert _json(resp) == {"ok": True}
+    stored = store.snapshots["inv-1"]
+    assert stored["battery_mode_register"] == 0
+    assert stored["rated_power_registers"] == [0, 8000]
+    served = settings_sync.settings_snapshot_response(stored)
+    assert served == {
+        "inverterId": "inv-1",
+        "modelId": "deye_sg04lp3",
+        "startRegister": 115,
+        "registers": [1, 2, 3],
+        "batteryModeRegister": 0,
+        "readAt": stored["read_at"],
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", [None, "1", 1.5, True, -1, 70000])
+async def test_sync_settings_without_a_usable_mode_word_serves_no_mode_key(mode):
+    store = _FakeReadingStore()
+    hass = _hass_with_store(_keystore(_box(inverters={"inv-1": _INV_1})), store)
+    body = {
+        "inverterId": "inv-1",
+        "modelId": "deye_sg04lp3",
+        "startRegister": 115,
+        "registers": [1],
+    }
+    if mode is not None:
+        body["batteryModeRegister"] = mode
+    resp = await _call(edge_api.EdgeSyncSettingsView, "post", hass, api_key=BOX_KEY, body=body)
+    assert _json(resp) == {"ok": True}
+    stored = store.snapshots["inv-1"]
+    assert "battery_mode_register" not in stored
+    assert "rated_power_registers" not in stored
+    assert "batteryModeRegister" not in settings_sync.settings_snapshot_response(stored)
+
+
+@pytest.mark.asyncio
 async def test_sync_settings_stores_a_brand_body_as_its_kind():
     store = _FakeReadingStore()
     inverters = {"inv-lux": {**_INV_1, "modelId": "luxpower_sna_5000_wpv"}}
