@@ -64,6 +64,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from ..bms_temperature import bms_temperature_from_states
+from ..operations_journal import SOURCE_INVERTER, now_iso, record_safely
 from . import priority_profile as pp
 from .event_evaluator import (
     BMS_TEMPERATURE_KEY,
@@ -170,6 +171,80 @@ async def _dispatch_all(
             if failure is None:
                 failure = _Failure(cmd_name, _reason_for(exc), exc)
     return failure, results
+
+
+# A transition's word in a journal row's `result.rulePhase`.
+_PHASES = {"activate": "start", "update": "update", "deactivate": "end"}
+
+
+def _journal_fields(event: dict) -> dict:
+    """The journal fields every row of *event*'s runs carries."""
+    return {
+        "source": SOURCE_INVERTER,
+        "object_id": str(event.get("inverterId")),
+        "created_by": (event.get("signing") or {}).get("signingKeyId"),
+        "calendar_event_name": event.get("name"),
+    }
+
+
+async def _journal_dispatch(
+    journal: object,
+    event: dict,
+    phase: str,
+    commands: list,
+    failure: _Failure | None,
+    results: list,
+) -> None:
+    """Journal one row per command a rule run sent: each that landed as
+    ``executed``, the first that failed as ``failed``. A run that sent no
+    command (an end with nothing to write back) is one ``rule_<phase>`` row."""
+    if journal is None:
+        return
+    if not commands:
+        await record_safely(
+            journal,
+            **_journal_fields(event),
+            command=f"rule_{phase}",
+            status="executed",
+            result={"rulePhase": phase},
+            executed_at=now_iso(),
+        )
+        return
+    payloads = dict(commands)
+    for cmd_name, result in results:
+        await record_safely(
+            journal,
+            **_journal_fields(event),
+            command=cmd_name,
+            status="executed",
+            payload=payloads.get(cmd_name),
+            result={"rulePhase": phase, "ack": result},
+            executed_at=now_iso(),
+        )
+    if failure is not None:
+        await record_safely(
+            journal,
+            **_journal_fields(event),
+            command=failure.command,
+            status="failed",
+            payload=payloads.get(failure.command),
+            result={"rulePhase": phase, "error": failure.reason},
+            executed_at=now_iso(),
+        )
+
+
+async def _journal_skip(journal: object, event: dict, old: dict, new: dict) -> None:
+    """Journal a rule run the island skips, once, when it starts skipping."""
+    reason = new.get(SKIPPED_REASON_KEY)
+    if journal is None or reason is None or reason == old.get(SKIPPED_REASON_KEY):
+        return
+    await record_safely(
+        journal,
+        **_journal_fields(event),
+        command="rule_skipped",
+        status="skipped",
+        result={"rulePhase": "skip", "reason": reason},
+    )
 
 
 def _valid_work_mode(value: object) -> int | None:
@@ -347,6 +422,7 @@ async def _tick(
     settings_for: object = None,
     bms_states_for: object = None,
     model_for: object = None,
+    journal: object = None,
 ) -> None:
     """Single scheduler tick.
 
@@ -370,13 +446,15 @@ async def _tick(
     model_for    : callable(inverter_id: str) -> str | None, the model of an
                    inverter the integration harvests itself, which a battery
                    charge current cap holds its target to.
+    journal      : OperationsJournal or None; every command a rule run sends,
+                   and a run the island skips, gets a row.
     """
     # 1. List events; finish any cancel the app asked for first
     all_events = await event_store.async_list_events()
     for event in all_events:
         if (event.get("executionState") or {}).get(REMOVAL_KEY):
             try:
-                await _settle(event_store, executor_for, event, now_utc, all_events)
+                await _settle(event_store, executor_for, event, now_utc, all_events, journal)
             except Exception:  # noqa: BLE001
                 _LOGGER.exception("Event %s: cancel restore failed", event.get("id"))
     enabled_events = [
@@ -412,7 +490,7 @@ async def _tick(
             )
             # Whether the event needs the cloud does not depend on a reading,
             # so the app learns it before the first one arrives.
-            await _sync_skip_reason(event_store, latest, event, exec_state)
+            await _sync_skip_reason(event_store, latest, event, exec_state, journal)
             continue
 
         others = _others(latest, event)
@@ -444,7 +522,7 @@ async def _tick(
                 state = dict(decision.new_state)
                 for key in _RETRY_KEYS:
                     state.pop(key, None)
-                await _persist(event_store, latest, event, state)
+                await _persist(event_store, latest, event, state, journal)
                 continue
 
             retry_at = _parse_iso(exec_state.get("dispatchRetryAt"))
@@ -453,6 +531,9 @@ async def _tick(
 
             failure, results = await _dispatch_all(
                 executor_for(inverter_id), decision.commands, event.get("signing")
+            )
+            await _journal_dispatch(
+                journal, event, _PHASES[decision.action], decision.commands, failure, results
             )
             if failure is None:
                 state = dict(decision.new_state)
@@ -466,7 +547,7 @@ async def _tick(
                 capture_priors(state, results, others)
 
             # Persist EVERY tick — guard survival + hysteresis bookkeeping
-            await _persist(event_store, latest, event, state)
+            await _persist(event_store, latest, event, state, journal)
 
         except Exception:  # noqa: BLE001
             _LOGGER.exception(
@@ -484,7 +565,9 @@ def _others(events: dict, event: dict) -> list:
     ]
 
 
-async def _sync_skip_reason(event_store: object, latest: dict, event: dict, state: dict) -> None:
+async def _sync_skip_reason(
+    event_store: object, latest: dict, event: dict, state: dict, journal: object = None
+) -> None:
     """Set or clear `skippedReason` without evaluating; write only on a change."""
     want = NEEDS_CLOUD if needs_cloud(event) else None
     if state.get(SKIPPED_REASON_KEY) == want:
@@ -492,11 +575,15 @@ async def _sync_skip_reason(event_store: object, latest: dict, event: dict, stat
     new_state = {k: v for k, v in state.items() if k != SKIPPED_REASON_KEY}
     if want is not None:
         new_state[SKIPPED_REASON_KEY] = want
-    await _persist(event_store, latest, event, new_state)
+    await _persist(event_store, latest, event, new_state, journal)
 
 
-async def _persist(event_store: object, latest: dict, event: dict, state: dict) -> None:
+async def _persist(
+    event_store: object, latest: dict, event: dict, state: dict, journal: object = None
+) -> None:
+    old = (latest.get(event.get("id")) or event).get("executionState") or {}
     await event_store.async_set_execution_state(event.get("id"), state)
+    await _journal_skip(journal, event, old, state)
     latest[event.get("id")] = {**event, "executionState": state}
 
 
@@ -530,17 +617,23 @@ async def settle_removal(
     executor_for: object,
     event_id: str,
     now_utc: datetime | None = None,
+    journal: object = None,
 ) -> None:
     """Run the restore of a cancelled event, then delete or idle it."""
     event = await event_store.async_get_event(event_id)
     if event is None:
         return
     events = await event_store.async_list_events()
-    await _settle(event_store, executor_for, event, now_utc or datetime.now(UTC), events)
+    await _settle(event_store, executor_for, event, now_utc or datetime.now(UTC), events, journal)
 
 
 async def _settle(
-    event_store: object, executor_for: object, event: dict, now_utc: datetime, events=()
+    event_store: object,
+    executor_for: object,
+    event: dict,
+    now_utc: datetime,
+    events=(),
+    journal: object = None,
 ) -> None:
     event_id = event.get("id")
     exec_state = event.get("executionState") or {}
@@ -555,7 +648,10 @@ async def _settle(
         others = _others({e.get("id"): e for e in events}, event)
         commands, done_state = restore_decision(event, exec_state, now_utc, others=others)
         inverter_id = event.get("inverterId")
-        failure, _ = await _dispatch_all(executor_for(inverter_id), commands, event.get("signing"))
+        failure, results = await _dispatch_all(
+            executor_for(inverter_id), commands, event.get("signing")
+        )
+        await _journal_dispatch(journal, event, "end", commands, failure, results)
         if failure is not None:
             state = _failed_state(exec_state, failure, now_utc)
             _log_failure(event_id, inverter_id, failure, state["dispatchFailures"])
@@ -584,6 +680,7 @@ async def run_event_scheduler_loop(
     settings_for: object = None,
     bms_states_for: object = None,
     model_for: object = None,
+    journal: object = None,
 ) -> None:
     """Island-mode event scheduler loop.
 
@@ -608,6 +705,7 @@ async def run_event_scheduler_loop(
     settings_for : async callable(inverter_id: str) -> dict | None, see ``_tick``.
     bms_states_for : async callable() -> dict | None, see ``_tick``.
     model_for    : callable(inverter_id: str) -> str | None, see ``_tick``.
+    journal      : OperationsJournal or None, see ``_tick``.
 
     GATED: spawned ONLY when cloud_ingest_enabled=False.  With cloud-sync ON
     the cloud engine handles events; double-fire must not occur.
@@ -626,6 +724,7 @@ async def run_event_scheduler_loop(
                 settings_for,
                 bms_states_for,
                 model_for,
+                journal,
             )
         except Exception:  # noqa: BLE001
             _LOGGER.exception(
