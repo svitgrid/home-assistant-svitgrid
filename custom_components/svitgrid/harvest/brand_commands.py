@@ -2,7 +2,7 @@
 
 The cloud evaluator sends a Deye register write to a Deye-family inverter and
 a priority profile or a threshold command to a PI30, MUST, LuxPower SNA,
-SMG II or SRNE. The island evaluator writes the Deye family, the priority
+SMG II, SRNE or P17. The island evaluator writes the Deye family, the priority
 profiles (svitgrid#1254) and the PI30 and MUST thresholds (#1255); an event on
 any other brand writes nothing and records ``unsupported_field`` rather than
 sending a partial payload.
@@ -97,6 +97,10 @@ def priority_profile_protocol(
     A port of priorityProfileProtocol, in its order, pinned by
     tests/fixtures/priority_profile_resolution.json.
     """
+    # A Voltronic P17 on the board's serial port, whatever its model: only the
+    # board speaks P17, and the transport names it.
+    if transport == "p17_serial":
+        return "p17"
     if transport == "pi30_serial":
         return "pi30"
     mid = model_id or ""

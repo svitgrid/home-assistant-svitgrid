@@ -90,8 +90,26 @@ def _parse_now(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
+_TABLE = json.loads((_FIXTURES / "priority_profile_table.json").read_text())
+
+# The cloud's pi30_vmii (the Daxtromn AGH) is not ported: the cloud offers it
+# only on a board at or above PI30_VMII_MIN_S3_VERSION, a version the island
+# does not read. The island still runs such a unit as pi30 (svitgrid D-2144).
+_NOT_PORTED = {"pi30_vmii"}
+
+
+def _resolution_case(case):
+    if case["expected"] in _NOT_PORTED:
+        return pytest.param(
+            case, marks=pytest.mark.xfail(strict=True, reason="pi30_vmii is not ported")
+        )
+    return case
+
+
 @pytest.mark.parametrize(
-    "case", _RESOLUTION, ids=lambda c: f"{c['modelId']}-{c['transport']}-{c['protocolId']}"
+    "case",
+    [_resolution_case(c) for c in _RESOLUTION],
+    ids=lambda c: f"{c['modelId']}-{c['transport']}-{c['protocolId']}",
 )
 def test_priority_resolution_fixture(case):
     got = priority_profile_protocol(case["modelId"], case["transport"], case["protocolId"])
@@ -481,3 +499,77 @@ def test_battery_charge_current_on_an_hv_deye_is_unsupported():
     lv = {**hv, "modelId": "deye_sg04lp3"}
     decision = evaluate_event(event, _READING, {"status": "idle"}, _NOW, TZ, inverter=lv)
     assert decision.skip_reason != "unsupported_field"
+
+
+# ── Voltronic P17 (the Axioma ISGRID 15000 on the board's serial port, D-2144) ──
+
+_P17 = {"modelId": "axioma_isgrid_15000", "transport": "p17_serial", "protocolId": "p17"}
+
+
+def test_profiles_by_protocol_match_the_cloud_table():
+    from custom_components.svitgrid.harvest.priority_profile import PROFILES_BY_PROTOCOL
+
+    cloud = {
+        name: tuple(spec["profiles"])
+        for name, spec in _TABLE["protocols"].items()
+        if name not in _NOT_PORTED
+    }
+    assert cloud == PROFILES_BY_PROTOCOL
+
+
+def test_a_p17_board_is_a_priority_brand_and_advertises_its_modes():
+    from custom_components.svitgrid.harvest.brand_commands import island_writes
+
+    assert brand_kind(_P17) == "priority"
+    assert island_writes(_P17) == {
+        "writableActions": [],
+        "modes": ["battery_charge", "use_battery"],
+    }
+    # Any model on the P17 transport: only the board speaks P17.
+    assert priority_profile_protocol("some_other_model", "p17_serial", None) == "p17"
+
+
+@pytest.mark.parametrize(
+    ("mode", "profile"), [("battery_charge", "grid_charge"), ("use_battery", "battery_first")]
+)
+def test_a_p17_profile_mode_applies_its_profile(mode, profile):
+    event = {
+        "id": "evt-1",
+        "inverterId": "inv-1",
+        "enabled": True,
+        "mode": mode,
+        "schedule": _ALL_DAY,
+        "config": {"targetSoc": 100, "chargeSource": "grid"},
+        "executionState": {"status": "idle"},
+    }
+    decision = evaluate_event(event, _READING, {"status": "idle"}, _NOW, TZ, inverter=_P17)
+    assert decision.action == "activate"
+    assert [(name, payload["profile"]) for name, payload in decision.commands] == [
+        ("apply_priority_profile", profile)
+    ]
+    assert "window" not in decision.commands[0][1]
+
+
+@pytest.mark.parametrize(
+    ("mode", "config"),
+    [
+        ("battery_charge", {"targetSoc": 100, "chargeSource": "grid", "chargeCurrentA": 60}),
+        ("battery_hold", {}),
+    ],
+)
+def test_a_p17_event_that_needs_a_held_setting_is_unsupported(mode, config):
+    """The cloud holds these with set_p17_hold, which the island does not send:
+    it writes nothing rather than the profile alone."""
+    event = {
+        "id": "evt-1",
+        "inverterId": "inv-1",
+        "enabled": True,
+        "mode": mode,
+        "schedule": _ALL_DAY,
+        "config": config,
+        "executionState": {"status": "idle"},
+    }
+    decision = evaluate_event(event, _READING, {"status": "idle"}, _NOW, TZ, inverter=_P17)
+    assert decision.commands == []
+    assert decision.skip_reason == "unsupported_field"
+    assert decision.new_state["lastCommandError"]["command"] == "set_p17_hold"

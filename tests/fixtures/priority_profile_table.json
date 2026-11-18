@@ -1,0 +1,59 @@
+{
+  "_comment": "Native values per protocol for priority profiles. Spec: docs/superpowers/specs/2026-10-07-priority-profile-control-design.md, and for luxpower docs/superpowers/specs/2026-10-22-luxpower-rules-window3-design.md. C (priority_profile_table.c), Dart (priority_profile_table.dart) and TS (utils/priority-profile.ts) are pinned to this file by parity tests. smg2 and srne values are UNMEASURED (vendor docs); pi30 values come from the Edecoa research doc; pi30_vmii (the Daxtromn AGH-6.2KW-PRO and its VMII siblings) shifts PCP down by one, 0 solar first, 1 solar and utility, 2 only solar, so grid_charge is PCP 1 and battery_first PCP 2, with codes from the AGH manual and owner-confirmed siblings (docs/inverter-research/2026-11-04-daxtromn-agh.md); must values are UNMEASURED (MUST spreadsheet 1.04.15: 20109 3 UTI, 1 SBU; 20143 2 solar and utility, 3 solar only), from the MUST contract docs/superpowers/specs/2026-10-24-must-pv1800-contract.md. A protocol offers exactly the profiles listed under it. luxpower has no fixed values: its profiles name which window-3 banks carry the window the API sends. p17 (the Axioma ISGRID 15000, Voltronic P17 over RS-232) has no fixed values either: each profile lists the catalogue keys it sets (`settings`, keys of packages/inverter_protocol/voltronic-p17-settings.json, in catalogue order), laid over a fresh read of the unit; its prev/applied pack solarPriority as outputPriority and gridChargesBattery | batteryToLoadWithPv << 1 as chargerPriority (priority_profile_p17.h). No p17 profile sets batteryToLoadNoPv: automation never touches it, so it stays the owner's setting.",
+  "protocols": {
+    "pi30": {
+      "registers": null,
+      "profiles": {
+        "grid_charge":   { "outputPriority": 0, "chargerPriority": 2 },
+        "battery_first": { "outputPriority": 2, "chargerPriority": 3 }
+      }
+    },
+    "pi30_vmii": {
+      "registers": null,
+      "profiles": {
+        "grid_charge":   { "outputPriority": 0, "chargerPriority": 1 },
+        "battery_first": { "outputPriority": 2, "chargerPriority": 2 }
+      }
+    },
+    "smg2": {
+      "registers": { "outputPriority": 301, "chargerPriority": 331 },
+      "profiles": {
+        "grid_charge":   { "outputPriority": 1, "chargerPriority": 2 },
+        "battery_first": { "outputPriority": 2, "chargerPriority": 3 }
+      }
+    },
+    "srne": {
+      "registers": { "outputPriority": 57860, "chargerPriority": 57871 },
+      "profiles": {
+        "grid_charge":   { "outputPriority": 1, "chargerPriority": 2 },
+        "battery_first": { "outputPriority": 2, "chargerPriority": 3 }
+      }
+    },
+    "luxpower": {
+      "registers": null,
+      "window": {
+        "gridFirst": { "start": 156, "end": 157 },
+        "acCharge": { "start": 72, "end": 73 },
+        "chargeMode": { "address": 120, "mask": 14, "shift": 1, "timeModes": [1, 4, 5] }
+      },
+      "profiles": {
+        "grid_charge": { "gridFirst": true, "acCharge": true },
+        "grid_first":  { "gridFirst": true, "acCharge": false }
+      }
+    },
+    "must": {
+      "registers": { "outputPriority": 20109, "chargerPriority": 20143 },
+      "profiles": {
+        "grid_charge":   { "outputPriority": 3, "chargerPriority": 2 },
+        "battery_first": { "outputPriority": 1, "chargerPriority": 3 }
+      }
+    },
+    "p17": {
+      "registers": null,
+      "profiles": {
+        "grid_charge":   { "settings": { "solarPriority": 0, "gridChargesBattery": 1 } },
+        "battery_first": { "settings": { "solarPriority": 1, "gridChargesBattery": 0, "batteryToLoadWithPv": 1 } }
+      }
+    }
+  }
+}
