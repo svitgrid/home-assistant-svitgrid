@@ -92,6 +92,7 @@ def station(hass, enable_custom_integrations, tmp_path, monkeypatch, aioclient_m
         patch("custom_components.svitgrid.run_settings_sync_loop", AsyncMock(return_value=None)),
         patch("custom_components.svitgrid.run_event_scheduler_loop", AsyncMock(return_value=None)),
         patch("custom_components.svitgrid.run_island_report_loop", AsyncMock(return_value=None)),
+        patch("custom_components.svitgrid.run_outage_schedule_loop", AsyncMock(return_value=None)),
         patch("custom_components.svitgrid.register_views"),
         patch("custom_components.svitgrid.register_panel", new_callable=AsyncMock),
         patch("custom_components.svitgrid.remove_panel"),

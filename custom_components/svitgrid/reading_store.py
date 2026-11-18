@@ -1033,6 +1033,27 @@ class ReadingStore:
             return None
         return state if isinstance(state, dict) else None
 
+    # The household's last outage schedule and when it was fetched (svitgrid
+    # D-2153), so a restart neither fetches early nor starts without it.
+    def _set_outage_schedule_state_sync(self, state: dict) -> None:
+        self._set_meta_sync("outage_schedule", json.dumps(state))
+
+    def _get_outage_schedule_state_sync(self) -> dict | None:
+        value = self._get_meta_sync("outage_schedule")
+        if not value:
+            return None
+        try:
+            state = json.loads(value)
+        except ValueError:
+            return None
+        return state if isinstance(state, dict) else None
+
+    async def set_outage_schedule_state(self, state: dict) -> None:
+        await self._hass.async_add_executor_job(self._set_outage_schedule_state_sync, state)
+
+    async def get_outage_schedule_state(self) -> dict | None:
+        return await self._hass.async_add_executor_job(self._get_outage_schedule_state_sync)
+
     async def island_report_rows(
         self, inverter_id: str, since_iso: str
     ) -> tuple[dict | None, list[tuple[str, dict]]]:

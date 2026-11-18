@@ -84,6 +84,7 @@ from .local_pairing import PAIRING_PHONE_KEY
 from .mqtt_control import MqttControlState
 from .mqtt_wake import run_loop as run_mqtt_wake_loop
 from .operations_journal import OperationsJournal
+from .outage_schedule import OutageSchedule, run_outage_schedule_loop
 from .panel import register_panel, remove_panel
 from .preset_refresh import refresh_entry_inverters
 from .reading_sender import Cadence, run_sender_loop
@@ -1068,6 +1069,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # island scheduler holds a battery charge current cap's target to.
     harvest_models: dict[str, str | None] = {}
     island_report_task = None
+    outage_schedule_task = None
 
     if loops_active:
         spec_store = RegisterSpecStore(hass)
@@ -1344,6 +1346,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 ),
                 name="svitgrid_island_report",
             )
+            # The outage schedule, the one public dataset an island may take
+            # from the cloud (svitgrid D-2153), for the Telegram warning before
+            # a scheduled outage. Same gate as the report: a guest has no key.
+            schedule = OutageSchedule(store)
+            hass.data.setdefault(DOMAIN, {}).setdefault("outage_schedules", {})[
+                household_key(entry)
+            ] = schedule
+            outage_schedule_task = hass.async_create_background_task(
+                run_outage_schedule_loop(holder=schedule, api_client=api_client, api_key=api_key),
+                name="svitgrid_outage_schedule",
+            )
     elif lifecycle is not None:
         _LOGGER.warning(
             "Svitgrid device is %s (reason=%s); readings/command/wake loops not "
@@ -1454,6 +1467,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "settings_sync_task": settings_sync_task,
         "charge_cap_task": charge_cap_task,
         "island_report_task": island_report_task,
+        "outage_schedule_task": outage_schedule_task,
         "executors_by_inverter": executors_by_inverter,
         "activity": activity,
         "entry_data": dict(data),
@@ -1510,10 +1524,14 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "settings_sync_task",
         "charge_cap_task",
         "island_report_task",
+        "outage_schedule_task",
     ):
         task = state.get(key)
         if task and not task.done():
             task.cancel()
+    schedules = hass.data.get(DOMAIN, {}).get("outage_schedules")
+    if isinstance(schedules, dict):
+        schedules.pop(household_key(entry), None)
     cancel_rollup = state.get("cancel_rollup")
     if cancel_rollup:
         cancel_rollup()

@@ -113,6 +113,7 @@ async def _setup(hass, entry):
         "settings_sync",
         "scheduler",
         "island_report",
+        "outage_schedule",
     )
     with ExitStack() as stack:
         mocks = {
@@ -130,6 +131,7 @@ async def _setup(hass, entry):
                     "run_settings_sync_loop",
                     "run_event_scheduler_loop",
                     "run_island_report_loop",
+                    "run_outage_schedule_loop",
                 ),
                 strict=True,
             )
@@ -260,6 +262,24 @@ async def test_true_island_reports_its_hourly_status_with_its_cloud_key(
 
 
 @pytest.mark.asyncio
+async def test_true_island_fetches_its_outage_schedule_with_its_cloud_key(
+    hass, enable_custom_integrations
+):
+    """svitgrid D-2153: the one public dataset an island takes from the cloud."""
+    await _seed_keystore(hass)
+    entry = _cloud_entry(cloud_ingest=False)
+    _, m = await _setup(hass, entry)
+
+    m["outage_schedule"].assert_called_once()
+    kwargs = m["outage_schedule"].call_args.kwargs
+    assert kwargs["api_key"] == "cloud-api-key"
+    assert kwargs["api_client"] is m["client"]
+    holder = hass.data[DOMAIN]["outage_schedules"][entry.data["household_id"]]
+    assert kwargs["holder"] is holder
+    assert hass.data[DOMAIN][entry.entry_id]["outage_schedule_task"] is not None
+
+
+@pytest.mark.asyncio
 async def test_cloud_copy_on_never_reports_an_island_status(hass, enable_custom_integrations):
     """Its readings already reach the cloud and count it."""
     await _seed_keystore(hass)
@@ -268,6 +288,8 @@ async def test_cloud_copy_on_never_reports_an_island_status(hass, enable_custom_
 
     m["island_report"].assert_not_called()
     assert hass.data[DOMAIN][entry.entry_id]["island_report_task"] is None
+    m["outage_schedule"].assert_not_called()
+    assert hass.data[DOMAIN][entry.entry_id]["outage_schedule_task"] is None
 
 
 @pytest.mark.asyncio
@@ -279,6 +301,8 @@ async def test_a_local_only_entry_reports_no_island_status(hass, enable_custom_i
     _, m = await _setup(hass, entry)
 
     m["island_report"].assert_not_called()
+    # A guest station fetches no outage schedule either (svitgrid D-2153).
+    m["outage_schedule"].assert_not_called()
 
 
 @pytest.mark.asyncio

@@ -291,6 +291,21 @@ class SvitgridApiClient:
                 _LOGGER.warning("island report refused: status=%s body=%s", resp.status, body)
             return resp.status, body if isinstance(body, dict) else None
 
+    async def get_island_outage_schedule(self, api_key: str) -> dict[str, Any]:
+        """GET the household's outage schedule (svitgrid D-2153).
+
+        `{region, group, factual}`, `factual` holding only the household's
+        group. Sends no readings. Raises on any non-2xx, including the 404 of
+        an API that predates the route, so the caller keeps the last answer.
+        """
+        url = f"{self._base}/api/v1/island-outage-schedule"
+        async with self._session.get(url, headers={"x-api-key": api_key}) as resp:
+            if resp.status >= 400:
+                raise SvitgridApiError(
+                    f"island outage schedule failed: status={resp.status} body={await _err(resp)}"
+                )
+            return await resp.json()
+
     async def ack_command(self, api_key: str, command_id: str, body: dict[str, Any]) -> None:
         url = f"{self._base}/api/v3/executors/commands/{command_id}/ack"
         async with self._session.post(url, headers={"x-api-key": api_key}, json=body) as resp:
