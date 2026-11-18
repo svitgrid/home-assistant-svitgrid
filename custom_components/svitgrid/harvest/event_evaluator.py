@@ -476,9 +476,14 @@ def _one_holds(condition: dict, signals: dict, held: bool) -> bool:
             held,
         )
     if ctype == "load_power":
+        # SolaX, Megarevo and Huawei never report load. Read as 0 W, `<= N`
+        # would hold forever and `>= N` never (#1562, custom-event-decision.ts).
+        load = signals.get("loadPowerW")
+        if load is None:
+            return False
         return _numeric_holds(
             condition["op"],
-            float(signals.get("loadPowerW", 0)),
+            float(load),
             float(condition["thresholdW"]),
             condition.get("releaseThresholdW"),
             held,
@@ -2288,7 +2293,8 @@ def _custom_signals(reading: dict) -> dict:
     return {
         "batterySoc": reading.get("batterySoc"),
         "pvPowerW": float(reading.get("pvPower") or 0),
-        "loadPowerW": float(reading.get("loadPower") or 0),
+        # Unknown when the reading carries no load, never 0 W (#1562).
+        "loadPowerW": _finite_or_none(reading.get("loadPower")),
         "gridPresent": grid_present,
         "gridVoltageMinV": min(voltages) if voltages else None,
         "gridVoltageMaxV": max(voltages) if voltages else None,

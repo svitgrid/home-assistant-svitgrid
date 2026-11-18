@@ -1049,3 +1049,44 @@ def test_use_battery_on_an_sna_is_refused():
     )
     assert decision.commands == []
     assert decision.skip_reason == "profile_unsupported"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# A missing load is unknown, never 0 W (svitgrid #1562)
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def _low_load_rule() -> dict:
+    return {
+        "mode": "custom",
+        "schedule": _in_window_schedule(),
+        "config": {
+            "customConditions": [{"type": "load_power", "op": "lte", "thresholdW": 300}],
+            "customActions": [{"command": "set_work_mode", "payload": {"workMode": 0}}],
+            "sustainMinutes": 0,
+        },
+    }
+
+
+def test_custom_load_power_is_not_met_on_a_reading_without_load():
+    """SolaX, Megarevo and Huawei never report load. Read as 0 W, `load <= N`
+    held forever; the API's evaluator now treats it as unknown (#1562)."""
+    reading = {"batterySoc": 70, "pvPower": 0, "gridPower": 0}
+    r1 = evaluate_event(_low_load_rule(), reading, _idle(), _NOW, TZ)
+    r2 = evaluate_event(_low_load_rule(), reading, r1.new_state, _NOW, TZ)
+    assert r2.action != "activate"
+    assert r2.commands == []
+    assert r2.new_state.get("status", "idle") == "idle"
+
+
+def test_custom_load_power_releases_an_active_rule_when_load_goes_missing():
+    reading = {"batterySoc": 70, "pvPower": 0, "gridPower": 0}
+    result = evaluate_event(_low_load_rule(), reading, _active(), _NOW, TZ)
+    assert result.action == "deactivate"
+
+
+def test_custom_load_power_still_reads_a_real_zero():
+    reading = {"batterySoc": 70, "pvPower": 0, "loadPower": 0, "gridPower": 0}
+    r1 = evaluate_event(_low_load_rule(), reading, _idle(), _NOW, TZ)
+    r2 = evaluate_event(_low_load_rule(), reading, r1.new_state, _NOW, TZ)
+    assert r2.action == "activate"
