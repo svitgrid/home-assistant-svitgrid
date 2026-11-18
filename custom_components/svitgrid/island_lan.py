@@ -123,6 +123,9 @@ CAPABILITIES = (
     # The island Telegram bot sends a rule's start and stop notices
     # (svitgrid D-2151), so the app stops saying they need the cloud.
     "rule_notices",
+    # POST /api/svitgrid/edge/box-command queues a board command for one
+    # edge box (`board_lan`, svitgrid #1312).
+    "edge_box_commands",
 )
 
 ACTION_SET_CLOUD_COPY = "set_cloud_copy"

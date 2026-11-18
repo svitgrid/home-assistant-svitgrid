@@ -1,0 +1,233 @@
+"""Board management over the LAN on an edge island (svitgrid #1312).
+
+`POST /api/svitgrid/edge/box-command` queues one board-level command for one
+adopted box: the app's reboot, pause and resume (svitgrid D-2165). Each is a
+signed request by a trusted key, as every other edge management write is,
+and the box's answer comes back on `/edge/commands/{id}`.
+"""
+
+from __future__ import annotations
+
+import json
+from unittest.mock import patch
+
+import pytest
+from homeassistant.core import HomeAssistant
+
+from custom_components.svitgrid.const import DOMAIN
+from tests.test_island_lan import (
+    NOW_MS,
+    _Admin,
+    _adopt,
+    _body,
+    _entry,
+    _inv,
+    _keystore,
+    _Req,
+)
+
+BOX_KEY = "box-1-key"
+
+
+@pytest.fixture(autouse=True)
+def _pinned_clock():
+    with patch("custom_components.svitgrid.island_lan._now_ms", return_value=NOW_MS):
+        yield
+
+
+class _Store:
+    """The parts of the reading store the box views and the status read."""
+
+    def __init__(self) -> None:
+        self.box_states: dict = {}
+
+    async def get_edge_box_state(self, device_id):
+        return self.box_states.get(device_id)
+
+    async def set_edge_box_state(self, device_id, state):
+        self.box_states[device_id] = dict(state)
+
+    async def get_settings_snapshot(self, inverter_id):
+        return None
+
+
+class _BoxReq(_Req):
+    """A request from the box itself: its API key, and a path parameter."""
+
+    def __init__(self, hass, body=None, *, command_id: str = "") -> None:
+        super().__init__(hass, body, island_key=None)
+        self.headers = {"X-API-Key": BOX_KEY}
+        self.match_info = {"command_id": command_id} if command_id else {}
+
+
+async def _setup(hass, tmp_path):
+    from custom_components.svitgrid.edge_command_queue import EdgeCommandQueue
+
+    admin = _Admin()
+    ks = await _keystore(hass, admin)
+    entry = _entry(hass)
+    queue = EdgeCommandQueue(str(tmp_path / "edge_commands.db"), None)
+    store = _Store()
+    hass.data[DOMAIN][entry.entry_id] = {"store": store, "edge_queue": queue}
+    await _adopt(hass, admin, "EC-1", _inv("inv-1"))
+    await _adopt(hass, admin, "EC-2", _inv("inv-2"))
+    await ks.async_bind_edge_box("EC-1", BOX_KEY)
+    return admin, ks, queue, store
+
+
+async def _send(hass, admin, device_id, command, **fields):
+    from custom_components.svitgrid.board_lan import SvitgridEdgeBoxCommandView
+
+    return await SvitgridEdgeBoxCommandView().post(
+        _Req(
+            hass,
+            admin.request("edge_box_command", deviceId=device_id, command=command, **fields),
+        )
+    )
+
+
+async def _ack(hass, command_id, **body):
+    from custom_components.svitgrid.edge_api import EdgeCommandAckView
+
+    return await EdgeCommandAckView().post(_BoxReq(hass, body, command_id=command_id), command_id)
+
+
+async def _command_state(hass, command_id):
+    from custom_components.svitgrid.island_lan import SvitgridEdgeCommandView
+
+    return _body(await SvitgridEdgeCommandView().get(_Req(hass), command_id))
+
+
+# ── reboot, pause, resume (D-2165) ──────────────────────────────────────────
+
+
+@pytest.mark.parametrize("command", ["reboot", "pause", "resume"])
+async def test_a_board_command_is_queued_for_its_box_alone(hass: HomeAssistant, tmp_path, command):
+    from custom_components.svitgrid.edge_api import _command_for_box
+
+    admin, _, queue, _ = await _setup(hass, tmp_path)
+
+    resp = await _send(hass, admin, "EC-1", command)
+
+    assert resp.status == 200, _body(resp)
+    command_id = _body(resp)["commandId"]
+    assert _body(resp) == {"success": True, "commandId": command_id, "status": "pending"}
+    assert await queue.async_pending_count("EC-2") == 0
+    row = await queue.async_next_pending("EC-1")
+    assert row["id"] == command_id
+    assert row["command"] == command
+    assert row["payload"] == {}
+    assert row["inverter_id"] is None
+    assert row["signing"] is None
+    assert row["source"] == "board"
+    # The box reads it as the cloud sends it: no signature, no inverter.
+    sent = _command_for_box(row)
+    assert sent == {"id": command_id, "command": command, "payload": {}, "inverterId": None}
+
+
+async def test_the_box_answer_comes_back_on_the_command_route(hass: HomeAssistant, tmp_path):
+    admin, _, queue, _ = await _setup(hass, tmp_path)
+    command_id = _body(await _send(hass, admin, "EC-1", "reboot"))["commandId"]
+    await queue.async_next_pending("EC-1")
+
+    resp = await _ack(hass, command_id, success=True)
+
+    assert resp.status == 200, _body(resp)
+    assert (await _command_state(hass, command_id))["state"] == "success"
+
+
+@pytest.mark.parametrize(("command", "paused"), [("pause", True), ("resume", False)])
+async def test_a_pause_or_resume_the_box_confirms_sets_harvest_paused(
+    hass: HomeAssistant, tmp_path, command, paused
+):
+    """A paused box uploads no telemetry, so the `harvestPaused` its batches
+    carry would never say it paused: the box's answer does."""
+    admin, _, queue, store = await _setup(hass, tmp_path)
+    store.box_states["EC-1"] = {"harvestPaused": not paused, "version": "2.180.0"}
+    command_id = _body(await _send(hass, admin, "EC-1", command))["commandId"]
+    await queue.async_next_pending("EC-1")
+
+    await _ack(hass, command_id, success=True)
+
+    assert store.box_states["EC-1"]["harvestPaused"] is paused
+    assert store.box_states["EC-1"]["version"] == "2.180.0"
+
+
+async def test_a_refused_pause_leaves_harvest_paused_alone(hass: HomeAssistant, tmp_path):
+    admin, _, queue, store = await _setup(hass, tmp_path)
+    store.box_states["EC-1"] = {"harvestPaused": False}
+    command_id = _body(await _send(hass, admin, "EC-1", "pause"))["commandId"]
+    await queue.async_next_pending("EC-1")
+
+    await _ack(hass, command_id, success=False, reason="busy")
+
+    assert store.box_states["EC-1"]["harvestPaused"] is False
+    state = await _command_state(hass, command_id)
+    assert state["state"] == "failed"
+    assert state["reason"] == "busy"
+
+
+async def test_an_unknown_command_is_refused(hass: HomeAssistant, tmp_path):
+    admin, _, queue, _ = await _setup(hass, tmp_path)
+
+    resp = await _send(hass, admin, "EC-1", "format_flash")
+
+    assert resp.status == 400
+    assert _body(resp) == {"error": "unknown_command"}
+    assert await queue.async_pending_count("EC-1") == 0
+
+
+async def test_an_unknown_box_is_404(hass: HomeAssistant, tmp_path):
+    admin, _, queue, _ = await _setup(hass, tmp_path)
+
+    resp = await _send(hass, admin, "EC-9", "reboot")
+
+    assert resp.status == 404
+    assert _body(resp) == {"error": "unknown_box"}
+
+
+async def test_a_board_command_needs_a_trusted_signature(hass: HomeAssistant, tmp_path):
+    from custom_components.svitgrid.board_lan import SvitgridEdgeBoxCommandView
+
+    admin, _, queue, _ = await _setup(hass, tmp_path)
+    fields = {"deviceId": "EC-1", "command": "reboot"}
+
+    no_key = await SvitgridEdgeBoxCommandView().post(
+        _Req(hass, admin.request("edge_box_command", **fields), island_key=None)
+    )
+    assert no_key.status == 401
+    untrusted = await SvitgridEdgeBoxCommandView().post(
+        _Req(hass, _Admin().request("edge_box_command", **fields))
+    )
+    assert untrusted.status == 403
+    other_action = await SvitgridEdgeBoxCommandView().post(
+        _Req(hass, admin.request("edge_leave", **fields))
+    )
+    assert other_action.status == 400
+    no_device = await SvitgridEdgeBoxCommandView().post(
+        _Req(hass, admin.request("edge_box_command", command="reboot"))
+    )
+    assert no_device.status == 400
+    assert await queue.async_pending_count("EC-1") == 0
+
+
+async def test_no_adopted_box_is_404(hass: HomeAssistant):
+    admin = _Admin()
+    await _keystore(hass, admin)
+    _entry(hass)
+
+    resp = await _send(hass, admin, "EC-1", "reboot")
+
+    assert resp.status == 404
+    assert _body(resp) == {"error": "no_edge_boxes"}
+
+
+async def test_island_status_advertises_board_commands(hass: HomeAssistant):
+    from custom_components.svitgrid.island_lan import SvitgridIslandStatusView
+
+    await _keystore(hass, _Admin())
+    _entry(hass)
+
+    status = await SvitgridIslandStatusView().get(_Req(hass))
+
+    assert "edge_box_commands" in json.loads(status.body)["capabilities"]

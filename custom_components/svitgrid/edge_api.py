@@ -878,6 +878,24 @@ async def _apply_set_state(hass, row: dict) -> None:
         await devices.async_update(device_id, {"on": on})
 
 
+# What a box's confirmed `pause` or `resume` says about `harvestPaused`.
+_PAUSE_STATES = {"pause": True, "resume": False}
+
+
+async def apply_board_ack(hass, box: EdgeBoxEntry, row: dict) -> None:
+    """Apply what a board command the box confirmed changes here (svitgrid
+    #1312, `board_lan`). A paused box uploads no telemetry, so the
+    `harvestPaused` of its batches cannot say it paused: its answer does."""
+    if row["state"] != "success":
+        return
+    paused = _PAUSE_STATES.get(row["command"])
+    store = (_entry_state(hass) or {}).get("store")
+    if paused is not None and store is not None:
+        state = dict(await store.get_edge_box_state(box.device_id) or {})
+        state["harvestPaused"] = paused
+        await store.set_edge_box_state(box.device_id, state)
+
+
 class EdgeCommandAckView(_EdgeView):
     """The box's answer to one command. An id this box was not given answers
     200 `{"success": false, "status": "unknown"}`: a 4xx would only make the
@@ -920,6 +938,8 @@ class EdgeCommandAckView(_EdgeView):
             await _box_holds_key(request.app["hass"], box, row["payload"])
         if row["command"] == "set_state" and row["state"] == "success":
             await _apply_set_state(request.app["hass"], row)
+        if row.get("source") == "board":
+            await apply_board_ack(request.app["hass"], box, row)
         return self.json({"success": True, "status": row["state"]})
 
 
