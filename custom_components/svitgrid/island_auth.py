@@ -22,8 +22,39 @@ sets ``request[KEY_AUTHENTICATED] = True`` after successful auth check (see
 from __future__ import annotations
 
 import hmac
+import time
 
 from homeassistant.helpers.http import KEY_AUTHENTICATED
+
+from .const import DOMAIN
+
+# When the app last made an authorized call to the add-on, on the monotonic
+# clock. Kept beside `hass.data[DOMAIN]`, not in it: several readers iterate
+# that dict's values as entry states. An idle edge box polls fast only while
+# the app is in use (`edge_api._poll_interval_ms`, svitgrid D-2117).
+APP_SEEN_AT_KEY = f"{DOMAIN}_app_seen_at"
+
+
+def _monotonic() -> float:
+    return time.monotonic()
+
+
+def _note_app_call(request: object) -> None:
+    """Record an authorized app call. Best-effort: a request without the
+    app's `hass` (a test fake) records nothing."""
+    try:
+        data = request.app["hass"].data
+    except (AttributeError, KeyError, TypeError):
+        return
+    if isinstance(data, dict):
+        data[APP_SEEN_AT_KEY] = _monotonic()
+
+
+def app_seen_within(hass: object, seconds: float) -> bool:
+    """True when the app made an authorized call in the last `seconds`."""
+    data = getattr(hass, "data", None)
+    seen = data.get(APP_SEEN_AT_KEY) if isinstance(data, dict) else None
+    return isinstance(seen, float) and _monotonic() - seen <= seconds
 
 
 def island_key_present_and_valid(request: object, island_keys: list[str] | str | None) -> bool:
@@ -58,6 +89,8 @@ def island_key_present_and_valid(request: object, island_keys: list[str] | str |
                 matched = True
         except (TypeError, ValueError):
             continue
+    if matched:
+        _note_app_call(request)
     return matched
 
 
@@ -71,5 +104,6 @@ def island_request_authorized(request: object, island_keys: list[str] | str | No
       ``island_key_present_and_valid``).
     """
     if request.get(KEY_AUTHENTICATED, False):
+        _note_app_call(request)
         return True
     return island_key_present_and_valid(request, island_keys)

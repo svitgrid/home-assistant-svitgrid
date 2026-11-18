@@ -2969,3 +2969,96 @@ async def test_edge_logs_without_a_relay_is_503():
     resp = await _relay_status(None, lambda st: st.pop("island_relay"))
     assert resp.status == 503
     assert _json(resp) == {"error": "no_relay"}
+
+
+# D-2117: an idle box on a true-island station polls slowly while no one uses
+# the app, and fast again from the first app call to the add-on.
+_APP_KEY = "app-island-key"
+
+
+def _island_hass(tmp_path, monkeypatch, *, true_island=True):
+    from custom_components.svitgrid import island_auth
+
+    clock = [5000.0]
+    monkeypatch.setattr(island_auth, "_monotonic", lambda: clock[0])
+    keystore = _keystore(_box(inverters={"inv-1": _INV_1}))
+    keystore._store.data["island_key"] = _APP_KEY
+    queue = _real_queue(tmp_path)
+    hass = _hass_with_queue(keystore, queue)
+    hass.data[DOMAIN][ENTRY_ID]["true_island"] = true_island
+    return hass, queue, clock
+
+
+async def _app_opens_a_screen(hass, *, key=_APP_KEY):
+    """The app reads the live screen over the LAN with its island key."""
+    from unittest.mock import AsyncMock
+
+    from custom_components.svitgrid.http_views import SvitgridLiveView
+
+    store = MagicMock()
+    store.live_snapshot = AsyncMock(return_value=[])
+    request = _FakeRequest(hass)
+    request.headers["X-Island-Key"] = key
+    request.get = lambda k, default=None: default
+    return await SvitgridLiveView(store).get(request)
+
+
+@pytest.mark.asyncio
+async def test_island_box_polls_slowly_while_no_one_uses_the_app(tmp_path, monkeypatch):
+    hass, _queue, _clock = _island_hass(tmp_path, monkeypatch)
+    body = _json(await _poll(hass))
+    assert body["pollIntervalMs"] == edge_api.POLL_INTERVAL_UNWATCHED_MS == 30000
+
+
+@pytest.mark.asyncio
+async def test_app_call_brings_an_island_box_back_to_fast_polling(tmp_path, monkeypatch):
+    """The path #1305 must keep fast: the box sits on the slow interval, the
+    app opens a screen, the box's next poll is told 2 s, and a command the app
+    queues after that lands within the fast interval."""
+    hass, queue, clock = _island_hass(tmp_path, monkeypatch)
+    assert _json(await _poll(hass))["pollIntervalMs"] == edge_api.POLL_INTERVAL_UNWATCHED_MS
+
+    resp = await _app_opens_a_screen(hass)
+    assert resp.status == 200
+    clock[0] += 20
+    fast = _json(await _poll(hass))["pollIntervalMs"]
+    assert fast == edge_api.POLL_INTERVAL_IDLE_MS == 2000
+
+    await queue.async_enqueue("EC-1", "switch_on", {}, signing=None, inverter_id=None, source="t")
+    clock[0] += fast / 1000
+    body = _json(await _poll(hass))
+    assert [c["command"] for c in body["commands"]] == ["switch_on"]
+
+
+@pytest.mark.asyncio
+async def test_island_box_stays_fast_while_the_app_is_in_use_then_slows(tmp_path, monkeypatch):
+    hass, _queue, clock = _island_hass(tmp_path, monkeypatch)
+    await _app_opens_a_screen(hass)
+    clock[0] += edge_api.APP_IN_USE_WINDOW_S - 1
+    assert _json(await _poll(hass))["pollIntervalMs"] == edge_api.POLL_INTERVAL_IDLE_MS
+    clock[0] += 2
+    assert _json(await _poll(hass))["pollIntervalMs"] == edge_api.POLL_INTERVAL_UNWATCHED_MS
+
+
+@pytest.mark.asyncio
+async def test_a_refused_app_call_does_not_speed_up_the_box(tmp_path, monkeypatch):
+    hass, _queue, _clock = _island_hass(tmp_path, monkeypatch)
+    resp = await _app_opens_a_screen(hass, key="not-the-key")
+    assert resp.status == 401
+    assert _json(await _poll(hass))["pollIntervalMs"] == edge_api.POLL_INTERVAL_UNWATCHED_MS
+
+
+@pytest.mark.asyncio
+async def test_pending_command_polls_fastest_on_an_unwatched_island(tmp_path, monkeypatch):
+    """A rule or calendar command waits out the slow interval, then drains
+    at the pending cadence."""
+    hass, queue, _clock = _island_hass(tmp_path, monkeypatch)
+    for name in ("a", "b"):
+        await queue.async_enqueue("EC-1", name, {}, signing=None, inverter_id=None, source="t")
+    assert _json(await _poll(hass))["pollIntervalMs"] == edge_api.POLL_INTERVAL_PENDING_MS
+
+
+@pytest.mark.asyncio
+async def test_cloud_station_box_keeps_the_fast_idle_poll(tmp_path, monkeypatch):
+    hass, _queue, _clock = _island_hass(tmp_path, monkeypatch, true_island=False)
+    assert _json(await _poll(hass))["pollIntervalMs"] == edge_api.POLL_INTERVAL_IDLE_MS
