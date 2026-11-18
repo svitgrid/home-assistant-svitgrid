@@ -23,13 +23,20 @@ box-wide commands.
 forwarded untouched; one signed for any other command is 400
 `box_signature_invalid`.
 
+`add_inverter`, `update_inverter` and `remove_inverter` carry the cloud's
+payload, which names `inverterId`: an inverter another box holds cannot be
+added (409), and one this box does not hold cannot be changed or removed
+(404 `unknown_inverter`).
+
 - `POST /api/svitgrid/edge/rename` — `signedData`: `{action: "edge_rename",
   deviceId, name, nonce, ts}`: the owner's name for the box, which
   `/edge/status` serves.
 
 What the box's answer changes here is applied when it acks
 (`edge_api.apply_board_ack`): a confirmed `pause` or `resume` sets
-`harvestPaused`, and a confirmed `factory_reset` forgets the box.
+`harvestPaused`, a confirmed `factory_reset` forgets the box, and a
+confirmed inverter command changes Home Assistant's list for the box, so
+nothing has to be adopted again.
 
 While no box is adopted the view answers 404 `{"error":"no_edge_boxes"}`
 before any auth check, so an install without one sees no change.
@@ -70,6 +77,36 @@ BOARD_COMMANDS = ("reboot", "pause", "resume")
 # trusts. A signature over any other command is never forwarded as one of
 # these (svitgrid D-2166).
 SIGNED_BOARD_COMMANDS = {"factory_reset": {"confirm": True}}
+# The box's own inverter list (svitgrid D-2168), each payload as the cloud
+# sends it and naming its `inverterId`. Home Assistant's list for the box
+# follows once the box confirms (`edge_api.apply_board_ack`).
+INVERTER_COMMANDS = ("add_inverter", "update_inverter", "remove_inverter")
+
+
+def _held(box) -> set[str]:
+    return set(box.inverter_ids) | set(box.inverters)
+
+
+def _inverter_payload(
+    command: str, raw, box_id: str, boxes: dict
+) -> tuple[dict | None, web.Response | None]:
+    """The payload of an inverter command, or the refusal: it must name an
+    inverter; `add_inverter` also its model, and one no other box holds; the
+    others one this box holds."""
+    if not isinstance(raw, dict):
+        return None, _json_error(400, "bad_request", detail="payload must be an object")
+    inverter_id = raw.get("inverterId")
+    if not isinstance(inverter_id, str) or not inverter_id:
+        return None, _json_error(400, "bad_request", detail="payload must name inverterId")
+    if command == "add_inverter":
+        if not isinstance(raw.get("modelId"), str) or not raw["modelId"]:
+            return None, _json_error(400, "bad_request", detail="payload must name modelId")
+        for other_id, other in boxes.items():
+            if other_id != box_id and inverter_id in _held(other):
+                return None, _json_error(409, "inverter_held_by_other_box")
+    elif inverter_id not in _held(boxes[box_id]):
+        return None, _json_error(404, "unknown_inverter")
+    return dict(raw), None
 
 
 def _payload_for(command: str, signed: dict) -> tuple[dict | None, web.Response | None]:
@@ -78,6 +115,9 @@ def _payload_for(command: str, signed: dict) -> tuple[dict | None, web.Response 
         return {}, None
     if command in SIGNED_BOARD_COMMANDS:
         return dict(SIGNED_BOARD_COMMANDS[command]), None
+    if command in INVERTER_COMMANDS:
+        # Checked against the box once it is known.
+        return {}, None
     return None, _json_error(400, "unknown_command")
 
 
@@ -132,6 +172,12 @@ class SvitgridEdgeBoxCommandView(HomeAssistantView):
             return error
         if box_id not in boxes:
             return _json_error(404, "unknown_box")
+        inverter_id = None
+        if command in INVERTER_COMMANDS:
+            payload, error = _inverter_payload(command, signed.get("payload"), box_id, boxes)
+            if error is not None:
+                return error
+            inverter_id = payload["inverterId"]
         queue = (_edge_entry_state(hass) or {}).get("edge_queue")
         if queue is None:
             return _json_error(503, "unavailable")
@@ -140,7 +186,7 @@ class SvitgridEdgeBoxCommandView(HomeAssistantView):
             command,
             payload,
             signing=signing,
-            inverter_id=None,
+            inverter_id=inverter_id,
             source="board",
             ttl_s=BOARD_COMMAND_TTL_S,
         )

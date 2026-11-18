@@ -409,3 +409,139 @@ async def test_a_refused_reset_keeps_the_box(hass: HomeAssistant, tmp_path):
     await _ack(hass, command_id, success=False, rejected=True, reason="device_id_mismatch")
 
     assert "EC-1" in (await ks.load()).edge_boxes
+
+
+# ── add, change, remove an inverter on a board (D-2168) ─────────────────────
+
+
+async def test_update_inverter_goes_to_the_box_and_home_assistant_follows(
+    hass: HomeAssistant, tmp_path
+):
+    from custom_components.svitgrid.edge_api import _command_for_box, build_edge_config
+
+    admin, ks, queue, _ = await _setup(hass, tmp_path)
+    payload = {
+        "inverterId": "inv-1",
+        "ipAddress": "192.168.1.77",
+        "loggerSerial": 2712345678,
+        "modelId": _inv("inv-1")["modelId"],
+        "phases": 3,
+        "hasBattery": True,
+    }
+
+    resp = await _send(hass, admin, "EC-1", "update_inverter", payload=payload)
+
+    assert resp.status == 200, _body(resp)
+    row = await queue.async_next_pending("EC-1")
+    assert row["command"] == "update_inverter"
+    assert row["payload"] == payload
+    assert _command_for_box(row)["inverterId"] == "inv-1"
+    # Nothing changes here until the box confirms.
+    assert (await ks.load()).edge_boxes["EC-1"].inverters["inv-1"].get("ipAddress") != (
+        "192.168.1.77"
+    )
+
+    await _ack(hass, row["id"], success=True)
+
+    box = (await ks.load()).edge_boxes["EC-1"]
+    assert box.inverters["inv-1"]["ipAddress"] == "192.168.1.77"
+    assert box.inverters["inv-1"]["loggerSerial"] == 2712345678
+    assert box.inverter_ids == ["inv-1"]
+    config = build_edge_config(box)
+    assert config["inverters"][0]["ipAddress"] == "192.168.1.77"
+
+
+async def test_add_inverter_adds_it_to_the_box_once_confirmed(hass: HomeAssistant, tmp_path):
+    admin, ks, queue, _ = await _setup(hass, tmp_path)
+    payload = {
+        "inverterId": "inv-3",
+        "modelId": "deye_sg04lp3",
+        "ipAddress": "192.168.1.78",
+        "loggerSerial": 2799999999,
+        "phases": 3,
+        "hasBattery": True,
+        "pollingInterval": 5,
+        "reportingInterval": 60,
+    }
+
+    resp = await _send(hass, admin, "EC-1", "add_inverter", payload=payload)
+    assert resp.status == 200, _body(resp)
+    row = await queue.async_next_pending("EC-1")
+    assert row["payload"] == payload
+    assert "inv-3" not in (await ks.load()).edge_boxes["EC-1"].inverters
+
+    await _ack(hass, row["id"], success=True)
+
+    box = (await ks.load()).edge_boxes["EC-1"]
+    assert box.inverter_ids == ["inv-1", "inv-3"]
+    assert box.inverters["inv-3"]["modelId"] == "deye_sg04lp3"
+    assert box.inverters["inv-3"]["ipAddress"] == "192.168.1.78"
+    # The binding stays: nothing is re-adopted.
+    assert box.api_key == BOX_KEY
+
+
+async def test_remove_inverter_drops_it_once_confirmed(hass: HomeAssistant, tmp_path):
+    admin, ks, queue, _ = await _setup(hass, tmp_path)
+
+    resp = await _send(hass, admin, "EC-1", "remove_inverter", payload={"inverterId": "inv-1"})
+    assert resp.status == 200, _body(resp)
+    row = await queue.async_next_pending("EC-1")
+
+    await _ack(hass, row["id"], success=True)
+
+    box = (await ks.load()).edge_boxes["EC-1"]
+    assert box.inverter_ids == []
+    assert box.inverters == {}
+    assert box.api_key == BOX_KEY
+
+
+async def test_a_refused_inverter_change_leaves_home_assistant_alone(hass: HomeAssistant, tmp_path):
+    admin, ks, queue, _ = await _setup(hass, tmp_path)
+    before = (await ks.load()).edge_boxes["EC-1"]
+    await _send(hass, admin, "EC-1", "remove_inverter", payload={"inverterId": "inv-1"})
+    row = await queue.async_next_pending("EC-1")
+
+    await _ack(hass, row["id"], success=False)
+
+    after = (await ks.load()).edge_boxes["EC-1"]
+    assert after.inverter_ids == before.inverter_ids
+    assert after.inverters == before.inverters
+
+
+async def test_an_inverter_another_box_holds_cannot_be_added(hass: HomeAssistant, tmp_path):
+    admin, _, queue, _ = await _setup(hass, tmp_path)
+
+    resp = await _send(
+        hass,
+        admin,
+        "EC-1",
+        "add_inverter",
+        payload={"inverterId": "inv-2", "modelId": "deye_sg04lp3"},
+    )
+
+    assert resp.status == 409
+    assert _body(resp) == {"error": "inverter_held_by_other_box"}
+    assert await queue.async_pending_count("EC-1") == 0
+
+
+@pytest.mark.parametrize(
+    ("command", "payload", "error"),
+    [
+        ("update_inverter", {"inverterId": "inv-2", "ipAddress": "1.2.3.4"}, "unknown_inverter"),
+        ("remove_inverter", {"inverterId": "inv-9"}, "unknown_inverter"),
+        ("update_inverter", {"ipAddress": "1.2.3.4"}, "bad_request"),
+        ("add_inverter", {"inverterId": "inv-3"}, "bad_request"),
+        ("remove_inverter", None, "bad_request"),
+    ],
+)
+async def test_an_inverter_command_must_name_an_inverter_of_this_box(
+    hass: HomeAssistant, tmp_path, command, payload, error
+):
+    admin, _, queue, _ = await _setup(hass, tmp_path)
+    fields = {} if payload is None else {"payload": payload}
+
+    resp = await _send(hass, admin, "EC-1", command, **fields)
+
+    assert resp.status in (400, 404)
+    assert _body(resp)["error"] == error
+    assert await queue.async_pending_count("EC-1") == 0

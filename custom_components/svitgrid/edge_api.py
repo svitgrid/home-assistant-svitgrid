@@ -900,6 +900,42 @@ async def _forget_reset_box(hass, box: EdgeBoxEntry) -> None:
         _schedule_edge_reload(hass)
 
 
+async def _follow_inverter_change(hass, box: EdgeBoxEntry, row: dict) -> None:
+    """The box added, changed or removed one of its inverters (svitgrid
+    D-2168): Home Assistant's list for the box follows, so the `config` block
+    and the reading pipeline agree with the box. The binding stays."""
+    from .island_lan import (  # island_lan imports this module
+        EDGE_ADOPT_INVERTER_KEYS,
+        _schedule_edge_reload,
+    )
+
+    payload = row.get("payload") or {}
+    inverter_id = payload.get("inverterId")
+    keystore = (hass.data.get(DOMAIN) or {}).get("keystore")
+    if keystore is None or not isinstance(inverter_id, str):
+        return
+    fields = {k: payload[k] for k in EDGE_ADOPT_INVERTER_KEYS if k in payload}
+    async with EDGE_BOX_LOCK:
+        state = await keystore.load()
+        current = state.edge_boxes.get(box.device_id) if state is not None else None
+        if current is None:
+            return
+        inverter_ids = list(current.inverter_ids)
+        inverters = dict(current.inverters)
+        if row["command"] == "remove_inverter":
+            inverter_ids = [i for i in inverter_ids if i != inverter_id]
+            inverters.pop(inverter_id, None)
+        else:
+            if inverter_id not in inverter_ids:
+                inverter_ids.append(inverter_id)
+            inverters[inverter_id] = {**inverters.get(inverter_id, {}), **fields}
+        await keystore.async_add_edge_box(
+            replace(current, inverter_ids=inverter_ids, inverters=inverters)
+        )
+    _LOGGER.info("Edge box %s: %s %s", box.device_id, row["command"], inverter_id)
+    _schedule_edge_reload(hass)
+
+
 async def apply_board_ack(hass, box: EdgeBoxEntry, row: dict) -> None:
     """Apply what a board command the box confirmed changes here (svitgrid
     #1312, `board_lan`). A paused box uploads no telemetry, so the
@@ -908,6 +944,9 @@ async def apply_board_ack(hass, box: EdgeBoxEntry, row: dict) -> None:
         return
     if row["command"] == "factory_reset":
         await _forget_reset_box(hass, box)
+        return
+    if row["command"] in ("add_inverter", "update_inverter", "remove_inverter"):
+        await _follow_inverter_change(hass, box, row)
         return
     paused = _PAUSE_STATES.get(row["command"])
     store = (_entry_state(hass) or {}).get("store")
