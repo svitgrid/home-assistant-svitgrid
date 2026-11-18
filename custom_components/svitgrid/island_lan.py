@@ -808,6 +808,7 @@ _ISLAND_STATUS_BOX_KEYS = (
     "pendingCommands",
     "inverterIds",
     "h2FirmwareVersion",
+    "name",
     # The board page's state (svitgrid D-2164), each only once reported.
     "harvestPaused",
     "trustedKeyCount",
@@ -1023,6 +1024,8 @@ class SvitgridEdgeAdoptView(HomeAssistantView):
                     # inverters from here when it binds, because `config`
                     # only prunes and renames what a box already holds.
                     send_inverters=signed.get("sendInverters") is True,
+                    # A name the owner gave the box here outlives a re-adopt.
+                    name=previous.name if previous is not None else None,
                 )
             )
             code = await keystore.async_issue_pair_code(device_id)
@@ -1129,6 +1132,8 @@ async def _box_status(hass, box: EdgeBoxEntry) -> dict[str, Any]:
         # Absent until the box reports one, which the app reads as a Zigbee
         # module too old to answer.
         **({"h2FirmwareVersion": h2} if (h2 := contact.get("h2FirmwareVersion")) else {}),
+        # The owner's name for the box, once renamed here (svitgrid D-2166).
+        **({"name": box.name} if box.name else {}),
         # What the board page needs (svitgrid D-2164): absent until the box
         # reports it, which the app reads as the cloud's value.
         **board_state_of(contact),

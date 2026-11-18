@@ -882,11 +882,32 @@ async def _apply_set_state(hass, row: dict) -> None:
 _PAUSE_STATES = {"pause": True, "resume": False}
 
 
+async def _forget_reset_box(hass, box: EdgeBoxEntry) -> None:
+    """The box wiped itself: it holds no key and no endpoint now, so it can
+    never report here again. Forget it, as the cloud deletes a board that
+    answers its reset (svitgrid #1306). Its queued rows stay, so the app still
+    reads the reset's answer; a later adopt of the box drops them."""
+    from .island_lan import _schedule_edge_reload  # island_lan imports this module
+
+    keystore = (hass.data.get(DOMAIN) or {}).get("keystore")
+    if keystore is None:
+        return
+    async with EDGE_BOX_LOCK:
+        removed = await keystore.async_remove_edge_box(box.device_id)
+    edge_refusals(hass).pop(box.device_id, None)
+    if removed:
+        _LOGGER.info("Edge box %s reset itself and is forgotten", box.device_id)
+        _schedule_edge_reload(hass)
+
+
 async def apply_board_ack(hass, box: EdgeBoxEntry, row: dict) -> None:
     """Apply what a board command the box confirmed changes here (svitgrid
     #1312, `board_lan`). A paused box uploads no telemetry, so the
     `harvestPaused` of its batches cannot say it paused: its answer does."""
     if row["state"] != "success":
+        return
+    if row["command"] == "factory_reset":
+        await _forget_reset_box(hass, box)
         return
     paused = _PAUSE_STATES.get(row["command"])
     store = (_entry_state(hass) or {}).get("store")

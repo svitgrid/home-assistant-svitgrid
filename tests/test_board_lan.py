@@ -231,3 +231,181 @@ async def test_island_status_advertises_board_commands(hass: HomeAssistant):
     status = await SvitgridIslandStatusView().get(_Req(hass))
 
     assert "edge_box_commands" in json.loads(status.body)["capabilities"]
+
+
+# ── rename, factory reset, remove (D-2166) ──────────────────────────────────
+
+
+def _reset_command(admin: _Admin, **signed_fields) -> dict:
+    """The phone-signed `factory_reset` the box itself verifies
+    (`reset_event_builder.dart`)."""
+    from custom_components.svitgrid.signing import sign_payload
+
+    signed = {
+        "command": "factory_reset",
+        "confirm": True,
+        "deviceId": "EC-1",
+        "validUntil": "2026-10-29T10:20:00.000Z",
+        **signed_fields,
+    }
+    return {
+        "signedEventData": signed,
+        "signature": sign_payload(signed, admin.priv),
+        "signingKeyId": admin.key_id,
+    }
+
+
+async def _rename(hass, admin, device_id, name):
+    from custom_components.svitgrid.board_lan import SvitgridEdgeRenameView
+
+    return await SvitgridEdgeRenameView().post(
+        _Req(hass, admin.request("edge_rename", deviceId=device_id, name=name))
+    )
+
+
+async def _edge_status(hass) -> dict:
+    from custom_components.svitgrid.island_lan import SvitgridEdgeStatusView
+
+    return {
+        b["deviceId"]: b for b in _body(await SvitgridEdgeStatusView().get(_Req(hass)))["boxes"]
+    }
+
+
+async def test_rename_sets_the_box_name_home_assistant_serves(hass: HomeAssistant, tmp_path):
+    from custom_components.svitgrid.island_lan import SvitgridIslandStatusView
+
+    admin, ks, _, _ = await _setup(hass, tmp_path)
+
+    resp = await _rename(hass, admin, "EC-1", "  Гараж  ")
+
+    assert resp.status == 200, _body(resp)
+    assert _body(resp) == {"ok": True, "name": "Гараж"}
+    assert (await ks.load()).edge_boxes["EC-1"].name == "Гараж"
+    boxes = await _edge_status(hass)
+    assert boxes["EC-1"]["name"] == "Гараж"
+    # A box never renamed here has no name to serve.
+    assert "name" not in boxes["EC-2"]
+    island = _body(await SvitgridIslandStatusView().get(_Req(hass)))
+    assert {b["deviceId"]: b.get("name") for b in island["edgeBoxes"]} == {
+        "EC-1": "Гараж",
+        "EC-2": None,
+    }
+
+
+async def test_a_name_survives_adopting_the_box_again(hass: HomeAssistant, tmp_path):
+    admin, ks, _, _ = await _setup(hass, tmp_path)
+    await _rename(hass, admin, "EC-1", "Гараж")
+
+    await _adopt(hass, admin, "EC-1", _inv("inv-1"))
+
+    assert (await ks.load()).edge_boxes["EC-1"].name == "Гараж"
+
+
+@pytest.mark.parametrize("name", ["", "   ", 7, None, "x" * 65])
+async def test_a_blank_or_long_name_is_refused(hass: HomeAssistant, tmp_path, name):
+    admin, ks, _, _ = await _setup(hass, tmp_path)
+
+    resp = await _rename(hass, admin, "EC-1", name)
+
+    assert resp.status == 400
+    assert (await ks.load()).edge_boxes["EC-1"].name is None
+
+
+async def test_rename_of_an_unknown_box_is_404(hass: HomeAssistant, tmp_path):
+    admin, _, _, _ = await _setup(hass, tmp_path)
+
+    resp = await _rename(hass, admin, "EC-9", "Гараж")
+
+    assert resp.status == 404
+    assert _body(resp) == {"error": "unknown_box"}
+
+
+async def test_a_factory_reset_carries_the_phone_signature_to_the_box(
+    hass: HomeAssistant, tmp_path
+):
+    from custom_components.svitgrid.edge_api import _command_for_box
+
+    admin, _, queue, _ = await _setup(hass, tmp_path)
+    box_command = _reset_command(admin)
+
+    resp = await _send(
+        hass, admin, "EC-1", "factory_reset", payload={"confirm": True}, boxCommand=box_command
+    )
+
+    assert resp.status == 200, _body(resp)
+    row = await queue.async_next_pending("EC-1")
+    assert row["command"] == "factory_reset"
+    assert row["payload"] == {"confirm": True}
+    assert row["signing"] == box_command
+    sent = _command_for_box(row)
+    assert sent["signedEventData"] == box_command["signedEventData"]
+    assert sent["signature"] == box_command["signature"]
+    assert sent["signingKeyId"] == box_command["signingKeyId"]
+
+
+async def test_a_factory_reset_without_the_box_signature_is_refused(hass: HomeAssistant, tmp_path):
+    admin, _, queue, _ = await _setup(hass, tmp_path)
+
+    resp = await _send(hass, admin, "EC-1", "factory_reset", payload={"confirm": True})
+
+    assert resp.status == 400
+    assert _body(resp) == {"error": "box_signature_required"}
+    assert await queue.async_pending_count("EC-1") == 0
+
+
+async def test_a_signature_over_another_command_is_never_a_reset(hass: HomeAssistant, tmp_path):
+    admin, _, queue, _ = await _setup(hass, tmp_path)
+
+    resp = await _send(
+        hass,
+        admin,
+        "EC-1",
+        "factory_reset",
+        payload={"confirm": True},
+        boxCommand=_reset_command(admin, command="zigbee_factory_reset"),
+    )
+
+    assert resp.status == 400
+    assert _body(resp) == {"error": "box_signature_invalid"}
+    assert await queue.async_pending_count("EC-1") == 0
+
+
+async def test_a_reset_the_box_confirms_forgets_the_box(hass: HomeAssistant, tmp_path):
+    """As the cloud deletes the board once it answers its reset (#1306)."""
+    admin, ks, queue, _ = await _setup(hass, tmp_path)
+    resp = await _send(
+        hass,
+        admin,
+        "EC-1",
+        "factory_reset",
+        payload={"confirm": True},
+        boxCommand=_reset_command(admin),
+    )
+    command_id = _body(resp)["commandId"]
+    await queue.async_next_pending("EC-1")
+
+    await _ack(hass, command_id, success=True)
+
+    boxes = (await ks.load()).edge_boxes
+    assert "EC-1" not in boxes
+    assert "EC-2" in boxes
+    # The app still reads the board's answer.
+    assert (await _command_state(hass, command_id))["state"] == "success"
+
+
+async def test_a_refused_reset_keeps_the_box(hass: HomeAssistant, tmp_path):
+    admin, ks, queue, _ = await _setup(hass, tmp_path)
+    resp = await _send(
+        hass,
+        admin,
+        "EC-1",
+        "factory_reset",
+        payload={"confirm": True},
+        boxCommand=_reset_command(admin),
+    )
+    command_id = _body(resp)["commandId"]
+    await queue.async_next_pending("EC-1")
+
+    await _ack(hass, command_id, success=False, rejected=True, reason="device_id_mismatch")
+
+    assert "EC-1" in (await ks.load()).edge_boxes

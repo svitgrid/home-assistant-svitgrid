@@ -116,6 +116,9 @@ class EdgeBoxEntry:
     # A new box the cloud has assigned nothing: its inverters go to it as
     # `add_inverter` when it binds (`sendInverters` on the adopt).
     send_inverters: bool = False
+    # The owner's name for the box, set from the app on an edge island
+    # (`/edge/rename`, svitgrid D-2166). None until it is renamed here.
+    name: str | None = None
 
 
 def _parse_edge_box(device_id: str, value: Any) -> EdgeBoxEntry | None:
@@ -143,6 +146,7 @@ def _parse_edge_box(device_id: str, value: Any) -> EdgeBoxEntry | None:
         pair_code_hash=_opt_str("pair_code_hash"),
         pair_code_expires_at=_opt_str("pair_code_expires_at"),
         send_inverters=value.get("send_inverters") is True,
+        name=_opt_str("name"),
     )
 
 
