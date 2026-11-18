@@ -1,0 +1,585 @@
+{
+  "_comment": "D-1939: what an executor does with a cloud command whose signature verified, given the envelope it carries. services/api/src/__tests__/envelope-replay.test.ts holds the cloud's rules (envelopeFailures, envelopeVerdict) to these cases, and the Home Assistant add-on vendors this file (scripts/sync-edge-command-fixtures.sh) and holds its envelope_check.py to the same answers. The target inverter is payload.inverterId, as on the add-on; an empty one skips the inverter check. `now` is the executor's clock and `clockSet` whether it is trustworthy. `failed` lists the binding and validity checks that did not hold, in the board's fixed order (envelope_check.c). `verdict` gives the action at each enforcement level: `off` (the server's envelopeEnforce is false), `switch` (it is true) and `always` (the S3's always-enforce build). `run` runs the command, `refuse` acks it rejected with `reason`, and `retry_later` neither runs nor acks it.",
+  "now": "2026-11-18T12:00:00.000Z",
+  "cases": [
+    {
+      "name": "a calendar event's charge runs on its inverter",
+      "command": "set_battery_charge",
+      "payload": {
+        "inverterId": "inv-A",
+        "powerLimit": 3000
+      },
+      "signedEventData": {
+        "scenarioId": "sc-1",
+        "type": "scenario",
+        "inverterId": "inv-A",
+        "mode": "battery_charge",
+        "authorizedCommands": [
+          "set_battery_charge",
+          "restore_battery_charge"
+        ],
+        "schedule": {},
+        "config": {
+          "targetSoc": 80
+        },
+        "validUntil": "2027-01-01T00:00:00.000Z"
+      },
+      "failed": [],
+      "verdict": {
+        "off": {
+          "action": "run",
+          "reason": null
+        },
+        "switch": {
+          "action": "run",
+          "reason": null
+        },
+        "always": {
+          "action": "run",
+          "reason": null
+        }
+      },
+      "clockSet": true
+    },
+    {
+      "name": "the event's restore runs",
+      "command": "restore_battery_charge",
+      "payload": {
+        "inverterId": "inv-A"
+      },
+      "signedEventData": {
+        "scenarioId": "sc-1",
+        "type": "scenario",
+        "inverterId": "inv-A",
+        "mode": "battery_charge",
+        "authorizedCommands": [
+          "set_battery_charge",
+          "restore_battery_charge"
+        ],
+        "schedule": {},
+        "config": {
+          "targetSoc": 80
+        },
+        "validUntil": "2027-01-01T00:00:00.000Z"
+      },
+      "failed": [],
+      "verdict": {
+        "off": {
+          "action": "run",
+          "reason": null
+        },
+        "switch": {
+          "action": "run",
+          "reason": null
+        },
+        "always": {
+          "action": "run",
+          "reason": null
+        }
+      },
+      "clockSet": true
+    },
+    {
+      "name": "a command the event does not authorize is refused",
+      "command": "set_work_mode",
+      "payload": {
+        "inverterId": "inv-A",
+        "workMode": 0
+      },
+      "signedEventData": {
+        "scenarioId": "sc-1",
+        "type": "scenario",
+        "inverterId": "inv-A",
+        "mode": "battery_charge",
+        "authorizedCommands": [
+          "set_battery_charge",
+          "restore_battery_charge"
+        ],
+        "schedule": {},
+        "config": {
+          "targetSoc": 80
+        },
+        "validUntil": "2027-01-01T00:00:00.000Z"
+      },
+      "failed": [
+        "command_not_authorized"
+      ],
+      "verdict": {
+        "off": {
+          "action": "run",
+          "reason": null
+        },
+        "switch": {
+          "action": "refuse",
+          "reason": "envelope_command_not_authorized"
+        },
+        "always": {
+          "action": "refuse",
+          "reason": "envelope_command_not_authorized"
+        }
+      },
+      "clockSet": true
+    },
+    {
+      "name": "the event's envelope replayed against another inverter",
+      "command": "set_battery_charge",
+      "payload": {
+        "inverterId": "inv-B",
+        "powerLimit": 3000
+      },
+      "signedEventData": {
+        "scenarioId": "sc-1",
+        "type": "scenario",
+        "inverterId": "inv-A",
+        "mode": "battery_charge",
+        "authorizedCommands": [
+          "set_battery_charge",
+          "restore_battery_charge"
+        ],
+        "schedule": {},
+        "config": {
+          "targetSoc": 80
+        },
+        "validUntil": "2027-01-01T00:00:00.000Z"
+      },
+      "failed": [
+        "inverter_mismatch"
+      ],
+      "verdict": {
+        "off": {
+          "action": "run",
+          "reason": null
+        },
+        "switch": {
+          "action": "run",
+          "reason": null
+        },
+        "always": {
+          "action": "refuse",
+          "reason": "envelope_inverter_mismatch"
+        }
+      },
+      "clockSet": true
+    },
+    {
+      "name": "an expired event envelope",
+      "command": "set_battery_charge",
+      "payload": {
+        "inverterId": "inv-A",
+        "powerLimit": 3000
+      },
+      "signedEventData": {
+        "scenarioId": "sc-1",
+        "type": "scenario",
+        "inverterId": "inv-A",
+        "mode": "battery_charge",
+        "authorizedCommands": [
+          "set_battery_charge",
+          "restore_battery_charge"
+        ],
+        "schedule": {},
+        "config": {
+          "targetSoc": 80
+        },
+        "validUntil": "2026-11-17T12:00:00.000Z"
+      },
+      "failed": [
+        "envelope_expired"
+      ],
+      "verdict": {
+        "off": {
+          "action": "run",
+          "reason": null
+        },
+        "switch": {
+          "action": "run",
+          "reason": null
+        },
+        "always": {
+          "action": "refuse",
+          "reason": "envelope_expired"
+        }
+      },
+      "clockSet": true
+    },
+    {
+      "name": "an expired event still restores",
+      "command": "restore_battery_charge",
+      "payload": {
+        "inverterId": "inv-A"
+      },
+      "signedEventData": {
+        "scenarioId": "sc-1",
+        "type": "scenario",
+        "inverterId": "inv-A",
+        "mode": "battery_charge",
+        "authorizedCommands": [
+          "set_battery_charge",
+          "restore_battery_charge"
+        ],
+        "schedule": {},
+        "config": {
+          "targetSoc": 80
+        },
+        "validUntil": "2026-11-17T12:00:00.000Z"
+      },
+      "failed": [
+        "envelope_expired"
+      ],
+      "verdict": {
+        "off": {
+          "action": "run",
+          "reason": null
+        },
+        "switch": {
+          "action": "run",
+          "reason": null
+        },
+        "always": {
+          "action": "run",
+          "reason": null
+        }
+      },
+      "clockSet": true
+    },
+    {
+      "name": "an envelope without validUntil is refused",
+      "command": "set_battery_charge",
+      "payload": {
+        "inverterId": "inv-A",
+        "powerLimit": 3000
+      },
+      "signedEventData": {
+        "scenarioId": "sc-1",
+        "type": "scenario",
+        "inverterId": "inv-A",
+        "mode": "battery_charge",
+        "authorizedCommands": [
+          "set_battery_charge",
+          "restore_battery_charge"
+        ],
+        "schedule": {},
+        "config": {
+          "targetSoc": 80
+        }
+      },
+      "failed": [
+        "valid_until_missing"
+      ],
+      "verdict": {
+        "off": {
+          "action": "run",
+          "reason": null
+        },
+        "switch": {
+          "action": "refuse",
+          "reason": "envelope_valid_until_missing"
+        },
+        "always": {
+          "action": "refuse",
+          "reason": "envelope_valid_until_missing"
+        }
+      },
+      "clockSet": true
+    },
+    {
+      "name": "an owner's tap runs its own command",
+      "command": "set_work_mode",
+      "payload": {
+        "inverterId": "inv-A",
+        "workMode": 0
+      },
+      "signedEventData": {
+        "scenarioId": "cmd-1",
+        "inverterId": "inv-A",
+        "command": "set_work_mode",
+        "payload": {
+          "workMode": 0
+        },
+        "validUntil": "2027-01-01T00:00:00.000Z"
+      },
+      "failed": [],
+      "verdict": {
+        "off": {
+          "action": "run",
+          "reason": null
+        },
+        "switch": {
+          "action": "run",
+          "reason": null
+        },
+        "always": {
+          "action": "run",
+          "reason": null
+        }
+      },
+      "clockSet": true
+    },
+    {
+      "name": "an owner's tap does not authorize another command",
+      "command": "set_solar_sell",
+      "payload": {
+        "inverterId": "inv-A",
+        "solarSell": 1
+      },
+      "signedEventData": {
+        "scenarioId": "cmd-1",
+        "inverterId": "inv-A",
+        "command": "set_work_mode",
+        "payload": {
+          "workMode": 0
+        },
+        "validUntil": "2027-01-01T00:00:00.000Z"
+      },
+      "failed": [
+        "command_not_authorized"
+      ],
+      "verdict": {
+        "off": {
+          "action": "run",
+          "reason": null
+        },
+        "switch": {
+          "action": "refuse",
+          "reason": "envelope_command_not_authorized"
+        },
+        "always": {
+          "action": "refuse",
+          "reason": "envelope_command_not_authorized"
+        }
+      },
+      "clockSet": true
+    },
+    {
+      "name": "an envelope with no command list and no inverter",
+      "command": "set_battery_charge",
+      "payload": {
+        "inverterId": "inv-A",
+        "powerLimit": 3000
+      },
+      "signedEventData": {
+        "scenarioId": "sc-3",
+        "mode": "battery_charge",
+        "validUntil": "2027-01-01T00:00:00.000Z"
+      },
+      "failed": [
+        "authorized_commands_missing",
+        "inverter_id_missing"
+      ],
+      "verdict": {
+        "off": {
+          "action": "run",
+          "reason": null
+        },
+        "switch": {
+          "action": "run",
+          "reason": null
+        },
+        "always": {
+          "action": "refuse",
+          "reason": "envelope_authorized_commands_missing"
+        }
+      },
+      "clockSet": true
+    },
+    {
+      "name": "a planner delegation naming the inverter",
+      "command": "set_work_mode",
+      "payload": {
+        "inverterId": "inv-A",
+        "workMode": 0
+      },
+      "signedEventData": {
+        "type": "planner_delegation",
+        "householdId": "hh-1",
+        "inverterIds": [
+          "inv-B",
+          "inv-A"
+        ],
+        "allowedModes": [
+          "sell_to_grid"
+        ],
+        "validUntil": "2026-01-01T00:00:00.000Z"
+      },
+      "failed": [
+        "authorized_commands_missing"
+      ],
+      "verdict": {
+        "off": {
+          "action": "run",
+          "reason": null
+        },
+        "switch": {
+          "action": "run",
+          "reason": null
+        },
+        "always": {
+          "action": "run",
+          "reason": null
+        }
+      },
+      "clockSet": true
+    },
+    {
+      "name": "a command with no inverter skips the inverter check",
+      "command": "set_battery_charge",
+      "payload": {
+        "powerLimit": 3000
+      },
+      "signedEventData": {
+        "scenarioId": "sc-1",
+        "type": "scenario",
+        "inverterId": "inv-A",
+        "mode": "battery_charge",
+        "authorizedCommands": [
+          "set_battery_charge",
+          "restore_battery_charge"
+        ],
+        "schedule": {},
+        "config": {
+          "targetSoc": 80
+        },
+        "validUntil": "2027-01-01T00:00:00.000Z"
+      },
+      "failed": [],
+      "verdict": {
+        "off": {
+          "action": "run",
+          "reason": null
+        },
+        "switch": {
+          "action": "run",
+          "reason": null
+        },
+        "always": {
+          "action": "run",
+          "reason": null
+        }
+      },
+      "clockSet": true
+    },
+    {
+      "name": "no clock waits for one",
+      "command": "set_battery_charge",
+      "clockSet": false,
+      "payload": {
+        "inverterId": "inv-A",
+        "powerLimit": 3000
+      },
+      "signedEventData": {
+        "scenarioId": "sc-1",
+        "type": "scenario",
+        "inverterId": "inv-A",
+        "mode": "battery_charge",
+        "authorizedCommands": [
+          "set_battery_charge",
+          "restore_battery_charge"
+        ],
+        "schedule": {},
+        "config": {
+          "targetSoc": 80
+        },
+        "validUntil": "2027-01-01T00:00:00.000Z"
+      },
+      "failed": [
+        "envelope_no_clock"
+      ],
+      "verdict": {
+        "off": {
+          "action": "run",
+          "reason": null
+        },
+        "switch": {
+          "action": "retry_later",
+          "reason": null
+        },
+        "always": {
+          "action": "retry_later",
+          "reason": null
+        }
+      }
+    },
+    {
+      "name": "no clock still restores",
+      "command": "restore_battery_charge",
+      "clockSet": false,
+      "payload": {
+        "inverterId": "inv-A"
+      },
+      "signedEventData": {
+        "scenarioId": "sc-1",
+        "type": "scenario",
+        "inverterId": "inv-A",
+        "mode": "battery_charge",
+        "authorizedCommands": [
+          "set_battery_charge",
+          "restore_battery_charge"
+        ],
+        "schedule": {},
+        "config": {
+          "targetSoc": 80
+        },
+        "validUntil": "2027-01-01T00:00:00.000Z"
+      },
+      "failed": [
+        "envelope_no_clock"
+      ],
+      "verdict": {
+        "off": {
+          "action": "run",
+          "reason": null
+        },
+        "switch": {
+          "action": "run",
+          "reason": null
+        },
+        "always": {
+          "action": "run",
+          "reason": null
+        }
+      }
+    },
+    {
+      "name": "no clock and an unauthorized command is refused at once",
+      "command": "set_work_mode",
+      "clockSet": false,
+      "payload": {
+        "inverterId": "inv-A",
+        "workMode": 0
+      },
+      "signedEventData": {
+        "scenarioId": "sc-1",
+        "type": "scenario",
+        "inverterId": "inv-A",
+        "mode": "battery_charge",
+        "authorizedCommands": [
+          "set_battery_charge",
+          "restore_battery_charge"
+        ],
+        "schedule": {},
+        "config": {
+          "targetSoc": 80
+        },
+        "validUntil": "2027-01-01T00:00:00.000Z"
+      },
+      "failed": [
+        "command_not_authorized",
+        "envelope_no_clock"
+      ],
+      "verdict": {
+        "off": {
+          "action": "run",
+          "reason": null
+        },
+        "switch": {
+          "action": "refuse",
+          "reason": "envelope_command_not_authorized"
+        },
+        "always": {
+          "action": "refuse",
+          "reason": "envelope_command_not_authorized"
+        }
+      }
+    }
+  ]
+}

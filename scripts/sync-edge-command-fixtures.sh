@@ -7,7 +7,8 @@
 # island_capability_vocab.json are hand-written there, and
 # zigbee_condition_cases.json, bms_sync_version_cases.json and
 # maintenance_due_cases.json are pinned against the cloud there
-# (zigbee-conditions.test.ts, bms-roster-model.test.ts, maintenance-due.test.ts). zigbee_device_profiles.json
+# (zigbee-conditions.test.ts, bms-roster-model.test.ts, maintenance-due.test.ts),
+# and so is envelope_enforcement_cases.json (envelope-replay.test.ts). zigbee_device_profiles.json
 # (prod's `config/zigbeeDeviceProfiles`) is read at runtime, so it goes into the
 # integration itself.
 set -euo pipefail
@@ -24,7 +25,8 @@ for SRC_REL in \
   fixtures/island_capability_vocab.json \
   fixtures/zigbee_condition_cases.json \
   fixtures/bms_sync_version_cases.json \
-  fixtures/maintenance_due_cases.json; do
+  fixtures/maintenance_due_cases.json \
+  fixtures/envelope_enforcement_cases.json; do
   SRC="$INVERTER_PROTOCOL_DIR/$SRC_REL"
   DEST="$FIXTURES_DIR/$(basename "$SRC_REL")"
   [ -f "$SRC" ] || { echo "source not found: $SRC" >&2; exit 1; }

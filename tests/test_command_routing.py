@@ -140,3 +140,136 @@ async def test_a_failed_battery_charge_current_acks_its_code_and_known_values(ha
     assert body["success"] is False
     assert body["result"] == ack
     assert body["reason"] == "executor_error: verify_mismatch"
+
+
+# --- svitgrid D-1939: the signed envelope on a cloud command ---------------
+
+_EVENT_ENVELOPE = {
+    "scenarioId": "sc-1",
+    "type": "scenario",
+    "inverterId": "ha-bbb",
+    "mode": "battery_charge",
+    "authorizedCommands": ["set_battery_charge", "restore_battery_charge"],
+    "schedule": {},
+    "config": {"targetSoc": 80},
+    "validUntil": "2099-01-01T00:00:00.000Z",
+}
+
+
+def _enveloped_cmd(command: str, admin_priv, signed_event_data: dict) -> dict:
+    return {
+        "commandId": "c9",
+        "command": command,
+        "payload": {"inverterId": "ha-bbb", "workMode": 0},
+        "signature": sign_payload(signed_event_data, admin_priv),
+        "signingKeyId": "admin-key-id",
+        "signedEventData": signed_event_data,
+    }
+
+
+async def _process(command, admin_pub_hex, executor, *, envelope_enforce):
+    our_priv, our_pub_hex = generate_keypair()
+    api_client = AsyncMock()
+    await process_command(
+        command=command,
+        api_client=api_client,
+        api_key="k",
+        trusted_public_keys_hex={"admin-key-id": admin_pub_hex},
+        our_private_key=our_priv,
+        our_signing_key_id="our-key",
+        executor_version="0.3.0",
+        keystore=None,
+        executors_by_inverter={"ha-bbb": executor},
+        envelope_enforce=envelope_enforce,
+    )
+    return api_client, our_pub_hex
+
+
+@pytest.mark.asyncio
+async def test_enforcing_refuses_a_command_its_envelope_does_not_authorize(hass):
+    from custom_components.svitgrid.signing import verify_payload
+
+    admin_priv, admin_pub_hex = generate_keypair()
+    executor = AsyncMock()
+    api_client, our_pub_hex = await _process(
+        _enveloped_cmd("set_work_mode", admin_priv, _EVENT_ENVELOPE),
+        admin_pub_hex,
+        executor,
+        envelope_enforce=True,
+    )
+
+    executor.dispatch.assert_not_awaited()
+    api_client.ack_command.assert_called_once()
+    body = api_client.ack_command.call_args.kwargs["body"]
+    assert body["success"] is False
+    assert body["rejected"] is True
+    assert body["reason"] == "envelope_command_not_authorized"
+    assert body["envelopeCheck"]["failed"] == ["command_not_authorized"]
+    assert body["envelopeCheck"]["signingKeyId"] == "admin-key-id"
+    # The report rides outside the signature, which the API rebuilds from
+    # the fixed ack fields (enforce-ha-signed-ack.ts).
+    signed = {
+        "commandId": "c9",
+        **{
+            k: body[k]
+            for k in ("success", "executorTime", "executorVersion", "rejected", "reason")
+            if k in body
+        },
+    }
+    assert verify_payload(signed, body["signature"], our_pub_hex)
+
+
+@pytest.mark.asyncio
+async def test_switch_off_runs_the_command_and_reports_the_check(hass):
+    admin_priv, admin_pub_hex = generate_keypair()
+    executor = AsyncMock()
+    executor.dispatch.return_value = {"ok": True}
+    api_client, _ = await _process(
+        _enveloped_cmd("set_work_mode", admin_priv, _EVENT_ENVELOPE),
+        admin_pub_hex,
+        executor,
+        envelope_enforce=False,
+    )
+
+    executor.dispatch.assert_awaited_once()
+    body = api_client.ack_command.call_args.kwargs["body"]
+    assert body["success"] is True
+    assert body["envelopeCheck"]["failed"] == ["command_not_authorized"]
+
+
+@pytest.mark.asyncio
+async def test_enforcing_runs_a_command_its_envelope_authorizes(hass):
+    admin_priv, admin_pub_hex = generate_keypair()
+    executor = AsyncMock()
+    executor.dispatch.return_value = {"ok": True}
+    api_client, _ = await _process(
+        _enveloped_cmd("set_battery_charge", admin_priv, _EVENT_ENVELOPE),
+        admin_pub_hex,
+        executor,
+        envelope_enforce=True,
+    )
+
+    executor.dispatch.assert_awaited_once()
+    body = api_client.ack_command.call_args.kwargs["body"]
+    assert body["success"] is True
+    assert "envelopeCheck" not in body
+
+
+@pytest.mark.asyncio
+async def test_enforcing_runs_an_inverter_mismatch_and_reports_it(hass):
+    """The switch level enforces the board's mask only: a wrong inverter is
+    reported, as on the S3, until the always level."""
+    admin_priv, admin_pub_hex = generate_keypair()
+    executor = AsyncMock()
+    executor.dispatch.return_value = {"ok": True}
+    envelope = {**_EVENT_ENVELOPE, "inverterId": "ha-other"}
+    api_client, _ = await _process(
+        _enveloped_cmd("set_battery_charge", admin_priv, envelope),
+        admin_pub_hex,
+        executor,
+        envelope_enforce=True,
+    )
+
+    executor.dispatch.assert_awaited_once()
+    body = api_client.ack_command.call_args.kwargs["body"]
+    assert body["envelopeCheck"]["failed"] == ["inverter_mismatch"]

@@ -207,7 +207,11 @@ class SvitgridApiClient:
         self, api_key: str, integration_version: str | None = None
     ) -> dict[str, Any]:
         url = f"{self._base}/api/v3/executors/commands"
-        headers = {"x-api-key": api_key}
+        # svitgrid D-1939: this build checks the signed envelope and refuses
+        # what it does not authorize while the poll's `envelopeEnforce` is
+        # true, as the board and the phone do. The API stamps
+        # `envelopeCapable` from this header.
+        headers = {"x-api-key": api_key, "X-Envelope-Enforced": "1"}
         if integration_version:
             headers["x-integration-version"] = integration_version
         async with self._session.get(url, headers=headers) as resp:

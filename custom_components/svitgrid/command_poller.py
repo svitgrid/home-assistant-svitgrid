@@ -44,6 +44,15 @@ from .const import (
     UPLOAD_LOGS_COMMAND,
 )
 from .entry_reload import update_entry_skipping_listener_reload
+from .envelope_check import (
+    ACTION_REFUSE,
+    ACTION_RETRY_LATER,
+    LEVEL_OFF,
+    LEVEL_SWITCH,
+    envelope_check_report,
+    envelope_failures,
+    envelope_verdict,
+)
 from .file_log import LOG_SUBDIR
 from .harvest.read_now import find_triggers
 from .harvest_config_apply import (
@@ -145,6 +154,7 @@ async def process_command(
     hass: HomeAssistant | None = None,
     entry: ConfigEntry | None = None,
     activity: Any | None = None,
+    envelope_enforce: bool = False,
 ) -> None:
     """Process one polled command. Three dispatch arms:
       1. Internal trust commands (add_trusted_key, revoke_trusted_key) —
@@ -1052,6 +1062,55 @@ async def process_command(
     if cmd_type in DISPATCHABLE_COMMANDS:
         payload = command.get("payload") or {}
         inverter_id = payload.get("inverterId")
+        # svitgrid D-1939: the signature covers `signedEventData` only, and
+        # what runs is the unsigned `command` and `payload`. Check that the
+        # verified envelope authorizes this command for this inverter while
+        # it is still valid. Every failure rides on the ack as
+        # `envelopeCheck`; the poll's `envelopeEnforce` decides whether it
+        # refuses (the S3's ENVELOPE_ENFORCE_MASK). This host's clock is
+        # trusted, so a no-clock wait cannot arise here.
+        now_s = int(time.time())
+        failed = envelope_failures(
+            signed_event_data,
+            str(cmd_type),
+            inverter_id if isinstance(inverter_id, str) else "",
+            now_s,
+        )
+        envelope_report = envelope_check_report(
+            failed, signed_event_data, str(cmd_type), sig_key_id, now_s
+        )
+        if envelope_report is not None:
+            _LOGGER.warning(
+                "Envelope check for %s (%s, command %s): %s",
+                cmd_type,
+                envelope_report["shape"],
+                cmd_id,
+                envelope_report["failed"],
+            )
+        action, refusal = envelope_verdict(
+            failed,
+            str(cmd_type),
+            signed_event_data,
+            LEVEL_SWITCH if envelope_enforce else LEVEL_OFF,
+        )
+        if action == ACTION_RETRY_LATER:
+            # Neither run nor ack: the API delivers it again.
+            return
+        if action == ACTION_REFUSE:
+            _LOGGER.warning("Refusing command %s (%s): %s", cmd_id, cmd_type, refusal)
+            await _send_signed_ack(
+                api_client=api_client,
+                api_key=api_key,
+                command_id=cmd_id,
+                success=False,
+                rejected=True,
+                reason=refusal,
+                our_private_key=our_private_key,
+                our_signing_key_id=our_signing_key_id,
+                executor_version=executor_version,
+                envelope_check=envelope_report,
+            )
+            return
         # None inverter_id (missing from payload) also falls through to the
         # no-executor rejection below — .get(None) misses on a str-keyed dict.
         executor = (executors_by_inverter or {}).get(inverter_id)
@@ -1072,6 +1131,7 @@ async def process_command(
                 our_private_key=our_private_key,
                 our_signing_key_id=our_signing_key_id,
                 executor_version=executor_version,
+                envelope_check=envelope_report,
             )
             return
 
@@ -1097,6 +1157,7 @@ async def process_command(
                 our_private_key=our_private_key,
                 our_signing_key_id=our_signing_key_id,
                 executor_version=executor_version,
+                envelope_check=envelope_report,
             )
             return
         except Exception as err:  # noqa: BLE001
@@ -1115,6 +1176,7 @@ async def process_command(
                 our_private_key=our_private_key,
                 our_signing_key_id=our_signing_key_id,
                 executor_version=executor_version,
+                envelope_check=envelope_report,
             )
             return
         await _send_signed_ack(
@@ -1126,6 +1188,7 @@ async def process_command(
             our_private_key=our_private_key,
             our_signing_key_id=our_signing_key_id,
             executor_version=executor_version,
+            envelope_check=envelope_report,
         )
         return
 
@@ -1155,9 +1218,14 @@ async def _send_signed_ack(
     result: dict | None = None,
     rejected: bool | None = None,
     reason: str | None = None,
+    envelope_check: dict | None = None,
 ) -> None:
     """Build + sign an ACK. commandId is FIRST in the signed payload
-    (Plan A's enforceHaSignedAck requires it for replay protection)."""
+    (Plan A's enforceHaSignedAck requires it for replay protection).
+
+    ``envelope_check`` (svitgrid D-1939) rides in the body OUTSIDE the
+    signature: the API rebuilds the signed payload from the fixed ack fields
+    only, so a signed one would fail verification."""
     ack_fields: dict[str, Any] = {
         "success": success,
         "executorTime": _now_iso(),
@@ -1179,6 +1247,7 @@ async def _send_signed_ack(
             command_id=command_id,
             body={
                 **ack_fields,
+                **({"envelopeCheck": envelope_check} if envelope_check else {}),
                 "signature": signature,
                 "signingKeyId": our_signing_key_id,
             },
@@ -1446,6 +1515,7 @@ async def _run_loop_body(
                     hass=hass,
                     entry=entry,
                     activity=activity,
+                    envelope_enforce=resp.get("envelopeEnforce") is True,
                 )
         except DeviceEvicted:
             # 410 Gone — owning household deleted. Authoritative eviction:

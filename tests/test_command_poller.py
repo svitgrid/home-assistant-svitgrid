@@ -979,3 +979,26 @@ async def test_poll_response_in_interval_mode_ends_live(monkeypatch):
     )
     assert control.live.mode == "interval"
     assert control.interval_s == 300
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("server_says,expected", [(True, True), (False, False), (None, False)])
+async def test_loop_hands_the_polls_envelope_switch_to_each_command(
+    monkeypatch, server_says, expected
+):
+    """svitgrid D-1939: the poll's `envelopeEnforce` decides, off unless true."""
+    import custom_components.svitgrid.command_poller as cp
+
+    seen: list[bool] = []
+
+    async def _fake_process(**kwargs):
+        seen.append(kwargs["envelope_enforce"])
+
+    monkeypatch.setattr(cp, "process_command", _fake_process)
+    resp = {"commands": [{"commandId": "c1", "command": "set_work_mode"}]}
+    if server_says is not None:
+        resp["envelopeEnforce"] = server_says
+    api = MagicMock()
+    api.poll_commands = AsyncMock(return_value=resp)
+    await _run_poller_capture_sleep(monkeypatch, _hass_one_iter(), api)
+    assert seen == [expected]

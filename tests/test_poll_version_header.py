@@ -37,3 +37,14 @@ async def test_poll_commands_omits_header_when_version_none():
     await client.poll_commands(api_key="k" * 10)
     _, kwargs = session.get.call_args
     assert "x-integration-version" not in kwargs["headers"]
+
+
+@pytest.mark.asyncio
+async def test_poll_commands_announces_envelope_enforcement():
+    """svitgrid D-1939: the API stamps envelopeCapable from this header, as for
+    the board and the phone, and only then sends envelopeEnforce."""
+    session = _mock_session()
+    client = SvitgridApiClient(session, api_base="https://api.example")
+    await client.poll_commands(api_key="k" * 10)
+    _, kwargs = session.get.call_args
+    assert kwargs["headers"]["X-Envelope-Enforced"] == "1"
