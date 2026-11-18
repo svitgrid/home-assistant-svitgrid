@@ -393,6 +393,38 @@ async def test_a_reset_the_box_confirms_forgets_the_box(hass: HomeAssistant, tmp
     assert (await _command_state(hass, command_id))["state"] == "success"
 
 
+async def test_the_answer_to_the_last_boxs_reset_stays_readable(hass: HomeAssistant, tmp_path):
+    """The reload after the last box is forgotten builds no queue (svitgrid
+    D-2225): the app still reads the reset's answer, not 404."""
+    from custom_components.svitgrid.island_lan import SvitgridEdgeCommandView
+
+    admin, ks, queue, _ = await _setup(hass, tmp_path)
+    resp = await _send(
+        hass,
+        admin,
+        "EC-1",
+        "factory_reset",
+        payload={"confirm": True},
+        boxCommand=_reset_command(admin),
+    )
+    command_id = _body(resp)["commandId"]
+    await queue.async_next_pending("EC-1")
+    await _ack(hass, command_id, success=True)
+    # The reload with no box left: the entry holds no queue.
+    for state in hass.data[DOMAIN].values():
+        if isinstance(state, dict) and "edge_queue" in state:
+            state["edge_queue"] = None
+
+    resp = await SvitgridEdgeCommandView().get(_Req(hass), command_id)
+
+    assert resp.status == 200, _body(resp)
+    assert _body(resp)["state"] == "success"
+    assert _body(resp)["id"] == command_id
+    # An id nobody queued is still 404.
+    resp = await SvitgridEdgeCommandView().get(_Req(hass), "nope")
+    assert resp.status == 404
+
+
 async def test_a_refused_reset_keeps_the_box(hass: HomeAssistant, tmp_path):
     admin, ks, queue, _ = await _setup(hass, tmp_path)
     resp = await _send(

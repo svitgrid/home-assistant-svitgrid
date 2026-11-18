@@ -369,6 +369,31 @@ def edge_refusals(hass) -> dict[str, dict]:
     return hass.data.setdefault(DOMAIN, {}).setdefault(_EDGE_REFUSALS_KEY, {})
 
 
+# hass.data[DOMAIN] key: commandId -> the answer to a `factory_reset` a box
+# confirmed, as `GET /api/svitgrid/edge/commands/{id}` serves it. The reload
+# after the household's last box is forgotten builds no queue, so without
+# this the app reads 404 for a reset that worked (svitgrid D-2225). In memory
+# only, and capped: the app reads the answer within seconds.
+_EDGE_RESET_ANSWERS_KEY = "edge_reset_answers"
+_EDGE_RESET_ANSWERS_MAX = 20
+
+
+def edge_reset_answers(hass) -> dict[str, dict]:
+    """commandId -> the answer to a confirmed reset, `{id, state, ...}`."""
+    return hass.data.setdefault(DOMAIN, {}).setdefault(_EDGE_RESET_ANSWERS_KEY, {})
+
+
+def command_answer(row: dict) -> dict:
+    """What `GET /api/svitgrid/edge/commands/{id}` serves for one row."""
+    return {
+        "id": row["id"],
+        "state": row["state"],
+        "result": row["result"],
+        "reason": row["reason"],
+        "ackedAt": row["acked_at"],
+    }
+
+
 def _refuse_pair_code(hass, error: str, *device_ids: str) -> web.Response:
     """The 403 for `error`, recorded against each box it is about."""
     refusals = edge_refusals(hass)
@@ -888,12 +913,18 @@ async def _apply_set_state(hass, row: dict) -> None:
 _PAUSE_STATES = {"pause": True, "resume": False}
 
 
-async def _forget_reset_box(hass, box: EdgeBoxEntry) -> None:
+async def _forget_reset_box(hass, box: EdgeBoxEntry, row: dict) -> None:
     """The box wiped itself: it holds no key and no endpoint now, so it can
     never report here again. Forget it, as the cloud deletes a board that
     answers its reset (svitgrid #1306). Its queued rows stay, so the app still
-    reads the reset's answer; a later adopt of the box drops them."""
+    reads the reset's answer; a later adopt of the box drops them. The answer
+    is also kept in memory, for the reload that builds no queue (D-2225)."""
     from .island_lan import _schedule_edge_reload  # island_lan imports this module
+
+    answers = edge_reset_answers(hass)
+    answers[row["id"]] = command_answer(row)
+    while len(answers) > _EDGE_RESET_ANSWERS_MAX:
+        answers.pop(next(iter(answers)))
 
     keystore = (hass.data.get(DOMAIN) or {}).get("keystore")
     if keystore is None:
@@ -949,7 +980,7 @@ async def apply_board_ack(hass, box: EdgeBoxEntry, row: dict) -> None:
     if row["state"] != "success":
         return
     if row["command"] == "factory_reset":
-        await _forget_reset_box(hass, box)
+        await _forget_reset_box(hass, box, row)
         return
     if row["command"] in ("add_inverter", "update_inverter", "remove_inverter"):
         await _follow_inverter_change(hass, box, row)

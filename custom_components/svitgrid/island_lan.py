@@ -67,7 +67,13 @@ from .const import (
     READINGS_DB_SUBDIR,
     REVOKE_TRUSTED_KEY_COMMAND,
 )
-from .edge_api import EDGE_BOX_LOCK, board_state_of, edge_refusals
+from .edge_api import (
+    EDGE_BOX_LOCK,
+    board_state_of,
+    command_answer,
+    edge_refusals,
+    edge_reset_answers,
+)
 from .edge_api import _entry_state as _edge_poll_state
 from .entry_reload import update_entry_skipping_listener_reload
 from .file_log import LOG_SUBDIR
@@ -1359,7 +1365,8 @@ class SvitgridEdgeCommandView(HomeAssistantView):
 
     Island key only. `{id, state, result, reason, ackedAt}`, where `state` is
     `pending`, `delivered`, `success`, `failed` or `expired`. An id no queue
-    holds is 404 `unknown_command`.
+    holds is 404 `unknown_command`, unless it is a reset a box confirmed
+    before Home Assistant forgot it (svitgrid D-2225).
     """
 
     url = "/api/svitgrid/edge/commands/{command_id}"
@@ -1372,15 +1379,10 @@ class SvitgridEdgeCommandView(HomeAssistantView):
         for state in _edge_entry_states(request.app["hass"]):
             row = await state["edge_queue"].async_get(command_id)
             if row is not None:
-                return web.json_response(
-                    {
-                        "id": row["id"],
-                        "state": row["state"],
-                        "result": row["result"],
-                        "reason": row["reason"],
-                        "ackedAt": row["acked_at"],
-                    }
-                )
+                return web.json_response(command_answer(row))
+        answer = edge_reset_answers(request.app["hass"]).get(command_id)
+        if answer is not None:
+            return web.json_response(answer)
         return _json_error(404, "unknown_command")
 
 
