@@ -10,6 +10,11 @@ relay its commands to the box:
   `/smart-devices/:id`, `/readings` and `/history` so the app's models parse
   them. `PATCH /zigbee/devices/{id}` renames a device, moves it to a room or
   sets what it powers.
+- `GET /api/svitgrid/zigbee/usage?period=today|month&date=` and
+  `/zigbee/usage/totals?from=&to=` serve the plugs' consumption from the
+  5-minute rollup, island key only, shaped like the cloud's
+  `/households/:id/smart-usage-by-device` and `/smart-usage-totals`
+  (svitgrid D-2133).
 - `POST /api/svitgrid/edge/zigbee/{id}/command` sends `set_state` signed by a
   trusted (owner or admin) key, and the phone's signature for the box rides
   untouched in `boxCommand`: the integration holds no key the box trusts. The
@@ -29,9 +34,10 @@ before any auth check, so an install without one sees no change.
 
 from __future__ import annotations
 
+import calendar
 import logging
 import re
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 from aiohttp import web
 from homeassistant.components.http import HomeAssistantView
@@ -39,6 +45,7 @@ from homeassistant.components.http import HomeAssistantView
 from .const import DOMAIN
 from .edge_api import _entry_state as _edge_entry_state
 from .island_lan import _box_command, _device_id, _island_key_ok, _json_error, signed_lan_request
+from .local_time import local_day_of, local_day_window
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -54,6 +61,13 @@ PERMIT_JOIN_MAX_S = 254
 # `SENSOR_HISTORY_BUCKET_MS` and `SENSOR_HISTORY_MAX_HOURS` (`smart-devices.ts`).
 SENSOR_BUCKET = timedelta(minutes=10)
 SENSOR_HISTORY_MAX_HOURS = 168
+
+# `SMART_USAGE_TOTALS_MAX_DAYS` (`households.ts`): two years.
+USAGE_TOTALS_MAX_DAYS = 731
+# One rollup slot spans five minutes (`SLOT_HOURS`, `smart-usage-rollup.ts`).
+SLOT_HOURS = 5 / 60
+_DAY_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+_MONTH_RE = re.compile(r"\d{4}-\d{2}")
 
 # Per-device commands the island key may send (spec 27). The box asks no
 # signature for any of them (`command_requires_signature`, `command_auth.c`).
@@ -330,6 +344,151 @@ class ZigbeeDeviceHistoryView(_ZigbeeView):
         return web.json_response({"history": await devices.async_history(device_id, limit)})
 
 
+def _local_date(value: str | None) -> date | None:
+    """`YYYY-MM-DD` as a date, or None."""
+    if not isinstance(value, str) or not _DAY_RE.fullmatch(value):
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+async def _device_names(devices) -> dict[str, str]:
+    return {d["id"]: d["name"] or d["id"] for d in await devices.async_list()}
+
+
+def _slot_power(sample) -> float:
+    value = sample.get("avgPowerW") if isinstance(sample, dict) else None
+    return value if isinstance(value, int | float) and not isinstance(value, bool) else 0
+
+
+async def _daily_energy(devices, first: date, last: date, tz: str | None) -> dict:
+    """Each plug's energy per local day over `first..last`: `{id: {day: Wh}}`.
+    Integrated from the slots' power, as the cloud's daily rollup does
+    (`foldEnrichedBuckets`): the S60ZBTPF's energy counter stays at 0."""
+    start, _ = local_day_window(first.isoformat(), tz)
+    _, end = local_day_window(last.isoformat(), tz)
+    out: dict[str, dict[str, float]] = {}
+    for period_start, samples in await devices.async_usage_slots(start, end):
+        day = local_day_of(period_start, tz)
+        for device_id, sample in samples.items():
+            by_day = out.setdefault(device_id, {})
+            by_day[day] = by_day.get(day, 0) + _slot_power(sample) * SLOT_HOURS
+    return out
+
+
+class ZigbeeUsageView(_ZigbeeView):
+    """GET /api/svitgrid/zigbee/usage?period=today|month&date= — each plug's
+    consumption, in the cloud's `smart-usage-by-device` shape: `{devices:
+    [{deviceId, name, series: [{periodStart, avgPowerW, energyWh,
+    deviceCount}]}]}`. `today` (the default) is the local day `date`
+    (`YYYY-MM-DD`, today when absent) in 5-minute slots, each slot's power
+    and its energy over the five minutes; `month` is the local month of
+    `date` (`YYYY-MM` or a day in it) in days, each day's energy. Only plugs
+    with a slot in the window are listed, as in the cloud."""
+
+    url = "/api/svitgrid/zigbee/usage"
+    name = "api:svitgrid:zigbee:usage"
+
+    async def get(self, request) -> web.Response:  # noqa: D102
+        gate = await self._gate(request)
+        if isinstance(gate, web.Response):
+            return gate
+        devices, _ = gate
+        hass = request.app["hass"]
+        tz = getattr(hass.config, "time_zone", None)
+        period = request.query.get("period", "today")
+        raw = request.query.get("date") or local_day_of(
+            datetime.now(UTC).isoformat().replace("+00:00", "Z"), tz
+        )
+        names = await _device_names(devices)
+        if period == "today":
+            day = _local_date(raw)
+            if day is None:
+                return _json_error(400, "bad_request", detail="date must be YYYY-MM-DD")
+            start, end = local_day_window(day.isoformat(), tz)
+            series: dict[str, list[dict]] = {}
+            for period_start, samples in await devices.async_usage_slots(start, end):
+                for device_id, sample in samples.items():
+                    power = _slot_power(sample)
+                    series.setdefault(device_id, []).append(
+                        {
+                            "periodStart": period_start,
+                            "avgPowerW": power,
+                            "energyWh": power * SLOT_HOURS,
+                            "deviceCount": 1,
+                        }
+                    )
+        elif period == "month":
+            month_ok = _MONTH_RE.fullmatch(raw) or _local_date(raw)
+            first = _local_date(raw[:7] + "-01") if month_ok else None
+            if first is None:
+                return _json_error(400, "bad_request", detail="date must be YYYY-MM")
+            last = first.replace(day=calendar.monthrange(first.year, first.month)[1])
+            series = {
+                device_id: [
+                    {"periodStart": day, "avgPowerW": 0, "energyWh": wh, "deviceCount": 1}
+                    for day, wh in sorted(by_day.items())
+                ]
+                for device_id, by_day in (await _daily_energy(devices, first, last, tz)).items()
+            }
+        else:
+            return _json_error(400, "bad_request", detail="period must be today or month")
+        return web.json_response(
+            {
+                "devices": [
+                    {"deviceId": device_id, "name": names.get(device_id, device_id), "series": rows}
+                    for device_id, rows in series.items()
+                ]
+            }
+        )
+
+
+class ZigbeeUsageTotalsView(_ZigbeeView):
+    """GET /api/svitgrid/zigbee/usage/totals?from=&to= — one energy total per
+    plug over the local dates `from..to` (`YYYY-MM-DD`, inclusive, at most
+    two years), in the cloud's `smart-usage-totals` shape: `{devices:
+    [{deviceId, name, energyWh, firstDay}]}`, `firstDay` the first date on
+    which the plug used energy, or null."""
+
+    url = "/api/svitgrid/zigbee/usage/totals"
+    name = "api:svitgrid:zigbee:usage:totals"
+
+    async def get(self, request) -> web.Response:  # noqa: D102
+        gate = await self._gate(request)
+        if isinstance(gate, web.Response):
+            return gate
+        devices, _ = gate
+        first = _local_date(request.query.get("from"))
+        last = _local_date(request.query.get("to"))
+        if first is None or last is None:
+            return _json_error(
+                400, "bad_request", detail="from and to query parameters required (YYYY-MM-DD)"
+            )
+        if not 0 <= (last - first).days <= USAGE_TOTALS_MAX_DAYS:
+            return _json_error(
+                400,
+                "bad_request",
+                detail=f"from must not be after to, and the range must not exceed "
+                f"{USAGE_TOTALS_MAX_DAYS} days",
+            )
+        tz = getattr(request.app["hass"].config, "time_zone", None)
+        names = await _device_names(devices)
+        totals = []
+        for device_id, by_day in (await _daily_energy(devices, first, last, tz)).items():
+            used = sorted(day for day, wh in by_day.items() if wh > 0)
+            totals.append(
+                {
+                    "deviceId": device_id,
+                    "name": names.get(device_id, device_id),
+                    "energyWh": sum(by_day.values()),
+                    "firstDay": used[0] if used else None,
+                }
+            )
+        return web.json_response({"devices": totals})
+
+
 def _set_state_command(raw) -> dict | None:
     """The `boxCommand` of a `set_state`: the phone's signature over
     `{command: "set_state", payload: {on}}`, or None."""
@@ -596,6 +755,8 @@ ZIGBEE_LAN_VIEWS = (
     ZigbeeDeviceView,
     ZigbeeDeviceReadingsView,
     ZigbeeDeviceHistoryView,
+    ZigbeeUsageView,
+    ZigbeeUsageTotalsView,
     ZigbeeDeviceCommandView,
     ZigbeeBoxCommandView,
     ZigbeePermitJoinView,
