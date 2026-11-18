@@ -3530,3 +3530,150 @@ async def test_send_view_without_api_key_or_client_is_409(hass: HomeAssistant):
     resp = await _send(hass)
     assert resp.status == 409
     assert _body(resp) == {"error": "no_cloud_identity"}
+
+
+# ── Zigbee plug usage over the LAN for the app (svitgrid D-2133) ────────────
+
+
+async def _plug_day(hass, tmp_path):
+    """An S60ZBTPF on a Kyiv station with readings across local midnight:
+    23:55 on the 17th (600 W, 50 Wh), then 00:00, 07:00 and 11:30 on the 18th
+    (120, 1800 and 2880 W: 400 Wh in all)."""
+    await hass.config.async_set_time_zone("Europe/Kyiv")
+    _, _, devices = await _zigbee_setup(hass, tmp_path)
+    await devices.async_update(
+        PLUG_ID, {"model": "S60ZBTPF", "manufacturer": "SONOFF", "name": "Компресор"}
+    )
+    for timestamp, power in (
+        ("2026-11-17T21:55:00.000Z", 600),
+        ("2026-11-17T22:00:00.000Z", 120),
+        ("2026-11-18T05:00:00.000Z", 1800),
+        ("2026-11-18T09:30:00.000Z", 2880),
+    ):
+        stored = await devices.async_store_socket_readings(
+            "EC-1",
+            timestamp,
+            [{"addr": "0x1234", "power": power, "voltage": 23000, "current": 52, "energy": 0}],
+        )
+        assert stored == 1
+    return devices
+
+
+async def test_zigbee_usage_today_serves_the_plugs_local_day(hass: HomeAssistant, tmp_path):
+    from custom_components.svitgrid.zigbee_lan import ZigbeeUsageView
+
+    await _plug_day(hass, tmp_path)
+
+    resp = await ZigbeeUsageView().get(_ZReq(hass, query={"period": "today", "date": "2026-11-18"}))
+
+    assert resp.status == 200, _body(resp)
+    [plug] = _body(resp)["devices"]
+    assert (plug["deviceId"], plug["name"]) == (PLUG_ID, "Компресор")
+    # The slot at 00:00 Kyiv (22:00Z the day before) is today's first; 23:55
+    # on the 17th is not today's.
+    assert [b["periodStart"] for b in plug["series"]] == [
+        "2026-11-17T22:00:00.000Z",
+        "2026-11-18T05:00:00.000Z",
+        "2026-11-18T09:30:00.000Z",
+    ]
+    assert [b["avgPowerW"] for b in plug["series"]] == [120, 1800, 2880]
+    assert {b["deviceCount"] for b in plug["series"]} == {1}
+    # What the socket card shows: each slot's power over its five minutes.
+    assert sum(b["avgPowerW"] for b in plug["series"]) * 5 / 60 == 400
+    assert sum(b["energyWh"] for b in plug["series"]) == 400
+
+
+async def test_zigbee_usage_month_serves_one_energy_row_per_local_day(
+    hass: HomeAssistant, tmp_path
+):
+    from custom_components.svitgrid.zigbee_lan import ZigbeeUsageView
+
+    await _plug_day(hass, tmp_path)
+
+    resp = await ZigbeeUsageView().get(_ZReq(hass, query={"period": "month", "date": "2026-11"}))
+
+    assert resp.status == 200, _body(resp)
+    [plug] = _body(resp)["devices"]
+    assert plug["series"] == [
+        {"periodStart": "2026-11-17", "avgPowerW": 0, "energyWh": 50, "deviceCount": 1},
+        {"periodStart": "2026-11-18", "avgPowerW": 0, "energyWh": 400, "deviceCount": 1},
+    ]
+
+
+async def test_zigbee_usage_totals_sum_the_local_days_of_a_range(hass: HomeAssistant, tmp_path):
+    from custom_components.svitgrid.zigbee_lan import ZigbeeUsageTotalsView
+
+    await _plug_day(hass, tmp_path)
+
+    both = await ZigbeeUsageTotalsView().get(
+        _ZReq(hass, query={"from": "2026-11-17", "to": "2026-11-18"})
+    )
+    today = await ZigbeeUsageTotalsView().get(
+        _ZReq(hass, query={"from": "2026-11-18", "to": "2026-11-18"})
+    )
+    before = await ZigbeeUsageTotalsView().get(
+        _ZReq(hass, query={"from": "2026-11-01", "to": "2026-11-16"})
+    )
+
+    assert both.status == 200, _body(both)
+    assert _body(both) == {
+        "devices": [
+            {"deviceId": PLUG_ID, "name": "Компресор", "energyWh": 450, "firstDay": "2026-11-17"}
+        ]
+    }
+    [one] = _body(today)["devices"]
+    assert (one["energyWh"], one["firstDay"]) == (400, "2026-11-18")
+    assert _body(before) == {"devices": []}
+
+
+async def test_zigbee_usage_refuses_bad_queries(hass: HomeAssistant, tmp_path):
+    from custom_components.svitgrid.zigbee_lan import ZigbeeUsageTotalsView, ZigbeeUsageView
+
+    await _zigbee_setup(hass, tmp_path)
+
+    for query in ({"period": "year"}, {"period": "today", "date": "18.11.2026"}):
+        resp = await ZigbeeUsageView().get(_ZReq(hass, query=query))
+        assert resp.status == 400, query
+    for query in (
+        {},
+        {"from": "2026-11-18"},
+        {"from": "2026-11-18", "to": "2026-11-17"},
+        {"from": "2020-01-01", "to": "2026-11-18"},
+    ):
+        resp = await ZigbeeUsageTotalsView().get(_ZReq(hass, query=query))
+        assert resp.status == 400, query
+
+
+async def test_zigbee_usage_needs_an_edge_box_and_the_island_key(hass: HomeAssistant, tmp_path):
+    from custom_components.svitgrid.zigbee_lan import ZigbeeUsageTotalsView, ZigbeeUsageView
+
+    await _zigbee_setup(hass, tmp_path)
+    for view in (ZigbeeUsageView(), ZigbeeUsageTotalsView()):
+        resp = await view.get(_ZReq(hass, island_key=OTHER_ISLAND_KEY))
+        assert resp.status == 401
+
+
+async def test_the_zigbee_usage_views_are_registered(hass: HomeAssistant):
+    from unittest.mock import MagicMock
+
+    from custom_components.svitgrid.http_views import register_views
+
+    hass.http = MagicMock()
+    register_views(hass, store=MagicMock())
+    urls = {call.args[0].url for call in hass.http.register_view.call_args_list}
+    assert {"/api/svitgrid/zigbee/usage", "/api/svitgrid/zigbee/usage/totals"} <= urls
+
+
+async def test_zigbee_usage_month_takes_a_day_of_the_month_too(hass: HomeAssistant, tmp_path):
+    from custom_components.svitgrid.zigbee_lan import ZigbeeUsageView
+
+    await _plug_day(hass, tmp_path)
+
+    by_day = await ZigbeeUsageView().get(
+        _ZReq(hass, query={"period": "month", "date": "2026-11-05"})
+    )
+    bad = await ZigbeeUsageView().get(_ZReq(hass, query={"period": "month", "date": "2026-13"}))
+
+    [plug] = _body(by_day)["devices"]
+    assert [b["energyWh"] for b in plug["series"]] == [50, 400]
+    assert bad.status == 400

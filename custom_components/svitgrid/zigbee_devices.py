@@ -494,6 +494,21 @@ class ZigbeeDeviceStore:
             "devices": devices,
         }
 
+    def _usage_slots_sync(self, start: str, end: str) -> list[tuple[str, dict]]:
+        conn = _connect(self._db_path)
+        try:
+            rows = conn.execute(
+                "SELECT period_start, devices_json FROM zigbee_usage_5min "
+                "WHERE period_start >= ? AND period_start < ? ORDER BY period_start, box_id",
+                (_iso(_parse_iso(start)), _iso(_parse_iso(end))),
+            ).fetchall()
+        finally:
+            conn.close()
+        slots: dict[str, dict] = {}
+        for r in rows:
+            slots.setdefault(r["period_start"], {}).update(json.loads(r["devices_json"]))
+        return list(slots.items())
+
     def _remove_sync(self, device_id: str) -> None:
         conn = _connect(self._db_path)
         try:
@@ -637,6 +652,12 @@ class ZigbeeDeviceStore:
         snapshot under `boards`, their sum at the top, and every plug's
         sample under `devices`. None for a slot with no metering plug."""
         return await self._run(self._usage_5min_sync, period_start)
+
+    async def async_usage_slots(self, start: str, end: str) -> list[tuple[str, dict]]:
+        """The 5-minute slots starting in `[start, end)` (UTC ISO), oldest
+        first: each slot's start and every plug's sample in it (`avgPowerW`,
+        `energyCounterWh`), every box's snapshot merged."""
+        return await self._run(self._usage_slots_sync, start, end)
 
     async def async_remove(self, device_id: str) -> None:
         """Forget the device, its readings and its history."""
