@@ -1,5 +1,7 @@
 [
   {"modelId": "edecoa_em_624a", "transport": "pi30_serial", "protocolId": "pi30", "expected": "pi30"},
+  {"modelId": "edecoa_em_302a", "transport": "pi30_serial", "protocolId": "pi30", "expected": "pi30"},
+  {"modelId": "daxtromn_agh_6_2kw_pro", "transport": "pi30_serial", "protocolId": "pi30", "expected": "pi30_vmii"},
   {"modelId": "anenji_anj_4200", "transport": null, "protocolId": "eybond_at", "expected": "smg2"},
   {"modelId": "anenji_anj_4200", "transport": null, "protocolId": null, "expected": "smg2"},
   {"modelId": "anenji_anj_4200", "transport": null, "protocolId": "solarman", "expected": "smg2"},
@@ -9,6 +11,8 @@
   {"modelId": "srne_hsi_1500", "transport": null, "protocolId": "solarman", "expected": "srne"},
   {"modelId": "deye_sg04lp3", "transport": null, "protocolId": null, "expected": null},
   {"modelId": "edecoa_em_624a", "transport": null, "protocolId": null, "expected": null},
+  {"modelId": "edecoa_em_302a", "transport": null, "protocolId": null, "expected": null},
+  {"modelId": "daxtromn_agh_6_2kw_pro", "transport": null, "protocolId": null, "expected": null},
   {"modelId": "anenji_anj_4200", "transport": "pi30_serial", "protocolId": null, "expected": "pi30"},
   {"modelId": "luxpower_sna_5000_wpv", "transport": "modbus_rtu", "protocolId": "modbus_rtu", "expected": "luxpower"},
   {"modelId": "luxpower_sna_5000_wpv", "transport": "modbus_rtu", "protocolId": null, "expected": "luxpower"},
@@ -20,5 +24,7 @@
   {"modelId": "must_pv18_3224", "transport": "eybond_at", "protocolId": "eybond_at", "expected": "must"},
   {"modelId": "must_pv18_3224", "transport": null, "protocolId": "eybond_at", "expected": "must"},
   {"modelId": "must_pv18_3224", "transport": null, "protocolId": null, "expected": null},
-  {"modelId": "must_pv18_3224", "transport": "modbus_tcp", "protocolId": "modbus_tcp", "expected": null}
+  {"modelId": "must_pv18_3224", "transport": "modbus_tcp", "protocolId": "modbus_tcp", "expected": null},
+  {"modelId": "axioma_isgrid_15000", "transport": "p17_serial", "protocolId": "p17", "expected": "p17"},
+  {"modelId": "axioma_isgrid_15000", "transport": null, "protocolId": null, "expected": null}
 ]

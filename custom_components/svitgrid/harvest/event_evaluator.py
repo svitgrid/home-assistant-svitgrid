@@ -1346,6 +1346,26 @@ def _unsupported_command(
     return writes[0].command
 
 
+def _p17_hold_command(event: dict, protocol: str | None) -> str | None:
+    """``set_p17_hold`` for a P17 event the cloud holds a setting for, else None.
+
+    The cloud holds a ``battery_hold`` window, and the AC charge current of a
+    ``battery_charge`` window beside its profile (p17-hold.ts
+    p17ChargeHoldValues). The island sends no hold yet, so such an event
+    writes nothing rather than the profile alone (svitgrid D-2144).
+    """
+    if protocol != "p17":
+        return None
+    mode = event.get("mode")
+    if mode == "battery_hold":
+        return "set_p17_hold"
+    if mode == "battery_charge":
+        current = _finite_or_none((event.get("config") or {}).get("chargeCurrentA"))
+        if current is not None and current > 0:
+            return "set_p17_hold"
+    return None
+
+
 def _unsupported(event: dict, exec_state: dict, command: str, now_utc: datetime):
     """Skip an event the island cannot write, recorded once in lastCommandError.
 
@@ -1418,6 +1438,9 @@ def evaluate_event(
         protocol = priority_profile_protocol(
             inverter.get("modelId"), inverter.get("transport"), inverter.get("protocolId")
         )
+        p17_hold = _p17_hold_command(event, protocol)
+        if p17_hold is not None:
+            return _unsupported(event, exec_state, p17_hold, now_utc)
         if kind == "priority" and _runs_on_priority_profile(event):
             decision = _evaluate_priority(
                 event, reading, exec_state, now_utc, tz, others, protocol, maintenance

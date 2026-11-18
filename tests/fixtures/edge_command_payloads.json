@@ -474,5 +474,671 @@
         "stopChargeV": 56
       }
     }
+  },
+  {
+    "command": "apply_priority_profile",
+    "inverter": {
+      "modelId": "axioma_isgrid_15000",
+      "transport": "p17_serial",
+      "protocolId": "p17"
+    },
+    "event": {
+      "id": "priority-battery_charge",
+      "inverterId": "inv-1",
+      "mode": "battery_charge",
+      "enabled": true,
+      "schedule": {
+        "startTime": "10:00",
+        "endTime": "14:00",
+        "recurrence": "daily"
+      },
+      "config": {
+        "targetSoc": 100,
+        "chargeSource": "grid"
+      },
+      "executionState": {
+        "status": "idle",
+        "activeCommandIds": []
+      }
+    },
+    "reading": {
+      "inverterId": "inv-1",
+      "batterySoc": 50
+    },
+    "now": "2026-09-14T09:00:00.000Z",
+    "timezone": "Europe/Kyiv",
+    "payload": {
+      "inverterId": "inv-1",
+      "profile": "grid_charge",
+      "revertAt": 1789384200
+    }
+  },
+  {
+    "command": "apply_priority_profile",
+    "inverter": {
+      "modelId": "axioma_isgrid_15000",
+      "transport": "p17_serial",
+      "protocolId": "p17"
+    },
+    "event": {
+      "id": "priority-use_battery",
+      "inverterId": "inv-1",
+      "mode": "use_battery",
+      "enabled": true,
+      "schedule": {
+        "startTime": "10:00",
+        "endTime": "14:00",
+        "recurrence": "daily"
+      },
+      "config": {},
+      "executionState": {
+        "status": "idle",
+        "activeCommandIds": []
+      }
+    },
+    "reading": {
+      "inverterId": "inv-1",
+      "batterySoc": 50
+    },
+    "now": "2026-09-14T09:00:00.000Z",
+    "timezone": "Europe/Kyiv",
+    "payload": {
+      "inverterId": "inv-1",
+      "profile": "battery_first",
+      "revertAt": 1789384200
+    }
+  },
+  {
+    "command": "set_p17_hold",
+    "inverter": {
+      "modelId": "axioma_isgrid_15000",
+      "transport": "p17_serial",
+      "protocolId": "p17"
+    },
+    "event": {
+      "id": "p17-battery_charge",
+      "inverterId": "inv-1",
+      "mode": "battery_charge",
+      "enabled": true,
+      "schedule": {
+        "startTime": "10:00",
+        "endTime": "14:00",
+        "recurrence": "daily"
+      },
+      "config": {
+        "targetSoc": 100,
+        "chargeSource": "grid",
+        "chargeCurrentA": 60
+      },
+      "executionState": {
+        "status": "idle",
+        "activeCommandIds": []
+      }
+    },
+    "reading": {
+      "inverterId": "inv-1",
+      "batterySoc": 50
+    },
+    "now": "2026-09-14T09:00:00.000Z",
+    "timezone": "Europe/Kyiv",
+    "payload": {
+      "inverterId": "inv-1",
+      "values": {
+        "maxAcChargeCurrent": 60
+      }
+    }
+  },
+  {
+    "command": "set_p17_hold",
+    "inverter": {
+      "modelId": "axioma_isgrid_15000",
+      "transport": "p17_serial",
+      "protocolId": "p17"
+    },
+    "event": {
+      "id": "p17-sell_to_grid",
+      "inverterId": "inv-1",
+      "mode": "sell_to_grid",
+      "enabled": true,
+      "schedule": {
+        "startTime": "10:00",
+        "endTime": "14:00",
+        "recurrence": "daily"
+      },
+      "config": {
+        "sellMode": "simple",
+        "sellPowerCapW": 8000,
+        "minSocPercent": 30
+      },
+      "executionState": {
+        "status": "idle",
+        "activeCommandIds": []
+      }
+    },
+    "reading": {
+      "inverterId": "inv-1",
+      "batterySoc": 50
+    },
+    "now": "2026-09-14T09:00:00.000Z",
+    "timezone": "Europe/Kyiv",
+    "payload": {
+      "inverterId": "inv-1",
+      "values": {
+        "feedIn": 1,
+        "batteryToGridWithPv": 1,
+        "batteryToGridNoPv": 1,
+        "feedInLimitW": 8000
+      }
+    }
+  },
+  {
+    "command": "set_p17_hold",
+    "inverter": {
+      "modelId": "axioma_isgrid_15000",
+      "transport": "p17_serial",
+      "protocolId": "p17"
+    },
+    "event": {
+      "id": "p17-sell_to_grid",
+      "inverterId": "inv-1",
+      "mode": "sell_to_grid",
+      "enabled": true,
+      "schedule": {
+        "startTime": "10:00",
+        "endTime": "14:00",
+        "recurrence": "daily"
+      },
+      "config": {
+        "sellMode": "simple",
+        "sellPowerCapW": 8000,
+        "minSocPercent": 30
+      },
+      "executionState": {
+        "status": "active",
+        "activeCommandIds": []
+      }
+    },
+    "reading": {
+      "inverterId": "inv-1",
+      "batterySoc": 50
+    },
+    "now": "2026-09-14T09:00:00.000Z",
+    "timezone": "Europe/Kyiv",
+    "payload": {
+      "inverterId": "inv-1",
+      "values": {
+        "batteryToGridWithPv": 0,
+        "batteryToGridNoPv": 0
+      }
+    }
+  },
+  {
+    "command": "restore_p17_hold",
+    "inverter": {
+      "modelId": "axioma_isgrid_15000",
+      "transport": "p17_serial",
+      "protocolId": "p17"
+    },
+    "event": {
+      "id": "p17-sell_to_grid",
+      "inverterId": "inv-1",
+      "mode": "sell_to_grid",
+      "enabled": true,
+      "schedule": {
+        "startTime": "10:00",
+        "endTime": "14:00",
+        "recurrence": "daily"
+      },
+      "config": {
+        "sellMode": "simple",
+        "sellPowerCapW": 8000,
+        "minSocPercent": 30
+      },
+      "executionState": {
+        "status": "active",
+        "activeCommandIds": [],
+        "previousP17Hold": {
+          "feedIn": 0,
+          "batteryToGridWithPv": 0,
+          "batteryToGridNoPv": 0,
+          "feedInLimitW": 5000,
+          "maxAcChargeCurrent": 30,
+          "acChargeWindows": [
+            "0100",
+            "0600"
+          ]
+        }
+      }
+    },
+    "reading": {
+      "inverterId": "inv-1",
+      "batterySoc": 50
+    },
+    "now": "2026-09-14T11:05:00.000Z",
+    "timezone": "Europe/Kyiv",
+    "payload": {
+      "inverterId": "inv-1",
+      "values": {
+        "feedIn": 0,
+        "batteryToGridWithPv": 0,
+        "batteryToGridNoPv": 0,
+        "feedInLimitW": 5000
+      }
+    }
+  },
+  {
+    "command": "set_p17_hold",
+    "inverter": {
+      "modelId": "axioma_isgrid_15000",
+      "transport": "p17_serial",
+      "protocolId": "p17"
+    },
+    "event": {
+      "id": "p17-battery_hold",
+      "inverterId": "inv-1",
+      "mode": "battery_hold",
+      "enabled": true,
+      "schedule": {
+        "startTime": "10:00",
+        "endTime": "14:00",
+        "recurrence": "daily"
+      },
+      "config": {},
+      "executionState": {
+        "status": "idle",
+        "activeCommandIds": []
+      }
+    },
+    "reading": {
+      "inverterId": "inv-1",
+      "batterySoc": 50
+    },
+    "now": "2026-09-14T09:00:00.000Z",
+    "timezone": "Europe/Kyiv",
+    "payload": {
+      "inverterId": "inv-1",
+      "values": {
+        "batteryToGridWithPv": 0,
+        "batteryToGridNoPv": 0
+      }
+    }
+  },
+  {
+    "command": "set_p17_hold",
+    "inverter": {
+      "modelId": "axioma_isgrid_15000",
+      "transport": "p17_serial",
+      "protocolId": "p17"
+    },
+    "event": {
+      "id": "custom-solar_sell-always",
+      "inverterId": "inv-1",
+      "mode": "custom",
+      "enabled": true,
+      "schedule": {
+        "startTime": "00:00",
+        "endTime": "23:59",
+        "recurrence": "always"
+      },
+      "config": {
+        "customActions": [
+          {
+            "type": "solar_sell",
+            "value": 1
+          }
+        ],
+        "customConditions": [
+          {
+            "type": "battery_soc",
+            "op": "lte",
+            "threshold": 60,
+            "releaseThreshold": 90
+          }
+        ],
+        "sustainMinutes": 0
+      },
+      "executionState": {
+        "status": "pending_condition",
+        "activeCommandIds": []
+      }
+    },
+    "reading": {
+      "inverterId": "inv-1",
+      "batterySoc": 50
+    },
+    "now": "2026-09-14T09:00:00.000Z",
+    "timezone": "Europe/Kyiv",
+    "payload": {
+      "inverterId": "inv-1",
+      "values": {
+        "feedIn": 1,
+        "feedInLimitW": 9000
+      }
+    }
+  },
+  {
+    "command": "set_p17_hold",
+    "inverter": {
+      "modelId": "axioma_isgrid_15000",
+      "transport": "p17_serial",
+      "protocolId": "p17"
+    },
+    "event": {
+      "id": "custom-p17_thresholds-always",
+      "inverterId": "inv-1",
+      "mode": "custom",
+      "enabled": true,
+      "schedule": {
+        "startTime": "00:00",
+        "endTime": "23:59",
+        "recurrence": "always"
+      },
+      "config": {
+        "customActions": [
+          {
+            "type": "p17_thresholds",
+            "cutoffOffGridV": 42,
+            "resumeOffGridV": 47,
+            "cutoffOnGridV": 44,
+            "resumeOnGridV": 49,
+            "maxChargeCurrent": 80
+          }
+        ],
+        "customConditions": [
+          {
+            "type": "battery_soc",
+            "op": "lte",
+            "threshold": 60,
+            "releaseThreshold": 90
+          }
+        ],
+        "sustainMinutes": 0
+      },
+      "executionState": {
+        "status": "pending_condition",
+        "activeCommandIds": []
+      }
+    },
+    "reading": {
+      "inverterId": "inv-1",
+      "batterySoc": 50
+    },
+    "now": "2026-09-14T09:00:00.000Z",
+    "timezone": "Europe/Kyiv",
+    "payload": {
+      "inverterId": "inv-1",
+      "values": {
+        "maxChargeCurrent": 80,
+        "cutoffOffGridV": 42,
+        "resumeOffGridV": 47,
+        "cutoffOnGridV": 44,
+        "resumeOnGridV": 49
+      }
+    }
+  },
+  {
+    "command": "restore_p17_hold",
+    "inverter": {
+      "modelId": "axioma_isgrid_15000",
+      "transport": "p17_serial",
+      "protocolId": "p17"
+    },
+    "event": {
+      "id": "custom-p17_thresholds-daily",
+      "inverterId": "inv-1",
+      "mode": "custom",
+      "enabled": true,
+      "schedule": {
+        "startTime": "10:00",
+        "endTime": "14:00",
+        "recurrence": "daily"
+      },
+      "config": {
+        "customActions": [
+          {
+            "type": "p17_thresholds",
+            "cutoffOffGridV": 42,
+            "resumeOffGridV": 47,
+            "cutoffOnGridV": 44,
+            "resumeOnGridV": 49,
+            "maxChargeCurrent": 80
+          }
+        ],
+        "customConditions": [
+          {
+            "type": "battery_soc",
+            "op": "lte",
+            "threshold": 60,
+            "releaseThreshold": 90
+          }
+        ],
+        "sustainMinutes": 0
+      },
+      "executionState": {
+        "status": "active",
+        "activeCommandIds": [],
+        "customSnapshot": {
+          "previousP17Hold": {
+            "maxChargeCurrent": 100,
+            "cutoffOffGridV": 44,
+            "resumeOffGridV": 48,
+            "cutoffOnGridV": 46,
+            "resumeOnGridV": 50
+          }
+        }
+      }
+    },
+    "reading": {
+      "inverterId": "inv-1",
+      "batterySoc": 95
+    },
+    "now": "2026-09-14T11:05:00.000Z",
+    "timezone": "Europe/Kyiv",
+    "payload": {
+      "inverterId": "inv-1",
+      "values": {
+        "maxChargeCurrent": 100,
+        "cutoffOffGridV": 44,
+        "resumeOffGridV": 48,
+        "cutoffOnGridV": 46,
+        "resumeOnGridV": 50
+      }
+    }
+  },
+  {
+    "command": "apply_priority_profile",
+    "inverter": {
+      "modelId": "daxtromn_agh_6_2kw_pro",
+      "transport": "pi30_serial",
+      "protocolId": "pi30"
+    },
+    "event": {
+      "id": "priority-battery_charge",
+      "inverterId": "inv-1",
+      "mode": "battery_charge",
+      "enabled": true,
+      "schedule": {
+        "startTime": "10:00",
+        "endTime": "14:00",
+        "recurrence": "daily"
+      },
+      "config": {
+        "targetSoc": 100,
+        "chargeSource": "grid"
+      },
+      "executionState": {
+        "status": "idle",
+        "activeCommandIds": []
+      }
+    },
+    "reading": {
+      "inverterId": "inv-1",
+      "batterySoc": 50
+    },
+    "now": "2026-09-14T09:00:00.000Z",
+    "timezone": "Europe/Kyiv",
+    "payload": {
+      "inverterId": "inv-1",
+      "profile": "grid_charge",
+      "revertAt": 1789384200
+    }
+  },
+  {
+    "command": "restore_priority_profile",
+    "inverter": {
+      "modelId": "daxtromn_agh_6_2kw_pro",
+      "transport": "pi30_serial",
+      "protocolId": "pi30"
+    },
+    "event": {
+      "id": "priority-battery_charge",
+      "inverterId": "inv-1",
+      "mode": "battery_charge",
+      "enabled": true,
+      "schedule": {
+        "startTime": "10:00",
+        "endTime": "14:00",
+        "recurrence": "daily"
+      },
+      "config": {
+        "targetSoc": 100,
+        "chargeSource": "grid"
+      },
+      "executionState": {
+        "status": "active",
+        "activeCommandIds": [],
+        "priorityProfilePrev": {
+          "protocol": "pi30_vmii",
+          "outputPriority": 2,
+          "chargerPriority": 0
+        },
+        "priorityApplyCmdId": "cmd-apply-1"
+      }
+    },
+    "reading": {
+      "inverterId": "inv-1",
+      "batterySoc": 80
+    },
+    "now": "2026-09-14T11:05:00.000Z",
+    "timezone": "Europe/Kyiv",
+    "payload": {
+      "inverterId": "inv-1",
+      "prev": {
+        "protocol": "pi30_vmii",
+        "outputPriority": 2,
+        "chargerPriority": 0
+      },
+      "cmdId": "cmd-apply-1"
+    }
+  },
+  {
+    "command": "set_pi30_thresholds",
+    "inverter": {
+      "modelId": "daxtromn_agh_6_2kw_pro",
+      "transport": "pi30_serial",
+      "protocolId": "pi30"
+    },
+    "event": {
+      "id": "custom-pi30_thresholds-daily",
+      "inverterId": "inv-1",
+      "mode": "custom",
+      "enabled": true,
+      "schedule": {
+        "startTime": "10:00",
+        "endTime": "14:00",
+        "recurrence": "daily"
+      },
+      "config": {
+        "customActions": [
+          {
+            "type": "pi30_thresholds",
+            "backToGridVoltage": 46,
+            "backToBatteryVoltage": 54
+          }
+        ],
+        "customConditions": [
+          {
+            "type": "battery_soc",
+            "op": "lte",
+            "threshold": 60,
+            "releaseThreshold": 90
+          }
+        ],
+        "sustainMinutes": 0
+      },
+      "executionState": {
+        "status": "pending_condition",
+        "activeCommandIds": []
+      }
+    },
+    "reading": {
+      "inverterId": "inv-1",
+      "batterySoc": 50
+    },
+    "now": "2026-09-14T09:00:00.000Z",
+    "timezone": "Europe/Kyiv",
+    "payload": {
+      "inverterId": "inv-1",
+      "backToGridVoltage": 46,
+      "backToBatteryVoltage": 54
+    }
+  },
+  {
+    "command": "restore_pi30_thresholds",
+    "inverter": {
+      "modelId": "daxtromn_agh_6_2kw_pro",
+      "transport": "pi30_serial",
+      "protocolId": "pi30"
+    },
+    "event": {
+      "id": "custom-pi30_thresholds-daily",
+      "inverterId": "inv-1",
+      "mode": "custom",
+      "enabled": true,
+      "schedule": {
+        "startTime": "10:00",
+        "endTime": "14:00",
+        "recurrence": "daily"
+      },
+      "config": {
+        "customActions": [
+          {
+            "type": "pi30_thresholds",
+            "backToGridVoltage": 46,
+            "backToBatteryVoltage": 54
+          }
+        ],
+        "customConditions": [
+          {
+            "type": "battery_soc",
+            "op": "lte",
+            "threshold": 60,
+            "releaseThreshold": 90
+          }
+        ],
+        "sustainMinutes": 0
+      },
+      "executionState": {
+        "status": "active",
+        "activeCommandIds": [],
+        "customSnapshot": {
+          "previousPi30Thresholds": {
+            "backToGridVoltage": 45,
+            "backToBatteryVoltage": 52
+          }
+        }
+      }
+    },
+    "reading": {
+      "inverterId": "inv-1",
+      "batterySoc": 95
+    },
+    "now": "2026-09-14T11:05:00.000Z",
+    "timezone": "Europe/Kyiv",
+    "payload": {
+      "inverterId": "inv-1",
+      "backToGridVoltage": 45,
+      "backToBatteryVoltage": 52
+    }
   }
 ]

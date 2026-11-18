@@ -54,6 +54,9 @@ PROFILES_BY_PROTOCOL = {
     "srne": ("grid_charge", "battery_first"),
     "luxpower": ("grid_charge", "grid_first"),
     "must": ("grid_charge", "battery_first"),
+    # The Axioma ISGRID 15000 (Voltronic P17) on the board's serial port. The
+    # board sets each profile's catalogue keys (priority_profile_table.json).
+    "p17": ("grid_charge", "battery_first"),
 }
 
 # Execution-state keys, the cloud's (CalendarEventDoc.executionState).

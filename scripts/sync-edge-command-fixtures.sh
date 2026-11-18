@@ -18,6 +18,7 @@ mkdir -p "$FIXTURES_DIR"
 for SRC_REL in \
   fixtures/edge_command_payloads.json \
   fixtures/priority_profile_resolution.json \
+  fixtures/priority_profile_table.json \
   fixtures/firmware_signed_commands.json \
   fixtures/edge_paths.json \
   fixtures/edge_pair_code.json \
