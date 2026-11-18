@@ -93,6 +93,18 @@ def test_offline_copy_carries_minutes():
     )
 
 
+def test_string_offline_copy_names_the_string():
+    """The cloud's `string_offline` copy, with the inverter and the string (svitgrid D-2155)."""
+    out = copy.render("string_offline", "uk", station="Deye <1>", string_id="PV2, PV3")
+    assert out == (
+        "<b>Рядок панелей не працює</b>\nDeye &lt;1&gt;: рядок PV2, PV3 майже не виробляє, "
+        "тоді як інші працюють — перевірте підключення/запобіжники."
+    )
+    assert copy.render("string_offline", "en", station="Home", string_id="PV1").startswith(
+        "<b>Solar string offline</b>\nHome: string PV1 is producing almost nothing"
+    )
+
+
 def test_rule_notice_copy():
     """A rule's start and stop notices (svitgrid D-2151)."""
     named = copy.render_rule_notice(

@@ -2,7 +2,7 @@
 
 One store holds the owner's bot token, the linked chats (one per paired phone),
 one-time link codes, the getUpdates offset, the alert detector's state, the
-liveness check's state and the send queue. The token never appears in `repr`, `str` or a log line.
+liveness check's state, the string check's state and the send queue. The token never appears in `repr`, `str` or a log line.
 """
 
 from __future__ import annotations
@@ -68,6 +68,7 @@ class TelegramState:
         self._detector: dict[str, Any] = {}
         self._liveness: dict[str, Any] = {}
         self._summaries: dict[str, Any] = {}
+        self._strings: dict[str, Any] = {}
         self._queue: list[dict[str, Any]] = []
         self._status: str | None = None
 
@@ -86,6 +87,7 @@ class TelegramState:
             "detector": self._detector,
             "liveness": self._liveness,
             "summaries": self._summaries,
+            "strings": self._strings,
             "queue": self._queue,
             "status": self._status,
         }
@@ -135,6 +137,8 @@ class TelegramState:
             self._liveness = live if isinstance(live, dict) else {}
             sums = raw.get("summaries")
             self._summaries = sums if isinstance(sums, dict) else {}
+            strs = raw.get("strings")
+            self._strings = strs if isinstance(strs, dict) else {}
             q = raw.get("queue")
             self._queue = q if isinstance(q, list) else []
             st = raw.get("status")
@@ -297,6 +301,16 @@ class TelegramState:
             if not isinstance(chat, dict):
                 chat = self._summaries[device_id] = {}
             chat[household_id] = {**self.summary_stamps(device_id, household_id), key: period}
+            self._save_later()
+
+    def strings(self) -> dict[str, Any]:
+        """The string check's state (svitgrid D-2155): the last day it ran and,
+        per inverter, the strings found dead and the time of the last alert."""
+        return self._strings
+
+    async def set_strings(self, strings: dict[str, Any]) -> None:
+        async with self._lock:
+            self._strings = strings
             self._save_later()
 
     def queue(self) -> list[dict[str, Any]]:

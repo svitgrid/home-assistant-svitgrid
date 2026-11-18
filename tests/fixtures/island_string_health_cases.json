@@ -1,0 +1,940 @@
+[
+  {
+    "name": "healthy_array",
+    "description": "Both strings produce: nothing.",
+    "strings": [
+      {
+        "id": "PV1",
+        "peakPowerWp": 3000
+      },
+      {
+        "id": "PV2",
+        "peakPowerWp": 3000
+      }
+    ],
+    "runs": [
+      {
+        "atDay": 0,
+        "samples": [
+          {
+            "reading": {
+              "pvPower": 4900,
+              "pvPower1": 2500,
+              "pvPower2": 2400
+            },
+            "times": 60
+          },
+          {
+            "reading": {
+              "pvPower": 0,
+              "pvPower1": 0,
+              "pvPower2": 0
+            },
+            "times": 60
+          }
+        ],
+        "expect": {
+          "checked": true,
+          "deadStringIds": [],
+          "health": [
+            {
+              "stringId": "PV1",
+              "index": 0,
+              "status": "ok",
+              "observedPeakW": 2500,
+              "bestSiblingPeakW": 2400,
+              "configuredWp": 3000
+            },
+            {
+              "stringId": "PV2",
+              "index": 1,
+              "status": "ok",
+              "observedPeakW": 2400,
+              "bestSiblingPeakW": 2500,
+              "configuredWp": 3000
+            }
+          ],
+          "alert": null
+        }
+      }
+    ]
+  },
+  {
+    "name": "one_string_dead",
+    "description": "PV2 gives nearly nothing while PV1 gives 2.5 kW: tell the owner about PV2.",
+    "strings": [
+      {
+        "id": "PV1",
+        "peakPowerWp": 3000
+      },
+      {
+        "id": "PV2",
+        "peakPowerWp": 3000
+      }
+    ],
+    "runs": [
+      {
+        "atDay": 0,
+        "samples": [
+          {
+            "reading": {
+              "pvPower": 2530,
+              "pvPower1": 2500,
+              "pvPower2": 30
+            },
+            "times": 60
+          },
+          {
+            "reading": {
+              "pvPower": 0,
+              "pvPower1": 0,
+              "pvPower2": 0
+            },
+            "times": 60
+          }
+        ],
+        "expect": {
+          "checked": true,
+          "deadStringIds": [
+            "PV2"
+          ],
+          "health": [
+            {
+              "stringId": "PV1",
+              "index": 0,
+              "status": "ok",
+              "observedPeakW": 2500,
+              "bestSiblingPeakW": 30,
+              "configuredWp": 3000
+            },
+            {
+              "stringId": "PV2",
+              "index": 1,
+              "status": "dead",
+              "observedPeakW": 30,
+              "bestSiblingPeakW": 2500,
+              "configuredWp": 3000
+            }
+          ],
+          "alert": {
+            "stringId": "PV2"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "still_dead_next_day",
+    "description": "A string already told about stays dead: no second message.",
+    "strings": [
+      {
+        "id": "PV1",
+        "peakPowerWp": 3000
+      },
+      {
+        "id": "PV2",
+        "peakPowerWp": 3000
+      }
+    ],
+    "runs": [
+      {
+        "atDay": 0,
+        "samples": [
+          {
+            "reading": {
+              "pvPower": 2500,
+              "pvPower1": 2500,
+              "pvPower2": 0
+            },
+            "times": 60
+          },
+          {
+            "reading": {
+              "pvPower": 0,
+              "pvPower1": 0,
+              "pvPower2": 0
+            },
+            "times": 60
+          }
+        ],
+        "expect": {
+          "checked": true,
+          "deadStringIds": [
+            "PV2"
+          ],
+          "health": [
+            {
+              "stringId": "PV1",
+              "index": 0,
+              "status": "ok",
+              "observedPeakW": 2500,
+              "bestSiblingPeakW": 0,
+              "configuredWp": 3000
+            },
+            {
+              "stringId": "PV2",
+              "index": 1,
+              "status": "dead",
+              "observedPeakW": 0,
+              "bestSiblingPeakW": 2500,
+              "configuredWp": 3000
+            }
+          ],
+          "alert": {
+            "stringId": "PV2"
+          }
+        }
+      },
+      {
+        "atDay": 1,
+        "samples": [
+          {
+            "reading": {
+              "pvPower": 2600,
+              "pvPower1": 2600,
+              "pvPower2": 0
+            },
+            "times": 60
+          },
+          {
+            "reading": {
+              "pvPower": 0,
+              "pvPower1": 0,
+              "pvPower2": 0
+            },
+            "times": 60
+          }
+        ],
+        "expect": {
+          "checked": true,
+          "deadStringIds": [
+            "PV2"
+          ],
+          "health": [
+            {
+              "stringId": "PV1",
+              "index": 0,
+              "status": "ok",
+              "observedPeakW": 2600,
+              "bestSiblingPeakW": 0,
+              "configuredWp": 3000
+            },
+            {
+              "stringId": "PV2",
+              "index": 1,
+              "status": "dead",
+              "observedPeakW": 0,
+              "bestSiblingPeakW": 2600,
+              "configuredWp": 3000
+            }
+          ],
+          "alert": null
+        }
+      }
+    ]
+  },
+  {
+    "name": "dead_again_inside_the_cooldown",
+    "description": "Repaired after a day, dead again on day 3: inside the 7-day cooldown, so nothing. Repaired again, then dead on day 9: told again.",
+    "strings": [
+      {
+        "id": "PV1",
+        "peakPowerWp": 3000
+      },
+      {
+        "id": "PV2",
+        "peakPowerWp": 3000
+      }
+    ],
+    "runs": [
+      {
+        "atDay": 0,
+        "samples": [
+          {
+            "reading": {
+              "pvPower": 2500,
+              "pvPower1": 2500,
+              "pvPower2": 0
+            },
+            "times": 60
+          },
+          {
+            "reading": {
+              "pvPower": 0,
+              "pvPower1": 0,
+              "pvPower2": 0
+            },
+            "times": 60
+          }
+        ],
+        "expect": {
+          "checked": true,
+          "deadStringIds": [
+            "PV2"
+          ],
+          "health": [
+            {
+              "stringId": "PV1",
+              "index": 0,
+              "status": "ok",
+              "observedPeakW": 2500,
+              "bestSiblingPeakW": 0,
+              "configuredWp": 3000
+            },
+            {
+              "stringId": "PV2",
+              "index": 1,
+              "status": "dead",
+              "observedPeakW": 0,
+              "bestSiblingPeakW": 2500,
+              "configuredWp": 3000
+            }
+          ],
+          "alert": {
+            "stringId": "PV2"
+          }
+        }
+      },
+      {
+        "atDay": 1,
+        "samples": [
+          {
+            "reading": {
+              "pvPower": 4900,
+              "pvPower1": 2500,
+              "pvPower2": 2400
+            },
+            "times": 60
+          },
+          {
+            "reading": {
+              "pvPower": 0,
+              "pvPower1": 0,
+              "pvPower2": 0
+            },
+            "times": 60
+          }
+        ],
+        "expect": {
+          "checked": true,
+          "deadStringIds": [],
+          "health": [
+            {
+              "stringId": "PV1",
+              "index": 0,
+              "status": "ok",
+              "observedPeakW": 2500,
+              "bestSiblingPeakW": 2400,
+              "configuredWp": 3000
+            },
+            {
+              "stringId": "PV2",
+              "index": 1,
+              "status": "ok",
+              "observedPeakW": 2400,
+              "bestSiblingPeakW": 2500,
+              "configuredWp": 3000
+            }
+          ],
+          "alert": null
+        }
+      },
+      {
+        "atDay": 3,
+        "samples": [
+          {
+            "reading": {
+              "pvPower": 2500,
+              "pvPower1": 2500,
+              "pvPower2": 0
+            },
+            "times": 60
+          },
+          {
+            "reading": {
+              "pvPower": 0,
+              "pvPower1": 0,
+              "pvPower2": 0
+            },
+            "times": 60
+          }
+        ],
+        "expect": {
+          "checked": true,
+          "deadStringIds": [
+            "PV2"
+          ],
+          "health": [
+            {
+              "stringId": "PV1",
+              "index": 0,
+              "status": "ok",
+              "observedPeakW": 2500,
+              "bestSiblingPeakW": 0,
+              "configuredWp": 3000
+            },
+            {
+              "stringId": "PV2",
+              "index": 1,
+              "status": "dead",
+              "observedPeakW": 0,
+              "bestSiblingPeakW": 2500,
+              "configuredWp": 3000
+            }
+          ],
+          "alert": null
+        }
+      },
+      {
+        "atDay": 8,
+        "samples": [
+          {
+            "reading": {
+              "pvPower": 4900,
+              "pvPower1": 2500,
+              "pvPower2": 2400
+            },
+            "times": 60
+          },
+          {
+            "reading": {
+              "pvPower": 0,
+              "pvPower1": 0,
+              "pvPower2": 0
+            },
+            "times": 60
+          }
+        ],
+        "expect": {
+          "checked": true,
+          "deadStringIds": [],
+          "health": [
+            {
+              "stringId": "PV1",
+              "index": 0,
+              "status": "ok",
+              "observedPeakW": 2500,
+              "bestSiblingPeakW": 2400,
+              "configuredWp": 3000
+            },
+            {
+              "stringId": "PV2",
+              "index": 1,
+              "status": "ok",
+              "observedPeakW": 2400,
+              "bestSiblingPeakW": 2500,
+              "configuredWp": 3000
+            }
+          ],
+          "alert": null
+        }
+      },
+      {
+        "atDay": 9,
+        "samples": [
+          {
+            "reading": {
+              "pvPower": 2500,
+              "pvPower1": 2500,
+              "pvPower2": 0
+            },
+            "times": 60
+          },
+          {
+            "reading": {
+              "pvPower": 0,
+              "pvPower1": 0,
+              "pvPower2": 0
+            },
+            "times": 60
+          }
+        ],
+        "expect": {
+          "checked": true,
+          "deadStringIds": [
+            "PV2"
+          ],
+          "health": [
+            {
+              "stringId": "PV1",
+              "index": 0,
+              "status": "ok",
+              "observedPeakW": 2500,
+              "bestSiblingPeakW": 0,
+              "configuredWp": 3000
+            },
+            {
+              "stringId": "PV2",
+              "index": 1,
+              "status": "dead",
+              "observedPeakW": 0,
+              "bestSiblingPeakW": 2500,
+              "configuredWp": 3000
+            }
+          ],
+          "alert": {
+            "stringId": "PV2"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "cloudy_week",
+    "description": "Both strings low together, as under cloud: the array is not alive, so nothing.",
+    "strings": [
+      {
+        "id": "PV1",
+        "peakPowerWp": 3000
+      },
+      {
+        "id": "PV2",
+        "peakPowerWp": 3000
+      }
+    ],
+    "runs": [
+      {
+        "atDay": 0,
+        "samples": [
+          {
+            "reading": {
+              "pvPower": 650,
+              "pvPower1": 600,
+              "pvPower2": 50
+            },
+            "times": 60
+          },
+          {
+            "reading": {
+              "pvPower": 0,
+              "pvPower1": 0,
+              "pvPower2": 0
+            },
+            "times": 60
+          }
+        ],
+        "expect": {
+          "checked": true,
+          "deadStringIds": [],
+          "health": [
+            {
+              "stringId": "PV1",
+              "index": 0,
+              "status": "ok",
+              "observedPeakW": 600,
+              "bestSiblingPeakW": 50,
+              "configuredWp": 3000
+            },
+            {
+              "stringId": "PV2",
+              "index": 1,
+              "status": "ok",
+              "observedPeakW": 50,
+              "bestSiblingPeakW": 600,
+              "configuredWp": 3000
+            }
+          ],
+          "alert": null
+        }
+      }
+    ]
+  },
+  {
+    "name": "too_few_readings",
+    "description": "Under 50 readings in the window: the sweep skips the inverter.",
+    "strings": [
+      {
+        "id": "PV1",
+        "peakPowerWp": 3000
+      },
+      {
+        "id": "PV2",
+        "peakPowerWp": 3000
+      }
+    ],
+    "runs": [
+      {
+        "atDay": 0,
+        "samples": [
+          {
+            "reading": {
+              "pvPower": 2500,
+              "pvPower1": 2500,
+              "pvPower2": 0
+            },
+            "times": 40
+          }
+        ],
+        "expect": {
+          "checked": false,
+          "deadStringIds": [],
+          "health": [],
+          "alert": null
+        }
+      }
+    ]
+  },
+  {
+    "name": "one_string_only",
+    "description": "One configured string has no sibling to compare with: skipped.",
+    "strings": [
+      {
+        "id": "PV1",
+        "peakPowerWp": 3000
+      }
+    ],
+    "runs": [
+      {
+        "atDay": 0,
+        "samples": [
+          {
+            "reading": {
+              "pvPower": 0,
+              "pvPower1": 0
+            },
+            "times": 120
+          }
+        ],
+        "expect": {
+          "checked": false,
+          "deadStringIds": [],
+          "health": [],
+          "alert": null
+        }
+      }
+    ]
+  },
+  {
+    "name": "fewer_channels_than_strings",
+    "description": "Three strings on two PV inputs: which string is which is unknown, so nothing.",
+    "strings": [
+      {
+        "id": "PV1",
+        "peakPowerWp": 3000
+      },
+      {
+        "id": "PV2",
+        "peakPowerWp": 3000
+      },
+      {
+        "id": "PV3",
+        "peakPowerWp": 3000
+      }
+    ],
+    "runs": [
+      {
+        "atDay": 0,
+        "samples": [
+          {
+            "reading": {
+              "pvPower": 4900,
+              "pvPower1": 2500,
+              "pvPower2": 2400
+            },
+            "times": 60
+          },
+          {
+            "reading": {
+              "pvPower": 0,
+              "pvPower1": 0,
+              "pvPower2": 0
+            },
+            "times": 60
+          }
+        ],
+        "expect": {
+          "checked": true,
+          "deadStringIds": [],
+          "health": [
+            {
+              "stringId": "PV1",
+              "index": 0,
+              "status": "ok",
+              "observedPeakW": 2500,
+              "bestSiblingPeakW": 2400,
+              "configuredWp": 3000
+            },
+            {
+              "stringId": "PV2",
+              "index": 1,
+              "status": "ok",
+              "observedPeakW": 2400,
+              "bestSiblingPeakW": 2500,
+              "configuredWp": 3000
+            },
+            {
+              "stringId": "PV3",
+              "index": 2,
+              "status": "ok",
+              "observedPeakW": 0,
+              "bestSiblingPeakW": 2500,
+              "configuredWp": 3000
+            }
+          ],
+          "alert": null
+        }
+      }
+    ]
+  },
+  {
+    "name": "small_string",
+    "description": "A 400 Wp string is below the 500 Wp floor: never flagged.",
+    "strings": [
+      {
+        "id": "PV1",
+        "peakPowerWp": 3000
+      },
+      {
+        "id": "PV2",
+        "peakPowerWp": 400
+      }
+    ],
+    "runs": [
+      {
+        "atDay": 0,
+        "samples": [
+          {
+            "reading": {
+              "pvPower": 2500,
+              "pvPower1": 2500,
+              "pvPower2": 0
+            },
+            "times": 60
+          },
+          {
+            "reading": {
+              "pvPower": 0,
+              "pvPower1": 0,
+              "pvPower2": 0
+            },
+            "times": 60
+          }
+        ],
+        "expect": {
+          "checked": true,
+          "deadStringIds": [],
+          "health": [
+            {
+              "stringId": "PV1",
+              "index": 0,
+              "status": "ok",
+              "observedPeakW": 2500,
+              "bestSiblingPeakW": 0,
+              "configuredWp": 3000
+            },
+            {
+              "stringId": "PV2",
+              "index": 1,
+              "status": "ok",
+              "observedPeakW": 0,
+              "bestSiblingPeakW": 2500,
+              "configuredWp": 400
+            }
+          ],
+          "alert": null
+        }
+      }
+    ]
+  },
+  {
+    "name": "no_peak_power",
+    "description": "A string with no peakPowerWp counts as 0 Wp: never flagged.",
+    "strings": [
+      {
+        "id": "PV1",
+        "peakPowerWp": 3000
+      },
+      {
+        "id": "PV2"
+      }
+    ],
+    "runs": [
+      {
+        "atDay": 0,
+        "samples": [
+          {
+            "reading": {
+              "pvPower": 2500,
+              "pvPower1": 2500,
+              "pvPower2": 0
+            },
+            "times": 60
+          },
+          {
+            "reading": {
+              "pvPower": 0,
+              "pvPower1": 0,
+              "pvPower2": 0
+            },
+            "times": 60
+          }
+        ],
+        "expect": {
+          "checked": true,
+          "deadStringIds": [],
+          "health": [
+            {
+              "stringId": "PV1",
+              "index": 0,
+              "status": "ok",
+              "observedPeakW": 2500,
+              "bestSiblingPeakW": 0,
+              "configuredWp": 3000
+            },
+            {
+              "stringId": "PV2",
+              "index": 1,
+              "status": "ok",
+              "observedPeakW": 0,
+              "bestSiblingPeakW": 2500,
+              "configuredWp": 0
+            }
+          ],
+          "alert": null
+        }
+      }
+    ]
+  },
+  {
+    "name": "two_strings_dead",
+    "description": "PV2 and PV3 both dead beside a healthy PV1: one message names both.",
+    "strings": [
+      {
+        "id": "PV1",
+        "peakPowerWp": 3000
+      },
+      {
+        "id": "PV2",
+        "peakPowerWp": 3000
+      },
+      {
+        "id": "PV3",
+        "peakPowerWp": 3000
+      }
+    ],
+    "runs": [
+      {
+        "atDay": 0,
+        "samples": [
+          {
+            "reading": {
+              "pvPower": 2810,
+              "pvPower1": 2800,
+              "pvPower2": 0,
+              "pvPower3": 10
+            },
+            "times": 60
+          },
+          {
+            "reading": {
+              "pvPower": 0,
+              "pvPower1": 0,
+              "pvPower2": 0,
+              "pvPower3": 0
+            },
+            "times": 60
+          }
+        ],
+        "expect": {
+          "checked": true,
+          "deadStringIds": [
+            "PV2",
+            "PV3"
+          ],
+          "health": [
+            {
+              "stringId": "PV1",
+              "index": 0,
+              "status": "ok",
+              "observedPeakW": 2800,
+              "bestSiblingPeakW": 10,
+              "configuredWp": 3000
+            },
+            {
+              "stringId": "PV2",
+              "index": 1,
+              "status": "dead",
+              "observedPeakW": 0,
+              "bestSiblingPeakW": 2800,
+              "configuredWp": 3000
+            },
+            {
+              "stringId": "PV3",
+              "index": 2,
+              "status": "dead",
+              "observedPeakW": 10,
+              "bestSiblingPeakW": 2800,
+              "configuredWp": 3000
+            }
+          ],
+          "alert": {
+            "stringId": "PV2, PV3"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "string_without_id",
+    "description": "A string with no id is named by its position, as the cloud names it.",
+    "strings": [
+      {
+        "id": "PV1",
+        "peakPowerWp": 3000
+      },
+      {
+        "peakPowerWp": 3000
+      }
+    ],
+    "runs": [
+      {
+        "atDay": 0,
+        "samples": [
+          {
+            "reading": {
+              "pvPower": 2500,
+              "pvPower1": 2500,
+              "pvPower2": 0
+            },
+            "times": 60
+          },
+          {
+            "reading": {
+              "pvPower": 0,
+              "pvPower1": 0,
+              "pvPower2": 0
+            },
+            "times": 60
+          }
+        ],
+        "expect": {
+          "checked": true,
+          "deadStringIds": [
+            "#1"
+          ],
+          "health": [
+            {
+              "stringId": "PV1",
+              "index": 0,
+              "status": "ok",
+              "observedPeakW": 2500,
+              "bestSiblingPeakW": 0,
+              "configuredWp": 3000
+            },
+            {
+              "stringId": "#1",
+              "index": 1,
+              "status": "dead",
+              "observedPeakW": 0,
+              "bestSiblingPeakW": 2500,
+              "configuredWp": 3000
+            }
+          ],
+          "alert": {
+            "stringId": "#1"
+          }
+        }
+      }
+    ]
+  }
+]

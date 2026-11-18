@@ -93,6 +93,7 @@ from .settings_sync import settings_sync_loop as run_settings_sync_loop
 from .telegram.liveness_source import (
     entry_for_inverter,
     island_liveness,
+    island_string_inputs,
     island_summary_totals,
 )
 from .telegram.runtime import TelegramRuntime, household_key
@@ -158,6 +159,7 @@ async def _start_telegram(hass: HomeAssistant, entry: ConfigEntry, store) -> Non
                 summary_totals=lambda household_id, from_day, to_day: island_summary_totals(
                     hass, household_id, from_day, to_day
                 ),
+                strings_source=lambda since_ms: island_string_inputs(hass, since_ms),
             )
             await runtime.start()
             # Only a started runtime is kept, so a failed start is retried

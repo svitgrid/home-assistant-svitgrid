@@ -27,6 +27,7 @@ Kind = Literal[
     "offline_board_recovered",
     "calendar_event_started",
     "calendar_event_ended",
+    "string_offline",
     "test",
     "linked",
 ]
@@ -85,13 +86,19 @@ def render(
     tz: str | None = None,
     now: datetime | None = None,
     minutes_ago: int | None = None,
+    string_id: str | None = None,
 ) -> str:
-    """Return the Telegram HTML for one message."""
+    """Return the Telegram HTML for one message.
+
+    `station` fills `{inverterName}`; for `string_offline` the caller passes
+    the inverter's own name when it has one, as the cloud does.
+    """
     strings = _strings(language)
     values = {
         "inverterName": html.escape(station),
         "batterySoc": "" if soc is None else html.escape(str(soc)),
         "minutesAgo": "" if minutes_ago is None else html.escape(str(minutes_ago)),
+        "stringId": "" if string_id is None else html.escape(string_id),
     }
 
     def fill(key: str) -> str:

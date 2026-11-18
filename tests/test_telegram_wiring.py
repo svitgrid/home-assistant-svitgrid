@@ -602,3 +602,72 @@ async def test_daily_report_reads_the_sealed_day(hass, station, aioclient_mock, 
     assert _sends(aioclient_mock)[-1] == (
         "<b>Щоденний звіт</b>\nЗа вчора: 9.5 кВт·год згенеровано, 7.3 кВт·год спожито"
     )
+
+
+async def _strings_layout(hass, inverter_id="ha-aaa"):
+    from custom_components.svitgrid.solar_strings import solar_strings_store
+
+    await (await solar_strings_store(hass)).async_set(
+        inverter_id,
+        [{"id": "PV1", "peakPowerWp": 3000}, {"id": "PV2", "peakPowerWp": 3000}],
+        "Deye",
+    )
+
+
+async def _dead_pv2_week(store, clock):
+    for i in range(60):
+        await store.append(
+            {
+                "inverterId": "ha-aaa",
+                "timestamp": clock.iso(-3600 - i * 60),
+                "pvPower": 2500,
+                "pvPower1": 2500,
+                "pvPower2": 0,
+            }
+        )
+
+
+async def test_a_dead_string_is_told_from_the_stored_readings(hass, station, aioclient_mock, clock):
+    """The string check reads the store's last 7 days for an inverter whose
+    setup the app sent (svitgrid D-2155)."""
+    await hass.config.async_update(time_zone="Europe/Kyiv")
+    await _bot(hass)
+    entry = _entry()
+    await _set_up(hass, entry)
+    await _strings_layout(hass)
+    await _dead_pv2_week(hass.data[DOMAIN][entry.entry_id]["store"], clock)
+
+    await hass.data[DOMAIN]["telegram"].check_strings()
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+    assert _sends(aioclient_mock)[-1].startswith(
+        "<b>Рядок панелей не працює</b>\nDeye: рядок PV2 майже не виробляє"
+    )
+
+
+async def test_no_string_setup_sends_nothing(hass, station, aioclient_mock, clock):
+    """An app that predates D-2155 never sends a setup: nothing is checked."""
+    await hass.config.async_update(time_zone="Europe/Kyiv")
+    await _bot(hass)
+    entry = _entry()
+    await _set_up(hass, entry)
+    await _dead_pv2_week(hass.data[DOMAIN][entry.entry_id]["store"], clock)
+
+    await hass.data[DOMAIN]["telegram"].check_strings()
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+    assert _sends(aioclient_mock) == []
+
+
+async def test_cloud_copy_on_sends_no_string_alert(hass, station, aioclient_mock, clock):
+    await hass.config.async_update(time_zone="Europe/Kyiv")
+    await _bot(hass)
+    entry = _entry(cloud_copy=True)
+    await _set_up(hass, entry)
+    await _strings_layout(hass)
+    await _dead_pv2_week(hass.data[DOMAIN][entry.entry_id]["store"], clock)
+
+    await hass.data[DOMAIN]["telegram"].check_strings()
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+    assert _sends(aioclient_mock) == []

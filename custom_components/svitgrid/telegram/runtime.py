@@ -3,7 +3,8 @@
 `on_reading` feeds the detector and writes one queue entry per alert and
 enabled chat before anything is sent, so an alert survives a restart or a
 Telegram outage. A timer runs the liveness check once a minute, for the
-boards and inverters that stop reporting (svitgrid D-2149). One sender task drains the queue oldest first and waits 60 s
+boards and inverters that stop reporting (svitgrid D-2149), and the cloud's
+string-outage rule once a day (svitgrid D-2155). One sender task drains the queue oldest first and waits 60 s
 after a failed send. One poller task long-polls `getUpdates`, but only while a
 link code is pending, and links the chat that sends `/start <code>`.
 
@@ -32,7 +33,8 @@ from .bot_api import BotApi, BotInUseElsewhere, InvalidToken, SendResult, Telegr
 from .detector import evaluate
 from .liveness import evaluate_liveness
 from .state import TelegramState
-from .summaries import due_summaries
+from .strings import STRING_WINDOW_DAYS, sweep_inverter
+from .summaries import _local, due_summaries
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -57,6 +59,7 @@ ALERT_KINDS = (
     "calendar_event_ended",
     "daily_summary",
     "weekly_summary",
+    "string_offline",
 )
 _SUMMARY_KINDS = frozenset({"daily_summary", "weekly_summary"})
 _NOTICE_KINDS = {"started": "calendar_event_started", "ended": "calendar_event_ended"}
@@ -71,10 +74,17 @@ _FLUSH_KINDS = frozenset(ALERT_KINDS) - {
     "weekly_summary",
 }
 LIVENESS_TICK_S = 60
+# The string check runs once a day from 09:00 on the station's clock: the
+# cloud's sweep runs at 03:10, inside most chats' quiet hours, which drop a
+# `string_offline` alert.
+STRING_CHECK_MINUTE = 9 * 60
+_DAY_MS = 24 * 60 * 60 * 1000
 
 LivenessSource = Callable[[], Awaitable[list[dict]]]
 # A household's energy over local days `from_day`..`to_day`, or None.
 SummaryTotals = Callable[[str, str, str], Awaitable[dict | None]]
+# Every island inverter with a string setup, and its readings since a time in ms.
+StringSource = Callable[[int], Awaitable[list[dict]]]
 
 STATUS_INVALID_TOKEN = "invalid_token"
 STATUS_IN_USE = "bot_in_use_elsewhere"
@@ -144,6 +154,7 @@ class TelegramRuntime:
         api_factory: Callable[[Any, str], BotApi] = BotApi,
         liveness_source: LivenessSource | None = None,
         summary_totals: SummaryTotals | None = None,
+        strings_source: StringSource | None = None,
     ) -> None:
         self._hass = hass
         self._state = state
@@ -162,6 +173,7 @@ class TelegramRuntime:
         self._liveness_source = liveness_source
         self._started_ms: int | None = None
         self._summary_totals = summary_totals
+        self._strings_source = strings_source
 
     # Lifecycle
 
@@ -337,6 +349,69 @@ class TelegramRuntime:
             await self.check_summaries(households)
         except Exception:  # noqa: BLE001
             _LOGGER.exception("The island energy reports failed; retrying")
+        try:
+            await self.check_strings()
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception("The island string check failed; retrying")
+
+    async def check_strings(self) -> None:
+        """Run the cloud's string-outage rule once a day (svitgrid D-2155).
+
+        Over each island inverter's last 7 days of readings, for the
+        inverters whose string setup the app sent. A string is told about when
+        it turns dead, never twice in 7 days. As with readings, nothing runs
+        without a bot and an enabled chat.
+        """
+        source = self._strings_source
+        if source is None or self._state.token() is None:
+            return
+        if not any(c.enabled for c in self._state.chats()):
+            return
+        local = _local(self._now(), self._hass.config.time_zone)
+        today = local.date().isoformat()
+        if local.hour * 60 + local.minute < STRING_CHECK_MINUTE:
+            return
+        if self._state.strings().get("lastRunDay") == today:
+            return
+        now_ms = self._now_ms()
+        inverters = await source(now_ms - STRING_WINDOW_DAYS * _DAY_MS)
+        async with self._lock:
+            previous = self._state.strings().get("inverters")
+            previous = previous if isinstance(previous, dict) else {}
+            states = dict(previous)
+            added = []
+            for inv in inverters:
+                inverter_id = inv.get("inverterId")
+                if not isinstance(inverter_id, str):
+                    continue
+                state, result = sweep_inverter(
+                    previous.get(inverter_id), inv.get("strings"), inv.get("readings") or [], now_ms
+                )
+                states[inverter_id] = state
+                if result.alert_string_id is None:
+                    continue
+                name = inv.get("inverterName")
+                added += [
+                    {
+                        "id": uuid.uuid4().hex,
+                        "chatDeviceId": chat.device_id,
+                        "kind": "string_offline",
+                        "householdId": inv.get("householdId"),
+                        "eventAtMs": now_ms,
+                        "soc": None,
+                        "inverterId": inverter_id,
+                        "inverterName": name if isinstance(name, str) else None,
+                        "stringId": result.alert_string_id,
+                        "createdAtMs": now_ms,
+                    }
+                    for chat in self._wanting("string_offline")
+                ]
+            await self._state.set_strings({"lastRunDay": today, "inverters": states})
+            if added:
+                await self._state.set_queue(_trim([*self._state.queue(), *added], now_ms))
+                await self._state.flush()
+        if added:
+            self._kick_sender()
 
     async def check_summaries(self, household_ids: list[str]) -> None:
         """Queue each chat's daily and weekly report that is due (svitgrid D-2152).
@@ -551,10 +626,16 @@ class TelegramRuntime:
         event_at = (
             datetime.fromtimestamp(event_ms / 1000, UTC) if isinstance(event_ms, int) else None
         )
+        station = self._station(entry.get("householdId"))
+        if entry.get("kind") == "string_offline" and isinstance(entry.get("inverterName"), str):
+            # The cloud names the inverter in this one.
+            station = entry["inverterName"]
+        string_id = entry.get("stringId")
         return copy.render(
             entry.get("kind"),
             language,
-            station=self._station(entry.get("householdId")),
+            station=station,
+            string_id=string_id if isinstance(string_id, str) else None,
             soc=entry.get("soc"),
             minutes_ago=entry.get("minutesAgo"),
             event_at=event_at,

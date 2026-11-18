@@ -81,6 +81,7 @@ from .keystore import EdgeBoxEntry, LastAdminKey
 from .log_upload import UPLOAD_LOCK
 from .settings_sync import find_edge_settings_snapshot
 from .signing import compute_key_id, public_key_from_hex
+from .solar_strings import solar_strings_store, valid_name, valid_strings
 from .zigbee_devices import ZigbeeDeviceStore, device_id_for_ieee
 
 _LOGGER = logging.getLogger(__name__)
@@ -126,6 +127,10 @@ CAPABILITIES = (
     # POST /api/svitgrid/edge/box-command queues a board command for one
     # edge box (`board_lan`, svitgrid #1312).
     "edge_box_commands",
+    # POST /api/svitgrid/island/solar-strings keeps each inverter's string
+    # setup, and the island Telegram bot runs the cloud's string-outage rule
+    # on it (svitgrid D-2155). The app sends the strings only when listed.
+    "string_outage",
 )
 
 ACTION_SET_CLOUD_COPY = "set_cloud_copy"
@@ -139,6 +144,7 @@ ACTION_EDGE_FORGET = "edge_forget"
 ACTION_EDGE_LEAVE = "edge_leave"
 ACTION_EDGE_KEY_ADD = "edge_key_add"
 ACTION_BMS_REPORT = "bms_report"
+ACTION_SOLAR_STRINGS = "solar_strings"
 # The box command `/edge/leave` queues (`edge_pair_code.json` `commands.clear`).
 EDGE_LEAVE_COMMAND = "clear_island_endpoint"
 
@@ -800,6 +806,46 @@ class SvitgridIslandBmsReportView(HomeAssistantView):
         return web.json_response({"ok": True, "packCount": count})
 
 
+class SvitgridIslandSolarStringsView(HomeAssistantView):
+    """POST /api/svitgrid/island/solar-strings — one inverter's string setup.
+
+    `signedData`: `{action: "solar_strings", inverterId, inverterName?, strings,
+    nonce, ts}`, `strings` the inverter's `solarConfig.strings` as the app
+    saves them to the cloud. Only each string's `id` and `peakPowerWp` are
+    kept (`solar_strings.py`); an empty list drops the inverter's setup. The
+    island Telegram bot reads it for the string-outage alert (svitgrid
+    D-2155), which the cloud's weekly sweep never runs on a local-only island.
+
+    404 `unknown_inverter` for an inverter this station does not serve.
+    """
+
+    url = "/api/svitgrid/island/solar-strings"
+    name = "api:svitgrid:island:solar-strings"
+    requires_auth = False
+
+    async def post(self, request) -> web.Response:  # noqa: D102
+        signed, error = await signed_lan_request(request, ACTION_SOLAR_STRINGS)
+        if error is not None:
+            return error
+        hass = request.app["hass"]
+        inverter_id = signed.get("inverterId")
+        if not isinstance(inverter_id, str) or not inverter_id:
+            return _json_error(400, "bad_request", detail="inverterId must be a string")
+        strings = valid_strings(signed.get("strings"))
+        if strings is None:
+            return _json_error(400, "bad_request", detail="strings is not a string setup")
+        name_ok, name = valid_name(signed.get("inverterName"))
+        if not name_ok:
+            return _json_error(400, "bad_request", detail="inverterName must be a string")
+        keystore = hass.data.get(DOMAIN, {}).get("keystore")
+        state = await keystore.load() if keystore is not None else None
+        boxes = list(state.edge_boxes.values()) if state is not None else []
+        if inverter_id not in _inverter_adverts(hass, boxes):
+            return _json_error(404, "unknown_inverter")
+        await (await solar_strings_store(hass)).async_set(inverter_id, strings, name)
+        return web.json_response({"ok": True, "stringCount": len(strings)})
+
+
 # What `/island/status` says of each edge box; `/edge/status` says more.
 _ISLAND_STATUS_BOX_KEYS = (
     "deviceId",
@@ -1380,6 +1426,7 @@ ISLAND_LAN_VIEWS = (
     SvitgridKeysRevokeView,
     SvitgridIslandStatusView,
     SvitgridIslandBmsReportView,
+    SvitgridIslandSolarStringsView,
     SvitgridEdgeAdoptView,
     SvitgridEdgeForgetView,
     SvitgridEdgeStatusView,

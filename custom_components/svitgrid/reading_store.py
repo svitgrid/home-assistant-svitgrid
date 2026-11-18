@@ -34,6 +34,10 @@ MAX_SEND_ATTEMPTS = 10
 _INITIALIZED: set[str] = set()
 
 
+# The keys the island string check reads (telegram/strings.py).
+_PV_POWER_KEYS = ("pvPower", "pvPower1", "pvPower2", "pvPower3", "pvPower4")
+
+
 def _connect(db_path: str) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path, timeout=30)
     conn.row_factory = sqlite3.Row
@@ -729,6 +733,27 @@ class ReadingStore:
         finally:
             conn.close()
 
+    def _string_power_rows_sync(self, inverter_id: str, since_iso: str) -> list[dict]:
+        """The PV power keys of every raw reading at or after *since_iso*.
+
+        For the island string check (svitgrid D-2155). A key the reading
+        lacks stays absent: the rule counts PV channels by key presence.
+        """
+        conn = _connect(self._db_path)
+        try:
+            cur = conn.execute(
+                "SELECT payload FROM readings_raw WHERE inverter_id = ? AND ts >= ? ORDER BY ts",
+                (inverter_id, since_iso),
+            )
+            rows = []
+            for r in cur.fetchall():
+                payload = json.loads(r["payload"])
+                if isinstance(payload, dict):
+                    rows.append({k: payload[k] for k in _PV_POWER_KEYS if k in payload})
+            return rows
+        finally:
+            conn.close()
+
     def _history_range_sync(self, inverter_id: str, start_day: str, end_day: str) -> list[dict]:
         conn = _connect(self._db_path)
         try:
@@ -1248,6 +1273,11 @@ class ReadingStore:
 
     async def today_summary(self, day: str, tz_name: str | None = None) -> list[dict]:
         return await self._hass.async_add_executor_job(self._today_summary_sync, day, tz_name)
+
+    async def string_power_rows(self, inverter_id: str, since_iso: str) -> list[dict]:
+        return await self._hass.async_add_executor_job(
+            self._string_power_rows_sync, inverter_id, since_iso
+        )
 
     async def history_range(self, inverter_id: str, start_day: str, end_day: str) -> list[dict]:
         return await self._hass.async_add_executor_job(

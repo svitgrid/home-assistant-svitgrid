@@ -8,11 +8,12 @@ the cloud's offline sweep covers it.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from ..const import DOMAIN
 from ..island_lan import _cloud_copy_of
+from ..solar_strings import solar_strings_store
 from .runtime import household_key
 from .summaries import summary_totals
 
@@ -138,12 +139,7 @@ async def island_summary_totals(hass, household_id: str, from_day: str, to_day: 
         if hh["householdId"] == household_id
         for inv in hh["inverters"]
     ]
-    domain = hass.data.get(DOMAIN) or {}
-    stores = [
-        s["store"]
-        for e in hass.config_entries.async_entries(DOMAIN)
-        if isinstance(s := domain.get(e.entry_id), dict) and s.get("store") is not None
-    ]
+    stores = _stores(hass)
     rows = []
     for inverter_id in inverters:
         found: list[dict] = []
@@ -151,3 +147,47 @@ async def island_summary_totals(hass, household_id: str, from_day: str, to_day: 
             found += await store.history_range(inverter_id, from_day, to_day)
         rows.append(found)
     return summary_totals(rows)
+
+
+def _stores(hass) -> list:
+    domain = hass.data.get(DOMAIN) or {}
+    return [
+        s["store"]
+        for e in hass.config_entries.async_entries(DOMAIN)
+        if isinstance(s := domain.get(e.entry_id), dict) and s.get("store") is not None
+    ]
+
+
+async def island_string_inputs(hass, since_ms: int) -> list[dict]:
+    """Every island inverter with a string setup from the app, and the PV
+    power of its readings since `since_ms` in every store (svitgrid D-2155).
+
+    An inverter the app sent no setup for, or one with a single string, is
+    left out before any reading is read.
+    """
+    layouts = await solar_strings_store(hass)
+    since = (
+        datetime.fromtimestamp(since_ms / 1000, UTC)
+        .isoformat(timespec="milliseconds")
+        .replace("+00:00", "Z")
+    )
+    stores = _stores(hass)
+    out = []
+    for hh in await island_liveness(hass):
+        for inv in hh["inverters"]:
+            layout = layouts.layout(inv["id"])
+            if layout is None or len(layout["strings"]) < 2:
+                continue
+            readings: list[dict] = []
+            for store in stores:
+                readings += await store.string_power_rows(inv["id"], since)
+            out.append(
+                {
+                    "householdId": hh["householdId"],
+                    "inverterId": inv["id"],
+                    "inverterName": layout["inverterName"],
+                    "strings": layout["strings"],
+                    "readings": readings,
+                }
+            )
+    return out

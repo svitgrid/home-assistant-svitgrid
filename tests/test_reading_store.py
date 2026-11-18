@@ -678,3 +678,28 @@ async def test_a_failing_reading_listener_never_fails_the_append(tmp_path, caplo
     assert store._recent_sync("inv-1", 10)[0]["payload"] == reading
     assert heard == [reading]
     assert "reading listener failed" in caplog.text
+
+
+def test_string_power_rows_keep_only_the_pv_keys_since_the_floor(tmp_path):
+    """The island string check reads 7 days of PV power (svitgrid D-2155).
+    A key the reading lacks stays absent: presence is how the rule counts
+    the inverter's PV channels."""
+    store = _store(tmp_path)
+    store._append_sync(
+        {"inverterId": "inv-1", "timestamp": "2026-10-20T10:00:00Z", "pvPower": 9, "pvPower1": 9}
+    )
+    store._append_sync(
+        {
+            "inverterId": "inv-1",
+            "timestamp": "2026-10-28T10:00:00Z",
+            "pvPower": 2500,
+            "pvPower1": 2500,
+            "pvPower2": 0,
+            "batterySoc": 80,
+        }
+    )
+    store._append_sync({"inverterId": "inv-2", "timestamp": "2026-10-28T10:00:00Z", "pvPower": 1})
+
+    rows = store._string_power_rows_sync("inv-1", "2026-10-21T10:00:00Z")
+
+    assert rows == [{"pvPower": 2500, "pvPower1": 2500, "pvPower2": 0}]

@@ -406,6 +406,127 @@ async def test_a_period_with_no_energy_is_tried_again(setup, hass):
     assert len(api.sent) == 1
 
 
+def _strings_source(readings, *, name="Deye", strings=None, asked=None):
+    """One island inverter with two strings and `readings` over the window."""
+
+    async def source(since_ms):
+        if asked is not None:
+            asked.append(since_ms)
+        return [
+            {
+                "householdId": "hh1",
+                "inverterId": "inv1",
+                "inverterName": name,
+                "strings": strings
+                if strings is not None
+                else [{"id": "PV1", "peakPowerWp": 3000}, {"id": "PV2", "peakPowerWp": 3000}],
+                "readings": readings,
+            }
+        ]
+
+    return source
+
+
+DEAD_PV2 = [{"pvPower": 2500, "pvPower1": 2500, "pvPower2": 0}] * 60
+
+
+async def test_a_dead_string_is_told_once_a_day_at_most(setup, hass):
+    """The cloud's string-outage rule, once a day from 09:00 (svitgrid D-2155)."""
+    rt, state, api, clock, _ = setup
+    await hass.config.async_update(time_zone="Europe/Kyiv")
+    _chat(state, "phone-1", 11)
+    asked: list[int] = []
+    rt._strings_source = _strings_source(DEAD_PV2, asked=asked)
+    await rt.start()
+    # NOW is 14:00 in Kyiv.
+    await rt.check_strings()
+    await rt.check_strings()
+    await _settle(rt)
+    assert len(api.sent) == 1
+    assert api.sent[0][1] == (
+        "<b>Рядок панелей не працює</b>\nDeye: рядок PV2 майже не виробляє, тоді як інші "
+        "працюють — перевірте підключення/запобіжники.\n🕑 14:00"
+    )
+    assert asked == [NOW_MS - 7 * 24 * 60 * 60 * 1000]
+    # The next day the string is still dead: the transition gate holds, even
+    # across a restart.
+    await state.flush()
+    again = tv.TelegramState(hass)
+    await again.load()
+    rt._state = again
+    clock.now = NOW + timedelta(days=1)
+    await rt.check_strings()
+    await _settle(rt)
+    assert len(api.sent) == 1
+    assert len(asked) == 2
+
+
+async def test_strings_wait_for_nine_in_the_morning(setup, hass):
+    rt, state, api, clock, _ = setup
+    await hass.config.async_update(time_zone="Europe/Kyiv")
+    _chat(state, "phone-1", 11)
+    asked: list[int] = []
+    rt._strings_source = _strings_source(DEAD_PV2, asked=asked)
+    await rt.start()
+    clock.now = datetime(2026, 10, 30, 6, 0, tzinfo=UTC)  # 08:00 in Kyiv
+    await rt.check_strings()
+    assert asked == []
+    clock.now = datetime(2026, 10, 30, 7, 0, tzinfo=UTC)  # 09:00
+    await rt.check_strings()
+    await _settle(rt)
+    assert len(api.sent) == 1
+
+
+async def test_a_muted_string_alert_is_not_sent(setup, hass):
+    rt, state, api, clock, _ = setup
+    await hass.config.async_update(time_zone="Europe/Kyiv")
+    state._chats["phone-1"] = Chat(
+        "phone-1",
+        11,
+        None,
+        True,
+        "en",
+        "2026-10-30T00:00:00+00:00",
+        {"mutedAlerts": ["string_offline"]},
+    )
+    _chat(state, "phone-2", 22, language="en")
+    rt._strings_source = _strings_source(DEAD_PV2, name=None)
+    await rt.start()
+    await rt.check_strings()
+    await _settle(rt)
+    assert [c for c, _, _ in api.sent] == [22]
+    # With no inverter name the station's name stands in.
+    assert api.sent[0][1].startswith("<b>Solar string offline</b>\nДача: string PV2 is")
+
+
+async def test_strings_need_a_bot_a_chat_and_a_layout(setup, hass):
+    rt, state, api, clock, _ = setup
+    await hass.config.async_update(time_zone="Europe/Kyiv")
+
+    async def source(since_ms):
+        raise AssertionError("not read without an enabled chat")
+
+    rt._strings_source = source
+    await rt.check_strings()
+    _chat(state, "phone-1", 11)
+    # An older app never sent a layout: the source has nothing, nothing is sent.
+    rt._strings_source = _strings_source(DEAD_PV2, strings=[])
+    await rt.check_strings()
+    await _settle(rt)
+    assert api.sent == []
+
+
+async def test_a_failing_string_check_does_not_stop_the_tick(setup, hass):
+    rt, state, api, clock, _ = setup
+    _chat(state, "phone-1", 11)
+
+    async def source(since_ms):
+        raise RuntimeError("store gone")
+
+    rt._strings_source = source
+    await rt._tick_once()  # logs, never raises
+
+
 async def test_retry_keeps_order_and_sends_after_reconnect(setup):
     rt, state, api, clock, sleeps = setup
     _chat(state, "phone-1", 11)
