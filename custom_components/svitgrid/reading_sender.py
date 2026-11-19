@@ -38,6 +38,14 @@ AUTH_COOLDOWN_S = 15 * 60
 _FAILURE_BACKOFF_BASE_S = 10
 _FAILURE_BACKOFF_CAP_S = 5 * 60
 
+# Extra requests one drain may spend splitting a batch the cloud refused with
+# 400 (svitgrid D-2312). The API validated the whole batch, so one row it
+# would not take refused every row beside it, and each of them counted an
+# attempt. Halving finds a refused row in about 2*log2(n) requests; the budget
+# keeps that well under the ingest rate limit (30 batches a minute), and what
+# the split does not reach stays pending for the next drain.
+SPLIT_REQUEST_BUDGET = 8
+
 
 class SenderHealth:
     """Sender-wide failure backoff, consulted by `drain_once`.
@@ -103,6 +111,7 @@ async def _http_send(
     publisher,
     health: SenderHealth | None = None,
     control: MqttControlState | None = None,
+    split_budget: list[int] | None = None,
 ) -> tuple[list[tuple[str, str]], bool]:
     """POST ``readings`` (aligned with ``keys``) via the HTTP batch ingest,
     map the per-item results back onto the store, handle DeviceEvicted /
@@ -117,6 +126,12 @@ async def _http_send(
     not ReadingRejected, not a transient-5xx ``None``) — the caller uses this
     to flip ``control.bootstrapped`` once the cloud path is proven this
     session, mirroring the edge firmware's ``g_http_ingest_confirmed_this_boot``.
+
+    ``split_budget`` (a one-item list, shared down the recursion) lets a batch
+    the cloud refused with 400 be sent again in halves, so a row the cloud will
+    not take costs only itself (svitgrid D-2312). Without it, or once it runs
+    out, a refused batch is handled as before, except that an unsplit batch of
+    several rows stays pending rather than counting an attempt on every row.
     """
     try:
         body = await api_client.push_readings_batch(api_key=api_key, readings=readings)
@@ -139,6 +154,58 @@ async def _http_send(
             if health is not None:
                 health.note_auth_failure()
             return [], False
+        if exc.status == 400 and len(keys) > 1 and split_budget is not None:
+            if split_budget[0] < 2:
+                # Out of budget: leave these rows pending. Marking them failed
+                # would count an attempt on rows the cloud may well accept.
+                _LOGGER.warning(
+                    "cloud refused a batch of %d reading(s) (400); leaving them for the next send",
+                    len(keys),
+                )
+                if health is not None:
+                    health.note_batch_failure()
+                return [], False
+            split_budget[0] -= 2
+            _LOGGER.warning(
+                "cloud refused a batch of %d reading(s) (400); sending it in halves so "
+                "only the refused reading(s) fail",
+                len(keys),
+            )
+            mid = len(keys) // 2
+            sent: list[tuple[str, str]] = []
+            any_ok = False
+            for part_keys, part_readings in (
+                (keys[:mid], readings[:mid]),
+                (keys[mid:], readings[mid:]),
+            ):
+                part_sent, part_ok = await _http_send(
+                    store=store,
+                    api_client=api_client,
+                    api_key=api_key,
+                    now_iso=now_iso,
+                    cadence=cadence,
+                    lifecycle=lifecycle,
+                    keys=part_keys,
+                    readings=part_readings,
+                    publisher=publisher,
+                    health=health,
+                    control=control,
+                    split_budget=split_budget,
+                )
+                sent.extend(part_sent)
+                any_ok = any_ok or part_ok
+                if lifecycle is not None and not lifecycle.active:
+                    break
+            if health is not None and sent:
+                health.note_ok()
+            return sent, any_ok
+        if exc.status == 400 and len(keys) == 1:
+            _LOGGER.warning(
+                "cloud refused the reading of %s at %s (400): %s",
+                keys[0][0],
+                keys[0][1],
+                exc,
+            )
         await _maybe(store.mark_failed(keys, now_iso))
         if health is not None:
             health.note_batch_failure()
@@ -299,8 +366,15 @@ async def drain_once(
     control: MqttControlState | None = None,
     health: SenderHealth | None = None,
     live_gates: dict[str, LiveGate] | None = None,
+    box_inverter_ids: set[str] | None = None,
 ) -> int:
     """Drain at most one batch. Returns number of rows marked 'sent'.
+
+    ``box_inverter_ids`` names the inverters an adopted edge box reads. Their
+    rows reach the store only on an edge island, already in the cloud's stored
+    form (`source: "edge-device"`), and they are the box's own readings, which
+    this add-on's key must not send (svitgrid D-2312). They are marked skipped,
+    never sent, and never ride a batch with the add-on's own rows.
 
     ``live_gates`` (one LiveGate per inverter, owned by the sender loop) turns
     on the Live gate while ``control`` says Live: a row the gate rejects is
@@ -356,6 +430,22 @@ async def drain_once(
     rows = await _maybe(store.get_sendable(now_iso, cap_s, batch_max))
     if not rows:
         return 0
+
+    if box_inverter_ids:
+        box_keys = [
+            (r["inverter_id"], r["ts"]) for r in rows if r["inverter_id"] in box_inverter_ids
+        ]
+        if box_keys:
+            await _maybe(store.mark_skipped(box_keys))
+            _LOGGER.info(
+                "not sending %d reading(s) of edge box inverter(s) %s: they are the "
+                "box's own readings",
+                len(box_keys),
+                sorted({inv for inv, _ in box_keys}),
+            )
+            rows = [r for r in rows if r["inverter_id"] not in box_inverter_ids]
+            if not rows:
+                return 0
 
     gating = live_gates is not None and control is not None and control.live.live
     if live_gates is not None and not gating:
@@ -416,6 +506,7 @@ async def drain_once(
                 publisher=publisher,
                 health=health,
                 control=control,
+                split_budget=[SPLIT_REQUEST_BUDGET],
             )
         if gating:
             _record_outcomes(rows, retries, set(acked_keys) | set(http_sent), live_gates)
@@ -436,6 +527,7 @@ async def drain_once(
         publisher=publisher,
         health=health,
         control=control,
+        split_budget=[SPLIT_REQUEST_BUDGET],
     )
     if control is not None and response_ok:
         control.bootstrapped = True
@@ -455,6 +547,7 @@ async def run_sender_loop(
     lifecycle=None,
     discharge_positive_ids: set[str] | None = None,
     control: MqttControlState | None = None,
+    box_inverter_ids: set[str] | None = None,
 ) -> None:
     # Additive MQTT readings publisher, owned by this loop so its paho network
     # thread is torn down when the loop exits (task cancel on unload). Construction
@@ -483,6 +576,7 @@ async def run_sender_loop(
                     control=control,
                     health=health,
                     live_gates=live_gates,
+                    box_inverter_ids=box_inverter_ids,
                 )
             except Exception:  # never let the sender loop die
                 _LOGGER.exception("sender drain failed")

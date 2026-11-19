@@ -138,6 +138,126 @@ async def test_drain_4xx_marks_failed(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_drain_never_sends_an_edge_box_rows(tmp_path):
+    """svitgrid D-2312: an ED-1's island rows are the box's own readings, stored
+    in their cloud form (`source: "edge-device"`). The add-on's key must not send
+    them, and they must not ride a batch with the add-on's own rows."""
+    store = _store(tmp_path)
+    now = "2026-11-19T19:43:00Z"
+    store._append_sync(
+        {"inverterId": "inv-box", "timestamp": "2026-11-19T19:30:00Z", "source": "edge-device"}
+    )
+    store._append_sync({"inverterId": "inv-1", "timestamp": "2026-11-19T19:41:41Z"})
+    store._append_sync(
+        {"inverterId": "inv-box", "timestamp": "2026-11-19T19:42:00Z", "source": "edge-device"}
+    )
+    client = _FakeClient({"results": [{"ok": True, "inverterId": "inv-1"}]})
+
+    sent = await drain_once(
+        store=store,
+        api_client=client,
+        api_key="k",
+        now_iso=now,
+        cadence=Cadence(interval_s=10),
+        box_inverter_ids={"inv-box"},
+    )
+
+    assert [[r["inverterId"] for r in batch] for batch in client.calls] == [["inv-1"]]
+    assert sent == 1
+    states = {
+        (r["inverter_id"], r["ts"]): r["sync_state"] for r in store._recent_sync("inv-box", 10)
+    }
+    assert set(states.values()) == {"skipped"}
+    assert store._recent_sync("inv-1", 1)[0]["sync_state"] == "sent"
+
+
+@pytest.mark.asyncio
+async def test_drain_only_box_rows_sends_nothing(tmp_path):
+    store = _store(tmp_path)
+    store._append_sync({"inverterId": "inv-box", "timestamp": "2026-11-19T19:30:00Z"})
+    client = _FakeClient({"results": []})
+
+    await drain_once(
+        store=store,
+        api_client=client,
+        api_key="k",
+        now_iso="2026-11-19T19:43:00Z",
+        cadence=Cadence(interval_s=10),
+        box_inverter_ids={"inv-box"},
+    )
+
+    assert client.calls == []
+    assert store._count_by_state_sync() == {"skipped": 1}
+
+
+class _RefusesBadRowClient:
+    """An API that validates the whole batch: one row it refuses 400s the lot."""
+
+    def __init__(self):
+        self.calls = []
+
+    async def push_readings_batch(self, api_key, readings):
+        self.calls.append([r["timestamp"] for r in readings])
+        if any(r.get("source") == "bad" for r in readings):
+            raise ReadingRejected(400, "Validation error")
+        return {"results": [{"ok": True, "inverterId": r["inverterId"]} for r in readings]}
+
+
+@pytest.mark.asyncio
+async def test_drain_400_batch_is_split_so_one_bad_row_costs_only_itself(tmp_path):
+    """svitgrid D-2312: a batch the cloud refuses with 400 is sent in halves until
+    the refused row stands alone. Only that row counts an attempt; the rest go up."""
+    store = _store(tmp_path)
+    for i in range(6):
+        reading = {"inverterId": "inv-1", "timestamp": f"2026-11-19T19:4{i}:00Z"}
+        if i == 2:
+            reading["source"] = "bad"
+        store._append_sync(reading)
+    client = _RefusesBadRowClient()
+
+    sent = await drain_once(
+        store=store,
+        api_client=client,
+        api_key="k",
+        now_iso="2026-11-19T19:50:00Z",
+        cadence=Cadence(interval_s=10),
+    )
+
+    assert sent == 5
+    assert store._count_by_state_sync() == {"sent": 5, "failed": 1}
+    bad = [r for r in store._recent_sync("inv-1", 10) if r["sync_state"] == "failed"]
+    assert [r["ts"] for r in bad] == ["2026-11-19T19:42:00Z"]
+    assert bad[0]["attempts"] == 1
+
+
+@pytest.mark.asyncio
+async def test_drain_400_split_stops_at_its_budget_and_leaves_the_rest_pending(tmp_path):
+    """Every row bad: the split spends a bounded number of requests per drain and
+    leaves the rows it did not reach pending, so no good row burns an attempt."""
+    from custom_components.svitgrid.reading_sender import SPLIT_REQUEST_BUDGET
+
+    store = _store(tmp_path)
+    for i in range(50):
+        store._append_sync(
+            {"inverterId": "inv-1", "timestamp": f"2026-11-19T19:{i:02d}:00Z", "source": "bad"}
+        )
+    client = _RefusesBadRowClient()
+
+    await drain_once(
+        store=store,
+        api_client=client,
+        api_key="k",
+        now_iso="2026-11-19T20:00:00Z",
+        cadence=Cadence(interval_s=10),
+    )
+
+    assert len(client.calls) <= 1 + SPLIT_REQUEST_BUDGET
+    counts = store._count_by_state_sync()
+    assert counts.get("pending", 0) > 0
+    assert counts.get("sent", 0) == 0
+
+
+@pytest.mark.asyncio
 async def test_drain_partial_results_marks_each_row(tmp_path):
     store = _store(tmp_path)
     now = "2026-06-24T12:00:00Z"

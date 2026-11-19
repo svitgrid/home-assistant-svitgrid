@@ -236,6 +236,7 @@ async def _start_local_store(
     control: MqttControlState | None = None,
     device_id: str | None = None,
     history_inverter_ids: set[str] | None = None,
+    box_inverter_ids: set[str] | None = None,
 ):
     """Create the per-entry local store, seed the shared lifecycle holder from
     persisted state, register the read views once, and (only when the device is
@@ -275,7 +276,11 @@ async def _start_local_store(
     uploads on the way back (svitgrid D-2103). Each start records whether the
     cloud copy is on, BEFORE the sender starts: the first start with it on
     after an island hands the island's unsent rows to the history upload, so
-    the live sender never sends them too."""
+    the live sender never sends them too.
+
+    box_inverter_ids: the inverters adopted edge boxes read. The live sender
+    never sends their rows (svitgrid D-2312): the box's island readings are its
+    own device's, and the cloud refuses them on this add-on's key."""
     from datetime import UTC, datetime, timedelta
 
     from homeassistant.helpers.event import async_track_time_interval
@@ -360,6 +365,7 @@ async def _start_local_store(
                 lifecycle=lifecycle,
                 discharge_positive_ids=discharge_positive_ids,
                 control=control,
+                box_inverter_ids=set(box_inverter_ids or ()),
             ),
             name="svitgrid_reading_sender",
         )
@@ -1014,6 +1020,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             # A box's inverters are its own device's, not this add-on's: the
             # history import refuses this key for them.
             history_inverter_ids={inv["inverter_id"] for inv in inverters} - edge_inverter_ids,
+            box_inverter_ids=edge_inverter_ids,
         )
         # A deprovisioned device's island keys go with it (issue #6): the
         # household no longer owns this add-on, so the phones it paired must

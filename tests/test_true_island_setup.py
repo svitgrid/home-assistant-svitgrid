@@ -246,6 +246,22 @@ async def test_cloud_copy_on_starts_the_cloud_loops(hass, enable_custom_integrat
 
 
 @pytest.mark.asyncio
+async def test_back_from_an_edge_island_the_sender_leaves_the_box_rows_out(
+    hass, enable_custom_integrations
+):
+    """svitgrid D-2312: on the way back, the box's island rows sit pending in the
+    store. The live sender is told which inverters are the box's, so it never
+    sends them with this add-on's key or batches them with its own rows."""
+    ks = await _seed_keystore(hass)
+    await _adopt_box(ks, "EC-1", "inv-edge-1")
+    entry = _cloud_entry(cloud_ingest=True)
+    _, m = await _setup(hass, entry)
+
+    m["sender"].assert_called_once()
+    assert m["sender"].call_args.kwargs["box_inverter_ids"] == {"inv-edge-1"}
+
+
+@pytest.mark.asyncio
 async def test_true_island_reports_its_hourly_status_with_its_cloud_key(
     hass, enable_custom_integrations
 ):
