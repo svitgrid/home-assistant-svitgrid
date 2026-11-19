@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.34.0 — 2026-11-19
 
 ### Added
 - **Leaving an island sends Home Assistant's history to the cloud.** The first
@@ -8,12 +8,23 @@
   7 days as 5-minute buckets, the hours back to 90 days as hourly totals, and
   older days as daily totals, through the cloud's history import. The upload
   runs beside the live sender, resumes after a restart, and ends once done or
-  30 days after the return. The cloud keeps a slot it already holds, so each
-  kWh is counted once. It needs an API that has svitgrid D-2101 and D-2102.
+  30 days after the return. A second island before it ends sends its own
+  readings too. The cloud keeps a slot it already holds, so each kWh is
+  counted once (svitgrid D-2103; needs the API with D-2101 and D-2102, live
+  since 2026-11-19).
 
 ### Fixed
 - Readings the Live gate holds back are marked skipped, not sent: only
-  readings the cloud took count as synced.
+  readings the cloud took count as synced (svitgrid D-2103).
+- **An outage alert with no battery SOC leaves the figure out.** A battery
+  with no BMS reports no SOC, and the island's Telegram alert read "is on
+  battery power (0%)" or "(%)". It now drops the battery clause, in all 11
+  languages (svitgrid D-2294).
+
+### Tests
+- The island scheduler's writes, restores and brand commands are checked
+  against what an always-enforcing edge box authorizes for each event mode
+  and custom action (svitgrid D-2288).
 
 ## 0.33.1 — 2026-11-19
 
