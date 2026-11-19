@@ -66,6 +66,7 @@ from .harvest.read_now import ReadNowTrigger
 from .harvest.spec_health import build_spec
 from .harvest.spec_source import RegisterSpecStore, resolve_register_spec
 from .harvest.write_executor import WriteExecutor
+from .history_upload import HistoryUploader, run_history_upload
 from .http_views import ensure_hello_view, register_views
 from .inverter_entry import harvest_config_from_api
 from .island_event_store import IslandEventStore
@@ -234,6 +235,7 @@ async def _start_local_store(
     discharge_positive_ids=None,
     control: MqttControlState | None = None,
     device_id: str | None = None,
+    history_inverter_ids: set[str] | None = None,
 ):
     """Create the per-entry local store, seed the shared lifecycle holder from
     persisted state, register the read views once, and (only when the device is
@@ -267,7 +269,13 @@ async def _start_local_store(
     install forever — re-pairing mints a new device and a new key, the pairing
     finalizes, and the sender still never starts. Rows left by a version that
     did not record a device are discarded here, because nothing shows whom they
-    describe; the server re-decides on the next request."""
+    describe; the server re-decides on the next request.
+
+    history_inverter_ids: the inverters whose island history this device
+    uploads on the way back (svitgrid D-2103). Each start records whether the
+    cloud copy is on, BEFORE the sender starts: the first start with it on
+    after an island hands the island's unsent rows to the history upload, so
+    the live sender never sends them too."""
     from datetime import UTC, datetime, timedelta
 
     from homeassistant.helpers.event import async_track_time_interval
@@ -322,6 +330,19 @@ async def _start_local_store(
         # timer. Paused devices must still run loops so the command poller can
         # detect an operator re-enable.
         return store, cadence, None, None, lifecycle
+
+    # The way back from an island (svitgrid D-2103). A local-only entry has no
+    # cloud to go back to.
+    if device_id and not str(device_id).startswith("local:"):
+        try:
+            await store.note_cloud_copy(
+                device_id,
+                bool(cloud_ingest_enabled),
+                set(history_inverter_ids if history_inverter_ids is not None else active_ids or ()),
+                datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+            )
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception("could not record the cloud copy state for the history upload")
 
     # Gate the cloud sender on the per-entry flag. The harvest engine, local-store
     # writes, and rollup timer all run regardless — only cloud upload is skipped.
@@ -990,6 +1011,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             # cloud pairing on this install cannot stop it.
             device_id=entry.data.get("edge_device_id")
             or (f"local:{entry.entry_id}" if local_only else None),
+            # A box's inverters are its own device's, not this add-on's: the
+            # history import refuses this key for them.
+            history_inverter_ids={inv["inverter_id"] for inv in inverters} - edge_inverter_ids,
         )
         # A deprovisioned device's island keys go with it (issue #6): the
         # household no longer owns this add-on, so the phones it paired must
@@ -1070,6 +1094,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     harvest_models: dict[str, str | None] = {}
     island_report_task = None
     outage_schedule_task = None
+    history_upload_task = None
 
     if loops_active:
         spec_store = RegisterSpecStore(hass)
@@ -1197,6 +1222,40 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # own jobs: cloud copy, leaving island mode and key revocation
         # (island_lan.py). Turning the cloud copy back on reloads the entry,
         # and the reload starts these loops again.
+        #
+        # That reload is also the way back: the history Home Assistant held on
+        # the island goes up in its own task, beside the live sender, until it
+        # is done (svitgrid D-2103). A cloud station never has one to send.
+        history_device_id = data.get("edge_device_id")
+        if (
+            store is not None
+            and cloud_ingest_enabled
+            and not local_only
+            and api_key
+            and history_device_id
+            and data.get("household_id")
+        ):
+            try:
+                history = await store.history_state(history_device_id)
+            except Exception:  # noqa: BLE001 - never let the way back block setup
+                _LOGGER.exception("could not read the history upload state")
+                history = None
+            if history and history.get("status") == "uploading":
+                uploader = HistoryUploader(
+                    store=store,
+                    api_client=api_client,
+                    api_key=api_key,
+                    household_id=data["household_id"],
+                    device_id=history_device_id,
+                    inverter_ids=sorted(
+                        {inv["inverter_id"] for inv in inverters} - edge_inverter_ids
+                    ),
+                    tz_name=hass.config.time_zone,
+                )
+                history_upload_task = hass.async_create_background_task(
+                    run_history_upload(uploader, should_stop=lambda: hass.is_stopping),
+                    name="svitgrid_history_upload",
+                )
         wake_event = asyncio.Event()
         command_task = hass.async_create_background_task(
             run_command_loop(
@@ -1468,6 +1527,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "charge_cap_task": charge_cap_task,
         "island_report_task": island_report_task,
         "outage_schedule_task": outage_schedule_task,
+        "history_upload_task": history_upload_task,
         "executors_by_inverter": executors_by_inverter,
         "activity": activity,
         "entry_data": dict(data),
@@ -1525,6 +1585,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "charge_cap_task",
         "island_report_task",
         "outage_schedule_task",
+        "history_upload_task",
     ):
         task = state.get(key)
         if task and not task.done():

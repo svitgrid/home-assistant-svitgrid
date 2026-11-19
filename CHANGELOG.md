@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **Leaving an island sends Home Assistant's history to the cloud.** The first
+  start with the cloud copy on after an island uploads, per inverter, the last
+  7 days as 5-minute buckets, the hours back to 90 days as hourly totals, and
+  older days as daily totals, through the cloud's history import. The upload
+  runs beside the live sender, resumes after a restart, and ends once done or
+  30 days after the return. The cloud keeps a slot it already holds, so each
+  kWh is counted once. It needs an API that has svitgrid D-2101 and D-2102.
+
+### Fixed
+- Readings the Live gate holds back are marked skipped, not sent: only
+  readings the cloud took count as synced.
+
 ## 0.33.0 — 2026-11-19
 
 ### Added

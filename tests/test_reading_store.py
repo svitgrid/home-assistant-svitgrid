@@ -703,3 +703,66 @@ def test_string_power_rows_keep_only_the_pv_keys_since_the_floor(tmp_path):
     rows = store._string_power_rows_sync("inv-1", "2026-10-21T10:00:00Z")
 
     assert rows == [{"pvPower": 2500, "pvPower1": 2500, "pvPower2": 0}]
+
+
+# ── the way back from an island (svitgrid D-2103) ──────────────────────
+
+
+def _raw(store, inv, ts):
+    store._append_sync({"inverterId": inv, "timestamp": ts, "pvPower": 1.0})
+
+
+def _states(store):
+    conn = store._connect_for_test()
+    try:
+        return {
+            (r["inverter_id"], r["ts"]): r["sync_state"]
+            for r in conn.execute("SELECT inverter_id, ts, sync_state FROM readings_raw")
+        }
+    finally:
+        conn.close()
+
+
+def test_leaving_the_island_hands_the_held_rows_to_the_history_upload(tmp_path):
+    store = _store(tmp_path)
+    store._note_cloud_copy_sync("dev-1", False, {"inv-1"}, "2026-11-01T00:00:00Z")
+    _raw(store, "inv-1", "2026-11-18T09:00:00Z")
+    _raw(store, "inv-1", "2026-11-19T11:59:30Z")
+    _raw(store, "inv-1", "2026-11-19T12:00:10Z")  # in the bucket the return falls in
+    _raw(store, "inv-2", "2026-11-19T11:00:00Z")  # not this device's inverter
+
+    state = store._note_cloud_copy_sync("dev-1", True, {"inv-1"}, "2026-11-19T12:02:30Z")
+
+    assert state["status"] == "uploading"
+    assert state["returnAt"] == "2026-11-19T12:02:30Z"
+    assert state["until"] == "2026-11-19T12:00:00Z"
+    # The live sender never sends what the history upload carries.
+    assert _states(store) == {
+        ("inv-1", "2026-11-18T09:00:00Z"): "skipped",
+        ("inv-1", "2026-11-19T11:59:30Z"): "skipped",
+        ("inv-1", "2026-11-19T12:00:10Z"): "pending",
+        ("inv-2", "2026-11-19T11:00:00Z"): "pending",
+    }
+    assert store._get_sendable_sync("2026-11-19T12:02:30Z", 48 * 3600, 50)[0]["ts"] == (
+        "2026-11-19T11:00:00Z"
+    )
+
+
+def test_a_cloud_station_start_changes_no_row(tmp_path):
+    store = _store(tmp_path)
+    _raw(store, "inv-1", "2026-11-19T11:59:30Z")
+
+    state = store._note_cloud_copy_sync("dev-1", True, {"inv-1"}, "2026-11-19T12:02:30Z")
+
+    assert state is None
+    assert _states(store) == {("inv-1", "2026-11-19T11:59:30Z"): "pending"}
+
+
+def test_each_restart_on_the_island_keeps_the_island_state(tmp_path):
+    store = _store(tmp_path)
+    store._note_cloud_copy_sync("dev-1", False, {"inv-1"}, "2026-11-01T00:00:00Z")
+    store._note_cloud_copy_sync("dev-1", False, {"inv-1"}, "2026-11-02T00:00:00Z")
+    first = store._note_cloud_copy_sync("dev-1", True, {"inv-1"}, "2026-11-19T12:02:30Z")
+    # A reload after the return keeps the boundary of the first start.
+    again = store._note_cloud_copy_sync("dev-1", True, {"inv-1"}, "2026-11-19T15:00:00Z")
+    assert again == first
