@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.34.1 — 2026-11-19
+
+### Fixed
+- **Live readings keep flowing after an edge island.** The live sender never
+  sends the rows an adopted ED-1 stored in Home Assistant during the island,
+  and when the cloud refuses a batch it resends it in halves, so one bad
+  reading costs only itself. On 0.34.0 one such row blocked every live
+  reading for about half an hour after the way back (svitgrid D-2312).
+- **Island history carries outages.** The history upload works out grid
+  presence from the raw samples, as the cloud does, so the island period's
+  5-minute buckets and hourly totals show the outages the cloud would have
+  shaded (svitgrid D-2297).
+
+### Changed
+- **A Zigbee relay shows power when it reports power.** Metering is decided
+  by the relay's own readings instead of a per-model list; the list stays
+  only to hide a model that reports garbage (svitgrid D-2081).
+
 ## 0.34.0 — 2026-11-19
 
 ### Added
