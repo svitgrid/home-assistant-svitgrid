@@ -332,15 +332,23 @@ class SvitgridApiClient:
             return resp.status, answer if isinstance(answer, dict) else None
 
     async def import_history(
-        self, api_key: str, household_id: str, inverter_id: str, buckets: list[dict[str, Any]]
+        self,
+        api_key: str,
+        household_id: str,
+        inverter_id: str,
+        buckets: list[dict[str, Any]],
+        *,
+        grant: str | None = None,
     ) -> tuple[int, dict[str, Any] | None]:
         """POST up to 288 island 5-minute buckets to the history import
-        (svitgrid D-2102), by the device key. Returns the status and the parsed
-        body for every answer, refusals included; a dropped connection raises."""
+        (svitgrid D-2102), by the device key, or by a history `grant` in its
+        place (svitgrid D-2313, a local-only entry). Returns the status and the
+        parsed body for every answer, refusals included; a dropped connection
+        raises."""
         url = (
             f"{self._base}/api/v1/households/{household_id}/inverters/{inverter_id}/history-import"
         )
-        return await self._post_answer(url, api_key, {"buckets": buckets})
+        return await self._post_answer(url, api_key, {"buckets": buckets}, grant=grant)
 
     async def import_history_totals(
         self,
@@ -350,6 +358,7 @@ class SvitgridApiClient:
         *,
         hours: list[dict[str, Any]] | None = None,
         days: list[dict[str, Any]] | None = None,
+        grant: str | None = None,
     ) -> tuple[int, dict[str, Any] | None]:
         """POST island hourly and daily totals to the history import's totals
         route (svitgrid D-2101). Same answer as `import_history`."""
@@ -362,12 +371,13 @@ class SvitgridApiClient:
             body["hours"] = hours
         if days:
             body["days"] = days
-        return await self._post_answer(url, api_key, body)
+        return await self._post_answer(url, api_key, body, grant=grant)
 
     async def _post_answer(
-        self, url: str, api_key: str, body: dict[str, Any]
+        self, url: str, api_key: str, body: dict[str, Any], *, grant: str | None = None
     ) -> tuple[int, dict[str, Any] | None]:
-        async with self._session.post(url, headers={"x-api-key": api_key}, json=body) as resp:
+        headers = {"x-history-grant": grant} if grant else {"x-api-key": api_key}
+        async with self._session.post(url, headers=headers, json=body) as resp:
             try:
                 answer = await resp.json(content_type=None)
             except Exception:  # noqa: BLE001

@@ -89,7 +89,7 @@ from .outage_schedule import OutageSchedule, run_outage_schedule_loop
 from .panel import register_panel, remove_panel
 from .preset_refresh import refresh_entry_inverters
 from .reading_sender import Cadence, run_sender_loop
-from .reading_store import ReadingStore
+from .reading_store import ReadingStore, history_keeps_inverters
 from .readings_publisher import run_loop as run_readings_loop
 from .settings_sync import find_edge_settings_snapshot
 from .settings_sync import settings_sync_loop as run_settings_sync_loop
@@ -298,6 +298,18 @@ async def _start_local_store(
     # error.
     store.cloud_ingest_enabled = cloud_ingest_enabled
 
+    # The box inverters an island or its upload still needs (svitgrid D-2313):
+    # the app forgets the boxes on the way back, maybe before this reload, and
+    # their rows must outlive the forget until the history upload sent them.
+    history_box_ids: set[str] = set()
+    if device_id:
+        try:
+            history_box_ids = history_keeps_inverters(await store.history_state(device_id))
+        except Exception:  # noqa: BLE001 - never let the way back block setup
+            _LOGGER.exception("could not read the history upload state")
+    if active_ids is not None:
+        active_ids = set(active_ids) | history_box_ids
+
     # Prune orphaned rows BEFORE the sender starts (re-pair queue poison fix).
     if active_ids is not None:
         pruned = await store.prune_inverters_not_in(active_ids)
@@ -345,6 +357,7 @@ async def _start_local_store(
                 bool(cloud_ingest_enabled),
                 set(history_inverter_ids if history_inverter_ids is not None else active_ids or ()),
                 datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                set(box_inverter_ids or ()),
             )
         except Exception:  # noqa: BLE001
             _LOGGER.exception("could not record the cloud copy state for the history upload")
@@ -365,7 +378,7 @@ async def _start_local_store(
                 lifecycle=lifecycle,
                 discharge_positive_ids=discharge_positive_ids,
                 control=control,
-                box_inverter_ids=set(box_inverter_ids or ()),
+                box_inverter_ids=set(box_inverter_ids or ()) | history_box_ids,
             ),
             name="svitgrid_reading_sender",
         )
@@ -1220,6 +1233,39 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         config=dict(inv.get("command_config") or {}),
                     )
 
+    if loops_active and local_only and store is not None:
+        # A local-only entry has no device key, so the way back from an edge
+        # island runs on the history grant the app handed it over the LAN
+        # (`island_lan.SvitgridIslandHistoryGrantView`, svitgrid D-2313). It
+        # sends only the boxes' inverters; nothing else of this entry is in
+        # the cloud.
+        grant_device_id = f"local:{entry.entry_id}"
+        try:
+            grant_state = await store.history_state(grant_device_id)
+        except Exception:  # noqa: BLE001 - never let the way back block setup
+            _LOGGER.exception("could not read the history upload state")
+            grant_state = None
+        if (
+            grant_state
+            and grant_state.get("status") == "uploading"
+            and isinstance(grant_state.get("grant"), str)
+            and isinstance(grant_state.get("householdId"), str)
+        ):
+            uploader = HistoryUploader(
+                store=store,
+                api_client=public_client,
+                api_key="",
+                household_id=grant_state["householdId"],
+                device_id=grant_device_id,
+                inverter_ids=[],
+                tz_name=hass.config.time_zone,
+                grant=grant_state["grant"],
+            )
+            history_upload_task = hass.async_create_background_task(
+                run_history_upload(uploader, should_stop=lambda: hass.is_stopping),
+                name="svitgrid_history_upload",
+            )
+
     if loops_active and not true_island:
         # The cloud loops. A true island starts none of them: a local-only
         # entry has no API key to poll with, and a cloud-paired island with the
@@ -1254,6 +1300,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     api_key=api_key,
                     household_id=data["household_id"],
                     device_id=history_device_id,
+                    # The boxes' inverters come from the state (D-2313).
                     inverter_ids=sorted(
                         {inv["inverter_id"] for inv in inverters} - edge_inverter_ids
                     ),

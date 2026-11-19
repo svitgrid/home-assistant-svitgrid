@@ -783,6 +783,18 @@ async def test_import_history_totals_sends_only_the_spans_given():
 
 
 @pytest.mark.asyncio
+async def test_import_history_sends_a_history_grant_in_place_of_the_key():
+    """svitgrid D-2313: a local-only entry has no device key; the app hands it
+    a history grant for the boxes' inverters."""
+    session, _ = _mock_session_with_response(200, {"imported": 1, "skipped": 0})
+    client = SvitgridApiClient(session, api_base="https://api.example")
+    await client.import_history("", "hh-1", "inv-1", [], grant="g-1")
+    assert session.post.call_args.kwargs["headers"] == {"x-history-grant": "g-1"}
+    await client.import_history_totals("", "hh-1", "inv-1", days=[{"date": "x"}], grant="g-1")
+    assert session.post.call_args.kwargs["headers"] == {"x-history-grant": "g-1"}
+
+
+@pytest.mark.asyncio
 async def test_import_history_returns_a_refusal_without_raising():
     session, _ = _mock_session_with_response(402, {"code": "history_import_requires_plan"})
     client = SvitgridApiClient(session, api_base="https://api.example")

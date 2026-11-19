@@ -25,7 +25,7 @@ from custom_components.svitgrid.history_upload import (
     normalize_inbound,
     run_history_upload,
 )
-from custom_components.svitgrid.reading_store import ReadingStore
+from custom_components.svitgrid.reading_store import ReadingStore, history_keeps_inverters
 
 # ── the fold ────────────────────────────────────────────────────────────
 
@@ -808,3 +808,153 @@ async def test_an_hourly_total_carries_the_outage_of_the_raw_rows_it_still_has(t
     other = hours[hour - timedelta(days=1)]
     assert "gridPresent" not in other
     assert "gridDownSeconds" not in other
+
+
+# ── an edge box's island readings (svitgrid D-2313) ─────────────────────
+
+BOX_INV = "box-inv"
+
+
+class _AnyCloud(_Cloud):
+    """The routes, for any inverter, recording who sent what and how."""
+
+    def __init__(self):
+        super().__init__()
+        self.by_inverter: dict[str, list[dict]] = {}
+        self.auth: list[tuple] = []
+
+    async def import_history(self, api_key, household_id, inverter_id, buckets, **kw):
+        self.auth.append((api_key, household_id, kw.get("grant")))
+        self.by_inverter.setdefault(inverter_id, []).extend(buckets)
+        return 200, {"imported": len(buckets), "skipped": 0}
+
+    async def import_history_totals(
+        self, api_key, household_id, inverter_id, *, hours=None, days=None, **kw
+    ):
+        self.auth.append((api_key, household_id, kw.get("grant")))
+        self.hours.extend(hours or [])
+        self.days.extend(days or [])
+        return 200, {"hours": {"imported": len(hours or [])}, "days": {"imported": len(days or [])}}
+
+
+def _append_box(store: ReadingStore, t: datetime, grid_present: bool) -> None:
+    """A box row as `edge_api._ingest_one` stores it: the pipeline's output,
+    in the cloud's names, with the grid state the pipeline settled on."""
+    store._append_sync(
+        {
+            "inverterId": BOX_INV,
+            "timestamp": t.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+            "pvPower": 800.0,
+            "loadPower": 500.0,
+            "gridPower": 0.0,
+            "gridVoltage": 231.0,
+            "dailyImportEnergy": 2.5,
+            "gridPresent": grid_present,
+            "gridPresentRaw": grid_present,
+            "source": "edge-device",
+        }
+    )
+
+
+def _box_island(store: ReadingStore, *, forgotten_before_return: bool = False) -> None:
+    """An edge island: the box adopted while the copy was off, then the
+    return. The app may forget the box before the entry reloads."""
+    t = UNTIL - timedelta(hours=2)
+    while t < UNTIL - timedelta(minutes=10):
+        # The box's grid event said the grid was down 10:30-10:40, though the
+        # voltage it reported stayed up: only the stored state knows.
+        down = UNTIL - timedelta(minutes=90) <= t < UNTIL - timedelta(minutes=80)
+        _append_box(store, t, grid_present=not down)
+        t += timedelta(minutes=1)
+    store._note_cloud_copy_sync(DEVICE, False, {INV}, _iso(RETURN_AT - timedelta(days=1)))
+    store._note_cloud_copy_sync(
+        DEVICE, False, {INV}, _iso(RETURN_AT - timedelta(hours=3)), {BOX_INV}
+    )
+    store._note_cloud_copy_sync(
+        DEVICE, True, {INV}, _iso(RETURN_AT), set() if forgotten_before_return else {BOX_INV}
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("forgotten", [False, True])
+async def test_a_box_inverter_goes_up_as_stored_beside_the_add_ons_own(tmp_path, forgotten):
+    store = _store(tmp_path)
+    _seed(store, raw_hours=2)
+    _box_island(store, forgotten_before_return=forgotten)
+    state = store._history_state_sync(DEVICE)
+    assert state["boxInverters"] == [BOX_INV]
+    clock = _Clock(RETURN_AT + timedelta(seconds=5))
+    cloud = _AnyCloud()
+
+    await _run_until_idle(_uploader(store, cloud, clock), clock)
+
+    assert set(cloud.by_inverter) == {INV, BOX_INV}
+    box = {_parse(b["ts"]): b for b in cloud.by_inverter[BOX_INV]}
+    assert len(box) == 22  # 10:00 to 11:45: the box rows stop at 11:50
+    assert all(b["sampleCount"] == 5 and b["pvPower"] == 800.0 for b in box.values())
+    # The stored grid state, not one derived again from the voltage.
+    assert box[UNTIL - timedelta(minutes=90)]["gridPresent"] is False
+    assert box[UNTIL - timedelta(minutes=85)]["gridPresent"] is False
+    assert box[UNTIL - timedelta(minutes=80)]["gridPresent"] is True
+    assert box[UNTIL - timedelta(minutes=30)]["dailyImportEnergy"] == 2.5
+    assert store._history_state_sync(DEVICE)["status"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_the_box_rows_before_the_return_are_left_to_the_upload(tmp_path):
+    store = _store(tmp_path)
+    _box_island(store, forgotten_before_return=True)
+    conn = store._connect_for_test()
+    states = {
+        r[0]
+        for r in conn.execute("SELECT sync_state FROM readings_raw WHERE inverter_id=?", (BOX_INV,))
+    }
+    conn.close()
+    assert states == {"skipped"}
+
+
+def test_the_prune_keeps_a_box_inverter_until_its_upload_ends():
+    assert history_keeps_inverters({"status": "island", "boxInverters": ["b"]}) == {"b"}
+    assert history_keeps_inverters({"status": "uploading", "boxInverters": ["b", 3]}) == {"b"}
+    assert history_keeps_inverters({"status": "done", "boxInverters": ["b"]}) == set()
+    assert history_keeps_inverters(None) == set()
+
+
+@pytest.mark.asyncio
+async def test_a_history_grant_uploads_the_boxes_with_no_device_key(tmp_path):
+    """A local-only entry: the app handed it a grant on the way back."""
+    store = _store(tmp_path)
+    t = UNTIL - timedelta(hours=1)
+    while t < UNTIL:
+        _append_box(store, t, grid_present=True)
+        t += timedelta(minutes=5)
+    store._set_history_state_sync(
+        "local:e1",
+        {
+            "status": "uploading",
+            "returnAt": _iso(RETURN_AT),
+            "until": _iso(UNTIL),
+            "inverters": {},
+            "boxInverters": [BOX_INV],
+            "householdId": "hh-1",
+            "grant": "g-1",
+        },
+    )
+    clock = _Clock(RETURN_AT + timedelta(seconds=5))
+    cloud = _AnyCloud()
+    up = HistoryUploader(
+        store=store,
+        api_client=cloud,
+        api_key="",
+        household_id="hh-1",
+        device_id="local:e1",
+        inverter_ids=[],
+        tz_name="UTC",
+        now=clock,
+        grant="g-1",
+    )
+
+    await _run_until_idle(up, clock)
+
+    assert len(cloud.by_inverter[BOX_INV]) == 12
+    assert cloud.auth and all(a == ("", "hh-1", "g-1") for a in cloud.auth)

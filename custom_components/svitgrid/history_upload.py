@@ -20,6 +20,16 @@ goes up as buckets, an older one as an hourly total, and the one hour on the
 seam waits until the cloud takes it hourly. Live ingest sends only readings
 from `until` on; the store marks the earlier ones `skipped` for the sender.
 
+An edge box's inverters go up too (svitgrid D-2313). On an edge island the
+box reported here, so this store holds its readings and nothing else does.
+Their rows were stored through the port of the cloud's pipeline
+(`edge_reading_pipeline.py`): already in the cloud's names, corrected and with
+the grid state the cloud would store. So they are folded as stored, with no
+second grid derivation, and the cloud takes them uncalibrated (it decides that
+by whose inverter it is). The add-on's key uploads them on a cloud-paired
+island; a local-only entry has no key and uploads with the history grant the
+app hands it on the way back (`grant`).
+
 The upload runs in its own task, so live readings never wait for it. Each step
 sends one request and stores its cursor, so a restart resumes where it
 stopped. It ends for good once every span is done, or 30 days after the
@@ -40,6 +50,7 @@ from typing import Any
 
 from .edge_reading_pipeline import _debounce_grid_present, derive_grid_present
 from .local_time import local_day_of
+from .reading_store import history_box_inverters
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -311,11 +322,13 @@ def _bucket_json(doc: dict[str, Any]) -> dict[str, Any]:
 
 
 def fold_buckets(
-    payloads: list[dict[str, Any]], lo: datetime, hi: datetime
+    payloads: list[dict[str, Any]], lo: datetime, hi: datetime, *, derive_grid: bool = True
 ) -> list[dict[str, Any]]:
     """The raw `payloads` with `lo <= timestamp < hi`, folded per 5-minute
     bucket, each sample with the grid state the cloud would derive. Payloads
-    before `lo` only seed that derivation."""
+    before `lo` only seed that derivation. `derive_grid=False` keeps the
+    `gridPresent` each payload was stored with: an edge box's rows carry the
+    state the cloud's pipeline derived, edge-confirmed outages included."""
     timed: list[tuple[datetime, dict]] = []
     for p in payloads:
         try:
@@ -325,7 +338,8 @@ def fold_buckets(
         if t < hi:
             timed.append((t, normalize_inbound(p)))
     timed.sort(key=lambda x: x[0])
-    derived = derive_grid_presence([s for _, s in timed])
+    samples = [s for _, s in timed]
+    derived = derive_grid_presence(samples) if derive_grid else samples
     by_bucket: dict[datetime, list[dict]] = {}
     for (t, _), s in zip(timed, derived, strict=True):
         if t >= lo:
@@ -481,6 +495,7 @@ class HistoryUploader:
         inverter_ids: list[str],
         tz_name: str | None,
         now: Callable[[], datetime] | None = None,
+        grant: str | None = None,
     ) -> None:
         self._store = store
         self._api = api_client
@@ -491,6 +506,12 @@ class HistoryUploader:
         self._tz = tz_name
         self._now = now or (lambda: datetime.now(UTC))
         self._failures = 0
+        # A history grant in place of the device key (a local-only entry).
+        self._grant = grant
+        self._box_ids: set[str] = set()
+
+    def _auth(self) -> dict[str, str]:
+        return {"grant": self._grant} if self._grant else {}
 
     async def step(self) -> tuple[str, float]:
         state = await self._store.history_state(self._device_id)
@@ -501,7 +522,10 @@ class HistoryUploader:
             _LOGGER.warning("island history upload given up 30 days after the return")
             return await self._finish(state, "expired")
         inverters = state.setdefault("inverters", {})
-        for inv in self._inverter_ids:
+        # The boxes' inverters after this add-on's own, from the state: the
+        # app may have forgotten the boxes already.
+        self._box_ids = set(history_box_inverters(state)) - set(self._inverter_ids)
+        for inv in [*self._inverter_ids, *sorted(self._box_ids)]:
             progress = inverters.setdefault(inv, {})
             for phase in ("buckets", "hours", "days"):
                 # A phase returns None when it moved its cursor without a
@@ -550,11 +574,13 @@ class HistoryUploader:
         payloads = await self._store.raw_payloads(
             inv, _iso_s(lo - _GRID_LOOKBACK), _iso_s(hi + timedelta(seconds=1))
         )
-        buckets = fold_buckets(payloads, lo, hi)
+        buckets = fold_buckets(payloads, lo, hi, derive_grid=inv not in self._box_ids)
         if buckets:
             outcome = await self._send(
                 state, progress, "buckets",
-                lambda: self._api.import_history(self._api_key, self._household_id, inv, buckets),
+                lambda: self._api.import_history(
+                    self._api_key, self._household_id, inv, buckets, **self._auth()
+                ),
             )  # fmt: skip
             if outcome is not None:
                 return outcome
@@ -599,14 +625,18 @@ class HistoryUploader:
         raw = await self._store.raw_payloads(
             inv, _iso_s(lo - _GRID_LOOKBACK), _iso_s(hi + timedelta(seconds=1))
         )
-        grid = hour_grid(fold_buckets(raw, lo, hi)) if raw else {}
+        grid = (
+            hour_grid(fold_buckets(raw, lo, hi, derive_grid=inv not in self._box_ids))
+            if raw
+            else {}
+        )
         for h in hours:
             h.update(grid.get(_parse(h["ts"]), {}))
         if hours:
             outcome = await self._send(
                 state, progress, "hours",
                 lambda: self._api.import_history_totals(
-                    self._api_key, self._household_id, inv, hours=hours
+                    self._api_key, self._household_id, inv, hours=hours, **self._auth()
                 ),
             )  # fmt: skip
             if outcome is not None:
@@ -631,7 +661,7 @@ class HistoryUploader:
             outcome = await self._send(
                 state, progress, "days",
                 lambda: self._api.import_history_totals(
-                    self._api_key, self._household_id, inv, days=days
+                    self._api_key, self._household_id, inv, days=days, **self._auth()
                 ),
             )  # fmt: skip
             if outcome is not None:

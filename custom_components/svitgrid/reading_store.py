@@ -125,6 +125,23 @@ def _median_gap_seconds(ts_list: list[str]) -> float | None:
     return float((gaps_sorted[mid - 1] + gaps_sorted[mid]) / 2)
 
 
+def history_box_inverters(state: dict | None) -> list[str]:
+    """The `boxInverters` of a history-upload state, sorted; [] when none
+    (svitgrid D-2313)."""
+    ids = (state or {}).get("boxInverters")
+    if not isinstance(ids, list):
+        return []
+    return sorted({i for i in ids if isinstance(i, str) and i})
+
+
+def history_keeps_inverters(state: dict | None) -> set[str]:
+    """The box inverters whose rows a history-upload state still needs: those
+    of an island or an upload in progress, none once it is done."""
+    if not state or state.get("status") not in ("island", "uploading"):
+        return set()
+    return set(history_box_inverters(state))
+
+
 class ReadingStore:
     """Tiered SQLite store. Sync `_*_sync` core; async wrappers offload to the
     HA executor so the event loop never blocks on disk I/O."""
@@ -1251,6 +1268,14 @@ class ReadingStore:
     #   {"status": "uploading", "returnAt", "until", "inverters": {...}}
     #   {"status": "done", ...}                   finished, or given up
     #
+    # `boxInverters` (svitgrid D-2313) lists the inverters adopted edge boxes
+    # read while the household was an island. Their rows are uploaded too, and
+    # are kept from the prune until the upload ends, because the app forgets
+    # the boxes on the way back, possibly before the entry reloads. A
+    # local-only entry gets its state from a history grant instead
+    # (`island_lan.SvitgridIslandHistoryGrantView`), which also stores
+    # `householdId`, `grant` and `grantExpiresAt`.
+    #
     # `until` is the start of the 5-minute bucket the return falls in: the
     # history upload carries every reading before it, and live ingest every
     # reading from it on, so no reading reaches the cloud both ways.
@@ -1272,7 +1297,12 @@ class ReadingStore:
         self._set_meta_sync(self._history_key(device_id), json.dumps(state))
 
     def _note_cloud_copy_sync(
-        self, device_id: str, cloud_copy_on: bool, inverter_ids: set[str], now_iso: str
+        self,
+        device_id: str,
+        cloud_copy_on: bool,
+        inverter_ids: set[str],
+        now_iso: str,
+        box_inverter_ids: set[str] | frozenset[str] = frozenset(),
     ) -> dict | None:
         """Record, at each start, whether the cloud copy is on, and return the
         history-upload state.
@@ -1292,11 +1322,21 @@ class ReadingStore:
                 new_state: dict = {"status": "island"}
                 if isinstance(kept, dict) and state.get("status") == "uploading":
                     new_state["inverters"] = kept
+                    new_state["boxInverters"] = history_box_inverters(state)
+                boxes = sorted(set(new_state.get("boxInverters") or ()) | set(box_inverter_ids))
+                if boxes:
+                    new_state["boxInverters"] = boxes
                 self._set_history_state_sync(device_id, new_state)
                 return new_state
+            # A box adopted during the island is noted at the next start.
+            boxes = sorted(set(history_box_inverters(state)) | set(box_inverter_ids))
+            if boxes != history_box_inverters(state):
+                state = {**state, "boxInverters": boxes}
+                self._set_history_state_sync(device_id, state)
             return state
         if state is None or state.get("status") != "island":
             return state
+        boxes = sorted(set(history_box_inverters(state)) | set(box_inverter_ids))
         until = self._five_min_of(now_iso[:19] + "Z")
         # Progress kept from an earlier return keeps its cursors, but not the
         # marks that ended a phase: those were measured against the earlier
@@ -1312,12 +1352,14 @@ class ReadingStore:
             "until": until,
             "inverters": inverters,
         }
+        if boxes:
+            new_state["boxInverters"] = boxes
         conn = _connect(self._db_path)
         try:
             conn.executemany(
                 "UPDATE readings_raw SET sync_state='skipped' "
                 "WHERE inverter_id = ? AND ts < ? AND sync_state IN ('pending','failed')",
-                [(inv, until) for inv in sorted(inverter_ids)],
+                [(inv, until) for inv in sorted(set(inverter_ids) | set(boxes))],
             )
             conn.execute(
                 "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
@@ -1433,10 +1475,20 @@ class ReadingStore:
         return await self._hass.async_add_executor_job(fn, *args)
 
     async def note_cloud_copy(
-        self, device_id: str, cloud_copy_on: bool, inverter_ids: set[str], now_iso: str
+        self,
+        device_id: str,
+        cloud_copy_on: bool,
+        inverter_ids: set[str],
+        now_iso: str,
+        box_inverter_ids: set[str] | frozenset[str] = frozenset(),
     ) -> dict | None:
         return await self._run(
-            self._note_cloud_copy_sync, device_id, cloud_copy_on, inverter_ids, now_iso
+            self._note_cloud_copy_sync,
+            device_id,
+            cloud_copy_on,
+            inverter_ids,
+            now_iso,
+            box_inverter_ids,
         )
 
     async def history_state(self, device_id: str) -> dict | None:

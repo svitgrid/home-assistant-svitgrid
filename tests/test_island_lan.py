@@ -226,6 +226,82 @@ async def test_leave_for_a_local_only_entry_is_no_cloud_identity(hass: HomeAssis
     reload_mock.assert_not_awaited()
 
 
+# ── history grant (svitgrid D-2313) ─────────────────────────────────────────
+
+
+async def _grant(hass, admin, **fields):
+    from custom_components.svitgrid.island_lan import SvitgridIslandHistoryGrantView
+
+    body = {"householdId": "hh-1", "token": "g-1", "inverterIds": ["inv-b"], **fields}
+    return await SvitgridIslandHistoryGrantView().post(
+        _Req(hass, admin.request("history_grant", **body))
+    )
+
+
+async def test_a_local_only_entry_takes_a_history_grant_and_reloads_to_upload(
+    hass: HomeAssistant, tmp_path
+):
+    from custom_components.svitgrid.reading_store import ReadingStore
+
+    admin = _Admin()
+    await _keystore(hass, admin)
+    entry = _entry(hass, local_only=True)
+    store = ReadingStore(None, str(tmp_path / "readings.db"))
+    _entry_state(hass, entry, store=store)
+
+    with patch.object(hass.config_entries, "async_schedule_reload") as reload:
+        resp = await _grant(hass, admin, inverterIds=["inv-b", "inv-a", "inv-b"])
+        await hass.async_block_till_done()
+
+    assert resp.status == 200
+    assert _body(resp) == {"ok": True, "inverterIds": ["inv-a", "inv-b"]}
+    reload.assert_called_once_with(entry.entry_id)
+    state = await store.history_state(f"local:{entry.entry_id}")
+    assert state["status"] == "uploading"
+    assert state["boxInverters"] == ["inv-a", "inv-b"]
+    assert (state["householdId"], state["grant"]) == ("hh-1", "g-1")
+    assert state["until"].endswith(("0:00Z", "5:00Z")) and state["until"] <= state["returnAt"]
+
+    # A grant sent again keeps the upload's cursors and boundary.
+    state["inverters"] = {"inv-a": {"bucketCursor": "x"}}
+    await store.set_history_state(f"local:{entry.entry_id}", state)
+    with patch.object(hass.config_entries, "async_schedule_reload"):
+        await _grant(hass, admin, token="g-2", inverterIds=["inv-a", "inv-b"])
+    again = await store.history_state(f"local:{entry.entry_id}")
+    assert again["grant"] == "g-2"
+    assert again["inverters"] == {"inv-a": {"bucketCursor": "x"}}
+    assert again["until"] == state["until"]
+
+
+async def test_a_history_grant_is_for_a_local_only_entry(hass: HomeAssistant):
+    admin = _Admin()
+    await _keystore(hass, admin)
+    _entry(hass)
+    resp = await _grant(hass, admin)
+    assert resp.status == 409
+    assert _body(resp) == {"error": "has_cloud_identity"}
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        pytest.param({"householdId": ""}, id="no household"),
+        pytest.param({"token": 5}, id="token not a string"),
+        pytest.param({"inverterIds": []}, id="no inverters"),
+        pytest.param({"inverterIds": ["x"] * 17}, id="too many"),
+    ],
+)
+async def test_a_history_grant_needs_a_household_a_token_and_inverters(
+    hass: HomeAssistant, tmp_path, fields
+):
+    admin = _Admin()
+    await _keystore(hass, admin)
+    entry = _entry(hass, local_only=True)
+    _entry_state(hass, entry)
+    resp = await _grant(hass, admin, **fields)
+    assert resp.status == 400
+
+
 # ── revoke ──────────────────────────────────────────────────────────────────
 
 
@@ -533,6 +609,7 @@ async def test_status_of_a_true_island(hass: HomeAssistant):
             "edge_box_commands",
             "string_outage",
             "maintenance_charge",
+            "history_grant",
         ],
     }
 
@@ -577,6 +654,7 @@ async def test_the_views_are_registered_with_the_others(hass: HomeAssistant):
         "/api/svitgrid/island/leave",
         "/api/svitgrid/keys/revoke",
         "/api/svitgrid/island/status",
+        "/api/svitgrid/island/history-grant",
     } <= urls
 
 
@@ -1255,6 +1333,7 @@ async def test_island_status_without_edge_boxes_is_unchanged(hass: HomeAssistant
             "edge_box_commands",
             "string_outage",
             "maintenance_charge",
+            "history_grant",
         ],
     }
 
@@ -1724,6 +1803,7 @@ async def test_island_status_without_edge_boxes_lists_ha_inverters_only(hass: Ho
             "edge_box_commands",
             "string_outage",
             "maintenance_charge",
+            "history_grant",
         ],
         "inverters": {
             "inv-ha-1": {"host": "ha", "readSource": "native"},

@@ -144,6 +144,10 @@ CAPABILITIES = (
     # box's priority profile alike (svitgrid D-2163). The app sends the
     # settings, and stops calling the charge a gap, only when listed.
     "maintenance_charge",
+    # POST /api/svitgrid/island/history-grant takes the history grant a
+    # local-only entry uploads an edge island's box history with on the way
+    # back (svitgrid D-2313). The app mints one only when this is listed.
+    "history_grant",
 )
 
 ACTION_SET_CLOUD_COPY = "set_cloud_copy"
@@ -159,6 +163,7 @@ ACTION_EDGE_KEY_ADD = "edge_key_add"
 ACTION_BMS_REPORT = "bms_report"
 ACTION_SOLAR_STRINGS = "solar_strings"
 ACTION_BATTERY_MAINTENANCE = "battery_maintenance"
+ACTION_HISTORY_GRANT = "history_grant"
 # The box command `/edge/leave` queues (`edge_pair_code.json` `commands.clear`).
 EDGE_LEAVE_COMMAND = "clear_island_endpoint"
 
@@ -1486,6 +1491,87 @@ class SvitgridIslandLogsSendView(HomeAssistantView):
         return web.json_response({"started": True}, status=202)
 
 
+class SvitgridIslandHistoryGrantView(HomeAssistantView):
+    """POST /api/svitgrid/island/history-grant — upload a box's island history
+    by a history grant (svitgrid D-2313).
+
+    `signedData`: `{action: "history_grant", householdId, token, inverterIds,
+    nonce, ts}`. On the way back from an edge island a local-only entry has no
+    device key, so its boxes' readings could never reach the cloud. The app
+    mints a grant for those inverters (`POST /api/v1/households/:id/
+    history-import/grants`) and hands it here, before it forgets the boxes.
+    The entry then uploads them as a cloud-paired one would
+    (`history_upload.py`), with the grant in place of the key, from now back.
+    A grant sent again replaces the first and keeps its cursors.
+
+    Errors: 400 `bad_request`, 404 `no_config_entry` (no loaded local-only
+    entry), 409 `has_cloud_identity` (a cloud-paired entry uploads by its key).
+    """
+
+    url = "/api/svitgrid/island/history-grant"
+    name = "api:svitgrid:island:history-grant"
+    requires_auth = False
+
+    async def post(self, request) -> web.Response:  # noqa: D102
+        signed, error = await signed_lan_request(request, ACTION_HISTORY_GRANT)
+        if error is not None:
+            return error
+        household_id = signed.get("householdId")
+        token = signed.get("token")
+        ids = signed.get("inverterIds")
+        if (
+            not isinstance(household_id, str)
+            or not household_id
+            or not isinstance(token, str)
+            or not 0 < len(token) <= 256
+            or not isinstance(ids, list)
+            or not 0 < len(ids) <= 16
+            or not all(isinstance(i, str) and i for i in ids)
+        ):
+            return _json_error(
+                400, "bad_request", detail="householdId, token and inverterIds are required"
+            )
+        hass = request.app["hass"]
+        entries = _entries(hass)
+        if entries and not any(e.data.get(CONF_LOCAL_ONLY) for e in entries):
+            return _json_error(409, "has_cloud_identity")
+        domain_data = hass.data.get(DOMAIN) or {}
+        target = None
+        for entry in entries:
+            state = domain_data.get(entry.entry_id)
+            if (
+                entry.data.get(CONF_LOCAL_ONLY)
+                and isinstance(state, dict)
+                and state.get("store") is not None
+            ):
+                target = (entry, state["store"])
+                break
+        if target is None:
+            return _json_error(404, "no_config_entry")
+        entry, store = target
+        device_id = f"local:{entry.entry_id}"
+        now = datetime.now(UTC).replace(microsecond=0)
+        returned = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+        until = returned[:14] + f"{(now.minute // 5) * 5:02d}:00Z"
+        previous = await store.history_state(device_id) or {}
+        kept = previous.get("inverters") if previous.get("grant") else None
+        await store.set_history_state(
+            device_id,
+            {
+                "status": "uploading",
+                "returnAt": previous.get("returnAt", returned) if kept else returned,
+                "until": previous.get("until", until) if kept else until,
+                "inverters": kept if isinstance(kept, dict) else {},
+                "boxInverters": sorted(set(ids)),
+                "householdId": household_id,
+                "grant": token,
+            },
+        )
+        _LOGGER.info("History grant taken over the LAN for %d box inverter(s)", len(set(ids)))
+        hass.loop.call_soon(hass.config_entries.async_schedule_reload, entry.entry_id)
+        return web.json_response({"ok": True, "inverterIds": sorted(set(ids))})
+
+
 ISLAND_LAN_VIEWS = (
     SvitgridIslandCloudCopyView,
     SvitgridIslandLeaveView,
@@ -1502,4 +1588,5 @@ ISLAND_LAN_VIEWS = (
     SvitgridEdgeKeyAddView,
     SvitgridEdgeCommandView,
     SvitgridIslandLogsSendView,
+    SvitgridIslandHistoryGrantView,
 )

@@ -622,3 +622,77 @@ async def test_a_cloud_station_start_uploads_no_history(hass, enable_custom_inte
 
     m["history_upload"].assert_not_called()
     assert _island_store(hass)._history_state_sync("ed-1") is None
+
+
+# ── an edge box's island history (svitgrid D-2313) ─────────────────────
+
+
+@pytest.mark.asyncio
+async def test_back_from_an_edge_island_a_forgotten_box_is_kept_and_uploaded(
+    hass, enable_custom_integrations, tmp_path
+):
+    """The app forgets the boxes on the way back, maybe before this reload:
+    the island state remembers them, so the prune keeps their rows, the live
+    sender leaves them out, and the history upload takes them."""
+    hass.config.config_dir = str(tmp_path)
+    await _seed_keystore(hass)
+    store = _island_store(hass)
+    store._note_cloud_copy_sync(
+        "ed-1", False, {"inv-direct"}, "2026-11-01T00:00:00Z", {"inv-edge-1"}
+    )
+    store._append_sync({"inverterId": "inv-edge-1", "timestamp": "2026-11-01T10:00:00Z"})
+
+    with patch.object(ReadingStore, "prune_inverters_not_in", AsyncMock(return_value=0)) as prune:
+        _ok, m = await _setup(hass, _cloud_entry(cloud_ingest=True))
+
+    assert "inv-edge-1" in prune.call_args.args[0]
+    assert m["sender"].call_args.kwargs["box_inverter_ids"] == {"inv-edge-1"}
+    m["history_upload"].assert_called_once()
+    state = store._history_state_sync("ed-1")
+    assert state["status"] == "uploading"
+    assert state["boxInverters"] == ["inv-edge-1"]
+    assert store._count_by_state_sync() == {"skipped": 1}
+
+
+@pytest.mark.asyncio
+async def test_a_local_only_entry_uploads_the_boxes_by_its_history_grant(
+    hass, enable_custom_integrations, tmp_path
+):
+    hass.config.config_dir = str(tmp_path)
+    await _seed_keystore(hass)
+    entry = _edge_move_entry()
+    store = _island_store(hass)
+    store._set_history_state_sync(
+        f"local:{entry.entry_id}",
+        {
+            "status": "uploading",
+            "returnAt": "2026-11-19T12:02:30Z",
+            "until": "2026-11-19T12:00:00Z",
+            "inverters": {},
+            "boxInverters": ["inv-edge-1"],
+            "householdId": "hh-1",
+            "grant": "g-1",
+        },
+    )
+
+    with patch.object(ReadingStore, "prune_inverters_not_in", AsyncMock(return_value=0)) as prune:
+        _ok, m = await _setup(hass, entry)
+
+    assert "inv-edge-1" in prune.call_args.args[0]
+    m["history_upload"].assert_called_once()
+    uploader = m["history_upload"].call_args.args[0]
+    assert uploader._grant == "g-1"
+    assert uploader._household_id == "hh-1"
+    assert uploader._device_id == f"local:{entry.entry_id}"
+    assert uploader._inverter_ids == []
+    m["sender"].assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_a_local_only_entry_without_a_grant_uploads_nothing(
+    hass, enable_custom_integrations, tmp_path
+):
+    hass.config.config_dir = str(tmp_path)
+    await _seed_keystore(hass)
+    _ok, m = await _setup(hass, _edge_move_entry())
+    m["history_upload"].assert_not_called()
