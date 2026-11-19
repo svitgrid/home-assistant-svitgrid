@@ -38,6 +38,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from .edge_reading_pipeline import _debounce_grid_present, derive_grid_present
 from .local_time import local_day_of
 
 _LOGGER = logging.getLogger(__name__)
@@ -86,6 +87,10 @@ BUCKET_ARRAY_FIELDS = (
 
 # `MAX_INTER_SAMPLE_ATTRIBUTION_SEC` in derive-grid-present.ts.
 _MAX_INTER_SAMPLE_ATTRIBUTION_S = 60
+# How far before a request's first bucket the raw rows are read, so the
+# debounce of its first sample sees the sample before it, as the cloud's
+# does with the stored reading.
+_GRID_LOOKBACK = timedelta(minutes=15)
 
 # ── normalize-reading.ts ────────────────────────────────────────────────
 _PV_STRING_ALIASES = {
@@ -168,6 +173,39 @@ def _floor(dt: datetime, step: timedelta) -> datetime:
 def _ceil(dt: datetime, step: timedelta) -> datetime:
     f = _floor(dt, step)
     return f if f == dt else f + step
+
+
+def derive_grid_presence(
+    samples: list[dict[str, Any]], prev: dict[str, Any] | None = None
+) -> list[dict[str, Any]]:
+    """`samples`, normalized payloads ordered by `timestamp`, each with the
+    `gridPresent` the cloud stores with it (svitgrid D-2297).
+
+    The add-on's raw rows carry no grid state: live ingest derives it. This
+    runs the same steps on the way back from an island: `deriveGridPresent`
+    on the sample, then `debounceGridPresent` against the sample before it
+    (`prev` for the first one, the stored reading the cloud would hold), as
+    `deriveStoredReading` does. A repeated timestamp is the same sample and
+    does not confirm a first down. Never mutates.
+    """
+    out: list[dict[str, Any]] = []
+    prev_present = prev_raw = None
+    if prev is not None:
+        prev_present = prev.get("gridPresent")
+        raw = prev.get("gridPresentRaw")
+        prev_raw = raw if raw is not None else prev_present
+    seen: set[str] = set()
+    for s in samples:
+        ts = s.get("timestamp")
+        if ts in seen:
+            out.append({**s, "gridPresent": prev_present, "gridPresentRaw": prev_raw})
+            continue
+        seen.add(ts)
+        raw = derive_grid_present(s)
+        present = _debounce_grid_present(raw, prev_raw, prev_present)
+        out.append({**s, "gridPresent": present, "gridPresentRaw": raw})
+        prev_present, prev_raw = present, raw
+    return out
 
 
 def fold_bucket(bucket_start: datetime, samples: list[dict[str, Any]]) -> dict[str, Any]:
@@ -275,19 +313,41 @@ def _bucket_json(doc: dict[str, Any]) -> dict[str, Any]:
 def fold_buckets(
     payloads: list[dict[str, Any]], lo: datetime, hi: datetime
 ) -> list[dict[str, Any]]:
-    """The raw `payloads` with `lo <= timestamp < hi`, folded per 5-minute bucket."""
-    by_bucket: dict[datetime, list[dict]] = {}
+    """The raw `payloads` with `lo <= timestamp < hi`, folded per 5-minute
+    bucket, each sample with the grid state the cloud would derive. Payloads
+    before `lo` only seed that derivation."""
+    timed: list[tuple[datetime, dict]] = []
     for p in payloads:
         try:
             t = _parse(p["timestamp"])
         except (KeyError, TypeError, ValueError):
             continue
-        if lo <= t < hi:
-            by_bucket.setdefault(_floor(t, _BUCKET), []).append(normalize_inbound(p))
-    out = []
-    for start in sorted(by_bucket):
-        samples = sorted(by_bucket[start], key=lambda s: _parse(s["timestamp"]))
-        out.append(_bucket_json(fold_bucket(start, samples)))
+        if t < hi:
+            timed.append((t, normalize_inbound(p)))
+    timed.sort(key=lambda x: x[0])
+    derived = derive_grid_presence([s for _, s in timed])
+    by_bucket: dict[datetime, list[dict]] = {}
+    for (t, _), s in zip(timed, derived, strict=True):
+        if t >= lo:
+            by_bucket.setdefault(_floor(t, _BUCKET), []).append(s)
+    return [_bucket_json(fold_bucket(start, by_bucket[start])) for start in sorted(by_bucket)]
+
+
+def hour_grid(buckets: list[dict[str, Any]]) -> dict[datetime, dict[str, Any]]:
+    """The grid fields of each hour `buckets` reach, folded as the cloud folds
+    its buckets into `readings_hourly` (`foldHourAccumulator`): `gridPresent`
+    false when any bucket saw the grid down, true when one saw it up, absent
+    when none knew; `gridDownSeconds` summed."""
+    out: dict[datetime, dict[str, Any]] = {}
+    for b in buckets:
+        acc = out.setdefault(_floor(_parse(b["ts"]), _HOUR), {"gridDownSeconds": 0})
+        present = b.get("gridPresent")
+        if present is False:
+            acc["gridPresent"] = False
+        elif present is True and acc.get("gridPresent") is not False:
+            acc["gridPresent"] = True
+        if _num(b.get("gridDownSeconds")):
+            acc["gridDownSeconds"] += b["gridDownSeconds"]
     return out
 
 
@@ -488,7 +548,7 @@ class HistoryUploader:
         hi = min(until, lo + BUCKETS_PER_REQUEST * _BUCKET)
         # One second either side: the store's `ts` strings may carry fractions.
         payloads = await self._store.raw_payloads(
-            inv, _iso_s(lo - timedelta(seconds=1)), _iso_s(hi + timedelta(seconds=1))
+            inv, _iso_s(lo - _GRID_LOOKBACK), _iso_s(hi + timedelta(seconds=1))
         )
         buckets = fold_buckets(payloads, lo, hi)
         if buckets:
@@ -534,6 +594,14 @@ class HistoryUploader:
         hi = min(eligible_to, lo + HOURS_PER_REQUEST * _HOUR)
         rows = await self._store.hourly_rows(inv, _iso_s(lo), _iso_s(hi))
         hours = [h for h in (cloud_hour(r) for r in rows) if h is not None]
+        # The grid state of the hours whose raw rows the add-on still holds
+        # (14 days); an older hour says nothing about the grid.
+        raw = await self._store.raw_payloads(
+            inv, _iso_s(lo - _GRID_LOOKBACK), _iso_s(hi + timedelta(seconds=1))
+        )
+        grid = hour_grid(fold_buckets(raw, lo, hi)) if raw else {}
+        for h in hours:
+            h.update(grid.get(_parse(h["ts"]), {}))
         if hours:
             outcome = await self._send(
                 state, progress, "hours",
