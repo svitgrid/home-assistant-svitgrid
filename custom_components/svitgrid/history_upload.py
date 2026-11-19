@@ -482,6 +482,13 @@ class HistoryUploader:
       "retry"    a transient failure; the same request goes again
       "blocked"  the cloud refused the caller (401, 402, 403, 409)
       "done"     nothing is left, for good
+
+    A 401 is final, not a hold, for a box's inverter and for any upload by a
+    grant (svitgrid D-2317): the cloud refuses an expired grant, one whose
+    maker lost the role, and a key for a box it no longer pairs with the
+    household, and none of those clears by waiting. That inverter's phase is
+    left out and the rest goes on. A 401 for the add-on's own inverter still
+    holds, since a re-issued key clears it.
     """
 
     def __init__(
@@ -509,6 +516,8 @@ class HistoryUploader:
         # A history grant in place of the device key (a local-only entry).
         self._grant = grant
         self._box_ids: set[str] = set()
+        # Whether a 401 for the inverter being sent is final (see the class).
+        self._final_401 = False
 
     def _auth(self) -> dict[str, str]:
         return {"grant": self._grant} if self._grant else {}
@@ -527,6 +536,7 @@ class HistoryUploader:
         self._box_ids = set(history_box_inverters(state)) - set(self._inverter_ids)
         for inv in [*self._inverter_ids, *sorted(self._box_ids)]:
             progress = inverters.setdefault(inv, {})
+            self._final_401 = bool(self._grant) or inv in self._box_ids
             for phase in ("buckets", "hours", "days"):
                 # A phase returns None when it moved its cursor without a
                 # request, or finished; it runs again until it is finished.
@@ -539,6 +549,9 @@ class HistoryUploader:
     async def _finish(self, state: dict, reason: str) -> tuple[str, float]:
         state["status"] = "done"
         state["reason"] = reason
+        # The grant is a credential; a finished upload has no use for it
+        # (svitgrid D-2317). A grant sent again starts a new upload.
+        state.pop("grant", None)
         await self._store.set_history_state(self._device_id, state)
         _LOGGER.info("island history upload finished (%s)", reason)
         return "done", 0
@@ -672,8 +685,8 @@ class HistoryUploader:
 
     async def _send(self, state, progress, phase, call) -> tuple[str, float] | None:
         """Send one request. None once the cloud took it, or once it refused
-        this inverter's span for good (400, 404, 413: the span is left out);
-        otherwise the step's result."""
+        this inverter's span for good (400, 404, 413, and a final 401: the
+        span is left out); otherwise the step's result."""
         try:
             status, body = await call()
         except Exception as exc:  # noqa: BLE001
@@ -682,7 +695,7 @@ class HistoryUploader:
         if status is not None and 200 <= status < 300:
             self._failures = 0
             return None
-        if status in (400, 404, 413):
+        if status in (400, 404, 413) or (status == 401 and self._final_401):
             _LOGGER.warning(
                 "island history upload: the cloud refused the %s (%s %s); left out",
                 phase,

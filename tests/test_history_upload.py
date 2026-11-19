@@ -958,3 +958,105 @@ async def test_a_history_grant_uploads_the_boxes_with_no_device_key(tmp_path):
 
     assert len(cloud.by_inverter[BOX_INV]) == 12
     assert cloud.auth and all(a == ("", "hh-1", "g-1") for a in cloud.auth)
+    # The grant is a credential: the finished state keeps none (svitgrid D-2317).
+    state = store._history_state_sync("local:e1")
+    assert state["status"] == "done"
+    assert "grant" not in state
+
+
+class _RefusingCloud(_AnyCloud):
+    """Answers 401 for the inverters in `refuse`, 200 for the rest."""
+
+    def __init__(self, refuse):
+        super().__init__()
+        self.refuse = set(refuse)
+        self.refused_calls = 0
+
+    async def import_history(self, api_key, household_id, inverter_id, buckets, **kw):
+        if inverter_id in self.refuse:
+            self.refused_calls += 1
+            return 401, {"error": "Invalid history grant"}
+        return await super().import_history(api_key, household_id, inverter_id, buckets, **kw)
+
+    async def import_history_totals(self, api_key, household_id, inverter_id, **kw):
+        if inverter_id in self.refuse:
+            self.refused_calls += 1
+            return 401, {"error": "Invalid history grant"}
+        return await super().import_history_totals(api_key, household_id, inverter_id, **kw)
+
+
+@pytest.mark.asyncio
+async def test_a_refused_grant_ends_the_upload_instead_of_retrying_every_hour(tmp_path):
+    """An expired grant, or one whose maker lost the role, never comes back
+    (svitgrid D-2317): each phase is refused once and the upload ends."""
+    store = _store(tmp_path)
+    t = UNTIL - timedelta(hours=1)
+    while t < UNTIL:
+        _append_box(store, t, grid_present=True)
+        t += timedelta(minutes=5)
+    store._set_history_state_sync(
+        "local:e1",
+        {
+            "status": "uploading",
+            "returnAt": _iso(RETURN_AT),
+            "until": _iso(UNTIL),
+            "inverters": {},
+            "boxInverters": [BOX_INV],
+            "householdId": "hh-1",
+            "grant": "g-old",
+        },
+    )
+    clock = _Clock(RETURN_AT + timedelta(seconds=5))
+    cloud = _RefusingCloud({BOX_INV})
+    up = HistoryUploader(
+        store=store,
+        api_client=cloud,
+        api_key="",
+        household_id="hh-1",
+        device_id="local:e1",
+        inverter_ids=[],
+        tz_name="UTC",
+        now=clock,
+        grant="g-old",
+    )
+
+    results = await _run_until_idle(up, clock, max_steps=20)
+
+    assert "blocked" not in results
+    assert cloud.refused_calls <= 3
+    state = store._history_state_sync("local:e1")
+    assert state["status"] == "done"
+    assert "grant" not in state
+
+
+@pytest.mark.asyncio
+async def test_a_box_inverter_the_key_may_not_send_is_left_out_and_the_own_goes_up(tmp_path):
+    """The device key for a box the cloud no longer pairs with the household:
+    the refusal is final for that inverter, not an hourly hold (svitgrid D-2317)."""
+    store = _store(tmp_path)
+    _seed(store, raw_hours=2)
+    _box_island(store)
+    clock = _Clock(RETURN_AT + timedelta(seconds=5))
+    cloud = _RefusingCloud({BOX_INV})
+
+    results = await _run_until_idle(_uploader(store, cloud, clock), clock)
+
+    assert "blocked" not in results
+    assert INV in cloud.by_inverter and BOX_INV not in cloud.by_inverter
+    assert store._history_state_sync(DEVICE)["status"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_the_own_inverter_refused_by_key_still_holds_and_retries(tmp_path):
+    """A 401 for the add-on's own inverter may clear (a key re-issued), so it
+    keeps holding until the 30 days end."""
+    store = _store(tmp_path)
+    _seed(store)
+    _returned(store)
+    clock = _Clock(RETURN_AT + timedelta(seconds=5))
+    cloud = _Cloud(answers=[(401, {"error": "Invalid API key"})])
+    up = _uploader(store, cloud, clock)
+
+    result, wait_s = await up.step()
+    assert result == "blocked"
+    assert wait_s >= 3600
