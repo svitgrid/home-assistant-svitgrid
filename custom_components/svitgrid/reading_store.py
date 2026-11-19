@@ -1094,6 +1094,35 @@ class ReadingStore:
         value = self._get_meta_sync(f"settings_snapshot:{inverter_id}")
         return json.loads(value) if value else None
 
+    # What a removed station leaves that the next household paired here must
+    # not see (svitgrid D-2328). The readings and the history-upload state
+    # stay: they are scoped by inverter and device, and the way back for the
+    # removed station may still need them.
+    _HOUSEHOLD_META_KEYS = ("island_report", "outage_schedule")
+
+    def _clear_station_meta_sync(self, inverter_ids: set[str] | None) -> int:
+        """Delete the settings snapshots of ``inverter_ids``; with None, every
+        snapshot and the household's island report and outage schedule."""
+        conn = _connect(self._db_path)
+        try:
+            if inverter_ids is None:
+                cur = conn.execute(
+                    "DELETE FROM meta WHERE key LIKE 'settings_snapshot:%' OR key IN (?, ?)",
+                    self._HOUSEHOLD_META_KEYS,
+                )
+            else:
+                cur = conn.executemany(
+                    "DELETE FROM meta WHERE key = ?",
+                    [(f"settings_snapshot:{inv}",) for inv in sorted(inverter_ids)],
+                )
+            conn.commit()
+            return cur.rowcount
+        finally:
+            conn.close()
+
+    async def clear_station_meta(self, inverter_ids: set[str] | None = None) -> int:
+        return await self._hass.async_add_executor_job(self._clear_station_meta_sync, inverter_ids)
+
     async def set_settings_snapshot(self, snapshot: dict) -> None:
         await self._hass.async_add_executor_job(self._set_settings_snapshot_sync, snapshot)
 

@@ -171,6 +171,31 @@ class IslandEventStore:
         finally:
             conn.close()
 
+    def _clear_events_sync(self, inverter_ids: set[str] | None) -> int:
+        """Delete the events of ``inverter_ids``, or every event when None.
+
+        Removing a station's config entry clears its rules here (svitgrid
+        D-2328): the file belongs to the Home Assistant install, so without
+        this the next household paired here was handed the old station's
+        rules. Returns how many events went.
+        """
+        conn = _connect(self._db_path)
+        try:
+            if inverter_ids is None:
+                cur = conn.execute("DELETE FROM island_events")
+                conn.commit()
+                return cur.rowcount
+            doomed = [
+                row["event_id"]
+                for row in conn.execute("SELECT event_id, event_json FROM island_events")
+                if json.loads(row["event_json"]).get("inverterId") in inverter_ids
+            ]
+            conn.executemany("DELETE FROM island_events WHERE event_id = ?", [(e,) for e in doomed])
+            conn.commit()
+            return len(doomed)
+        finally:
+            conn.close()
+
     # ── async wrappers ────────────────────────────────────────────────────────
 
     async def async_upsert_event(
@@ -209,3 +234,10 @@ class IslandEventStore:
             await asyncio.get_running_loop().run_in_executor(
                 None, self._set_execution_state_sync, event_id, state
             )
+
+    async def async_clear_events(self, inverter_ids: set[str] | None = None) -> int:
+        if self._hass is not None:
+            return await self._hass.async_add_executor_job(self._clear_events_sync, inverter_ids)
+        return await asyncio.get_running_loop().run_in_executor(
+            None, self._clear_events_sync, inverter_ids
+        )

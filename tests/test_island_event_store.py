@@ -267,3 +267,27 @@ async def test_table_written_by_0_25_0_opens_and_keeps_every_event(tmp_path):
     event = await store.async_get_event("evt-old")
     assert event["signing"] == SIGNING
     assert event["executionState"] == {"status": "active"}
+
+
+# ── clearing a removed station's events (svitgrid D-2328) ─────────────────────
+
+
+def test_clear_events_for_inverters_keeps_other_inverters_events(tmp_path):
+    store = _store(tmp_path)
+    store._upsert_event_sync({"id": "a", "inverterId": "inv-a"})
+    store._upsert_event_sync({"id": "b", "inverterId": "inv-b"})
+    store._upsert_event_sync({"id": "c"})
+
+    assert store._clear_events_sync({"inv-a"}) == 1
+
+    assert sorted(e["id"] for e in store._list_events_sync()) == ["b", "c"]
+
+
+def test_clear_events_with_no_filter_removes_every_event(tmp_path):
+    store = _store(tmp_path)
+    store._upsert_event_sync({"id": "a", "inverterId": "inv-a"})
+    store._upsert_event_sync({"id": "c"})
+
+    assert store._clear_events_sync(None) == 2
+
+    assert store._list_events_sync() == []

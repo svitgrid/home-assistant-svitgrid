@@ -249,3 +249,80 @@ async def test_deprovisioning_revokes_the_entrys_keys(hass, enable_custom_integr
     await _setup_and_unload(hass, entry_a, between=_deprovision)
 
     assert await SvitgridKeystore(hass).async_get_island_keys() == [KEY_B]
+
+
+# ---------------------------------------------------------------------------
+# The removed station's island state goes with it (svitgrid D-2328)
+# ---------------------------------------------------------------------------
+
+
+def _island_stores(hass, tmp_path, monkeypatch):
+    import os
+
+    from custom_components import svitgrid
+    from custom_components.svitgrid.const import READINGS_DB_FILE
+    from custom_components.svitgrid.island_event_store import IslandEventStore
+
+    monkeypatch.setattr(svitgrid, "READINGS_DB_SUBDIR", str(tmp_path))
+    db_dir = str(tmp_path)
+    return (
+        IslandEventStore(os.path.join(db_dir, "island_events.db"), hass=hass),
+        ReadingStore(hass, os.path.join(db_dir, READINGS_DB_FILE)),
+    )
+
+
+@pytest.mark.asyncio
+async def test_removing_the_last_entry_clears_its_rules_and_household_state(
+    hass, enable_custom_integrations, tmp_path, monkeypatch
+):
+    """Pairing this Home Assistant with another household must not hand the
+    new household's phones the old station's rules, settings or reports. The
+    readings and the way-back state stay: they are scoped by inverter and
+    device, and a new pairing never reads another device's."""
+    from custom_components.svitgrid import async_remove_entry
+
+    events, readings = _island_stores(hass, tmp_path, monkeypatch)
+    await events.async_upsert_event({"id": "old-rule", "inverterId": "ha-xyz"})
+    await readings.set_settings_snapshot({"inverter_id": "ha-xyz", "values": {"145": 1}})
+    await readings.set_island_report_state({"lastSent": "2026-11-19"})
+    await readings.set_outage_schedule_state({"fetchedAt": "2026-11-19"})
+    await readings.set_history_state("ed-1", {"status": "done"})
+    entry = _entry(hass, island_key=None)
+
+    await async_remove_entry(hass, entry)
+
+    assert await events.async_list_events() == []
+    assert await readings.get_settings_snapshot("ha-xyz") is None
+    assert await readings.get_island_report_state() is None
+    assert await readings.get_outage_schedule_state() is None
+    assert await readings.history_state("ed-1") == {"status": "done"}
+
+
+@pytest.mark.asyncio
+async def test_removing_an_entry_beside_another_clears_only_its_inverters(
+    hass, enable_custom_integrations, tmp_path, monkeypatch
+):
+    from custom_components.svitgrid import async_remove_entry
+
+    events, readings = _island_stores(hass, tmp_path, monkeypatch)
+    await events.async_upsert_event({"id": "mine", "inverterId": "ha-xyz"})
+    await events.async_upsert_event({"id": "theirs", "inverterId": "ha-other"})
+    await readings.set_settings_snapshot({"inverter_id": "ha-xyz"})
+    await readings.set_settings_snapshot({"inverter_id": "ha-other"})
+    await readings.set_island_report_state({"lastSent": "2026-11-19"})
+    other = _entry(hass, island_key=None)
+    hass.config_entries.async_update_entry(
+        other,
+        data={
+            **other.data,
+            "inverters": [{**other.data["inverters"][0], "inverter_id": "ha-other"}],
+        },
+    )
+    entry = _entry(hass, island_key=None)
+
+    await async_remove_entry(hass, entry)
+
+    assert [e["id"] for e in await events.async_list_events()] == ["theirs"]
+    assert await readings.get_settings_snapshot("ha-xyz") is None
+    assert await readings.get_settings_snapshot("ha-other") is not None
+    assert await readings.get_island_report_state() == {"lastSent": "2026-11-19"}

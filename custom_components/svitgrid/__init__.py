@@ -1808,10 +1808,59 @@ async def _clear_telegram_if_last(hass: HomeAssistant, entry: ConfigEntry) -> No
         _LOGGER.exception("Could not clear the island Telegram state")
 
 
+async def _clear_entry_island_state(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Clear the island state of the station `entry` set up (svitgrid D-2328).
+
+    `island_events.db` and the `meta` table of `readings.db` belong to the
+    Home Assistant install, not to an entry, so the next household paired
+    here was handed the removed station's rules (`GET /api/svitgrid/events`)
+    and its settings snapshots. When no other Svitgrid entry remains, every
+    rule, settings snapshot, island report and outage schedule goes. Beside
+    another entry, only the rules and snapshots of inverters no other entry
+    carries go.
+
+    The readings and the history-upload state stay. They are keyed by
+    inverter and by device (or `local:<entry id>`), so a new pairing never
+    reads them, and they are the owner's history. Never raises.
+    """
+    try:
+        others = [
+            e for e in hass.config_entries.async_entries(DOMAIN) if e.entry_id != entry.entry_id
+        ]
+        inverter_ids: set[str] | None = None
+        if others:
+            kept = {i.get("inverter_id") for e in others for i in _inverters_from_entry(e)}
+            inverter_ids = {
+                i["inverter_id"] for i in _inverters_from_entry(entry) if i.get("inverter_id")
+            } - kept
+            if not inverter_ids:
+                return
+        db_dir = hass.config.path(READINGS_DB_SUBDIR)
+        events_path = os.path.join(db_dir, "island_events.db")
+        readings_path = os.path.join(db_dir, READINGS_DB_FILE)
+        exists = await hass.async_add_executor_job(
+            lambda: (os.path.exists(events_path), os.path.exists(readings_path))
+        )
+        cleared = 0
+        if exists[0]:
+            cleared += await IslandEventStore(events_path, hass=hass).async_clear_events(
+                inverter_ids
+            )
+        if exists[1]:
+            await ReadingStore(hass, readings_path).clear_station_meta(inverter_ids)
+        _LOGGER.info(
+            "Cleared the island state of config entry %s (%d rule(s))", entry.entry_id, cleared
+        )
+    except Exception:  # noqa: BLE001
+        _LOGGER.exception("Could not clear the island state of config entry %s", entry.entry_id)
+
+
 async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """The entry is being deleted: revoke the island keys it adopted, and for
     a LAN pairing, untrust the app's signing key. Deleting the last entry
-    also clears the island Telegram state."""
+    also clears the island Telegram state, and the station's island rules
+    and household state go with it (svitgrid D-2328)."""
     await _revoke_entry_island_keys(hass, entry)
     await _untrust_entry_signing_keys(hass, entry)
     await _clear_telegram_if_last(hass, entry)
+    await _clear_entry_island_state(hass, entry)
