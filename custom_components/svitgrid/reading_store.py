@@ -1298,11 +1298,19 @@ class ReadingStore:
         if state is None or state.get("status") != "island":
             return state
         until = self._five_min_of(now_iso[:19] + "Z")
+        # Progress kept from an earlier return keeps its cursors, but not the
+        # marks that ended a phase: those were measured against the earlier
+        # boundary, and the second island's readings lie past it.
+        inverters = {
+            inv: {k: v for k, v in progress.items() if k not in ("buckets", "hours", "days")}
+            for inv, progress in (state.get("inverters") or {}).items()
+            if isinstance(progress, dict)
+        }
         new_state = {
             "status": "uploading",
             "returnAt": now_iso,
             "until": until,
-            "inverters": state.get("inverters") or {},
+            "inverters": inverters,
         }
         conn = _connect(self._db_path)
         try:

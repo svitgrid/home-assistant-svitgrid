@@ -519,6 +519,46 @@ async def test_a_restart_mid_upload_resumes_from_the_stored_cursor(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_a_second_island_before_the_upload_ends_uploads_its_own_readings(tmp_path):
+    # The buckets of the first return are done and the totals are still
+    # going up when the household goes back to the island. Its second return
+    # must send the second island's readings too, not stop at the first
+    # boundary because the buckets were marked done.
+    store = _store(tmp_path)
+    _seed(store)
+    _returned(store)
+    clock = _Clock(RETURN_AT + timedelta(seconds=5))
+    cloud = _Cloud()
+    up = _uploader(store, cloud, clock)
+    while (store._history_state_sync(DEVICE)["inverters"].get(INV) or {}).get("buckets") != "done":
+        await up.step()
+    assert store._history_state_sync(DEVICE)["status"] == "uploading"
+
+    second_island = RETURN_AT + timedelta(hours=1)
+    store._note_cloud_copy_sync(DEVICE, False, {INV}, _iso(second_island))
+    t = datetime(2026, 11, 19, 13, 5, tzinfo=UTC)
+    second_return = datetime(2026, 11, 19, 15, 2, 30, tzinfo=UTC)
+    while t < second_return:
+        store._append_sync(
+            {"inverterId": INV, "timestamp": _iso(t), "pvPower": 2000.0, "batterySoc": 60.0}
+        )
+        t += timedelta(minutes=5)
+    store._note_cloud_copy_sync(DEVICE, True, {INV}, _iso(second_return))
+    clock.now = second_return + timedelta(seconds=5)
+
+    await _run_until_idle(_uploader(store, cloud, clock), clock)
+
+    second = [b for b in cloud.buckets if b.get("pvPower") == 2000.0]
+    assert [_parse(b["ts"]) for b in second][0] == datetime(2026, 11, 19, 13, 5, tzinfo=UTC)
+    assert _parse(second[-1]["ts"]) == datetime(2026, 11, 19, 14, 55, tzinfo=UTC)
+    bucket_ts = [b["ts"] for b in cloud.buckets]
+    assert len(bucket_ts) == len(set(bucket_ts))
+    hour_ts = [h["ts"] for h in cloud.hours]
+    assert len(hour_ts) == len(set(hour_ts))
+    assert store._history_state_sync(DEVICE)["status"] == "done"
+
+
+@pytest.mark.asyncio
 async def test_once_done_it_stops_for_good(tmp_path):
     store = _store(tmp_path)
     _seed(store)
