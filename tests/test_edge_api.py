@@ -2407,8 +2407,63 @@ async def test_socket_readings_are_stored_scaled_by_the_profile(tmp_path):
             "energy": 4321,
         }
     ]
-    # TS0001 from that maker meters nothing: the cloud skips it.
+    # A TS0001 that shows a meter is stored, whatever its model's default
+    # (svitgrid D-2081): 1500 W at 230 V is evidence. Scaled by TS0001's divisors.
+    [ts0001] = await devices.async_socket_readings(_ZB_ID_2)
+    assert (ts0001["power"], ts0001["voltage"]) == (1500, 23012)
+
+
+@pytest.mark.asyncio
+async def test_a_relay_meters_by_its_own_readings(tmp_path):
+    """svitgrid D-2081: zeros from a relay that never showed a meter follow
+    its model's default (TS0001: skipped); once it shows a nonzero value it is
+    remembered, so its later zeros (load off) are stored too."""
+    hass, _queue, devices = _hass_with_zigbee(_keystore(_box(inverters={})), tmp_path)
+    await _two_plugs(hass, devices)
+    zeros = _socket("0x2222", power=0, voltage=0, current=0, energy=0)
+
+    async def send(sock, ts):
+        resp = await _call(
+            edge_api.EdgeIngestBatchView,
+            "post",
+            hass,
+            api_key=BOX_KEY,
+            body={"readings": [], "socketReadings": [sock], "timestamp": ts},
+        )
+        assert resp.status == 200
+
+    await send(zeros, "2026-10-28T10:00:00.000Z")
     assert await devices.async_socket_readings(_ZB_ID_2) == []
+    assert (await devices.async_get(_ZB_ID_2))["meteringEvidenceAt"] is None
+
+    await send(_socket("0x2222", power=0, voltage=226, current=177), "2026-10-28T10:01:00.000Z")
+    await send(zeros, "2026-10-28T10:02:00.000Z")
+    assert len(await devices.async_socket_readings(_ZB_ID_2)) == 2
+    assert (await devices.async_get(_ZB_ID_2))["meteringEvidenceAt"] is not None
+
+
+def test_metering_override_beats_the_readings():
+    from custom_components.svitgrid.zigbee_devices import (
+        socket_reading_shows_meter,
+        stores_socket_reading,
+    )
+
+    assert socket_reading_shows_meter({"power": 0, "voltage": 0, "current": 0}) is False
+    assert socket_reading_shows_meter({"power": 0, "voltage": 226, "current": 0}) is True
+    assert (
+        socket_reading_shows_meter({"power": 0, "voltage": 0, "current": 0, "ewe": {"p": 5}})
+        is True
+    )
+    assert stores_socket_reading({"meteringOverride": False}, evidence=True, metered=True) is False
+    assert (
+        stores_socket_reading(
+            {"metering": False, "meteringOverride": True}, evidence=False, metered=False
+        )
+        is True
+    )
+    assert stores_socket_reading({"metering": False}, evidence=False, metered=False) is False
+    assert stores_socket_reading({"metering": False}, evidence=True, metered=False) is True
+    assert stores_socket_reading(None, evidence=False, metered=False) is True
 
 
 @pytest.mark.asyncio

@@ -59,6 +59,7 @@ _COLUMNS = {
     "applianceType": "appliance_type",
     "addedAt": "added_at",
     "lastSeen": "last_seen",
+    "meteringEvidenceAt": "metering_evidence_at",
 }
 _BOOL_FIELDS = ("on", "reachable")
 
@@ -108,7 +109,8 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             room              TEXT,
             appliance_type    TEXT,
             added_at          TEXT NOT NULL,
-            last_seen         TEXT
+            last_seen         TEXT,
+            metering_evidence_at TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_zigbee_devices_box_addr
             ON zigbee_devices (device_id, addr);
@@ -160,6 +162,9 @@ def _create_schema(conn: sqlite3.Connection) -> None:
     columns = {r[1] for r in conn.execute("PRAGMA table_info(zigbee_devices)")}
     if "appliance_type" not in columns:
         conn.execute("ALTER TABLE zigbee_devices ADD COLUMN appliance_type TEXT")
+    # And one written before a relay could meter by its readings (svitgrid D-2081).
+    if "metering_evidence_at" not in columns:
+        conn.execute("ALTER TABLE zigbee_devices ADD COLUMN metering_evidence_at TEXT")
     conn.commit()
 
 
@@ -197,6 +202,38 @@ def resolve_zigbee_profile(
         return None
     override = (base.get("manufacturers") or {}).get(manufacturer) if manufacturer else None
     return {**base, **override} if isinstance(override, dict) else base
+
+
+def _nonzero(value: Any) -> bool:
+    return (
+        isinstance(value, int | float)
+        and not isinstance(value, bool)
+        and value != 0
+        and value == value
+    )
+
+
+def socket_reading_shows_meter(reading: dict) -> bool:
+    """`socketReadingShowsMeter` (`zigbee-device-profiles.ts`, svitgrid D-2081):
+    the box sends a plug only once its ActivePower read succeeded, so what a
+    reading must still rule out is a unit that answers zeros. Any nonzero
+    power, voltage or current (or eWeLink p, v, i) shows a meter."""
+    ewe = reading.get("ewe") if isinstance(reading.get("ewe"), dict) else {}
+    return any(_nonzero(reading.get(k)) for k in ("power", "voltage", "current")) or any(
+        _nonzero(ewe.get(k)) for k in ("p", "v", "i")
+    )
+
+
+def stores_socket_reading(profile: dict | None, *, evidence: bool, metered: bool) -> bool:
+    """`storesSocketReading`: `meteringOverride` decides when set; a plug that
+    showed a meter, now or before, is stored; otherwise the profile's
+    `metering` default applies, and no profile stores the reading."""
+    override = (profile or {}).get("meteringOverride")
+    if isinstance(override, bool):
+        return override
+    if metered or evidence:
+        return True
+    return not (profile is not None and not profile.get("metering"))
 
 
 def _js_round(value: float) -> int:
@@ -327,8 +364,9 @@ class ZigbeeDeviceStore:
     ) -> int:
         """`processSocketReadings` (`socket-readings-ingest.ts`): each reading of
         a plug the box holds, scaled by its profile, then the box's snapshot in
-        the slot's rollup. A non-metering plug and an unknown address are
-        skipped. Returns how many were stored."""
+        the slot's rollup. A plug meters by its own readings (svitgrid D-2081,
+        `stores_socket_reading`); one that does not, and an unknown address,
+        are skipped. Returns how many were stored."""
         if profiles is None:
             profiles = load_zigbee_profiles()
         conn = _connect(self._db_path)
@@ -344,7 +382,9 @@ class ZigbeeDeviceStore:
                 device = _row_to_dict(row)
                 model = reading.get("model") or device["model"]
                 profile = resolve_zigbee_profile(profiles, model, device["manufacturer"])
-                if profile is not None and not profile.get("metering"):
+                evidence = socket_reading_shows_meter(reading)
+                metered = device["meteringEvidenceAt"] is not None
+                if not stores_socket_reading(profile, evidence=evidence, metered=metered):
                     continue
                 scaled = {
                     key: reading[key] / _divisor(profile, f"{key}Divisor")
@@ -360,6 +400,8 @@ class ZigbeeDeviceStore:
                 update = {"reachable": 1, "unreachable_since": None, "last_seen": _iso(_utcnow())}
                 if reading.get("model") and not device["model"]:
                     update["model"] = reading["model"]
+                if evidence and not metered and (profile or {}).get("meteringOverride") is not True:
+                    update["metering_evidence_at"] = update["last_seen"]
                 conn.execute(
                     f"UPDATE zigbee_devices SET {', '.join(f'{c} = ?' for c in update)} "
                     "WHERE id = ?",
