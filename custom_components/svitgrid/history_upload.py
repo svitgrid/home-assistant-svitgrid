@@ -50,7 +50,7 @@ from typing import Any
 
 from .edge_reading_pipeline import _debounce_grid_present, derive_grid_present
 from .local_time import local_day_of
-from .reading_store import history_box_inverters
+from .reading_store import HISTORY_GIVE_UP_AFTER, history_box_inverters
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -67,7 +67,7 @@ DAYS_PER_REQUEST = 366  # HISTORY_IMPORT_MAX_DAYS
 
 # How long after the return the upload keeps trying. By then the cloud takes
 # none of the 5-minute buckets and only part of the hours.
-GIVE_UP_AFTER = timedelta(days=30)
+GIVE_UP_AFTER = HISTORY_GIVE_UP_AFTER
 
 PACE_S = 2  # between requests
 BLOCKED_RETRY_S = 3600  # 401, 402, 403, 409: the owner or the cloud must act

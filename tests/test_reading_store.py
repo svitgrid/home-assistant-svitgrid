@@ -766,3 +766,66 @@ def test_each_restart_on_the_island_keeps_the_island_state(tmp_path):
     # A reload after the return keeps the boundary of the first start.
     again = store._note_cloud_copy_sync("dev-1", True, {"inv-1"}, "2026-11-19T15:00:00Z")
     assert again == first
+
+
+# ── the orphan prune keeps what a way-back upload still needs (svitgrid D-2341) ──
+
+
+def _raw_states(store) -> dict[str, set[str]]:
+    conn = store._connect_for_test()
+    try:
+        out: dict[str, set[str]] = {}
+        for r in conn.execute("SELECT inverter_id, sync_state FROM readings_raw"):
+            out.setdefault(r["inverter_id"], set()).add(r["sync_state"])
+        return out
+    finally:
+        conn.close()
+
+
+def _seed_old_station(store) -> None:
+    store._append_sync({"inverterId": "inv-new", "timestamp": "2026-11-19T10:00:00Z"})
+    store._append_sync({"inverterId": "inv-old", "timestamp": "2026-11-19T09:00:00Z"})
+    store._append_sync({"inverterId": "inv-old", "timestamp": "2026-11-19T09:05:00Z"})
+
+
+def test_prune_keeps_an_island_stations_unsent_rows_out_of_the_queue(tmp_path):
+    """Home Assistant paired to another household while the previous station's
+    island readings still wait for the way back: they stay, marked `skipped`,
+    so the live sender never sends them and they never block its queue."""
+    store = _store(tmp_path)
+    _seed_old_station(store)
+    store._set_history_state_sync("old-device", {"status": "island"})
+
+    deleted = store._prune_inverters_not_in_sync({"inv-new"}, now_iso="2026-11-20T00:00:00Z")
+
+    assert deleted == 0
+    assert _raw_states(store) == {"inv-new": {"pending"}, "inv-old": {"skipped"}}
+
+
+def test_prune_keeps_rows_of_an_upload_inside_its_window_and_drops_sent_ones(tmp_path):
+    store = _store(tmp_path)
+    _seed_old_station(store)
+    store._mark_sent_sync([("inv-old", "2026-11-19T09:00:00Z")])
+    store._set_history_state_sync(
+        "local:old-entry", {"status": "uploading", "returnAt": "2026-11-10T00:00:00Z"}
+    )
+
+    deleted = store._prune_inverters_not_in_sync({"inv-new"}, now_iso="2026-11-20T00:00:00Z")
+
+    assert deleted == 1
+    assert _raw_states(store) == {"inv-new": {"pending"}, "inv-old": {"skipped"}}
+
+
+def test_prune_deletes_orphans_once_no_upload_can_need_them(tmp_path):
+    """A finished upload, or one past its 30-day window, needs nothing."""
+    store = _store(tmp_path)
+    _seed_old_station(store)
+    store._set_history_state_sync("done-device", {"status": "done"})
+    store._set_history_state_sync(
+        "late-device", {"status": "uploading", "returnAt": "2026-10-01T00:00:00Z"}
+    )
+
+    deleted = store._prune_inverters_not_in_sync({"inv-new"}, now_iso="2026-11-20T00:00:00Z")
+
+    assert deleted == 2
+    assert _raw_states(store) == {"inv-new": {"pending"}}

@@ -8,7 +8,7 @@ import json
 import logging
 import sqlite3
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from homeassistant.core import HomeAssistant
@@ -132,6 +132,31 @@ def history_box_inverters(state: dict | None) -> list[str]:
     if not isinstance(ids, list):
         return []
     return sorted({i for i in ids if isinstance(i, str) and i})
+
+
+# How long after the return a way-back upload keeps trying
+# (`history_upload.GIVE_UP_AFTER`).
+HISTORY_GIVE_UP_AFTER = timedelta(days=30)
+
+
+def history_may_need_rows(state: dict | None, now: datetime) -> bool:
+    """Whether a history-upload state could still send stored raw rows
+    (svitgrid D-2341): an island, or an upload inside its 30-day window. The
+    state does not say which inverters it covers, so any such state counts."""
+    if not isinstance(state, dict):
+        return False
+    status = state.get("status")
+    if status == "island":
+        return True
+    if status != "uploading":
+        return False
+    try:
+        returned = datetime.fromisoformat(str(state.get("returnAt")).replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    if returned.tzinfo is None:
+        returned = returned.replace(tzinfo=UTC)
+    return now - returned <= HISTORY_GIVE_UP_AFTER
 
 
 def history_keeps_inverters(state: dict | None) -> set[str]:
@@ -1251,26 +1276,55 @@ class ReadingStore:
         finally:
             conn.close()
 
-    def _prune_inverters_not_in_sync(self, keep_ids: set) -> int:
+    def _history_may_need_rows_sync(self, conn: sqlite3.Connection, now: datetime) -> bool:
+        for row in conn.execute("SELECT value FROM meta WHERE key LIKE 'history_upload:%'"):
+            try:
+                state = json.loads(row["value"])
+            except (TypeError, ValueError):
+                continue
+            if history_may_need_rows(state, now):
+                return True
+        return False
+
+    def _prune_inverters_not_in_sync(self, keep_ids: set, now_iso: str | None = None) -> int:
         """Delete readings_raw rows for inverters not in keep_ids.
 
         Only prunes readings_raw (the outbound queue — the bug vector).
         readings_hourly / readings_daily are the local archive and are
         intentionally left untouched.
 
+        While any history-upload state could still send stored rows (an
+        island, or an upload inside its window), the unsent rows of those
+        inverters are kept and marked `skipped` instead (svitgrid D-2341): Home
+        Assistant paired to another household must not delete the previous
+        station's island readings before the way back sends them. `skipped`
+        keeps them out of the live sender's queue, and the raw retention drops
+        them later. Rows already sent go either way.
+
         Returns the number of rows deleted.
         """
         keep = list(keep_ids)
+        now = (
+            datetime.fromisoformat(now_iso.replace("Z", "+00:00"))
+            if now_iso
+            else datetime.now(tz=UTC)
+        )
+        where = "1=1"
+        if keep:
+            where = f"inverter_id NOT IN ({','.join('?' * len(keep))})"
         conn = _connect(self._db_path)
         try:
-            if not keep:
-                cur = conn.execute("DELETE FROM readings_raw")
-            else:
-                placeholders = ",".join("?" * len(keep))
-                cur = conn.execute(
-                    f"DELETE FROM readings_raw WHERE inverter_id NOT IN ({placeholders})",
+            if self._history_may_need_rows_sync(conn, now):
+                conn.execute(
+                    f"UPDATE readings_raw SET sync_state='skipped' "
+                    f"WHERE {where} AND sync_state != 'sent'",
                     keep,
                 )
+                cur = conn.execute(
+                    f"DELETE FROM readings_raw WHERE {where} AND sync_state = 'sent'", keep
+                )
+            else:
+                cur = conn.execute(f"DELETE FROM readings_raw WHERE {where}", keep)
             conn.commit()
             return cur.rowcount
         finally:
