@@ -1,0 +1,72 @@
+{
+  "_comment": "The list of record: every command name the calendar evaluator (services/api/src/calendar/evaluator.ts) can dispatch for a mode, in the order the builders sign it (order is signed). Mobile (signed_event_builder.dart authorizedCommandsFor), web (apps/web/src/signing/envelope.ts) and the API test authorized-commands-by-mode.test.ts are pinned to it. A mode under p17 is for an inverter on the P17 transport; a mode absent there signs its deye list. custom signs the commands of its actions: custom.<action type> lists them for a non-P17 inverter, in signed order. The API test pins every catalog action and its customActionCommands variants (services/api/src/calendar/custom-action-catalog.ts) to it; mobile custom_event_config_helpers.dart is pinned in custom_event_config_helpers_test.dart. On a P17 inverter the held action types sign set_p17_hold / restore_p17_hold instead.",
+  "deye": {
+    "battery_charge": [
+      "set_battery_charge", "restore_battery_charge",
+      "set_grid_charge_current", "restore_grid_charge_current",
+      "set_grid_charge_toggle", "restore_grid_charge_toggle",
+      "apply_priority_profile", "restore_priority_profile",
+      "set_grid_charge_master", "restore_grid_charge_master"
+    ],
+    "sell_to_grid": [
+      "set_work_mode", "restore_work_mode",
+      "set_solar_sell", "restore_solar_sell",
+      "set_sell_power_cap", "restore_sell_power_cap",
+      "set_grid_charge_toggle", "restore_grid_charge_toggle"
+    ],
+    "battery_maintenance_charge": [
+      "set_solar_sell", "restore_solar_sell",
+      "set_battery_charge", "restore_battery_charge",
+      "apply_priority_profile", "restore_priority_profile",
+      "set_grid_charge_master", "restore_grid_charge_master"
+    ],
+    "use_battery": [
+      "set_work_mode", "restore_work_mode",
+      "set_grid_charge_toggle", "restore_grid_charge_toggle",
+      "apply_priority_profile", "restore_priority_profile",
+      "set_grid_charge_master", "restore_grid_charge_master",
+      "set_pi30_thresholds", "restore_pi30_thresholds"
+    ],
+    "battery_hold": [
+      "set_work_mode", "restore_work_mode",
+      "set_solar_sell", "restore_solar_sell"
+    ],
+    "lower_consumption": ["set_state"],
+    "consume_from_sun": ["set_state"],
+    "gen_force": ["set_gen_force", "restore_gen_force"],
+    "day_planning": [
+      "set_battery_charge", "restore_battery_charge",
+      "set_work_mode", "restore_work_mode"
+    ]
+  },
+  "custom": {
+    "work_mode": ["set_work_mode", "restore_work_mode"],
+    "solar_sell": ["set_solar_sell", "restore_solar_sell"],
+    "sell_power_cap": ["set_sell_power_cap", "restore_sell_power_cap"],
+    "grid_charge_toggle": [
+      "set_grid_charge_toggle", "restore_grid_charge_toggle",
+      "set_grid_charge_master", "restore_grid_charge_master"
+    ],
+    "gen_force": ["set_gen_force", "restore_gen_force"],
+    "energy_pattern": ["set_energy_pattern", "restore_energy_pattern"],
+    "gen_port_mode": ["set_gen_port_mode", "restore_gen_port_mode"],
+    "grid_charge_current": ["set_grid_charge_current", "restore_grid_charge_current"],
+    "battery_charge_current": ["set_battery_charge_current", "restore_battery_charge_current"],
+    "tou_slots": ["set_battery_charge", "restore_battery_charge"],
+    "smart_device": ["set_state"],
+    "smart_device_except": ["set_state"],
+    "peak_shaving": ["set_peak_shaving", "restore_peak_shaving"],
+    "priority_profile": ["apply_priority_profile", "restore_priority_profile"],
+    "pi30_thresholds": ["set_pi30_thresholds", "restore_pi30_thresholds"],
+    "must_thresholds": ["set_must_thresholds", "restore_must_thresholds"],
+    "p17_thresholds": ["set_p17_hold", "restore_p17_hold"],
+    "ev_charger": []
+  },
+  "p17": {
+    "battery_charge": ["apply_priority_profile", "restore_priority_profile", "set_p17_hold", "restore_p17_hold"],
+    "use_battery": ["apply_priority_profile", "restore_priority_profile"],
+    "battery_maintenance_charge": ["apply_priority_profile", "restore_priority_profile"],
+    "sell_to_grid": ["set_p17_hold", "restore_p17_hold"],
+    "battery_hold": ["set_p17_hold", "restore_p17_hold"]
+  }
+}

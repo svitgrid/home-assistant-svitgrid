@@ -1,0 +1,1817 @@
+{
+  "_comment": "Shared vectors for the log-only envelope check (#954). Read by devices/edge-connector-v2/test/test_envelope_check.c and apps/mobile/test/core/signing/envelope_check_test.dart. Each case gives the verified signedEventData, the top-level command the executor is about to run, and the inverter it would run it on (empty when the executor does not know). `failed` lists the checks that did not hold, in this fixed order: authorized_commands_missing, command_not_authorized, inverter_id_missing, inverter_mismatch. `shape` is the envelope's `type`, or `untyped` for the buildSignedEventData shape that has none (older creates and every healer re-sign). An envelope with no authorizedCommands array but a string `command` (an owner tap or a board-level command) authorizes exactly that one command: a different top-level command fails command_not_authorized, and the envelope does not fail authorized_commands_missing. `enforced` names the checks that make the executor refuse a command; each case's `refuse` is true exactly when its `failed` list holds one of them, except envelope_no_clock on a restore_* command, which never refuses (rulings R1, R7). `reason` is the ack reason a refusing executor sends (`envelope_` plus the first enforced check in the fixed order, never doubled, so envelope_no_clock stays envelope_no_clock); null when the case does not refuse. `retryLater` is true when the only enforced failure is envelope_no_clock on a non-restore command: the executor sends no ack, so the command is redelivered once the clock is set.",
+  "enforced": [
+    "command_not_authorized",
+    "valid_until_missing",
+    "envelope_no_clock"
+  ],
+  "_alwaysComment": "D-1899: an S3 built with SVITGRID_FLEET_ENVELOPE_ENFORCE \"always\" refuses on enforcedAlways whatever the server says. envelope_no_clock and envelope_expired do not count against a restore_* command. A planner_delegation names allowedModes, not authorizedCommands, so authorized_commands_missing does not count against it either; its limits are a later design. refuseAlways and reasonAlways give the answer; the board's test and services/api/src/__tests__/envelope-replay.test.ts both read them.",
+  "enforcedAlways": [
+    "authorized_commands_missing",
+    "command_not_authorized",
+    "inverter_id_missing",
+    "inverter_mismatch",
+    "smart_device_mismatch",
+    "valid_until_missing",
+    "envelope_no_clock",
+    "envelope_expired"
+  ],
+  "_deviceScopedComment": "D-2283: board-level commands bind the board, not an inverter. For a command in deviceScopedCommands the inverter half of the check (inverter_id_missing, inverter_mismatch) does not apply: the envelope still has to authorize the command, and its validUntil still counts. The phone signs the island pair as {command, payload, validUntil} with no inverter and no deviceId, so without this an always-enforcing hub (D-1899) refused every move to Home Assistant and back. The board also reports a signed deviceId that names another board as device_mismatch (report only, not in these vectors, since the executors here do not know the board's id).",
+  "deviceScopedCommands": [
+    "permit_join",
+    "factory_reset",
+    "zigbee_factory_reset",
+    "set_island_endpoint",
+    "clear_island_endpoint"
+  ],
+  "_smartDeviceScopedComment": "D-2285: commands that bind one smart device, not an inverter. For a command in smartDeviceScopedCommands, an envelope that carries a non-empty smartDeviceId is smart-device scoped: the inverter half (inverter_id_missing, inverter_mismatch) does not apply, and the executor checks smartDeviceId against the command's own top-level smartDeviceId (`targetSmartDeviceId`, empty when the executor does not know it, which skips the check). smart_device_mismatch sits after inverter_mismatch in the fixed order and is in enforcedAlways, not in enforced. An envelope with a smartDeviceId and neither authorizedCommands nor a command is the cloud on/off tap that app builds released before D-2285 sign ({smartDeviceId, on, validUntil}): it authorizes set_state and nothing else, so a different top-level command fails command_not_authorized. validUntil still counts. Cases without `targetSmartDeviceId` mean an empty one.",
+  "smartDeviceScopedCommands": [
+    "set_state"
+  ],
+  "_islandComment": "D-2288: the two envelopes the phone signs for an edge island, which Home Assistant hands the box untouched. A settings tap (IslandCommandSender.sendCommand) signs {command, payload} with the inverter only as payload.inverterId, and app builds from D-2127 add a nonce and ts (epoch ms). A calendar event or rule (IslandEventClient) signs the event map itself: id, inverterId, mode, schedule, config and, from D-2127, nonce and ts; no type, no scenarioId, no authorizedCommands and no validUntil. Binding: an envelope that names no inverter at the top level but signs a payload with a string inverterId names that one. An envelope with a string mode and no type, scenarioId, authorizedCommands or command authorizes what that mode sends: the deye list of authorized-commands-by-mode.json for the mode (or for its islandEventModeAliases entry), and for custom the union of each action's list there by type, or the action's own command in the legacy {command, payload} form. A mode with no list fails authorized_commands_missing. Validity: an island envelope with no validUntil key and a numeric ts is valid until ts plus islandCommandValiditySeconds (a settings tap: kInverterCommandValidity, and Home Assistant's queue TTL) or islandEventValiditySeconds (an event: scenarioValidUntil). One that signs neither a validUntil nor a ts (every app build released before D-2127) cannot be made fresh by the board: off an island it fails valid_until_missing as before; on a board whose island endpoint is set (`onIsland`), where Home Assistant delivers every command and checks the signed nonce and ts itself, it reports signed_time_missing instead, which no level enforces. The binding still applies there.",
+  "islandEventModeAliases": {
+    "battery_maintenance": "battery_maintenance_charge"
+  },
+  "islandCommandValiditySeconds": 900,
+  "islandEventValiditySeconds": 31536000,
+  "cases": [
+    {
+      "name": "matching scenario envelope",
+      "command": "set_battery_charge",
+      "targetInverterId": "inv-A",
+      "signedEventData": {
+        "scenarioId": "sc-1",
+        "type": "scenario",
+        "inverterId": "inv-A",
+        "mode": "battery_charge",
+        "authorizedCommands": [
+          "set_battery_charge",
+          "restore_battery_charge"
+        ],
+        "schedule": {},
+        "config": {
+          "targetSoc": 80
+        },
+        "validUntil": "2027-01-01T00:00:00.000Z"
+      },
+      "failed": [],
+      "shape": "scenario",
+      "refuse": false,
+      "reason": null,
+      "refuseAlways": false,
+      "reasonAlways": null
+    },
+    {
+      "name": "restore command listed",
+      "command": "restore_work_mode",
+      "targetInverterId": "inv-A",
+      "signedEventData": {
+        "scenarioId": "sc-1",
+        "type": "scenario",
+        "inverterId": "inv-A",
+        "mode": "work_mode",
+        "authorizedCommands": [
+          "set_work_mode",
+          "restore_work_mode"
+        ],
+        "schedule": {},
+        "config": {
+          "targetSoc": 80
+        },
+        "validUntil": "2027-01-01T00:00:00.000Z"
+      },
+      "failed": [],
+      "shape": "scenario",
+      "refuse": false,
+      "reason": null,
+      "refuseAlways": false,
+      "reasonAlways": null
+    },
+    {
+      "name": "command outside authorizedCommands",
+      "command": "set_work_mode",
+      "targetInverterId": "inv-A",
+      "signedEventData": {
+        "scenarioId": "sc-1",
+        "type": "scenario",
+        "inverterId": "inv-A",
+        "mode": "battery_charge",
+        "authorizedCommands": [
+          "set_battery_charge",
+          "restore_battery_charge"
+        ],
+        "schedule": {},
+        "config": {
+          "targetSoc": 80
+        },
+        "validUntil": "2027-01-01T00:00:00.000Z"
+      },
+      "failed": [
+        "command_not_authorized"
+      ],
+      "shape": "scenario",
+      "refuse": true,
+      "reason": "envelope_command_not_authorized",
+      "refuseAlways": true,
+      "reasonAlways": "envelope_command_not_authorized"
+    },
+    {
+      "name": "wrong inverter",
+      "command": "set_battery_charge",
+      "targetInverterId": "inv-B",
+      "signedEventData": {
+        "scenarioId": "sc-1",
+        "type": "scenario",
+        "inverterId": "inv-A",
+        "mode": "battery_charge",
+        "authorizedCommands": [
+          "set_battery_charge",
+          "restore_battery_charge"
+        ],
+        "schedule": {},
+        "config": {
+          "targetSoc": 80
+        },
+        "validUntil": "2027-01-01T00:00:00.000Z"
+      },
+      "failed": [
+        "inverter_mismatch"
+      ],
+      "shape": "scenario",
+      "refuse": false,
+      "reason": null,
+      "refuseAlways": true,
+      "reasonAlways": "envelope_inverter_mismatch"
+    },
+    {
+      "name": "older envelope without type",
+      "command": "restore_battery_charge",
+      "targetInverterId": "inv-A",
+      "signedEventData": {
+        "scenarioId": "sc-2",
+        "inverterId": "inv-A",
+        "mode": "battery_charge",
+        "authorizedCommands": [
+          "set_battery_charge",
+          "restore_battery_charge"
+        ],
+        "schedule": {},
+        "config": {},
+        "validUntil": "2027-01-01T00:00:00.000Z"
+      },
+      "failed": [],
+      "shape": "untyped",
+      "refuse": false,
+      "reason": null,
+      "refuseAlways": false,
+      "reasonAlways": null
+    },
+    {
+      "name": "envelope with neither authorizedCommands nor an inverter",
+      "command": "set_battery_charge",
+      "targetInverterId": "inv-A",
+      "signedEventData": {
+        "scenarioId": "sc-3",
+        "mode": "battery_charge",
+        "validUntil": "2027-01-01T00:00:00.000Z"
+      },
+      "failed": [
+        "authorized_commands_missing",
+        "inverter_id_missing"
+      ],
+      "shape": "untyped",
+      "refuse": false,
+      "reason": null,
+      "refuseAlways": true,
+      "reasonAlways": "envelope_authorized_commands_missing"
+    },
+    {
+      "name": "delegation envelope names the target in inverterIds",
+      "command": "set_work_mode",
+      "targetInverterId": "inv-A",
+      "signedEventData": {
+        "type": "planner_delegation",
+        "householdId": "hh-1",
+        "inverterIds": [
+          "inv-B",
+          "inv-A"
+        ],
+        "allowedModes": [
+          "sell_to_grid"
+        ],
+        "validUntil": "2027-01-01T00:00:00.000Z"
+      },
+      "failed": [
+        "authorized_commands_missing"
+      ],
+      "shape": "planner_delegation",
+      "refuse": false,
+      "reason": null,
+      "refuseAlways": false,
+      "reasonAlways": null
+    },
+    {
+      "name": "target unknown to the executor skips the inverter check",
+      "command": "set_battery_charge",
+      "targetInverterId": "",
+      "signedEventData": {
+        "scenarioId": "sc-1",
+        "type": "scenario",
+        "inverterId": "inv-A",
+        "mode": "battery_charge",
+        "authorizedCommands": [
+          "set_battery_charge"
+        ],
+        "validUntil": "2027-01-01T00:00:00.000Z"
+      },
+      "failed": [],
+      "shape": "scenario",
+      "refuse": false,
+      "reason": null,
+      "refuseAlways": false,
+      "reasonAlways": null
+    },
+    {
+      "name": "tap envelope, same command",
+      "command": "set_work_mode",
+      "targetInverterId": "inv-A",
+      "signedEventData": {
+        "scenarioId": "cmd-1",
+        "inverterId": "inv-A",
+        "command": "set_work_mode",
+        "payload": {},
+        "validUntil": "2027-01-01T00:00:00.000Z"
+      },
+      "failed": [],
+      "shape": "untyped",
+      "refuse": false,
+      "reason": null,
+      "refuseAlways": false,
+      "reasonAlways": null
+    },
+    {
+      "name": "tap envelope, other command",
+      "command": "set_solar_sell",
+      "targetInverterId": "inv-A",
+      "signedEventData": {
+        "scenarioId": "cmd-1",
+        "inverterId": "inv-A",
+        "command": "set_work_mode",
+        "payload": {},
+        "validUntil": "2027-01-01T00:00:00.000Z"
+      },
+      "failed": [
+        "command_not_authorized"
+      ],
+      "shape": "untyped",
+      "refuse": true,
+      "reason": "envelope_command_not_authorized",
+      "refuseAlways": true,
+      "reasonAlways": "envelope_command_not_authorized"
+    },
+    {
+      "name": "board command envelope",
+      "command": "permit_join",
+      "targetInverterId": "",
+      "signedEventData": {
+        "command": "permit_join",
+        "deviceId": "edge-1",
+        "validUntil": "2027-01-01T00:00:00.000Z"
+      },
+      "failed": [],
+      "shape": "untyped",
+      "refuse": false,
+      "reason": null,
+      "refuseAlways": false,
+      "reasonAlways": null
+    },
+    {
+      "name": "other inverter",
+      "command": "set_battery_charge",
+      "targetInverterId": "inv-B",
+      "signedEventData": {
+        "scenarioId": "sc-1",
+        "type": "scenario",
+        "inverterId": "inv-A",
+        "mode": "battery_charge",
+        "authorizedCommands": [
+          "set_battery_charge",
+          "restore_battery_charge"
+        ],
+        "schedule": {},
+        "config": {
+          "targetSoc": 80
+        },
+        "validUntil": "2027-01-01T00:00:00.000Z"
+      },
+      "failed": [
+        "inverter_mismatch"
+      ],
+      "shape": "scenario",
+      "refuse": false,
+      "reason": null,
+      "refuseAlways": true,
+      "reasonAlways": "envelope_inverter_mismatch"
+    },
+    {
+      "name": "island move to Home Assistant, as the app signs it",
+      "command": "set_island_endpoint",
+      "targetInverterId": "",
+      "signedEventData": {
+        "command": "set_island_endpoint",
+        "payload": {
+          "url": "http://192.168.1.50:8099",
+          "pairCode": "123456"
+        },
+        "validUntil": "2027-01-01T00:00:00.000Z"
+      },
+      "failed": [],
+      "shape": "untyped",
+      "refuse": false,
+      "reason": null,
+      "refuseAlways": false,
+      "reasonAlways": null
+    },
+    {
+      "name": "island move back to the cloud, as the app signs it",
+      "command": "clear_island_endpoint",
+      "targetInverterId": "",
+      "signedEventData": {
+        "command": "clear_island_endpoint",
+        "payload": {},
+        "validUntil": "2027-01-01T00:00:00.000Z"
+      },
+      "failed": [],
+      "shape": "untyped",
+      "refuse": false,
+      "reason": null,
+      "refuseAlways": false,
+      "reasonAlways": null
+    },
+    {
+      "name": "factory reset names the board, not an inverter",
+      "command": "factory_reset",
+      "targetInverterId": "",
+      "signedEventData": {
+        "command": "factory_reset",
+        "confirm": true,
+        "deviceId": "edge-a0b1c2d3e4f5",
+        "validUntil": "2027-01-01T00:00:00.000Z"
+      },
+      "failed": [],
+      "shape": "untyped",
+      "refuse": false,
+      "reason": null,
+      "refuseAlways": false,
+      "reasonAlways": null
+    },
+    {
+      "name": "mesh reset names the board, not an inverter",
+      "command": "zigbee_factory_reset",
+      "targetInverterId": "",
+      "signedEventData": {
+        "command": "zigbee_factory_reset",
+        "confirm": true,
+        "deviceId": "edge-a0b1c2d3e4f5",
+        "validUntil": "2027-01-01T00:00:00.000Z"
+      },
+      "failed": [],
+      "shape": "untyped",
+      "refuse": false,
+      "reason": null,
+      "refuseAlways": false,
+      "reasonAlways": null
+    },
+    {
+      "name": "a clear envelope does not authorize a move",
+      "command": "set_island_endpoint",
+      "targetInverterId": "",
+      "signedEventData": {
+        "command": "clear_island_endpoint",
+        "payload": {},
+        "validUntil": "2027-01-01T00:00:00.000Z"
+      },
+      "failed": [
+        "command_not_authorized"
+      ],
+      "shape": "untyped",
+      "refuse": true,
+      "reason": "envelope_command_not_authorized",
+      "refuseAlways": true,
+      "reasonAlways": "envelope_command_not_authorized"
+    },
+    {
+      "name": "a board-level envelope with no command is still refused",
+      "command": "set_island_endpoint",
+      "targetInverterId": "",
+      "signedEventData": {
+        "payload": {},
+        "validUntil": "2027-01-01T00:00:00.000Z"
+      },
+      "failed": [
+        "authorized_commands_missing"
+      ],
+      "shape": "untyped",
+      "refuse": false,
+      "reason": null,
+      "refuseAlways": true,
+      "reasonAlways": "envelope_authorized_commands_missing"
+    },
+    {
+      "name": "an island envelope does not authorize an inverter command",
+      "command": "set_work_mode",
+      "targetInverterId": "inv-A",
+      "signedEventData": {
+        "command": "set_island_endpoint",
+        "payload": {},
+        "validUntil": "2027-01-01T00:00:00.000Z"
+      },
+      "failed": [
+        "command_not_authorized",
+        "inverter_id_missing"
+      ],
+      "shape": "untyped",
+      "refuse": true,
+      "reason": "envelope_command_not_authorized",
+      "refuseAlways": true,
+      "reasonAlways": "envelope_command_not_authorized"
+    },
+    {
+      "name": "cloud on/off tap, as released apps sign it",
+      "command": "set_state",
+      "targetInverterId": "",
+      "targetSmartDeviceId": "sd-1",
+      "signedEventData": {
+        "smartDeviceId": "sd-1",
+        "on": true,
+        "validUntil": "2027-01-01T00:00:00.000Z"
+      },
+      "failed": [],
+      "shape": "untyped",
+      "refuse": false,
+      "reason": null,
+      "refuseAlways": false,
+      "reasonAlways": null
+    },
+    {
+      "name": "cloud on/off tap, as apps sign it from D-2285",
+      "command": "set_state",
+      "targetInverterId": "",
+      "targetSmartDeviceId": "sd-1",
+      "signedEventData": {
+        "command": "set_state",
+        "smartDeviceId": "sd-1",
+        "on": true,
+        "validUntil": "2027-01-01T00:00:00.000Z"
+      },
+      "failed": [],
+      "shape": "untyped",
+      "refuse": false,
+      "reason": null,
+      "refuseAlways": false,
+      "reasonAlways": null
+    },
+    {
+      "name": "on/off tap through Home Assistant on an edge island",
+      "command": "set_state",
+      "targetInverterId": "",
+      "targetSmartDeviceId": "zb-00124b0029aa0001",
+      "signedEventData": {
+        "command": "set_state",
+        "payload": {
+          "on": false
+        },
+        "smartDeviceId": "zb-00124b0029aa0001",
+        "validUntil": "2027-01-01T00:00:00.000Z"
+      },
+      "failed": [],
+      "shape": "untyped",
+      "refuse": false,
+      "reason": null,
+      "refuseAlways": false,
+      "reasonAlways": null
+    },
+    {
+      "name": "a tap for one device does not switch another",
+      "command": "set_state",
+      "targetInverterId": "",
+      "targetSmartDeviceId": "sd-2",
+      "signedEventData": {
+        "smartDeviceId": "sd-1",
+        "on": true,
+        "validUntil": "2027-01-01T00:00:00.000Z"
+      },
+      "failed": [
+        "smart_device_mismatch"
+      ],
+      "shape": "untyped",
+      "refuse": false,
+      "reason": null,
+      "refuseAlways": true,
+      "reasonAlways": "envelope_smart_device_mismatch"
+    },
+    {
+      "name": "a tap the executor cannot place is not compared",
+      "command": "set_state",
+      "targetInverterId": "",
+      "targetSmartDeviceId": "",
+      "signedEventData": {
+        "smartDeviceId": "sd-1",
+        "on": true,
+        "validUntil": "2027-01-01T00:00:00.000Z"
+      },
+      "failed": [],
+      "shape": "untyped",
+      "refuse": false,
+      "reason": null,
+      "refuseAlways": false,
+      "reasonAlways": null
+    },
+    {
+      "name": "a released tap does not authorize an inverter command",
+      "command": "set_work_mode",
+      "targetInverterId": "inv-A",
+      "signedEventData": {
+        "smartDeviceId": "sd-1",
+        "on": true,
+        "validUntil": "2027-01-01T00:00:00.000Z"
+      },
+      "failed": [
+        "command_not_authorized",
+        "inverter_id_missing"
+      ],
+      "shape": "untyped",
+      "refuse": true,
+      "reason": "envelope_command_not_authorized",
+      "refuseAlways": true,
+      "reasonAlways": "envelope_command_not_authorized"
+    },
+    {
+      "name": "a released tap does not authorize a board-level command",
+      "command": "permit_join",
+      "targetInverterId": "",
+      "signedEventData": {
+        "smartDeviceId": "sd-1",
+        "on": true,
+        "validUntil": "2027-01-01T00:00:00.000Z"
+      },
+      "failed": [
+        "command_not_authorized"
+      ],
+      "shape": "untyped",
+      "refuse": true,
+      "reason": "envelope_command_not_authorized",
+      "refuseAlways": true,
+      "reasonAlways": "envelope_command_not_authorized"
+    },
+    {
+      "name": "a tap signed for set_state does not authorize another command",
+      "command": "set_startup_state",
+      "targetInverterId": "",
+      "targetSmartDeviceId": "sd-1",
+      "signedEventData": {
+        "command": "set_state",
+        "smartDeviceId": "sd-1",
+        "on": true,
+        "validUntil": "2027-01-01T00:00:00.000Z"
+      },
+      "failed": [
+        "command_not_authorized",
+        "inverter_id_missing"
+      ],
+      "shape": "untyped",
+      "refuse": true,
+      "reason": "envelope_command_not_authorized",
+      "refuseAlways": true,
+      "reasonAlways": "envelope_command_not_authorized"
+    },
+    {
+      "name": "a calendar set_state on a scenario envelope still binds its inverter",
+      "command": "set_state",
+      "targetInverterId": "inv-A",
+      "targetSmartDeviceId": "sd-1",
+      "signedEventData": {
+        "scenarioId": "sc-7",
+        "type": "scenario",
+        "inverterId": "inv-A",
+        "mode": "smart_device",
+        "authorizedCommands": [
+          "set_state"
+        ],
+        "schedule": {},
+        "config": {},
+        "validUntil": "2027-01-01T00:00:00.000Z"
+      },
+      "failed": [],
+      "shape": "scenario",
+      "refuse": false,
+      "reason": null,
+      "refuseAlways": false,
+      "reasonAlways": null
+    },
+    {
+      "name": "a set_state envelope with no device and no inverter is still refused",
+      "command": "set_state",
+      "targetInverterId": "",
+      "targetSmartDeviceId": "sd-1",
+      "signedEventData": {
+        "command": "set_state",
+        "payload": {
+          "on": true
+        },
+        "validUntil": "2027-01-01T00:00:00.000Z"
+      },
+      "failed": [
+        "inverter_id_missing"
+      ],
+      "shape": "untyped",
+      "refuse": false,
+      "reason": null,
+      "refuseAlways": true,
+      "reasonAlways": "envelope_inverter_id_missing"
+    },
+    {
+      "name": "island settings tap, as released apps sign it",
+      "command": "set_work_mode",
+      "targetInverterId": "inv-A",
+      "signedEventData": {
+        "command": "set_work_mode",
+        "payload": {
+          "inverterId": "inv-A",
+          "workMode": 2
+        }
+      },
+      "failed": [],
+      "shape": "untyped",
+      "refuse": false,
+      "reason": null,
+      "refuseAlways": false,
+      "reasonAlways": null
+    },
+    {
+      "name": "island settings tap, as apps sign it from D-2127",
+      "command": "set_work_mode",
+      "targetInverterId": "inv-A",
+      "signedEventData": {
+        "command": "set_work_mode",
+        "payload": {
+          "inverterId": "inv-A",
+          "workMode": 2
+        },
+        "nonce": "6f1c2a7e-0b5d-4c3a-9f2e-8d1b4a6c7e90",
+        "ts": 1795089600000
+      },
+      "failed": [],
+      "shape": "untyped",
+      "refuse": false,
+      "reason": null,
+      "refuseAlways": false,
+      "reasonAlways": null
+    },
+    {
+      "name": "an island settings tap does not authorize another command",
+      "command": "set_solar_sell",
+      "targetInverterId": "inv-A",
+      "signedEventData": {
+        "command": "set_work_mode",
+        "payload": {
+          "inverterId": "inv-A",
+          "workMode": 2
+        },
+        "nonce": "6f1c2a7e-0b5d-4c3a-9f2e-8d1b4a6c7e90",
+        "ts": 1795089600000
+      },
+      "failed": [
+        "command_not_authorized"
+      ],
+      "shape": "untyped",
+      "refuse": true,
+      "reason": "envelope_command_not_authorized",
+      "refuseAlways": true,
+      "reasonAlways": "envelope_command_not_authorized"
+    },
+    {
+      "name": "an island settings tap for one inverter does not run on another",
+      "command": "set_work_mode",
+      "targetInverterId": "inv-B",
+      "signedEventData": {
+        "command": "set_work_mode",
+        "payload": {
+          "inverterId": "inv-A",
+          "workMode": 2
+        },
+        "nonce": "6f1c2a7e-0b5d-4c3a-9f2e-8d1b4a6c7e90",
+        "ts": 1795089600000
+      },
+      "failed": [
+        "inverter_mismatch"
+      ],
+      "shape": "untyped",
+      "refuse": false,
+      "reason": null,
+      "refuseAlways": true,
+      "reasonAlways": "envelope_inverter_mismatch"
+    },
+    {
+      "name": "island calendar event, as released apps sign it",
+      "command": "set_battery_charge",
+      "targetInverterId": "inv-A",
+      "signedEventData": {
+        "id": "8b0c6c0e-2f0c-4d3e-9a51-0d6a1f3c2b11",
+        "inverterId": "inv-A",
+        "name": "Нічний заряд",
+        "mode": "battery_charge",
+        "enabled": true,
+        "schedule": {
+          "startTime": "23:00",
+          "endTime": "06:00",
+          "recurrence": "daily"
+        },
+        "config": {
+          "chargeSource": "grid",
+          "targetSoc": 80
+        }
+      },
+      "failed": [],
+      "shape": "untyped",
+      "refuse": false,
+      "reason": null,
+      "refuseAlways": false,
+      "reasonAlways": null
+    },
+    {
+      "name": "island calendar event restores, as apps sign it from D-2127",
+      "command": "restore_battery_charge",
+      "targetInverterId": "inv-A",
+      "signedEventData": {
+        "id": "8b0c6c0e-2f0c-4d3e-9a51-0d6a1f3c2b11",
+        "inverterId": "inv-A",
+        "name": "Нічний заряд",
+        "mode": "battery_charge",
+        "enabled": true,
+        "schedule": {
+          "startTime": "23:00",
+          "endTime": "06:00",
+          "recurrence": "daily"
+        },
+        "config": {
+          "chargeSource": "grid",
+          "targetSoc": 80
+        },
+        "nonce": "6f1c2a7e-0b5d-4c3a-9f2e-8d1b4a6c7e90",
+        "ts": 1795089600000
+      },
+      "failed": [],
+      "shape": "untyped",
+      "refuse": false,
+      "reason": null,
+      "refuseAlways": false,
+      "reasonAlways": null
+    },
+    {
+      "name": "an island event does not authorize a command its mode never sends",
+      "command": "set_work_mode",
+      "targetInverterId": "inv-A",
+      "signedEventData": {
+        "id": "8b0c6c0e-2f0c-4d3e-9a51-0d6a1f3c2b11",
+        "inverterId": "inv-A",
+        "name": "Нічний заряд",
+        "mode": "battery_charge",
+        "enabled": true,
+        "schedule": {
+          "startTime": "23:00",
+          "endTime": "06:00",
+          "recurrence": "daily"
+        },
+        "config": {
+          "chargeSource": "grid",
+          "targetSoc": 80
+        },
+        "nonce": "6f1c2a7e-0b5d-4c3a-9f2e-8d1b4a6c7e90",
+        "ts": 1795089600000
+      },
+      "failed": [
+        "command_not_authorized"
+      ],
+      "shape": "untyped",
+      "refuse": true,
+      "reason": "envelope_command_not_authorized",
+      "refuseAlways": true,
+      "reasonAlways": "envelope_command_not_authorized"
+    },
+    {
+      "name": "an island event for one inverter does not run on another",
+      "command": "set_battery_charge",
+      "targetInverterId": "inv-B",
+      "signedEventData": {
+        "id": "8b0c6c0e-2f0c-4d3e-9a51-0d6a1f3c2b11",
+        "inverterId": "inv-A",
+        "name": "Нічний заряд",
+        "mode": "battery_charge",
+        "enabled": true,
+        "schedule": {
+          "startTime": "23:00",
+          "endTime": "06:00",
+          "recurrence": "daily"
+        },
+        "config": {
+          "chargeSource": "grid",
+          "targetSoc": 80
+        },
+        "nonce": "6f1c2a7e-0b5d-4c3a-9f2e-8d1b4a6c7e90",
+        "ts": 1795089600000
+      },
+      "failed": [
+        "inverter_mismatch"
+      ],
+      "shape": "untyped",
+      "refuse": false,
+      "reason": null,
+      "refuseAlways": true,
+      "reasonAlways": "envelope_inverter_mismatch"
+    },
+    {
+      "name": "island rule runs its custom action",
+      "command": "set_work_mode",
+      "targetInverterId": "inv-A",
+      "signedEventData": {
+        "id": "c2f6e0a4-71d9-4b8e-a3c5-5e9d0b7f1a22",
+        "inverterId": "inv-A",
+        "name": "Продаж увечері",
+        "mode": "custom",
+        "enabled": true,
+        "schedule": {
+          "startTime": "18:00",
+          "endTime": "22:00",
+          "recurrence": "always"
+        },
+        "config": {
+          "customActions": [
+            {
+              "type": "work_mode",
+              "value": 0
+            },
+            {
+              "type": "smart_device",
+              "deviceIds": [
+                "sd-1"
+              ],
+              "activeState": "on",
+              "restoreState": "off"
+            }
+          ],
+          "conditions": [
+            {
+              "type": "battery_soc",
+              "op": "gte",
+              "value": 90
+            }
+          ]
+        },
+        "nonce": "6f1c2a7e-0b5d-4c3a-9f2e-8d1b4a6c7e90",
+        "ts": 1795089600000
+      },
+      "failed": [],
+      "shape": "untyped",
+      "refuse": false,
+      "reason": null,
+      "refuseAlways": false,
+      "reasonAlways": null
+    },
+    {
+      "name": "island rule switches the socket its action names",
+      "command": "set_state",
+      "targetInverterId": "inv-A",
+      "targetSmartDeviceId": "sd-1",
+      "signedEventData": {
+        "id": "c2f6e0a4-71d9-4b8e-a3c5-5e9d0b7f1a22",
+        "inverterId": "inv-A",
+        "name": "Продаж увечері",
+        "mode": "custom",
+        "enabled": true,
+        "schedule": {
+          "startTime": "18:00",
+          "endTime": "22:00",
+          "recurrence": "always"
+        },
+        "config": {
+          "customActions": [
+            {
+              "type": "work_mode",
+              "value": 0
+            },
+            {
+              "type": "smart_device",
+              "deviceIds": [
+                "sd-1"
+              ],
+              "activeState": "on",
+              "restoreState": "off"
+            }
+          ],
+          "conditions": [
+            {
+              "type": "battery_soc",
+              "op": "gte",
+              "value": 90
+            }
+          ]
+        },
+        "nonce": "6f1c2a7e-0b5d-4c3a-9f2e-8d1b4a6c7e90",
+        "ts": 1795089600000
+      },
+      "failed": [],
+      "shape": "untyped",
+      "refuse": false,
+      "reason": null,
+      "refuseAlways": false,
+      "reasonAlways": null
+    },
+    {
+      "name": "an island rule authorizes only its actions' commands",
+      "command": "set_solar_sell",
+      "targetInverterId": "inv-A",
+      "signedEventData": {
+        "id": "c2f6e0a4-71d9-4b8e-a3c5-5e9d0b7f1a22",
+        "inverterId": "inv-A",
+        "name": "Продаж увечері",
+        "mode": "custom",
+        "enabled": true,
+        "schedule": {
+          "startTime": "18:00",
+          "endTime": "22:00",
+          "recurrence": "always"
+        },
+        "config": {
+          "customActions": [
+            {
+              "type": "work_mode",
+              "value": 0
+            },
+            {
+              "type": "smart_device",
+              "deviceIds": [
+                "sd-1"
+              ],
+              "activeState": "on",
+              "restoreState": "off"
+            }
+          ],
+          "conditions": [
+            {
+              "type": "battery_soc",
+              "op": "gte",
+              "value": 90
+            }
+          ]
+        },
+        "nonce": "6f1c2a7e-0b5d-4c3a-9f2e-8d1b4a6c7e90",
+        "ts": 1795089600000
+      },
+      "failed": [
+        "command_not_authorized"
+      ],
+      "shape": "untyped",
+      "refuse": true,
+      "reason": "envelope_command_not_authorized",
+      "refuseAlways": true,
+      "reasonAlways": "envelope_command_not_authorized"
+    },
+    {
+      "name": "a legacy island custom action names its own command",
+      "command": "set_solar_sell",
+      "targetInverterId": "inv-A",
+      "signedEventData": {
+        "id": "0e7d3c1b-5a49-4f2e-8b6d-9c1a2e3f4b55",
+        "inverterId": "inv-A",
+        "mode": "custom",
+        "enabled": true,
+        "schedule": {
+          "startTime": "10:00",
+          "endTime": "14:00",
+          "recurrence": "daily"
+        },
+        "config": {
+          "customActions": [
+            {
+              "command": "set_solar_sell",
+              "payload": {
+                "solarSell": 1
+              },
+              "restorePayload": {
+                "solarSell": 0
+              }
+            }
+          ]
+        }
+      },
+      "failed": [],
+      "shape": "untyped",
+      "refuse": false,
+      "reason": null,
+      "refuseAlways": false,
+      "reasonAlways": null
+    },
+    {
+      "name": "island socket event switches a socket",
+      "command": "set_state",
+      "targetInverterId": "inv-A",
+      "targetSmartDeviceId": "sd-1",
+      "signedEventData": {
+        "id": "4a1b2c3d-6e7f-4a8b-9c0d-1e2f3a4b5c66",
+        "inverterId": "inv-A",
+        "mode": "lower_consumption",
+        "enabled": true,
+        "schedule": {
+          "startTime": "17:00",
+          "endTime": "21:00",
+          "recurrence": "daily"
+        },
+        "config": {
+          "smartDeviceIds": [
+            "sd-1"
+          ]
+        },
+        "nonce": "6f1c2a7e-0b5d-4c3a-9f2e-8d1b4a6c7e90",
+        "ts": 1795089600000
+      },
+      "failed": [],
+      "shape": "untyped",
+      "refuse": false,
+      "reason": null,
+      "refuseAlways": false,
+      "reasonAlways": null
+    },
+    {
+      "name": "legacy island battery maintenance event",
+      "command": "set_solar_sell",
+      "targetInverterId": "inv-A",
+      "signedEventData": {
+        "id": "9f8e7d6c-5b4a-4321-8fed-cba987654321",
+        "inverterId": "inv-A",
+        "mode": "battery_maintenance",
+        "enabled": true,
+        "schedule": {
+          "startTime": "11:00",
+          "endTime": "15:00",
+          "recurrence": "weekly",
+          "weekdays": [
+            6
+          ]
+        },
+        "config": {}
+      },
+      "failed": [],
+      "shape": "untyped",
+      "refuse": false,
+      "reason": null,
+      "refuseAlways": false,
+      "reasonAlways": null
+    },
+    {
+      "name": "an island event in a mode the board does not know",
+      "command": "set_battery_charge",
+      "targetInverterId": "inv-A",
+      "signedEventData": {
+        "id": "8b0c6c0e-2f0c-4d3e-9a51-0d6a1f3c2b11",
+        "inverterId": "inv-A",
+        "name": "Нічний заряд",
+        "mode": "grid_peak_rescue",
+        "enabled": true,
+        "schedule": {
+          "startTime": "23:00",
+          "endTime": "06:00",
+          "recurrence": "daily"
+        },
+        "config": {
+          "chargeSource": "grid",
+          "targetSoc": 80
+        }
+      },
+      "failed": [
+        "authorized_commands_missing"
+      ],
+      "shape": "untyped",
+      "refuse": false,
+      "reason": null,
+      "refuseAlways": true,
+      "reasonAlways": "envelope_authorized_commands_missing"
+    },
+    {
+      "name": "edge-island inverter setting, as the app signs it (D-2282)",
+      "command": "set_inverter_setting",
+      "targetInverterId": "inv-A",
+      "signedEventData": {
+        "command": "set_inverter_setting",
+        "deviceId": "edge-a0b1c2d3e4f5",
+        "inverterId": "inv-A",
+        "setting": "batteryLowSoc",
+        "value": 20,
+        "validUntil": "2026-11-19T12:15:00.000Z",
+        "nonce": "6f1c2a7e-0b5d-4c3a-9f2e-8d1b4a6c7e90",
+        "ts": 1795089600000
+      },
+      "failed": [],
+      "shape": "untyped",
+      "refuse": false,
+      "reason": null,
+      "refuseAlways": false,
+      "reasonAlways": null
+    }
+  ],
+  "_validityComment": "Validity vectors (#955), log-only like the cases above. Each gives the verified signedEventData, the executor's clock (`now`, ISO 8601 UTC) and whether that clock is trustworthy (`clockSet`: false on a board SNTP has not answered yet). `failed` lists, in this fixed order: valid_until_missing, envelope_no_clock, envelope_expired. `expiredAgoS` is whole seconds since validUntil when expired, else null. A report also carries `eventId` (the envelope's scenarioId, or empty). A planner_delegation is not checked here: the harvester already refuses an expired one as envelope_expired. `command` is the top-level command being run, present where `refuse` depends on it (envelope_no_clock does not refuse restore_*). `refuse` and `retryLater` follow the same rules as the cases above. `bindingFailed` (absent means none) lists the binding checks from the cases above that fail for `command` against the same envelope, with the inverter check skipped; `refuse` and `retryLater` are judged on both lists together, so a binding failure next to envelope_no_clock is final, never retried. `signed_time_missing` follows envelope_expired in the fixed order; a case with `onIsland` true is judged on a board whose island endpoint is set (D-2288). Its eventId is the scenarioId, or an island event's id.",
+  "validityCases": [
+    {
+      "name": "valid envelope",
+      "now": "2026-10-22T00:00:00.000Z",
+      "clockSet": true,
+      "signedEventData": {
+        "scenarioId": "sc-1",
+        "type": "scenario",
+        "inverterId": "inv-A",
+        "mode": "battery_charge",
+        "authorizedCommands": [
+          "set_battery_charge"
+        ],
+        "schedule": {},
+        "config": {
+          "targetSoc": 80
+        },
+        "validUntil": "2027-01-01T00:00:00.000Z"
+      },
+      "failed": [],
+      "expiredAgoS": null,
+      "eventId": "sc-1",
+      "refuse": false,
+      "reason": null,
+      "refuseAlways": false,
+      "reasonAlways": null
+    },
+    {
+      "name": "expired envelope",
+      "now": "2026-10-22T00:00:00.000Z",
+      "clockSet": true,
+      "signedEventData": {
+        "scenarioId": "sc-1",
+        "type": "scenario",
+        "inverterId": "inv-A",
+        "mode": "battery_charge",
+        "authorizedCommands": [
+          "set_battery_charge"
+        ],
+        "schedule": {},
+        "config": {
+          "targetSoc": 80
+        },
+        "validUntil": "2026-10-20T12:00:00.000Z"
+      },
+      "failed": [
+        "envelope_expired"
+      ],
+      "expiredAgoS": 129600,
+      "eventId": "sc-1",
+      "refuse": false,
+      "reason": null,
+      "refuseAlways": true,
+      "reasonAlways": "envelope_expired"
+    },
+    {
+      "name": "expired envelope with an offset and no fraction",
+      "now": "2026-10-22T00:00:00.000Z",
+      "clockSet": true,
+      "signedEventData": {
+        "scenarioId": "sc-1",
+        "type": "scenario",
+        "inverterId": "inv-A",
+        "mode": "battery_charge",
+        "authorizedCommands": [
+          "set_battery_charge"
+        ],
+        "schedule": {},
+        "config": {
+          "targetSoc": 80
+        },
+        "validUntil": "2026-10-21T23:00:00+02:00"
+      },
+      "failed": [
+        "envelope_expired"
+      ],
+      "expiredAgoS": 10800,
+      "eventId": "sc-1",
+      "refuse": false,
+      "reason": null,
+      "refuseAlways": true,
+      "reasonAlways": "envelope_expired"
+    },
+    {
+      "name": "no clock",
+      "now": "1970-01-01T00:00:12.000Z",
+      "clockSet": false,
+      "signedEventData": {
+        "scenarioId": "sc-1",
+        "type": "scenario",
+        "inverterId": "inv-A",
+        "mode": "battery_charge",
+        "authorizedCommands": [
+          "set_battery_charge"
+        ],
+        "schedule": {},
+        "config": {
+          "targetSoc": 80
+        },
+        "validUntil": "2027-01-01T00:00:00.000Z"
+      },
+      "failed": [
+        "envelope_no_clock"
+      ],
+      "expiredAgoS": null,
+      "eventId": "sc-1",
+      "command": "set_battery_charge",
+      "refuse": true,
+      "reason": "envelope_no_clock",
+      "retryLater": true,
+      "refuseAlways": true,
+      "reasonAlways": "envelope_no_clock"
+    },
+    {
+      "name": "envelope without validUntil",
+      "now": "2026-10-22T00:00:00.000Z",
+      "clockSet": true,
+      "signedEventData": {
+        "scenarioId": "sc-1",
+        "type": "scenario",
+        "inverterId": "inv-A",
+        "mode": "battery_charge",
+        "authorizedCommands": [
+          "set_battery_charge"
+        ],
+        "schedule": {},
+        "config": {
+          "targetSoc": 80
+        }
+      },
+      "failed": [
+        "valid_until_missing"
+      ],
+      "expiredAgoS": null,
+      "eventId": "sc-1",
+      "refuse": true,
+      "reason": "envelope_valid_until_missing",
+      "refuseAlways": true,
+      "reasonAlways": "envelope_valid_until_missing"
+    },
+    {
+      "name": "unparseable validUntil counts as missing",
+      "now": "2026-10-22T00:00:00.000Z",
+      "clockSet": true,
+      "signedEventData": {
+        "scenarioId": "sc-1",
+        "type": "scenario",
+        "inverterId": "inv-A",
+        "mode": "battery_charge",
+        "authorizedCommands": [
+          "set_battery_charge"
+        ],
+        "schedule": {},
+        "config": {
+          "targetSoc": 80
+        },
+        "validUntil": "next year"
+      },
+      "failed": [
+        "valid_until_missing"
+      ],
+      "expiredAgoS": null,
+      "eventId": "sc-1",
+      "refuse": true,
+      "reason": "envelope_valid_until_missing",
+      "refuseAlways": true,
+      "reasonAlways": "envelope_valid_until_missing"
+    },
+    {
+      "name": "older untyped envelope, expired",
+      "now": "2026-10-22T00:00:00.000Z",
+      "clockSet": true,
+      "signedEventData": {
+        "scenarioId": "sc-2",
+        "inverterId": "inv-A",
+        "mode": "battery_charge",
+        "authorizedCommands": [
+          "set_battery_charge"
+        ],
+        "schedule": {},
+        "config": {},
+        "validUntil": "2026-10-21T00:00:00.000Z"
+      },
+      "failed": [
+        "envelope_expired"
+      ],
+      "expiredAgoS": 86400,
+      "eventId": "sc-2",
+      "refuse": false,
+      "reason": null,
+      "refuseAlways": true,
+      "reasonAlways": "envelope_expired"
+    },
+    {
+      "name": "planner delegation is not checked here",
+      "now": "2026-10-22T00:00:00.000Z",
+      "clockSet": true,
+      "signedEventData": {
+        "type": "planner_delegation",
+        "householdId": "hh-1",
+        "inverterIds": [
+          "inv-A"
+        ],
+        "allowedModes": [
+          "sell_to_grid"
+        ],
+        "validUntil": "2026-01-01T00:00:00.000Z"
+      },
+      "failed": [],
+      "expiredAgoS": null,
+      "eventId": "",
+      "bindingFailed": [
+        "authorized_commands_missing"
+      ],
+      "refuse": false,
+      "reason": null,
+      "refuseAlways": false,
+      "reasonAlways": null
+    },
+    {
+      "name": "restore on a board without a clock",
+      "now": "1970-01-01T00:00:12.000Z",
+      "clockSet": false,
+      "signedEventData": {
+        "scenarioId": "sc-1",
+        "type": "scenario",
+        "inverterId": "inv-A",
+        "mode": "battery_charge",
+        "authorizedCommands": [
+          "set_work_mode",
+          "restore_work_mode"
+        ],
+        "schedule": {},
+        "config": {
+          "targetSoc": 80
+        },
+        "validUntil": "2027-01-01T00:00:00.000Z"
+      },
+      "failed": [
+        "envelope_no_clock"
+      ],
+      "expiredAgoS": null,
+      "eventId": "sc-1",
+      "command": "restore_work_mode",
+      "refuse": false,
+      "reason": null,
+      "refuseAlways": false,
+      "reasonAlways": null
+    },
+    {
+      "name": "planner delegation past validUntil",
+      "now": "2026-10-22T00:00:00.000Z",
+      "clockSet": true,
+      "signedEventData": {
+        "type": "planner_delegation",
+        "householdId": "hh-1",
+        "inverterIds": [
+          "inv-A"
+        ],
+        "allowedModes": [
+          "sell_to_grid"
+        ],
+        "validUntil": "2026-01-01T00:00:00.000Z"
+      },
+      "failed": [],
+      "expiredAgoS": null,
+      "eventId": "",
+      "command": "set_work_mode",
+      "bindingFailed": [
+        "authorized_commands_missing"
+      ],
+      "refuse": false,
+      "reason": null,
+      "refuseAlways": false,
+      "reasonAlways": null
+    },
+    {
+      "name": "no clock and a command the envelope does not authorize",
+      "now": "1970-01-01T00:00:12.000Z",
+      "clockSet": false,
+      "signedEventData": {
+        "scenarioId": "sc-1",
+        "type": "scenario",
+        "inverterId": "inv-A",
+        "mode": "battery_charge",
+        "authorizedCommands": [
+          "set_battery_charge",
+          "restore_battery_charge"
+        ],
+        "schedule": {},
+        "config": {
+          "targetSoc": 80
+        },
+        "validUntil": "2027-01-01T00:00:00.000Z"
+      },
+      "failed": [
+        "envelope_no_clock"
+      ],
+      "expiredAgoS": null,
+      "eventId": "sc-1",
+      "command": "set_work_mode",
+      "bindingFailed": [
+        "command_not_authorized"
+      ],
+      "refuse": true,
+      "reason": "envelope_command_not_authorized",
+      "refuseAlways": true,
+      "reasonAlways": "envelope_command_not_authorized"
+    },
+    {
+      "name": "cloud on/off tap past its validUntil",
+      "now": "2026-11-19T12:03:00.000Z",
+      "clockSet": true,
+      "signedEventData": {
+        "smartDeviceId": "sd-1",
+        "on": true,
+        "validUntil": "2026-11-19T12:02:00.000Z"
+      },
+      "failed": [
+        "envelope_expired"
+      ],
+      "expiredAgoS": 60,
+      "eventId": "",
+      "command": "set_state",
+      "refuse": false,
+      "reason": null,
+      "refuseAlways": true,
+      "reasonAlways": "envelope_expired"
+    },
+    {
+      "name": "island settings tap from D-2127, a minute after it was signed",
+      "now": "2026-11-19T12:01:00.000Z",
+      "clockSet": true,
+      "signedEventData": {
+        "command": "set_work_mode",
+        "payload": {
+          "inverterId": "inv-A",
+          "workMode": 2
+        },
+        "nonce": "6f1c2a7e-0b5d-4c3a-9f2e-8d1b4a6c7e90",
+        "ts": 1795089600000
+      },
+      "failed": [],
+      "expiredAgoS": null,
+      "eventId": "",
+      "command": "set_work_mode",
+      "refuse": false,
+      "reason": null,
+      "refuseAlways": false,
+      "reasonAlways": null
+    },
+    {
+      "name": "island settings tap from D-2127, past its 15 minutes",
+      "now": "2026-11-19T12:15:01.000Z",
+      "clockSet": true,
+      "signedEventData": {
+        "command": "set_work_mode",
+        "payload": {
+          "inverterId": "inv-A",
+          "workMode": 2
+        },
+        "nonce": "6f1c2a7e-0b5d-4c3a-9f2e-8d1b4a6c7e90",
+        "ts": 1795089600000
+      },
+      "failed": [
+        "envelope_expired"
+      ],
+      "expiredAgoS": 1,
+      "eventId": "",
+      "command": "set_work_mode",
+      "refuse": false,
+      "reason": null,
+      "refuseAlways": true,
+      "reasonAlways": "envelope_expired"
+    },
+    {
+      "name": "island settings tap from D-2127, no clock",
+      "now": "1970-01-01T00:00:12.000Z",
+      "clockSet": false,
+      "signedEventData": {
+        "command": "set_work_mode",
+        "payload": {
+          "inverterId": "inv-A",
+          "workMode": 2
+        },
+        "nonce": "6f1c2a7e-0b5d-4c3a-9f2e-8d1b4a6c7e90",
+        "ts": 1795089600000
+      },
+      "failed": [
+        "envelope_no_clock"
+      ],
+      "expiredAgoS": null,
+      "eventId": "",
+      "command": "set_work_mode",
+      "refuse": true,
+      "reason": "envelope_no_clock",
+      "retryLater": true,
+      "refuseAlways": true,
+      "reasonAlways": "envelope_no_clock"
+    },
+    {
+      "name": "island settings tap as released apps sign it, off an island",
+      "now": "2026-11-19T12:01:00.000Z",
+      "clockSet": true,
+      "signedEventData": {
+        "command": "set_work_mode",
+        "payload": {
+          "inverterId": "inv-A",
+          "workMode": 2
+        }
+      },
+      "failed": [
+        "valid_until_missing"
+      ],
+      "expiredAgoS": null,
+      "eventId": "",
+      "command": "set_work_mode",
+      "refuse": true,
+      "reason": "envelope_valid_until_missing",
+      "refuseAlways": true,
+      "reasonAlways": "envelope_valid_until_missing"
+    },
+    {
+      "name": "island settings tap as released apps sign it, on an edge island",
+      "now": "2026-11-19T12:01:00.000Z",
+      "clockSet": true,
+      "onIsland": true,
+      "signedEventData": {
+        "command": "set_work_mode",
+        "payload": {
+          "inverterId": "inv-A",
+          "workMode": 2
+        }
+      },
+      "failed": [
+        "signed_time_missing"
+      ],
+      "expiredAgoS": null,
+      "eventId": "",
+      "command": "set_work_mode",
+      "refuse": false,
+      "reason": null,
+      "refuseAlways": false,
+      "reasonAlways": null
+    },
+    {
+      "name": "island event from D-2127, within its year",
+      "now": "2027-06-07T12:00:00.000Z",
+      "clockSet": true,
+      "signedEventData": {
+        "id": "8b0c6c0e-2f0c-4d3e-9a51-0d6a1f3c2b11",
+        "inverterId": "inv-A",
+        "name": "Нічний заряд",
+        "mode": "battery_charge",
+        "enabled": true,
+        "schedule": {
+          "startTime": "23:00",
+          "endTime": "06:00",
+          "recurrence": "daily"
+        },
+        "config": {
+          "chargeSource": "grid",
+          "targetSoc": 80
+        },
+        "nonce": "6f1c2a7e-0b5d-4c3a-9f2e-8d1b4a6c7e90",
+        "ts": 1795089600000
+      },
+      "failed": [],
+      "expiredAgoS": null,
+      "eventId": "8b0c6c0e-2f0c-4d3e-9a51-0d6a1f3c2b11",
+      "command": "set_battery_charge",
+      "refuse": false,
+      "reason": null,
+      "refuseAlways": false,
+      "reasonAlways": null
+    },
+    {
+      "name": "island event from D-2127, past its year",
+      "now": "2027-11-20T12:00:00.000Z",
+      "clockSet": true,
+      "signedEventData": {
+        "id": "8b0c6c0e-2f0c-4d3e-9a51-0d6a1f3c2b11",
+        "inverterId": "inv-A",
+        "name": "Нічний заряд",
+        "mode": "battery_charge",
+        "enabled": true,
+        "schedule": {
+          "startTime": "23:00",
+          "endTime": "06:00",
+          "recurrence": "daily"
+        },
+        "config": {
+          "chargeSource": "grid",
+          "targetSoc": 80
+        },
+        "nonce": "6f1c2a7e-0b5d-4c3a-9f2e-8d1b4a6c7e90",
+        "ts": 1795089600000
+      },
+      "failed": [
+        "envelope_expired"
+      ],
+      "expiredAgoS": 86400,
+      "eventId": "8b0c6c0e-2f0c-4d3e-9a51-0d6a1f3c2b11",
+      "command": "set_battery_charge",
+      "refuse": false,
+      "reason": null,
+      "refuseAlways": true,
+      "reasonAlways": "envelope_expired"
+    },
+    {
+      "name": "island event past its year still restores",
+      "now": "2027-11-20T12:00:00.000Z",
+      "clockSet": true,
+      "signedEventData": {
+        "id": "8b0c6c0e-2f0c-4d3e-9a51-0d6a1f3c2b11",
+        "inverterId": "inv-A",
+        "name": "Нічний заряд",
+        "mode": "battery_charge",
+        "enabled": true,
+        "schedule": {
+          "startTime": "23:00",
+          "endTime": "06:00",
+          "recurrence": "daily"
+        },
+        "config": {
+          "chargeSource": "grid",
+          "targetSoc": 80
+        },
+        "nonce": "6f1c2a7e-0b5d-4c3a-9f2e-8d1b4a6c7e90",
+        "ts": 1795089600000
+      },
+      "failed": [
+        "envelope_expired"
+      ],
+      "expiredAgoS": 86400,
+      "eventId": "8b0c6c0e-2f0c-4d3e-9a51-0d6a1f3c2b11",
+      "command": "restore_battery_charge",
+      "refuse": false,
+      "reason": null,
+      "refuseAlways": false,
+      "reasonAlways": null
+    },
+    {
+      "name": "island event as released apps sign it, off an island",
+      "now": "2026-11-19T12:01:00.000Z",
+      "clockSet": true,
+      "signedEventData": {
+        "id": "8b0c6c0e-2f0c-4d3e-9a51-0d6a1f3c2b11",
+        "inverterId": "inv-A",
+        "name": "Нічний заряд",
+        "mode": "battery_charge",
+        "enabled": true,
+        "schedule": {
+          "startTime": "23:00",
+          "endTime": "06:00",
+          "recurrence": "daily"
+        },
+        "config": {
+          "chargeSource": "grid",
+          "targetSoc": 80
+        }
+      },
+      "failed": [
+        "valid_until_missing"
+      ],
+      "expiredAgoS": null,
+      "eventId": "8b0c6c0e-2f0c-4d3e-9a51-0d6a1f3c2b11",
+      "command": "set_battery_charge",
+      "refuse": true,
+      "reason": "envelope_valid_until_missing",
+      "refuseAlways": true,
+      "reasonAlways": "envelope_valid_until_missing"
+    },
+    {
+      "name": "island event as released apps sign it, on an edge island",
+      "now": "2026-11-19T12:01:00.000Z",
+      "clockSet": true,
+      "onIsland": true,
+      "signedEventData": {
+        "id": "8b0c6c0e-2f0c-4d3e-9a51-0d6a1f3c2b11",
+        "inverterId": "inv-A",
+        "name": "Нічний заряд",
+        "mode": "battery_charge",
+        "enabled": true,
+        "schedule": {
+          "startTime": "23:00",
+          "endTime": "06:00",
+          "recurrence": "daily"
+        },
+        "config": {
+          "chargeSource": "grid",
+          "targetSoc": 80
+        }
+      },
+      "failed": [
+        "signed_time_missing"
+      ],
+      "expiredAgoS": null,
+      "eventId": "8b0c6c0e-2f0c-4d3e-9a51-0d6a1f3c2b11",
+      "command": "set_battery_charge",
+      "refuse": false,
+      "reason": null,
+      "refuseAlways": false,
+      "reasonAlways": null
+    },
+    {
+      "name": "on an island, a released event still binds its commands",
+      "now": "2026-11-19T12:01:00.000Z",
+      "clockSet": true,
+      "onIsland": true,
+      "signedEventData": {
+        "id": "8b0c6c0e-2f0c-4d3e-9a51-0d6a1f3c2b11",
+        "inverterId": "inv-A",
+        "name": "Нічний заряд",
+        "mode": "battery_charge",
+        "enabled": true,
+        "schedule": {
+          "startTime": "23:00",
+          "endTime": "06:00",
+          "recurrence": "daily"
+        },
+        "config": {
+          "chargeSource": "grid",
+          "targetSoc": 80
+        }
+      },
+      "failed": [
+        "signed_time_missing"
+      ],
+      "expiredAgoS": null,
+      "eventId": "8b0c6c0e-2f0c-4d3e-9a51-0d6a1f3c2b11",
+      "command": "set_work_mode",
+      "bindingFailed": [
+        "command_not_authorized"
+      ],
+      "refuse": true,
+      "reason": "envelope_command_not_authorized",
+      "refuseAlways": true,
+      "reasonAlways": "envelope_command_not_authorized"
+    },
+    {
+      "name": "on an island, a cloud scenario without validUntil is still refused",
+      "now": "2026-11-19T12:01:00.000Z",
+      "clockSet": true,
+      "onIsland": true,
+      "signedEventData": {
+        "scenarioId": "sc-1",
+        "type": "scenario",
+        "inverterId": "inv-A",
+        "mode": "battery_charge",
+        "authorizedCommands": [
+          "set_battery_charge"
+        ],
+        "schedule": {},
+        "config": {
+          "targetSoc": 80
+        }
+      },
+      "failed": [
+        "valid_until_missing"
+      ],
+      "expiredAgoS": null,
+      "eventId": "sc-1",
+      "command": "set_battery_charge",
+      "refuse": true,
+      "reason": "envelope_valid_until_missing",
+      "refuseAlways": true,
+      "reasonAlways": "envelope_valid_until_missing"
+    },
+    {
+      "name": "an island ts that is not a number counts as missing",
+      "now": "2026-11-19T12:01:00.000Z",
+      "clockSet": true,
+      "signedEventData": {
+        "command": "set_work_mode",
+        "payload": {
+          "inverterId": "inv-A",
+          "workMode": 2
+        },
+        "nonce": "6f1c2a7e-0b5d-4c3a-9f2e-8d1b4a6c7e90",
+        "ts": "1795089600000"
+      },
+      "failed": [
+        "valid_until_missing"
+      ],
+      "expiredAgoS": null,
+      "eventId": "",
+      "command": "set_work_mode",
+      "refuse": true,
+      "reason": "envelope_valid_until_missing",
+      "refuseAlways": true,
+      "reasonAlways": "envelope_valid_until_missing"
+    }
+  ]
+}
