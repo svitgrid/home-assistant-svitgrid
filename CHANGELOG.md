@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.33.1 — 2026-11-19
+
+### Fixed
+- **Inverter settings save again on an edge island.** Home Assistant refused
+  every settings write the app sent for an inverter read by an ED-1
+  (`400 bad_request`), so nothing changed on LuxPower SNA, MUST, Edecoa and
+  Anenji settings screens. The add-on now checks the write against the
+  board's own signed event and relays it.
+
 ## 0.33.0 — 2026-11-19
 
 ### Added
