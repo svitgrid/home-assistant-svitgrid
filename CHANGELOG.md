@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.33.0 — 2026-11-19
+
+### Added
+- **An edge island's board is managed from the app.** Reboot, pause and
+  resume, rename, factory-reset and remove a board; add, change or remove an
+  inverter on it without adopting it again; and run a register dump, an
+  RS-485 discover, a logger rescan or a probe. The add-on keeps the board
+  state the board page needs (paused, trusted keys, serial port).
+- **Island alerts by Telegram.** Battery low, critical and full; an inverter
+  fault; a board or inverter that stops reporting; a rule's start and stop;
+  a solar string that stops producing; and the daily and weekly energy
+  reports. Each chat chooses which alerts it gets.
+- **Rules on an edge island switch Zigbee sockets**, and «Lower consumption»,
+  «Consume from Sun» and «Критичні пристрої» run there, with Zigbee sensor
+  and socket conditions.
+- **A signed-in island fetches its household's outage schedule** from the
+  cloud (no readings are sent).
+- A journal of island commands and rule runs on Home Assistant.
+- A board's crash dump on an island is forwarded to the cloud.
+- A true island reports its hourly status to the cloud.
+- **Battery charge-current cap** on an island, with the model's and the
+  BMS's limits and a revert after 6 hours.
+
+### Changed
+- **Cloud inverter commands are checked against their signed envelope.** The
+  command must be one the owner's signature authorizes, for that inverter,
+  inside its validity window. The add-on reports any mismatch on the ack, and
+  refuses it only while the cloud turns enforcement on for the household,
+  which it does after replaying that household's recent commands.
+- A battery maintenance charge runs only when it is due, on both island paths.
+- A replayed or stale signed LAN command or event write is refused.
+- An idle ED-1 on a true island polls every 30 s while the app is unused.
+- Island rules treat a missing home load as unknown, not 0 W.
+
+### Fixed
+- The MQTT readings publisher gets a new token after a drop and every 12 h.
+- A Zigbee plug's energy today is served over the LAN instead of 0.00 kWh.
+- The island settings view serves the Deye battery-mode word.
+- An old board gets a clear answer instead of a silent battery sync.
+- The answer to the last board's factory reset stays readable.
+
 ## 0.32.0 — 2026-11-17
 
 ### Changed
