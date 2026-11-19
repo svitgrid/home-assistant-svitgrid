@@ -749,3 +749,42 @@ async def test_post_coredump_returns_a_refusal_without_raising():
     client = SvitgridApiClient(session, api_base="https://api.example")
     status, body = await client.post_coredump(api_key="k", body={}, for_device_id="EC-1")
     assert (status, body) == (403, {"error": "not_island"})
+
+
+@pytest.mark.asyncio
+async def test_import_history_posts_the_buckets_with_the_device_key():
+    """svitgrid D-2103: the add-on uploads its island buckets by its device key."""
+    answer = {"imported": 1, "skipped": 0, "latestTs": "2026-11-19T10:00:00.000Z"}
+    session, _ = _mock_session_with_response(200, answer)
+    client = SvitgridApiClient(session, api_base="https://api.example")
+    buckets = [{"ts": "2026-11-19T10:00:00.000Z", "sampleCount": 3, "pvPower": 100.0}]
+    status, body = await client.import_history("ha-key", "hh-1", "inv-1", buckets)
+    assert (status, body) == (200, answer)
+    call_args = session.post.call_args
+    assert call_args.args[0] == (
+        "https://api.example/api/v1/households/hh-1/inverters/inv-1/history-import"
+    )
+    assert call_args.kwargs["headers"]["x-api-key"] == "ha-key"
+    assert call_args.kwargs["json"] == {"buckets": buckets}
+
+
+@pytest.mark.asyncio
+async def test_import_history_totals_sends_only_the_spans_given():
+    session, _ = _mock_session_with_response(
+        200, {"hours": {"imported": 0, "skipped": 0}, "days": {"imported": 1, "skipped": 0}}
+    )
+    client = SvitgridApiClient(session, api_base="https://api.example")
+    days = [{"date": "2026-03-02", "dailyPvEnergy": 14.2}]
+    status, _ = await client.import_history_totals("ha-key", "hh-1", "inv-1", days=days)
+    assert status == 200
+    call_args = session.post.call_args
+    assert call_args.args[0].endswith("/households/hh-1/inverters/inv-1/history-import/totals")
+    assert call_args.kwargs["json"] == {"days": days}
+
+
+@pytest.mark.asyncio
+async def test_import_history_returns_a_refusal_without_raising():
+    session, _ = _mock_session_with_response(402, {"code": "history_import_requires_plan"})
+    client = SvitgridApiClient(session, api_base="https://api.example")
+    status, body = await client.import_history("k", "hh-1", "inv-1", [])
+    assert (status, body) == (402, {"code": "history_import_requires_plan"})

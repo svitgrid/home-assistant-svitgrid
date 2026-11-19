@@ -304,8 +304,8 @@ async def drain_once(
 
     ``live_gates`` (one LiveGate per inverter, owned by the sender loop) turns
     on the Live gate while ``control`` says Live: a row the gate rejects is
-    marked sent without being uploaded, so the cloud sees only the rows that
-    moved or the heartbeat, and the local store keeps every row for the panel
+    marked skipped, not sent, without being uploaded, so the cloud sees only
+    the rows that moved or the heartbeat, and the local store keeps every row for the panel
     and the rollups. Leaving Live clears the gates.
 
     ``discharge_positive_ids`` names inverters whose battery power we normalized
@@ -365,7 +365,10 @@ async def drain_once(
     if gating:
         rows, skipped, retries = _gate_rows(rows, control, live_gates)
         if skipped:
-            await _maybe(store.mark_sent(skipped))
+            # Not uploaded, so not "sent": the gate's rows stay in the store
+            # for the panel and the rollups, and never read as in the cloud
+            # (svitgrid D-2103).
+            await _maybe(store.mark_skipped(skipped))
             skipped_count = len(skipped)
         if not rows:
             return skipped_count

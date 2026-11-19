@@ -331,6 +331,49 @@ class SvitgridApiClient:
                 answer = None
             return resp.status, answer if isinstance(answer, dict) else None
 
+    async def import_history(
+        self, api_key: str, household_id: str, inverter_id: str, buckets: list[dict[str, Any]]
+    ) -> tuple[int, dict[str, Any] | None]:
+        """POST up to 288 island 5-minute buckets to the history import
+        (svitgrid D-2102), by the device key. Returns the status and the parsed
+        body for every answer, refusals included; a dropped connection raises."""
+        url = (
+            f"{self._base}/api/v1/households/{household_id}/inverters/{inverter_id}/history-import"
+        )
+        return await self._post_answer(url, api_key, {"buckets": buckets})
+
+    async def import_history_totals(
+        self,
+        api_key: str,
+        household_id: str,
+        inverter_id: str,
+        *,
+        hours: list[dict[str, Any]] | None = None,
+        days: list[dict[str, Any]] | None = None,
+    ) -> tuple[int, dict[str, Any] | None]:
+        """POST island hourly and daily totals to the history import's totals
+        route (svitgrid D-2101). Same answer as `import_history`."""
+        url = (
+            f"{self._base}/api/v1/households/{household_id}/inverters/{inverter_id}"
+            "/history-import/totals"
+        )
+        body: dict[str, Any] = {}
+        if hours:
+            body["hours"] = hours
+        if days:
+            body["days"] = days
+        return await self._post_answer(url, api_key, body)
+
+    async def _post_answer(
+        self, url: str, api_key: str, body: dict[str, Any]
+    ) -> tuple[int, dict[str, Any] | None]:
+        async with self._session.post(url, headers={"x-api-key": api_key}, json=body) as resp:
+            try:
+                answer = await resp.json(content_type=None)
+            except Exception:  # noqa: BLE001
+                answer = None
+            return resp.status, answer if isinstance(answer, dict) else None
+
     async def post_log_part(self, api_key: str, body: dict[str, Any]) -> None:
         """POST one upload_logs part to the logs route the ED-1 uses."""
         await self._post_log(api_key, body)

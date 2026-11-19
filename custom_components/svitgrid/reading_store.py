@@ -1239,6 +1239,224 @@ class ReadingStore:
     async def get_lifecycle(self) -> dict:
         return await self._hass.async_add_executor_job(self._get_lifecycle_sync)
 
+    # ── the way back from an island (svitgrid D-2103) ─────────────────
+    #
+    # While the cloud copy is off, readings stay here and nothing uploads them.
+    # When it comes back on, `history_upload.py` sends what this store holds
+    # through the cloud's history import, and the live sender sends only what
+    # was read from the return on. The state lives in `meta` under
+    # `history_upload:<device id>`:
+    #
+    #   {"status": "island"}                      the cloud copy is off
+    #   {"status": "uploading", "returnAt", "until", "inverters": {...}}
+    #   {"status": "done", ...}                   finished, or given up
+    #
+    # `until` is the start of the 5-minute bucket the return falls in: the
+    # history upload carries every reading before it, and live ingest every
+    # reading from it on, so no reading reaches the cloud both ways.
+
+    def _history_key(self, device_id: str) -> str:
+        return f"history_upload:{device_id}"
+
+    def _history_state_sync(self, device_id: str) -> dict | None:
+        value = self._get_meta_sync(self._history_key(device_id))
+        if not value:
+            return None
+        try:
+            state = json.loads(value)
+        except ValueError:
+            return None
+        return state if isinstance(state, dict) else None
+
+    def _set_history_state_sync(self, device_id: str, state: dict) -> None:
+        self._set_meta_sync(self._history_key(device_id), json.dumps(state))
+
+    def _note_cloud_copy_sync(
+        self, device_id: str, cloud_copy_on: bool, inverter_ids: set[str], now_iso: str
+    ) -> dict | None:
+        """Record, at each start, whether the cloud copy is on, and return the
+        history-upload state.
+
+        A start with the copy off marks the island. The first start with the
+        copy on after an island is the return: it fixes the boundary and marks
+        `inverter_ids`' unsent rows before it `skipped`, so the live sender,
+        which starts after this, leaves them to the history upload. A cloud
+        station never has an island state, so nothing changes for it.
+        """
+        state = self._history_state_sync(device_id)
+        if not cloud_copy_on:
+            if state is None or state.get("status") != "island":
+                # Progress from an earlier return is kept: a second return
+                # resumes the cursors with a new boundary.
+                kept = (state or {}).get("inverters") if state else None
+                new_state: dict = {"status": "island"}
+                if isinstance(kept, dict) and state.get("status") == "uploading":
+                    new_state["inverters"] = kept
+                self._set_history_state_sync(device_id, new_state)
+                return new_state
+            return state
+        if state is None or state.get("status") != "island":
+            return state
+        until = self._five_min_of(now_iso[:19] + "Z")
+        new_state = {
+            "status": "uploading",
+            "returnAt": now_iso,
+            "until": until,
+            "inverters": state.get("inverters") or {},
+        }
+        conn = _connect(self._db_path)
+        try:
+            conn.executemany(
+                "UPDATE readings_raw SET sync_state='skipped' "
+                "WHERE inverter_id = ? AND ts < ? AND sync_state IN ('pending','failed')",
+                [(inv, until) for inv in sorted(inverter_ids)],
+            )
+            conn.execute(
+                "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
+                (self._history_key(device_id), json.dumps(new_state)),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return new_state
+
+    def _mark_skipped_sync(self, keys: list[tuple[str, str]]) -> None:
+        conn = _connect(self._db_path)
+        try:
+            conn.executemany(
+                "UPDATE readings_raw SET sync_state='skipped' WHERE inverter_id=? AND ts=?",
+                keys,
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _raw_payloads_sync(self, inverter_id: str, from_iso: str, to_iso: str) -> list[dict]:
+        """Payloads of `inverter_id` with `from_iso <= ts < to_iso`, oldest first.
+
+        The caller filters by parsed time again: a stored `ts` with fractional
+        seconds does not sort as a string against a whole-second bound.
+        """
+        conn = _connect(self._db_path)
+        try:
+            cur = conn.execute(
+                "SELECT payload FROM readings_raw WHERE inverter_id = ? AND ts >= ? AND ts < ? "
+                "ORDER BY ts ASC",
+                (inverter_id, from_iso, to_iso),
+            )
+            return [json.loads(r["payload"]) for r in cur.fetchall()]
+        finally:
+            conn.close()
+
+    def _first_raw_ts_sync(self, inverter_id: str, from_iso: str, to_iso: str) -> str | None:
+        conn = _connect(self._db_path)
+        try:
+            row = conn.execute(
+                "SELECT MIN(ts) m FROM readings_raw WHERE inverter_id = ? AND ts >= ? AND ts < ?",
+                (inverter_id, from_iso, to_iso),
+            ).fetchone()
+            return row["m"] if row else None
+        finally:
+            conn.close()
+
+    def _hourly_rows_sync(self, inverter_id: str, from_iso: str, to_iso: str) -> list[dict]:
+        """`readings_hourly` rows with `from_iso <= hour_start < to_iso`, oldest first."""
+        conn = _connect(self._db_path)
+        try:
+            cur = conn.execute(
+                "SELECT hour_start, sample_count, avgs, peaks, energy FROM readings_hourly "
+                "WHERE inverter_id = ? AND hour_start >= ? AND hour_start < ? "
+                "ORDER BY hour_start ASC",
+                (inverter_id, from_iso, to_iso),
+            )
+            return [
+                {
+                    "hour_start": r["hour_start"],
+                    "sample_count": r["sample_count"],
+                    "avgs": json.loads(r["avgs"]),
+                    "peaks": json.loads(r["peaks"]),
+                    "energy": json.loads(r["energy"]),
+                }
+                for r in cur.fetchall()
+            ]
+        finally:
+            conn.close()
+
+    def _first_hour_sync(self, inverter_id: str, from_iso: str, to_iso: str) -> str | None:
+        conn = _connect(self._db_path)
+        try:
+            row = conn.execute(
+                "SELECT MIN(hour_start) m FROM readings_hourly "
+                "WHERE inverter_id = ? AND hour_start >= ? AND hour_start < ?",
+                (inverter_id, from_iso, to_iso),
+            ).fetchone()
+            return row["m"] if row else None
+        finally:
+            conn.close()
+
+    def _daily_rows_sync(
+        self, inverter_id: str, after_day: str | None, before_day: str, limit: int
+    ) -> list[dict]:
+        """`readings_daily` rows with `after_day < day < before_day`, oldest first."""
+        conn = _connect(self._db_path)
+        try:
+            cur = conn.execute(
+                "SELECT day, sample_count, avgs, peaks, energy FROM readings_daily "
+                "WHERE inverter_id = ? AND day > ? AND day < ? ORDER BY day ASC LIMIT ?",
+                (inverter_id, after_day or "", before_day, limit),
+            )
+            return [
+                {
+                    "day": r["day"],
+                    "sample_count": r["sample_count"],
+                    "avgs": json.loads(r["avgs"]),
+                    "peaks": json.loads(r["peaks"]),
+                    "energy": json.loads(r["energy"]),
+                }
+                for r in cur.fetchall()
+            ]
+        finally:
+            conn.close()
+
+    async def _run(self, fn, *args):
+        """Run a sync core method off the event loop; inline without hass (tests)."""
+        if self._hass is None:
+            return fn(*args)
+        return await self._hass.async_add_executor_job(fn, *args)
+
+    async def note_cloud_copy(
+        self, device_id: str, cloud_copy_on: bool, inverter_ids: set[str], now_iso: str
+    ) -> dict | None:
+        return await self._run(
+            self._note_cloud_copy_sync, device_id, cloud_copy_on, inverter_ids, now_iso
+        )
+
+    async def history_state(self, device_id: str) -> dict | None:
+        return await self._run(self._history_state_sync, device_id)
+
+    async def set_history_state(self, device_id: str, state: dict) -> None:
+        await self._run(self._set_history_state_sync, device_id, state)
+
+    async def mark_skipped(self, keys: list[tuple[str, str]]) -> None:
+        await self._run(self._mark_skipped_sync, keys)
+
+    async def raw_payloads(self, inverter_id: str, from_iso: str, to_iso: str) -> list[dict]:
+        return await self._run(self._raw_payloads_sync, inverter_id, from_iso, to_iso)
+
+    async def first_raw_ts(self, inverter_id: str, from_iso: str, to_iso: str) -> str | None:
+        return await self._run(self._first_raw_ts_sync, inverter_id, from_iso, to_iso)
+
+    async def hourly_rows(self, inverter_id: str, from_iso: str, to_iso: str) -> list[dict]:
+        return await self._run(self._hourly_rows_sync, inverter_id, from_iso, to_iso)
+
+    async def first_hour(self, inverter_id: str, from_iso: str, to_iso: str) -> str | None:
+        return await self._run(self._first_hour_sync, inverter_id, from_iso, to_iso)
+
+    async def daily_rows(
+        self, inverter_id: str, after_day: str | None, before_day: str, limit: int
+    ) -> list[dict]:
+        return await self._run(self._daily_rows_sync, inverter_id, after_day, before_day, limit)
+
     def _connect_for_test(self) -> sqlite3.Connection:
         return _connect(self._db_path)
 

@@ -25,6 +25,9 @@ class _SyncStore(ReadingStore):
     async def mark_failed(self, keys, now_iso):
         return self._mark_failed_sync(keys, now_iso)
 
+    async def mark_skipped(self, keys):
+        return self._mark_skipped_sync(keys)
+
     async def set_lifecycle(self, *a):
         return None
 
@@ -867,7 +870,10 @@ async def test_live_uploads_heartbeat_rows_only_and_marks_all_done(tmp_path):
 
     uploaded = [r["timestamp"] for batch in client.calls for r in batch]
     assert uploaded == ["2026-06-24T10:00:00Z", "2026-06-24T10:00:30Z"]
-    assert store._count_by_state_sync() == {"sent": 12}
+    # Only the uploaded rows read as sent; the gate's rows are skipped, so
+    # nothing takes "sent" to mean "the cloud has it" when it does not
+    # (svitgrid D-2103).
+    assert store._count_by_state_sync() == {"sent": 2, "skipped": 10}
 
 
 @pytest.mark.asyncio
@@ -928,7 +934,7 @@ async def test_live_failed_send_leaves_next_send_to_heartbeat(tmp_path):
     sent = [json.loads(p)["timestamp"] for p in pub.publish_and_wait_calls]
     # The failed row retries; the 500 W move waits for the heartbeat.
     assert sent == ["2026-06-24T10:00:00Z", "2026-06-24T10:00:30Z"]
-    assert store._count_by_state_sync() == {"sent": 3}
+    assert store._count_by_state_sync() == {"sent": 2, "skipped": 1}
 
 
 @pytest.mark.asyncio

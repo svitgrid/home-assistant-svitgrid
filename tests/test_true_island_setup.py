@@ -114,6 +114,7 @@ async def _setup(hass, entry):
         "scheduler",
         "island_report",
         "outage_schedule",
+        "history_upload",
     )
     with ExitStack() as stack:
         mocks = {
@@ -132,6 +133,7 @@ async def _setup(hass, entry):
                     "run_event_scheduler_loop",
                     "run_island_report_loop",
                     "run_outage_schedule_loop",
+                    "run_history_upload",
                 ),
                 strict=True,
             )
@@ -544,3 +546,63 @@ async def test_an_edge_move_entry_reads_its_boxes_inverters_and_keeps_their_read
     # A prune that did not know the box's inverter would delete its readings.
     assert "inv-edge-1" in prune.call_args.args[0]
     assert m["harvest"].call_count == 0
+
+
+# ── the way back (svitgrid D-2103) ─────────────────────────────────────
+
+
+def _island_store(hass) -> ReadingStore:
+    """The install's store, in this test's own config directory."""
+    import os
+
+    os.makedirs(hass.config.path("svitgrid"), exist_ok=True)
+    return ReadingStore(None, hass.config.path("svitgrid", "readings.db"))
+
+
+@pytest.mark.asyncio
+async def test_the_first_start_after_the_island_uploads_its_history(
+    hass, enable_custom_integrations, tmp_path
+):
+    hass.config.config_dir = str(tmp_path)
+    await _seed_keystore(hass)
+    store = _island_store(hass)
+    store._note_cloud_copy_sync("ed-1", False, {"inv-direct"}, "2026-11-01T00:00:00Z")
+    store._append_sync({"inverterId": "inv-direct", "timestamp": "2026-11-01T10:00:00Z"})
+
+    ok, m = await _setup(hass, _cloud_entry(cloud_ingest=True))
+
+    assert ok is True
+    m["sender"].assert_called_once()
+    m["history_upload"].assert_called_once()
+    uploader = m["history_upload"].call_args.args[0]
+    assert uploader._inverter_ids == ["inv-direct"]
+    assert uploader._household_id == "hh-1"
+    assert uploader._device_id == "ed-1"
+    assert uploader._api_key == "cloud-api-key"
+    assert store._history_state_sync("ed-1")["status"] == "uploading"
+    # The island's rows are the upload's, not the live sender's.
+    assert store._count_by_state_sync() == {"skipped": 1}
+    state = hass.data[DOMAIN]["e-cloud"]
+    assert state["history_upload_task"] is not None
+
+
+@pytest.mark.asyncio
+async def test_a_true_island_start_records_the_island_and_uploads_nothing(
+    hass, enable_custom_integrations, tmp_path
+):
+    hass.config.config_dir = str(tmp_path)
+    await _seed_keystore(hass)
+    _ok, m = await _setup(hass, _cloud_entry(cloud_ingest=False))
+
+    m["history_upload"].assert_not_called()
+    assert _island_store(hass)._history_state_sync("ed-1") == {"status": "island"}
+
+
+@pytest.mark.asyncio
+async def test_a_cloud_station_start_uploads_no_history(hass, enable_custom_integrations, tmp_path):
+    hass.config.config_dir = str(tmp_path)
+    await _seed_keystore(hass)
+    _ok, m = await _setup(hass, _cloud_entry(cloud_ingest=True))
+
+    m["history_upload"].assert_not_called()
+    assert _island_store(hass)._history_state_sync("ed-1") is None
