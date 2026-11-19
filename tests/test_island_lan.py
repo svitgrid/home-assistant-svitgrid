@@ -3451,6 +3451,35 @@ async def test_edge_status_serves_the_board_state_its_page_needs(hass: HomeAssis
     assert not set(board_state) & set(island_boxes["EC-2"])
 
 
+async def test_edge_status_serves_the_uptime_and_when_it_was_reported(
+    hass: HomeAssistant, tmp_path
+):
+    """svitgrid D-2325: on an edge island the board page showed the cloud's
+    uptime, frozen when the board moved. The status serves the board's own,
+    with the time Home Assistant recorded it."""
+    from custom_components.svitgrid.edge_command_queue import EdgeCommandQueue
+
+    admin = _Admin()
+    await _keystore(hass, admin)
+    entry = _entry(hass)
+    queue = EdgeCommandQueue(str(tmp_path / "edge_commands.db"), None)
+    store = _EdgeStore(
+        box_states={
+            "EC-1": {"uptime": 531, "uptimeAt": "2026-11-19T21:56:20.000Z"},
+            "EC-2": {"version": "2.172.0"},
+        }
+    )
+    _entry_state(hass, entry, store=store, queue=queue)
+    await _adopt(hass, admin, "EC-1", _inv("inv-1"))
+    await _adopt(hass, admin, "EC-2", _inv("inv-2"))
+
+    boxes = {b["deviceId"]: b for b in _body(await _edge_status(hass))["boxes"]}
+    assert boxes["EC-1"]["uptime"] == 531
+    assert boxes["EC-1"]["uptimeAt"] == "2026-11-19T21:56:20.000Z"
+    assert "uptime" not in boxes["EC-2"]
+    assert "uptimeAt" not in boxes["EC-2"]
+
+
 # ── conditionTypes: the temperature conditions the island evaluates (#1328) ──
 
 _ZIGBEE_CONDITION_TYPES = [

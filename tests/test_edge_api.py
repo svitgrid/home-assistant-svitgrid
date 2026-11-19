@@ -1444,6 +1444,8 @@ async def test_telemetry_updates_box_state():
     }
     assert "freeHeap" not in state
     assert _SERVER_TIME.fullmatch(state["lastContactAt"])
+    # svitgrid D-2325: when the uptime was reported, so the app grows it.
+    assert state["uptimeAt"] == state["lastContactAt"]
     assert set(store.box_states) == {"EC-1"}
 
 
@@ -1463,6 +1465,8 @@ async def test_every_ingest_stamps_last_contact_and_keeps_telemetry():
     assert state["version"] == "2.172.0"
     assert state["lastContactAt"] != "2026-10-28T09:00:00.000Z"
     assert _SERVER_TIME.fullmatch(state["lastContactAt"])
+    # No uptime came in, so none is stamped (svitgrid D-2325).
+    assert "uptimeAt" not in state
 
 
 @pytest.mark.asyncio

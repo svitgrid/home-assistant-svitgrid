@@ -1259,7 +1259,20 @@ async def _box_status(hass, box: EdgeBoxEntry) -> dict[str, Any]:
         # What the board page needs (svitgrid D-2164): absent until the box
         # reports it, which the app reads as the cloud's value.
         **board_state_of(contact),
+        # The board's own uptime and when it was reported (svitgrid D-2325):
+        # the cloud's stops when the board moves. Absent until it reports one.
+        **_uptime_of(contact),
     }
+
+
+def _uptime_of(contact: dict) -> dict[str, Any]:
+    """`uptime` (seconds) and `uptimeAt` from a box's stored state, when it
+    reported a whole, non-negative uptime; nothing otherwise."""
+    uptime = contact.get("uptime")
+    if type(uptime) is not int or uptime < 0:
+        return {}
+    at = contact.get("uptimeAt")
+    return {"uptime": uptime, **({"uptimeAt": at} if isinstance(at, str) else {})}
 
 
 def _box_command(raw) -> dict | None:

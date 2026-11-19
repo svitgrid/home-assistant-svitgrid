@@ -582,10 +582,15 @@ async def _stamp_contact(store, box: EdgeBoxEntry, telemetry=None) -> None:
     """Record the box's 2xx as `lastContactAt`, with what its `telemetry`
     says about it. Keys the box did not send keep their last value."""
     state = dict(await store.get_edge_box_state(box.device_id) or {})
+    now = _server_time()
     if isinstance(telemetry, dict):
         state.update({k: telemetry[k] for k in _TELEMETRY_STATE_KEYS if k in telemetry})
         state.update(board_state_of(telemetry))
-    state["lastContactAt"] = _server_time()
+        if "uptime" in telemetry:
+            # When the uptime was true, so the app can grow it (svitgrid
+            # D-2325): a paused box stamps contact without telemetry.
+            state["uptimeAt"] = now
+    state["lastContactAt"] = now
     await store.set_edge_box_state(box.device_id, state)
 
 

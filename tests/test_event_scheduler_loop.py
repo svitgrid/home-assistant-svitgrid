@@ -654,6 +654,24 @@ async def test_retry_that_succeeds_activates_and_clears_the_backoff():
 
 
 @pytest.mark.asyncio
+async def test_a_key_the_edge_box_does_not_know_is_recorded_as_unknown_key():
+    """svitgrid D-2323: on an edge island the box refused the rule's write
+    because it does not know the key of the phone that saved the rule. The
+    app names that, so the reason stays `unknown_key`, not `write_failed`."""
+    from custom_components.svitgrid.harvest.event_scheduler_loop import _tick
+
+    event_store = FakeEventStore([_make_use_battery_event()])
+    store = FakeStore([_reading_at()])
+    executor = _failing_executor(RuntimeError("unknown_key"))
+
+    await _tick(store, event_store, lambda _i: executor, "UTC", _NOW_IN_WINDOW)
+
+    state = event_store._events["evt-1"]["executionState"]
+    assert state["dispatchFailures"] == 1
+    assert state["lastCommandError"]["reason"] == "unknown_key"
+
+
+@pytest.mark.asyncio
 async def test_failed_dispatch_logs_once_per_event(caplog):
     from datetime import timedelta
 

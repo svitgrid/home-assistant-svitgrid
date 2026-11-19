@@ -145,6 +145,10 @@ def _reason_for(exc: BaseException) -> str:
         return "bad_payload"
     if text.startswith(("verify_failed", "verify_read_failed", "verify_mismatch")):
         return "readback_mismatch"
+    if text == "unknown_key":
+        # An edge box refused the signature: it does not know the key of the
+        # phone that saved the event yet (svitgrid D-2323). The app says so.
+        return "unknown_key"
     return "write_failed"
 
 
