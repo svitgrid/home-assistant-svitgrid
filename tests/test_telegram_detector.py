@@ -132,6 +132,18 @@ def test_restore_without_soc_carries_none():
     assert [(a.type, a.battery_soc) for a in alerts] == [("grid_restored", None)]
 
 
+def test_outage_without_soc_carries_none():
+    """A battery with no BMS sends no batterySoc; the outage carries None, not
+    0, so the message leaves the figure out (svitgrid D-2294)."""
+    _, alerts = evaluate({}, "hh1", "inv1", _edge(), 1_793_181_600_000)
+    assert [(a.type, a.battery_soc) for a in alerts] == [("outage", None)]
+
+
+def test_outage_with_zero_soc_keeps_zero():
+    _, alerts = evaluate({}, "hh1", "inv1", _edge(batterySoc=0), 1_793_181_600_000)
+    assert [(a.type, a.battery_soc) for a in alerts] == [("outage", 0)]
+
+
 @pytest.mark.parametrize("stamp", [None, "not a date", 123])
 def test_restore_event_at_falls_back_to_now(stamp):
     t0 = 1_793_181_600_000

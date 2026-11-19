@@ -172,7 +172,9 @@ def evaluate(
                     "outage",
                     household_id,
                     min(starts) if starts else now_ms,
-                    _round(soc if soc is not None else 0),
+                    # An absent SOC stays None, so the message leaves the
+                    # figure out instead of "0%" (svitgrid D-2294).
+                    _round(soc),
                 )
             )
 

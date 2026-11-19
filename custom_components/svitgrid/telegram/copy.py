@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import html
 import json
+import re
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from importlib import resources
@@ -39,6 +40,9 @@ _FIXTURE = json.loads(
 )
 _COPY: dict[str, dict[str, str]] = _FIXTURE["copy"]
 _FALLBACK: str = _FIXTURE["fallback"]
+# The battery figure in parentheses, as every language writes it: "({batterySoc}%)",
+# Turkish "(%{batterySoc})". Without a SOC the clause goes, with its leading space.
+_SOC_CLAUSE = re.compile(r"\s*\([^()]*\{batterySoc\}[^()]*\)")
 
 
 def _strings(language: str | None) -> dict[str, str]:
@@ -103,6 +107,10 @@ def render(
 
     def fill(key: str) -> str:
         text = strings[key]
+        if soc is None:
+            # No SOC (a battery with no BMS): the wording without the figure,
+            # never "(%)" (svitgrid D-2294).
+            text = _SOC_CLAUSE.sub("", text)
         for name, value in values.items():
             text = text.replace("{" + name + "}", value)
         return text

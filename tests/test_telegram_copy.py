@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
+
 from custom_components.svitgrid.telegram import copy
 
 NOW = datetime(2026, 10, 30, 12, 0, tzinfo=UTC)
@@ -14,6 +16,29 @@ TODAY_EVENT = datetime(2026, 10, 30, 9, 5, tzinfo=UTC)
 def test_render_outage_uk():
     out = copy.render("outage", "uk", station="Дім", soc=78)
     assert out == ("<b>Відключення електроенергії</b>\nДім працює від батареї (78%)")
+
+
+def test_render_outage_without_soc_leaves_the_figure_out():
+    """No batterySoc (a battery with no BMS): no «(%)» (svitgrid D-2294)."""
+    assert copy.render("outage", "uk", station="Дім") == (
+        "<b>Відключення електроенергії</b>\nДім працює від батареї"
+    )
+    assert copy.render("outage", "en", station="Home", soc=None) == (
+        "<b>Power Outage</b>\nHome is on battery power"
+    )
+    assert copy.render("outage", "tr", station="Ev").endswith("Ev batarya gücüyle çalışıyor")
+
+
+@pytest.mark.parametrize("language", copy._FIXTURE["languages"])
+def test_outage_without_soc_has_no_empty_figure_in_any_language(language):
+    out = copy.render("outage", language, station="S")
+    assert "%" not in out
+    assert "()" not in out
+    assert out == out.rstrip()
+
+
+def test_render_outage_with_zero_soc_keeps_the_figure():
+    assert copy.render("outage", "en", station="Home", soc=0).endswith("(0%)")
 
 
 def test_render_falls_back_to_en_for_ja():
