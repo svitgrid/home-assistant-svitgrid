@@ -13,6 +13,8 @@ Written BEFORE implementation (RED phase). Tests cover:
 from __future__ import annotations
 
 import json
+import time
+import uuid
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -591,3 +593,252 @@ async def test_happy_path_top_level_matches_signed_dispatches_correctly(hass):
     data = json.loads(resp.body)
     assert data["ok"] is True
     executor.dispatch.assert_awaited_once_with("set_battery_charge", cmd_payload)
+
+
+# ---------------------------------------------------------------------------
+# set_inverter_setting on an edge island (svitgrid D-2282)
+#
+# The app signs the board's own event, not {command, payload}: the
+# integration relays the phone's signature to the board untouched, and the
+# board verifies that event. So the signed map has no `payload` key, and the
+# top-level payload is bound against the event's own fields.
+# ---------------------------------------------------------------------------
+
+
+class _RelayingExecutor:
+    """An executor that relays the phone's signature, as EdgeBoxExecutor does."""
+
+    relays_signature = True
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict, dict | None]] = []
+
+    async def dispatch(self, command_name, payload, *, signing=None):
+        self.calls.append((command_name, payload, signing))
+        return {"ok": True, "readBack": payload.get("value")}
+
+
+def _app_set_inverter_setting_body(
+    private_key,
+    key_id: str,
+    *,
+    setting: str = "batteryWarningSoc",
+    value=25,
+    inverter_id: str = INVERTER_ID,
+    payload_extra: dict | None = None,
+    top_level_overrides: dict | None = None,
+) -> dict:
+    """The body the app posts, copied from apps/mobile.
+
+    `sendInverterSettingsCommandOnHost` (settings_host_messages.dart) builds
+    the payload `{...payload, inverterId}`, signs
+    `buildInverterSettingSignedEventData` (inverter_setting_event_builder.dart)
+    and adds the event's `validUntil` to the payload.
+    `IslandCommandSender._signAndPost` (island_command_sender.dart) adds
+    `nonce` and `ts` (`withReplayGuard`) to the signed map and posts
+    `{command, payload, signedEventData, signature, signingKeyId, commandId}`.
+    """
+    valid_until = "2099-01-01T00:00:00.000Z"
+    event = {
+        "command": "set_inverter_setting",
+        "deviceId": "edge-ac276ed060e0",
+        "inverterId": inverter_id,
+        "setting": setting,
+        "value": value,
+        "validUntil": valid_until,
+        "nonce": str(uuid.uuid4()),
+        "ts": int(time.time() * 1000),
+    }
+    payload = {
+        "inverterId": inverter_id,
+        "setting": setting,
+        "value": value,
+        **(payload_extra or {}),
+        "validUntil": valid_until,
+    }
+    payload.update(top_level_overrides or {})
+    signature = sign_payload(event, private_key)
+    return {
+        "command": "set_inverter_setting",
+        "payload": payload,
+        "signedEventData": event,
+        "signature": signature,
+        "signingKeyId": key_id,
+        "commandId": str(uuid.uuid4()),
+    }
+
+
+def _trusted_key(hass):
+    private_key, pub_hex = generate_keypair()
+    _install_keystore(hass, trusted_public_keys_hex={"admin-key-1": pub_hex})
+    return private_key
+
+
+@pytest.mark.asyncio
+async def test_app_set_inverter_setting_body_reaches_a_relaying_executor(hass):
+    private_key = _trusted_key(hass)
+    executor = _RelayingExecutor()
+    _install_executor(hass, INVERTER_ID, executor)
+    body = _app_set_inverter_setting_body(private_key, "admin-key-1")
+
+    resp = await SvitgridCommandsView().post(
+        _FakeRequest(hass, island_key_header=ISLAND_KEY, body=body)
+    )
+
+    assert resp.status == 200, resp.body
+    assert json.loads(resp.body) == {"ok": True, "result": {"ok": True, "readBack": 25}}
+    assert executor.calls == [
+        (
+            "set_inverter_setting",
+            body["payload"],
+            {
+                "signedEventData": body["signedEventData"],
+                "signature": body["signature"],
+                "signingKeyId": "admin-key-1",
+            },
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_app_anenji_body_keeps_its_unsigned_pack_voltage_hint(hass):
+    private_key = _trusted_key(hass)
+    executor = _RelayingExecutor()
+    _install_executor(hass, INVERTER_ID, executor)
+    body = _app_set_inverter_setting_body(
+        private_key,
+        "admin-key-1",
+        setting="bulkChargeVoltage",
+        value=56.4,
+        payload_extra={"nominalPackVoltage": 48},
+    )
+
+    resp = await SvitgridCommandsView().post(
+        _FakeRequest(hass, island_key_header=ISLAND_KEY, body=body)
+    )
+
+    assert resp.status == 200, resp.body
+    assert executor.calls[0][1] == body["payload"]
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"value": 26},
+        {"value": "25"},
+        {"setting": "batteryLowSoc"},
+        {"inverterId": "inv-other"},
+        {"validUntil": "2099-12-31T00:00:00.000Z"},
+        {"workMode": 1},
+    ],
+)
+@pytest.mark.asyncio
+async def test_top_level_payload_that_disagrees_with_the_signed_event_is_refused(hass, overrides):
+    private_key = _trusted_key(hass)
+    executor = _RelayingExecutor()
+    other = _RelayingExecutor()
+    hass.data.setdefault(DOMAIN, {})
+    hass.data[DOMAIN]["__test_entry__"] = {
+        "executors_by_inverter": {INVERTER_ID: executor, "inv-other": other}
+    }
+    body = _app_set_inverter_setting_body(private_key, "admin-key-1", top_level_overrides=overrides)
+
+    resp = await SvitgridCommandsView().post(
+        _FakeRequest(hass, island_key_header=ISLAND_KEY, body=body)
+    )
+
+    assert resp.status == 403
+    assert json.loads(resp.body)["error"] == "command_mismatch"
+    assert executor.calls == [] and other.calls == []
+
+
+@pytest.mark.asyncio
+async def test_top_level_payload_missing_a_signed_field_is_refused(hass):
+    private_key = _trusted_key(hass)
+    executor = _RelayingExecutor()
+    _install_executor(hass, INVERTER_ID, executor)
+    body = _app_set_inverter_setting_body(private_key, "admin-key-1")
+    del body["payload"]["value"]
+
+    resp = await SvitgridCommandsView().post(
+        _FakeRequest(hass, island_key_header=ISLAND_KEY, body=body)
+    )
+
+    assert resp.status == 403
+    assert executor.calls == []
+
+
+@pytest.mark.asyncio
+async def test_board_event_to_an_executor_that_does_not_relay_is_still_refused(hass):
+    private_key = _trusted_key(hass)
+    executor = _make_executor(result={"applied": True})
+    executor.relays_signature = False
+    _install_executor(hass, INVERTER_ID, executor)
+    body = _app_set_inverter_setting_body(private_key, "admin-key-1")
+
+    resp = await SvitgridCommandsView().post(
+        _FakeRequest(hass, island_key_header=ISLAND_KEY, body=body)
+    )
+
+    assert resp.status == 400
+    assert json.loads(resp.body)["error"] == "bad_request"
+    executor.dispatch.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_board_event_shape_for_another_command_is_still_refused(hass):
+    private_key = _trusted_key(hass)
+    executor = _RelayingExecutor()
+    _install_executor(hass, INVERTER_ID, executor)
+    body = _app_set_inverter_setting_body(private_key, "admin-key-1")
+    event = {**body["signedEventData"], "command": "set_work_mode"}
+    body.update(
+        command="set_work_mode",
+        signedEventData=event,
+        signature=sign_payload(event, private_key),
+    )
+
+    resp = await SvitgridCommandsView().post(
+        _FakeRequest(hass, island_key_header=ISLAND_KEY, body=body)
+    )
+
+    assert resp.status == 400
+    assert executor.calls == []
+
+
+@pytest.mark.asyncio
+async def test_board_event_with_a_bad_signature_is_refused(hass):
+    private_key = _trusted_key(hass)
+    executor = _RelayingExecutor()
+    _install_executor(hass, INVERTER_ID, executor)
+    body = _app_set_inverter_setting_body(private_key, "admin-key-1")
+    body["signedEventData"] = {**body["signedEventData"], "value": 90}
+
+    resp = await SvitgridCommandsView().post(
+        _FakeRequest(hass, island_key_header=ISLAND_KEY, body=body)
+    )
+
+    assert resp.status == 403
+    assert json.loads(resp.body)["error"] == "signature_invalid"
+    assert executor.calls == []
+
+
+@pytest.mark.asyncio
+async def test_board_event_replayed_with_a_new_command_id_is_refused(hass):
+    private_key = _trusted_key(hass)
+    executor = _RelayingExecutor()
+    _install_executor(hass, INVERTER_ID, executor)
+    body = _app_set_inverter_setting_body(private_key, "admin-key-1")
+    view = SvitgridCommandsView()
+
+    first = await view.post(_FakeRequest(hass, island_key_header=ISLAND_KEY, body=body))
+    replay = await view.post(
+        _FakeRequest(
+            hass, island_key_header=ISLAND_KEY, body={**body, "commandId": str(uuid.uuid4())}
+        )
+    )
+
+    assert first.status == 200
+    assert replay.status == 403
+    assert json.loads(replay.body)["error"] == "replayed"
+    assert len(executor.calls) == 1

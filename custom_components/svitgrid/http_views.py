@@ -712,6 +712,17 @@ async def _measured_batteries(hass, entry_id: str) -> set[str]:
     return local_pairing.measured_batteries(snapshot)
 
 
+# Commands whose signed map on an edge island is the board's own event rather
+# than `{command, payload}` (svitgrid D-2282): the app's
+# `sendInverterSettingsCommandOnHost` signs `buildInverterSettingSignedEventData`.
+RELAYED_EVENT_COMMANDS = frozenset({"set_inverter_setting"})
+
+# Payload keys the app sends with such a command that its event does not sign.
+# The board receives them unsigned on the cloud path too: the Anenji screen's
+# pack-voltage hint.
+UNSIGNED_SETTING_HINTS = frozenset({"nominalPackVoltage"})
+
+
 class SvitgridCommandsView(HomeAssistantView):
     """POST /api/svitgrid/commands — island-key + admin-signature → WriteExecutor.
 
@@ -759,6 +770,50 @@ class SvitgridCommandsView(HomeAssistantView):
     def _json_error(status: int, error: str, **extra) -> web.Response:
         body = json.dumps({"error": error, **extra})
         return web.Response(status=status, text=body, content_type="application/json")
+
+    def _bind_relayed_event(self, hass, event: dict, payload) -> dict | web.Response:
+        """Bind the top-level payload to a board event the app signed.
+
+        For a `RELAYED_EVENT_COMMANDS` command on an edge island the app signs
+        the board's own event (`buildInverterSettingSignedEventData`:
+        `{command, deviceId, inverterId, setting, value, validUntil}` plus
+        `nonce` and `ts`), because the integration relays the signature and
+        the board verifies that event. It carries no `payload` key.
+
+        Accepted only for an inverter whose executor relays the signature, so
+        the board checks the same signature again. The payload must carry
+        `inverterId`, `setting` and `value`, each equal (type included) to the
+        event's, may carry `validUntil` only as the event signs it, and may
+        carry no other key but `UNSIGNED_SETTING_HINTS`, which the board also
+        receives unsigned on the cloud path. Returns the payload to dispatch,
+        or the refusal: `400 bad_request` for an event this path does not
+        take, `403 command_mismatch` for a payload that disagrees with it.
+        """
+        inverter_id = event.get("inverterId")
+        if (
+            not isinstance(inverter_id, str)
+            or not isinstance(event.get("setting"), str)
+            or "value" not in event
+        ):
+            return self._json_error(400, "bad_request")
+        executor = self._get_executors(hass).get(inverter_id)
+        relays = getattr(executor, "relays_signature", None)
+        if not (type(relays) is bool and relays):
+            return self._json_error(400, "bad_request")
+        if not isinstance(payload, dict):
+            return self._json_error(403, "command_mismatch")
+        for key in ("inverterId", "setting", "value"):
+            if key not in payload:
+                return self._json_error(403, "command_mismatch")
+        for key, value in payload.items():
+            if key in UNSIGNED_SETTING_HINTS:
+                continue
+            if key not in ("inverterId", "setting", "value", "validUntil") or key not in event:
+                return self._json_error(403, "command_mismatch")
+            signed = event[key]
+            if type(value) is not type(signed) or value != signed:
+                return self._json_error(403, "command_mismatch")
+        return dict(payload)
 
     # ------------------------------------------------------------------
     # Integration-level commands
@@ -866,14 +921,22 @@ class SvitgridCommandsView(HomeAssistantView):
             return self._json_error(400, "bad_request")
         signed_command = signed_event_data.get("command")
         signed_payload = signed_event_data.get("payload")
-        if (
-            not signed_command
-            or not isinstance(signed_command, str)
-            or not isinstance(signed_payload, dict)
-        ):
+        if not signed_command or not isinstance(signed_command, str):
             return self._json_error(400, "bad_request")
-        if command != signed_command or payload != signed_payload:
-            return self._json_error(403, "command_mismatch")
+        if "payload" not in signed_event_data and signed_command in RELAYED_EVENT_COMMANDS:
+            # The board's own event, signed for a board that verifies it
+            # itself (svitgrid D-2282): bind against the event's fields.
+            if command != signed_command:
+                return self._json_error(403, "command_mismatch")
+            bound = self._bind_relayed_event(hass, signed_event_data, payload)
+            if isinstance(bound, web.Response):
+                return bound
+            signed_payload = bound
+        else:
+            if not isinstance(signed_payload, dict):
+                return self._json_error(400, "bad_request")
+            if command != signed_command or payload != signed_payload:
+                return self._json_error(403, "command_mismatch")
 
         # --- Replay protection ---
         # A retry of the same commandId within five minutes is answered, not
