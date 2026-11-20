@@ -6,6 +6,10 @@ verification on the server; these tests are the contract gate.
 
 from __future__ import annotations
 
+import hashlib
+import json
+from pathlib import Path
+
 import pytest
 
 from custom_components.svitgrid.signing import (
@@ -166,3 +170,36 @@ class TestEcdsaP256:
             public_key_from_hex("not-hex")
         with pytest.raises(ValueError):
             public_key_from_hex("04" + "aa" * 10)  # too short
+
+
+# svitgrid D-2204: the payload hash a signed station change carries. A copy of
+# the monorepo's packages/inverter_protocol/test/fixtures/
+# station-command-payload-vectors.json, read there by the API, the app and the
+# board: the add-on checks a phone's `boxCommand` against this hash.
+_STATION_VECTORS = json.loads(
+    (Path(__file__).parent / "fixtures" / "station-command-payload-vectors.json").read_text()
+)["cases"]
+
+
+@pytest.mark.parametrize("case", _STATION_VECTORS, ids=lambda c: c["name"])
+def test_station_command_payload_hash(case):
+    canonical = canonical_json_encode(case["payload"])
+    assert canonical == case["canonical"]
+    assert hashlib.sha256(canonical.encode("utf-8")).hexdigest() == case["sha256"]
+
+
+@pytest.mark.parametrize(
+    ("value", "text"),
+    [
+        (1e21, "1e+21"),
+        (1e20, "100000000000000000000"),
+        (1e-7, "1e-7"),
+        (0.00001, "0.00001"),
+        (-2.5e-8, "-2.5e-8"),
+        (1.5e300, "1.5e+300"),
+        (-0.0, "0"),
+        (123.456, "123.456"),
+    ],
+)
+def test_floats_print_as_javascript_does(value, text):
+    assert canonical_json_encode({"v": value}) == f'{{"v":{text}}}'

@@ -120,6 +120,9 @@ class EdgeBoxEntry:
     # The owner's name for the box, set from the app on an edge island
     # (`/edge/rename`, svitgrid D-2166). None until it is renamed here.
     name: str | None = None
+    # inverter id -> the phone's `boxCommand` over that inverter's
+    # `add_inverter` (svitgrid D-2204), sent with it when the box binds.
+    inverter_signing: dict[str, dict] = field(default_factory=dict)
 
 
 def _parse_edge_box(device_id: str, value: Any) -> EdgeBoxEntry | None:
@@ -148,6 +151,13 @@ def _parse_edge_box(device_id: str, value: Any) -> EdgeBoxEntry | None:
         pair_code_expires_at=_opt_str("pair_code_expires_at"),
         send_inverters=value.get("send_inverters") is True,
         name=_opt_str("name"),
+        inverter_signing={
+            str(k): dict(v)
+            for k, v in (value.get("inverter_signing") or {}).items()
+            if isinstance(v, dict)
+        }
+        if isinstance(value.get("inverter_signing"), dict)
+        else {},
     )
 
 

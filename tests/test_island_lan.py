@@ -2527,6 +2527,115 @@ async def test_leave_hub_queues_the_leave_and_keeps_the_device(hass: HomeAssista
     assert len(await devices.async_history(PLUG_ID)) == 1
 
 
+def _station_box_command(signer: _Admin, command: str, payload: dict) -> dict:
+    """The phone's signature for the box over a station change (svitgrid
+    D-2204): the command, the box, the payload's hash and an expiry."""
+    from custom_components.svitgrid.signing import payload_sha256
+
+    signed = {
+        "command": command,
+        "deviceId": "EC-1",
+        "payloadSha256": payload_sha256(payload),
+        "validUntil": "2026-11-20T12:00:00.000Z",
+    }
+    return {
+        "signedEventData": signed,
+        "signature": sign_payload(signed, signer.priv),
+        "signingKeyId": signer.key_id,
+    }
+
+
+@pytest.mark.parametrize(
+    ("command", "extra", "box_command", "payload"),
+    [
+        ("remove_device", {}, "remove_device", {"addr": "0x1234", "ieee": PLUG_IEEE}),
+        ("leave_hub", {}, "remove_device", {"addr": "0x1234", "ieee": PLUG_IEEE}),
+        (
+            "set_startup_state",
+            {"mode": "off"},
+            "set_startup_state",
+            {"mode": "off", "addr": "0x1234", "ep": 1},
+        ),
+    ],
+)
+async def test_a_station_change_previews_the_box_command_and_forwards_its_signature(
+    hass: HomeAssistant, tmp_path, command, extra, box_command, payload
+):
+    """svitgrid D-2204: Home Assistant adds the address, so the phone asks
+    for the exact command, signs it, and the signature reaches the box."""
+    from custom_components.svitgrid.edge_api import _command_for_box
+    from custom_components.svitgrid.zigbee_lan import (
+        ZigbeeDeviceCommandPreviewView,
+        ZigbeeDeviceCommandView,
+    )
+
+    admin, queue, devices = await _zigbee_setup(hass, tmp_path)
+    request = {"command": command, "payload": extra}
+
+    preview = await ZigbeeDeviceCommandPreviewView().post(_ZReq(hass, request), PLUG_ID)
+
+    assert preview.status == 200, _body(preview)
+    assert _body(preview) == {
+        "boardCommands": [
+            {"edgeDeviceId": "EC-1", "deviceId": "EC-1", "command": box_command, "payload": payload}
+        ]
+    }
+    assert await queue.async_next_pending("EC-1") is None
+
+    box = _station_box_command(admin, box_command, _body(preview)["boardCommands"][0]["payload"])
+    resp = await ZigbeeDeviceCommandView().post(
+        _ZReq(hass, {**request, "boxCommand": box}), PLUG_ID
+    )
+
+    assert resp.status == 200, _body(resp)
+    sent = _command_for_box(await queue.async_next_pending("EC-1"))
+    assert (sent["command"], sent["payload"]) == (box_command, payload)
+    assert sent["signedEventData"] == box["signedEventData"]
+    assert sent["signature"] == box["signature"]
+    assert sent["signingKeyId"] == box["signingKeyId"]
+
+
+async def test_a_signature_over_another_payload_is_refused(hass: HomeAssistant, tmp_path):
+    from custom_components.svitgrid.zigbee_lan import ZigbeeDeviceCommandView
+
+    admin, queue, devices = await _zigbee_setup(hass, tmp_path)
+    box = _station_box_command(admin, "remove_device", {"addr": "0x9999", "ieee": PLUG_IEEE})
+
+    resp = await ZigbeeDeviceCommandView().post(
+        _ZReq(hass, {"command": "remove_device", "boxCommand": box}), PLUG_ID
+    )
+
+    assert resp.status == 400
+    assert _body(resp)["error"] == "box_signature_invalid"
+    assert await queue.async_next_pending("EC-1") is None
+    assert await devices.async_get(PLUG_ID) is not None
+
+
+async def test_a_command_the_box_runs_unsigned_previews_nothing(hass: HomeAssistant, tmp_path):
+    from custom_components.svitgrid.zigbee_lan import ZigbeeDeviceCommandPreviewView
+
+    await _zigbee_setup(hass, tmp_path)
+
+    resp = await ZigbeeDeviceCommandPreviewView().post(
+        _ZReq(hass, {"command": "identify"}), PLUG_ID
+    )
+
+    assert resp.status == 200
+    assert _body(resp) == {"boardCommands": []}
+
+
+async def test_the_preview_needs_the_island_key(hass: HomeAssistant, tmp_path):
+    from custom_components.svitgrid.zigbee_lan import ZigbeeDeviceCommandPreviewView
+
+    await _zigbee_setup(hass, tmp_path)
+
+    resp = await ZigbeeDeviceCommandPreviewView().post(
+        _ZReq(hass, {"command": "remove_device"}, island_key=OTHER_ISLAND_KEY), PLUG_ID
+    )
+
+    assert resp.status == 401
+
+
 async def test_leave_hub_needs_the_island_key(hass: HomeAssistant, tmp_path):
     from custom_components.svitgrid.zigbee_lan import ZigbeeDeviceCommandView
 
@@ -3582,6 +3691,68 @@ async def test_edge_adopt_keeps_send_inverters(hass: HomeAssistant):
     boxes = (await ks.load()).edge_boxes
     assert boxes["EC-1"].send_inverters is True
     assert boxes["EC-2"].send_inverters is False
+
+
+async def test_edge_adopt_previews_and_keeps_the_signed_add_inverter(hass: HomeAssistant):
+    """svitgrid D-2204: the phone reads the `add_inverter` each inverter will
+    get when the box binds, signs it, and the adopt keeps the signature."""
+    from custom_components.svitgrid.island_lan import SvitgridEdgeAdoptPreviewView
+    from custom_components.svitgrid.signing import payload_sha256
+
+    admin = _Admin()
+    ks = await _keystore(hass, admin)
+    _entry(hass)
+    other = dict(_INV_DEYE, inverterId="inv-other")
+
+    preview = await SvitgridEdgeAdoptPreviewView().post(
+        _Req(hass, {"deviceId": "EC-1", "inverters": [_INV_DEYE, other], "sendInverters": True})
+    )
+
+    assert preview.status == 200, _body(preview)
+    commands = _body(preview)["boardCommands"]
+    assert [c["command"] for c in commands] == ["add_inverter", "add_inverter"]
+    assert all(c["deviceId"] == "EC-1" for c in commands)
+
+    def box(c):
+        event = {
+            "command": c["command"],
+            "deviceId": c["deviceId"],
+            "payloadSha256": payload_sha256(c["payload"]),
+            "validUntil": "2026-11-21T10:00:00.000Z",
+        }
+        return {
+            "signedEventData": event,
+            "signature": f"sig-{c['payload']['inverterId']}",
+            "signingKeyId": admin.key_id,
+        }
+
+    stray = box({**commands[0], "payload": {**commands[0]["payload"], "ipAddress": "10.9.9.9"}})
+    await _adopt(
+        hass,
+        admin,
+        "EC-1",
+        _INV_DEYE,
+        other,
+        sendInverters=True,
+        boxCommands=[stray, box(commands[1]), box(commands[0])],
+    )
+
+    signing = (await ks.load()).edge_boxes["EC-1"].inverter_signing
+    assert signing[_INV_DEYE["inverterId"]]["signature"] == f"sig-{_INV_DEYE['inverterId']}"
+    assert signing["inv-other"]["signature"] == "sig-inv-other"
+
+
+async def test_edge_adopt_preview_lists_nothing_for_a_box_that_holds_its_inverters(
+    hass: HomeAssistant,
+):
+    from custom_components.svitgrid.island_lan import SvitgridEdgeAdoptPreviewView
+
+    preview = await SvitgridEdgeAdoptPreviewView().post(
+        _Req(hass, {"deviceId": "EC-1", "inverters": [_INV_DEYE]})
+    )
+
+    assert preview.status == 200
+    assert _body(preview) == {"boardCommands": []}
 
 
 async def test_edge_status_names_the_zigbee_module_version(hass: HomeAssistant, tmp_path):

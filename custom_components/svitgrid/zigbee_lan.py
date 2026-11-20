@@ -19,7 +19,10 @@ relay its commands to the box:
   trusted (owner or admin) key, and the phone's signature for the box rides
   untouched in `boxCommand`: the integration holds no key the box trusts. The
   unsigned `identify`, `get_device_status`, `set_startup_state`,
-  `remove_device` and `leave_hub` need the island key only (spec 27).
+  `remove_device` and `leave_hub` need the island key only (spec 27). The
+  box checks the owner's signature on `set_startup_state` and
+  `remove_device` (svitgrid D-2204): the app reads the exact command from
+  `…/command/board-commands` and sends its signature as `boxCommand`.
 - `POST /api/svitgrid/edge/zigbee/command` sends a box-wide command:
   `list_devices`, `neighbors`, `routes`, `mesh_snapshot` with the island key,
   `zigbee_restart` and `zigbee_factory_reset` signed by a trusted key only.
@@ -47,6 +50,7 @@ from .edge_api import _entry_state as _edge_entry_state
 from .harvest.socket_actions import EDGE_DEVICE_MISSING, SocketSwitcher
 from .island_lan import _box_command, _device_id, _island_key_ok, _json_error, signed_lan_request
 from .local_time import local_day_of, local_day_window
+from .signing import payload_sha256
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -527,6 +531,77 @@ class ZigbeeUsageTotalsView(_ZigbeeView):
         return web.json_response({"devices": totals})
 
 
+# Station changes (svitgrid D-2204): the box runs them only with the owner's
+# signature over `{command, deviceId, payloadSha256, validUntil}`. Home
+# Assistant fills in the payload, so the phone asks for it first
+# (`ZigbeeDeviceCommandPreviewView`) and sends its signature as `boxCommand`.
+STATION_DEVICE_COMMANDS = ("set_startup_state", "remove_device")
+
+
+def _device_box_command(command: str, extra: dict, device: dict) -> tuple[str, dict]:
+    """The command the box gets for the app's `command` on `device`, and its
+    payload: Home Assistant adds the device's address and endpoint, or for a
+    leave its address and IEEE. One function for the view and its preview,
+    so the phone signs the payload the box receives."""
+    if command in LEAVE_COMMANDS:
+        return "remove_device", {"addr": device["addr"], "ieee": device["ieee"]}
+    return command, {**extra, "addr": device["addr"], "ep": device["endpoint"]}
+
+
+def _station_signing(body: dict, box_command: str, payload: dict):
+    """The phone's `boxCommand` for a station change, forwarded untouched, or
+    None when the body carries none (an app before svitgrid D-2204; the boxes
+    in the field report that and run the command). One that names another
+    command or hashes another payload is 400 `box_signature_invalid`: the box
+    would refuse it."""
+    if box_command not in STATION_DEVICE_COMMANDS or "boxCommand" not in body:
+        return None, None
+    box_command_body = _box_command(body.get("boxCommand"))
+    if box_command_body is None:
+        return None, _json_error(400, "box_signature_invalid")
+    event = box_command_body["signedEventData"]
+    if event.get("command") != box_command or event.get("payloadSha256") != payload_sha256(payload):
+        return None, _json_error(400, "box_signature_invalid")
+    return box_command_body, None
+
+
+class ZigbeeDeviceCommandPreviewView(_ZigbeeView):
+    """POST /api/svitgrid/edge/zigbee/{id}/command/board-commands — what the
+    command view would queue for the box, for the phone to sign (svitgrid
+    D-2204). Same body and island key; nothing is queued. Answers
+    `{boardCommands: [{edgeDeviceId, deviceId, command, payload}]}`, empty for
+    a command the box runs unsigned."""
+
+    url = "/api/svitgrid/edge/zigbee/{device_id}/command/board-commands"
+    name = "api:svitgrid:edge:zigbee:command:board-commands"
+
+    async def post(self, request, device_id: str) -> web.Response:  # noqa: D102
+        gate = await self._gate(request)
+        if isinstance(gate, web.Response):
+            return gate
+        devices, _ = gate
+        body = await _body(request)
+        if body is None or body.get("command") not in UNSIGNED_DEVICE_COMMANDS:
+            return _json_error(400, "bad_request")
+        device = await devices.async_get(device_id)
+        if device is None:
+            return _json_error(404, "unknown_device")
+        extra = body.get("payload") if isinstance(body.get("payload"), dict) else {}
+        box_command, payload = _device_box_command(body["command"], extra, device)
+        commands = []
+        if box_command in STATION_DEVICE_COMMANDS:
+            box_id = device["deviceId"]
+            commands.append(
+                {
+                    "edgeDeviceId": box_id,
+                    "deviceId": box_id,
+                    "command": box_command,
+                    "payload": payload,
+                }
+            )
+        return web.json_response({"boardCommands": commands})
+
+
 def _set_state_command(raw) -> dict | None:
     """The `boxCommand` of a `set_state`: the phone's signature over
     `{command: "set_state", payload: {on}}`, or None."""
@@ -592,17 +667,15 @@ class ZigbeeDeviceCommandView(_ZigbeeView):
             return _json_error(404, "unknown_device")
         if device["deviceId"] not in boxes:
             return _json_error(409, "edge_device_missing")
-        if command in LEAVE_COMMANDS:
-            box_command = "remove_device"
-            payload = {"addr": device["addr"], "ieee": device["ieee"]}
-        else:
-            box_command = command
-            payload = {**extra, "addr": device["addr"], "ep": device["endpoint"]}
+        box_command, payload = _device_box_command(command, extra, device)
+        signing, error = _station_signing(body, box_command, payload)
+        if error is not None:
+            return error
         command_id = await queue.async_enqueue(
             device["deviceId"],
             box_command,
             payload,
-            signing=None,
+            signing=signing,
             inverter_id=None,
             source="zigbee",
         )
@@ -796,6 +869,7 @@ ZIGBEE_LAN_VIEWS = (
     ZigbeeUsageView,
     ZigbeeUsageTotalsView,
     ZigbeeDeviceCommandView,
+    ZigbeeDeviceCommandPreviewView,
     ZigbeeBoxCommandView,
     ZigbeePermitJoinView,
 )

@@ -1,0 +1,140 @@
+{
+  "_comment": "Shared vectors for the payload hash a signed station change carries (svitgrid D-2204): payloadSha256 is the lowercase hex SHA-256 of the payload's canonical JSON (keys sorted at every level, no whitespace, numbers as JavaScript prints them, an absent payload as {}). The API builds the payload and hands it to the phone, the phone signs that hash, and the board recomputes it from the payload it receives. Read by services/api/src/__tests__/signing/canonical-json.test.ts, apps/mobile/test/core/signing/station_command_event_builder_test.dart and devices/edge-connector-v2/test/test_canonical_json.c; the add-on keeps a copy in tests/fixtures. Regenerate canonical and sha256 only from the TypeScript encoder, and never edit them by hand.",
+  "cases": [
+    {
+      "name": "no payload hashes as an empty object",
+      "command": "pause",
+      "payload": {},
+      "canonical": "{}",
+      "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+    },
+    {
+      "name": "add_inverter over a Wi-Fi logger",
+      "command": "add_inverter",
+      "payload": {
+        "inverterId": "Xk3pQ9vLm2",
+        "ipAddress": "192.168.1.40",
+        "loggerSerial": 2712345678,
+        "modelId": "deye_sun_12k_sg04lp3_eu",
+        "phases": 3,
+        "hasBattery": true,
+        "batteryCapacityWh": 10240,
+        "pollingInterval": 5,
+        "reportingInterval": 60,
+        "slaveId": 1,
+        "port": 8899
+      },
+      "canonical": "{\"batteryCapacityWh\":10240,\"hasBattery\":true,\"inverterId\":\"Xk3pQ9vLm2\",\"ipAddress\":\"192.168.1.40\",\"loggerSerial\":2712345678,\"modelId\":\"deye_sun_12k_sg04lp3_eu\",\"phases\":3,\"pollingInterval\":5,\"port\":8899,\"reportingInterval\":60,\"slaveId\":1}",
+      "sha256": "b3e0f04be8e4cc5181e271203758cc4c121fbb78e8a1f637bbd46d23490d6d48"
+    },
+    {
+      "name": "add_inverter on the cable, PI30 with no slave id",
+      "command": "add_inverter",
+      "payload": {
+        "inverterId": "p130",
+        "modelId": "edecoa_em654a",
+        "phases": 1,
+        "hasBattery": true,
+        "pollingInterval": 5,
+        "reportingInterval": 60,
+        "protocolId": "pi30"
+      },
+      "canonical": "{\"hasBattery\":true,\"inverterId\":\"p130\",\"modelId\":\"edecoa_em654a\",\"phases\":1,\"pollingInterval\":5,\"protocolId\":\"pi30\",\"reportingInterval\":60}",
+      "sha256": "035edeafa62ae6cee8724b4d7e8538735d7785c0407e6996f7b531bdbbef6d87"
+    },
+    {
+      "name": "update_inverter from the cable switch, a model never stored",
+      "command": "update_inverter",
+      "payload": {
+        "inverterId": "inv-2",
+        "modelId": null,
+        "phases": 1,
+        "hasBattery": false,
+        "protocolId": "modbus_rtu",
+        "slaveId": 247,
+        "pollingInterval": 5,
+        "reportingInterval": 60
+      },
+      "canonical": "{\"hasBattery\":false,\"inverterId\":\"inv-2\",\"modelId\":null,\"phases\":1,\"pollingInterval\":5,\"protocolId\":\"modbus_rtu\",\"reportingInterval\":60,\"slaveId\":247}",
+      "sha256": "d247c538ad00651a033395b6b358601e8a87ede76eb63bb240cbc11b254805d4"
+    },
+    {
+      "name": "update_inverter with a fractional capacity",
+      "command": "update_inverter",
+      "payload": {
+        "inverterId": "inv-3",
+        "modelId": "luxpower_sna_6k",
+        "phases": 1,
+        "hasBattery": true,
+        "batteryCapacityWh": 5120.5,
+        "pollingInterval": 5,
+        "reportingInterval": 60
+      },
+      "canonical": "{\"batteryCapacityWh\":5120.5,\"hasBattery\":true,\"inverterId\":\"inv-3\",\"modelId\":\"luxpower_sna_6k\",\"phases\":1,\"pollingInterval\":5,\"reportingInterval\":60}",
+      "sha256": "e7a8bcd79ad0ca1d76e937e0642b681a45d9d580cba04832d70f8feba9a76290"
+    },
+    {
+      "name": "remove_inverter",
+      "command": "remove_inverter",
+      "payload": {
+        "inverterId": "Xk3pQ9vLm2"
+      },
+      "canonical": "{\"inverterId\":\"Xk3pQ9vLm2\"}",
+      "sha256": "08ea04126727a8f5a5a335b789e88772f96da5c5c7c730a396da59a3635ce345"
+    },
+    {
+      "name": "remove_device with its IEEE",
+      "command": "remove_device",
+      "payload": {
+        "addr": "0x1A2B",
+        "ieee": "0xa4c1380000001234"
+      },
+      "canonical": "{\"addr\":\"0x1A2B\",\"ieee\":\"0xa4c1380000001234\"}",
+      "sha256": "12f289ead4cb6f6c4c3ce01cbcfb40bf3b3111ed79fa8e642fa0c5c05e9d8df1"
+    },
+    {
+      "name": "set_startup_state on an island",
+      "command": "set_startup_state",
+      "payload": {
+        "mode": "restore",
+        "addr": "0x1a2b",
+        "ep": 1
+      },
+      "canonical": "{\"addr\":\"0x1a2b\",\"ep\":1,\"mode\":\"restore\"}",
+      "sha256": "9a0ac129085e2389b2fbba67991d39de0f1249ce3c312c4f7d60176bfabc45a8"
+    },
+    {
+      "name": "bms_adopt with a Ukrainian label and a tab",
+      "command": "bms_adopt",
+      "payload": {
+        "packId": "c8:47:8c:00:11:22",
+        "label": "Батарея\t«Схід» 1",
+        "adoptedAt": 1763650000,
+        "driver": "jk02_32s",
+        "addrType": 0
+      },
+      "canonical": "{\"addrType\":0,\"adoptedAt\":1763650000,\"driver\":\"jk02_32s\",\"label\":\"Батарея\\t«Схід» 1\",\"packId\":\"c8:47:8c:00:11:22\"}",
+      "sha256": "66a2f120a5e94268473d2d4cd4483710a3eed687df2f933d0bc4d6954c332384"
+    },
+    {
+      "name": "nested objects and arrays keep array order",
+      "command": "update_inverter",
+      "payload": {
+        "z": [
+          3,
+          1,
+          {
+            "b": 0.30000000000000004,
+            "a": 1e+21
+          }
+        ],
+        "a": {
+          "y": 0,
+          "x": 1e-7
+        }
+      },
+      "canonical": "{\"a\":{\"x\":1e-7,\"y\":0},\"z\":[3,1,{\"a\":1e+21,\"b\":0.30000000000000004}]}",
+      "sha256": "e766263b1581f148e49450fd7b581d6c9f87c8aafd1f3ea0a6de1001da959761"
+    }
+  ]
+}

@@ -31,6 +31,7 @@ import base64
 import hashlib
 import json
 import math
+from decimal import Decimal
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes
@@ -47,6 +48,13 @@ def canonical_json_bytes(obj: object) -> bytes:
     return canonical_json_encode(obj).encode("utf-8")
 
 
+def payload_sha256(payload: dict | None) -> str:
+    """Lowercase hex SHA-256 of `payload`'s canonical JSON, `{}` when absent:
+    the `payloadSha256` a phone signs over a station change and the box
+    recomputes from the payload it receives (svitgrid D-2204)."""
+    return hashlib.sha256(canonical_json_bytes(payload or {})).hexdigest()
+
+
 def _encode(value: object) -> str:
     if value is None:
         return "null"
@@ -55,10 +63,7 @@ def _encode(value: object) -> str:
     if isinstance(value, float):
         if math.isnan(value) or math.isinf(value):
             raise ValueError(f"Cannot encode non-finite number: {value}")
-        # Match TS: integer-valued doubles emit as ints.
-        if value.is_integer():
-            return str(int(value))
-        return repr(value)
+        return _js_number(value)
     if isinstance(value, int):
         return str(value)
     if isinstance(value, str):
@@ -74,6 +79,30 @@ def _encode(value: object) -> str:
         ]
         return "{" + ",".join(parts) + "}"
     raise TypeError(f"Unsupported type: {type(value).__name__}")
+
+
+def _js_number(value: float) -> str:
+    """`value` as JavaScript's Number#toString prints it, which is what the
+    API, the app and the board sign (svitgrid D-2204): the shortest digits
+    that round-trip, positional for decimal exponents -7 < e < 21, otherwise
+    `d.ddde+X` / `d.ddde-X`; a whole number below 1e21 with no decimal
+    point. Python's repr agrees on the digits but not on the form."""
+    if value == 0:
+        return "0"
+    if value.is_integer() and abs(value) < 1e21:
+        return str(int(value))
+    sign, digits, exponent = Decimal(repr(value)).as_tuple()
+    text = "".join(str(d) for d in digits).rstrip("0") or "0"
+    exp10 = len(digits) + exponent - 1
+    out = "-" if sign else ""
+    if exp10 >= 21 or exp10 <= -7:
+        mantissa = text[0] + ("." + text[1:] if len(text) > 1 else "")
+        return f"{out}{mantissa}e{'-' if exp10 < 0 else '+'}{abs(exp10)}"
+    if exp10 < 0:
+        return f"{out}0.{'0' * (-exp10 - 1)}{text}"
+    whole = text[: exp10 + 1].ljust(exp10 + 1, "0")
+    frac = text[exp10 + 1 :]
+    return f"{out}{whole}{'.' + frac if frac else ''}"
 
 
 def generate_keypair() -> tuple[ec.EllipticCurvePrivateKey, str]:

@@ -70,6 +70,8 @@ from .const import (
 )
 from .edge_api import (
     EDGE_BOX_LOCK,
+    add_inverter_payload,
+    adopt_signing_for,
     board_state_of,
     command_answer,
     edge_refusals,
@@ -1106,6 +1108,63 @@ def _first_store(hass):
     return None
 
 
+def _adopt_inverter_signing(device_id: str, inverters: list[dict], raw) -> dict[str, dict]:
+    """inverter id -> the adopt's `boxCommands` entry that signs that
+    inverter's `add_inverter` for box `device_id` (svitgrid D-2204). An entry
+    that fits no inverter is dropped: the box would refuse it."""
+    if not isinstance(raw, list):
+        return {}
+    signing: dict[str, dict] = {}
+    for inverter in inverters:
+        payload = add_inverter_payload(inverter)
+        for item in raw:
+            fit = adopt_signing_for(_box_command(item), device_id, payload)
+            if fit is not None:
+                signing[inverter["inverterId"]] = fit
+                break
+    return signing
+
+
+class SvitgridEdgeAdoptPreviewView(HomeAssistantView):
+    """POST /api/svitgrid/edge/adopt/board-commands — the `add_inverter`
+    commands an adopt of these inverters would queue for the box when it
+    binds, for the phone to sign (svitgrid D-2204).
+
+    Body `{deviceId, inverters, sendInverters}`, as the adopt's signed data.
+    Answers `{boardCommands: [{edgeDeviceId, deviceId, command, payload}]}`,
+    empty unless `sendInverters`. It reads nothing stored and writes nothing:
+    the payloads come from the request alone, so it needs no key.
+    """
+
+    url = "/api/svitgrid/edge/adopt/board-commands"
+    name = "api:svitgrid:edge:adopt:board-commands"
+    requires_auth = False
+
+    async def post(self, request) -> web.Response:  # noqa: D102
+        try:
+            body = await request.json()
+        except ValueError:
+            return _json_error(400, "bad_request")
+        if not isinstance(body, dict):
+            return _json_error(400, "bad_request")
+        device_id = _device_id(body)
+        inverters = _adopt_inverters(body.get("inverters"))
+        if device_id is None or inverters is None:
+            return _json_error(400, "bad_request")
+        commands = []
+        if body.get("sendInverters") is True:
+            commands = [
+                {
+                    "edgeDeviceId": device_id,
+                    "deviceId": device_id,
+                    "command": "add_inverter",
+                    "payload": add_inverter_payload(inverter),
+                }
+                for inverter in inverters
+            ]
+        return web.json_response({"boardCommands": commands})
+
+
 class SvitgridEdgeAdoptView(HomeAssistantView):
     """POST /api/svitgrid/edge/adopt — adopt one edge box and its inverters.
 
@@ -1122,6 +1181,11 @@ class SvitgridEdgeAdoptView(HomeAssistantView):
     devices the box holds from the cloud) are stored under the box before
     the answer, and the answer adds `zigbeeSkipped`: the malformed entries,
     each `{index, ieee?}`.
+
+    `boxCommands` (svitgrid D-2204) are the phone's signatures over the
+    `add_inverter` each inverter gets when the box binds, read from
+    `/edge/adopt/board-commands`. Each is kept for the inverter it fits and
+    sent with that command; one that fits none is dropped.
     """
 
     url = "/api/svitgrid/edge/adopt"
@@ -1176,6 +1240,11 @@ class SvitgridEdgeAdoptView(HomeAssistantView):
                     send_inverters=signed.get("sendInverters") is True,
                     # A name the owner gave the box here outlives a re-adopt.
                     name=previous.name if previous is not None else None,
+                    # svitgrid D-2204: the phone's signature over each
+                    # inverter's `add_inverter`, from the adopt preview.
+                    inverter_signing=_adopt_inverter_signing(
+                        device_id, inverters, signed.get("boxCommands")
+                    ),
                 )
             )
             code = await keystore.async_issue_pair_code(device_id)
@@ -1623,6 +1692,7 @@ ISLAND_LAN_VIEWS = (
     SvitgridIslandSolarStringsView,
     SvitgridIslandBatteryMaintenanceView,
     SvitgridEdgeAdoptView,
+    SvitgridEdgeAdoptPreviewView,
     SvitgridEdgeForgetView,
     SvitgridEdgeStatusView,
     SvitgridEdgeLeaveView,

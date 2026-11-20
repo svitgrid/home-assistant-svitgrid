@@ -45,7 +45,7 @@ from .island_auth import app_seen_within
 from .keystore import EdgeBoxEntry, KeystoreState
 from .settings_read_plan import onboarding_body, settings_snapshot_kind_for
 from .settings_sync import store_edge_settings_snapshot
-from .signing import compute_key_id
+from .signing import compute_key_id, payload_sha256
 from .zigbee_devices import device_id_for_ieee
 from .zigbee_devices import now_iso as zigbee_now_iso
 
@@ -183,6 +183,30 @@ def add_inverter_payload(inverter: dict) -> dict:
     return payload
 
 
+def adopt_signing_for(box_command, device_id: str, payload: dict) -> dict | None:
+    """The phone's `boxCommand` over `add_inverter` with this `payload` for
+    box `device_id` (svitgrid D-2204), or None when it does not fit: the box
+    would refuse a signature over another command, box or payload."""
+    if not isinstance(box_command, dict):
+        return None
+    event = box_command.get("signedEventData")
+    if not isinstance(event, dict):
+        return None
+    if (
+        event.get("command") != "add_inverter"
+        or event.get("deviceId") != device_id
+        or event.get("payloadSha256") != payload_sha256(payload)
+        or not isinstance(box_command.get("signature"), str)
+        or not isinstance(box_command.get("signingKeyId"), str)
+    ):
+        return None
+    return {
+        "signedEventData": event,
+        "signature": box_command["signature"],
+        "signingKeyId": box_command["signingKeyId"],
+    }
+
+
 async def _prepare_bound_box(hass, box: EdgeBoxEntry) -> None:
     """Starts a box that just bound with a clean queue.
 
@@ -203,11 +227,14 @@ async def _prepare_bound_box(hass, box: EdgeBoxEntry) -> None:
         adopted = box.inverters.get(inverter_id)
         if adopted is None:
             continue
+        payload = add_inverter_payload(adopted)
         await queue.async_enqueue(
             box.device_id,
             "add_inverter",
-            add_inverter_payload(adopted),
-            signing=None,
+            payload,
+            signing=adopt_signing_for(
+                box.inverter_signing.get(inverter_id), box.device_id, payload
+            ),
             inverter_id=None,
             source="adopt",
         )

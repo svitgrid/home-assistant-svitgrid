@@ -2976,6 +2976,52 @@ async def test_a_new_box_gets_its_inverter_when_it_binds(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_a_new_box_gets_its_inverter_with_the_owners_signature(tmp_path):
+    """svitgrid D-2204: the phone signed the `add_inverter` at the adopt,
+    and the box gets that signature with it when it binds."""
+    from custom_components.svitgrid.edge_api import add_inverter_payload
+    from custom_components.svitgrid.signing import payload_sha256
+
+    box = _adopted_box(send_inverters=True)
+    signing = {
+        "signedEventData": {
+            "command": "add_inverter",
+            "deviceId": "EC-1",
+            "payloadSha256": payload_sha256(add_inverter_payload(box.inverters["inv-1"])),
+            "validUntil": "2026-11-21T10:00:00.000Z",
+        },
+        "signature": "sig",
+        "signingKeyId": "owner-key",
+    }
+    box.inverter_signing = {"inv-1": signing}
+    queue = await _bind_with_queue(tmp_path, box)
+
+    [row] = await queue.async_pending("EC-1", "add_inverter")
+    assert row["signing"] == signing
+
+
+@pytest.mark.asyncio
+async def test_a_signature_over_another_payload_is_not_sent_at_the_bind(tmp_path):
+    box = _adopted_box(send_inverters=True)
+    box.inverter_signing = {
+        "inv-1": {
+            "signedEventData": {
+                "command": "add_inverter",
+                "deviceId": "EC-1",
+                "payloadSha256": "0" * 64,
+                "validUntil": "2026-11-21T10:00:00.000Z",
+            },
+            "signature": "sig",
+            "signingKeyId": "owner-key",
+        }
+    }
+    queue = await _bind_with_queue(tmp_path, box)
+
+    [row] = await queue.async_pending("EC-1", "add_inverter")
+    assert row["signing"] is None
+
+
+@pytest.mark.asyncio
 async def test_a_stale_leave_never_reaches_a_box_that_just_bound(tmp_path):
     queue = await _bind_with_queue(tmp_path, _adopted_box(send_inverters=True))
 
