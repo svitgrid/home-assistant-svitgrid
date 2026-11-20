@@ -908,13 +908,20 @@ async def _box_holds_key(hass, box: EdgeBoxEntry, payload) -> None:
 
 async def _box_reports_keys(hass, box: EdgeBoxEntry, telemetry) -> None:
     """The box's telemetry names the keys it trusts, by prefix
-    (`trustedKeyIdPrefixes`, cloud_uploader.c): none of them is pending on
-    it (svitgrid D-2354)."""
-    prefixes = telemetry.get("trustedKeyIdPrefixes") if isinstance(telemetry, dict) else None
-    keystore = (hass.data.get(DOMAIN) or {}).get("keystore")
-    if keystore is None or not isinstance(prefixes, list):
+    (`trustedKeyIdPrefixes`, cloud_uploader.c, on every batch to any
+    endpoint): none of them is pending on it, now or when approved later
+    (svitgrid D-2354). `trustedKeyCount: 0` comes with no list: the box holds
+    no key, so a list kept from before no longer stands."""
+    if not isinstance(telemetry, dict):
         return
-    await keystore.async_clear_box_pending_by_prefixes(prefixes, box.device_id)
+    keystore = (hass.data.get(DOMAIN) or {}).get("keystore")
+    if keystore is None:
+        return
+    prefixes = telemetry.get("trustedKeyIdPrefixes")
+    if isinstance(prefixes, list):
+        await keystore.async_clear_box_pending_by_prefixes(prefixes, box.device_id)
+    elif _is_count(telemetry.get("trustedKeyCount")) and telemetry["trustedKeyCount"] == 0:
+        await keystore.async_forget_box_key_prefixes(box.device_id)
 
 
 async def _box_ran_signed(hass, box: EdgeBoxEntry, row: dict) -> None:

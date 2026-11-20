@@ -1609,6 +1609,51 @@ async def test_a_box_reporting_a_pending_key_clears_it_for_that_box(hass: HomeAs
     assert [k["keyId"] for k in await ks.async_list_pending_box_keys()] == [other.key_id]
 
 
+async def test_a_phone_the_box_already_lists_is_not_pending_on_it(hass: HomeAssistant, tmp_path):
+    """The box sent its key list before the phone joined (svitgrid D-2354,
+    round 3): the S3 uploads every 5 minutes when idle, so a list that only
+    clears what is already pending left the join screen and the board row
+    saying the board does not know the phone's key for up to 5 minutes. The
+    last list each box reported decides at the approval, and survives a
+    restart."""
+    admin, _ = await _leave_setup(hass, tmp_path)
+    ks = hass.data[DOMAIN]["keystore"]
+    await ks.async_bind_edge_box("EC-1", "box-key-1")
+    await ks.async_bind_edge_box("EC-2", "box-key-2")
+    phone = _Admin()
+
+    resp = await _ingest_telemetry(
+        hass, "box-key-1", {"trustedKeyIdPrefixes": [phone.key_id[:8].upper()]}
+    )
+    assert resp.status == 200, _body(resp)
+    assert (await ks.load()).box_key_prefixes["EC-1"] == [phone.key_id[:8]]
+
+    await _trust_over_lan(hass, admin, phone)
+    assert (await ks.load()).box_pending_keys[phone.key_id] == ["EC-2"]
+
+    # A list that no longer names the key adds nothing back, and a box that
+    # leaves takes its list with it.
+    await _ingest_telemetry(hass, "box-key-1", {"trustedKeyIdPrefixes": ["0badc0de"]})
+    assert (await ks.load()).box_pending_keys[phone.key_id] == ["EC-2"]
+    await ks.async_remove_edge_box("EC-1")
+    assert "EC-1" not in (await ks.load()).box_key_prefixes
+
+
+async def test_a_box_reporting_no_keys_drops_its_kept_list(hass: HomeAssistant, tmp_path):
+    """A box wiped by a reset reports `trustedKeyCount: 0` and no list: a
+    phone approved after that is pending on it again (svitgrid D-2354)."""
+    admin, _ = await _leave_setup(hass, tmp_path)
+    ks = hass.data[DOMAIN]["keystore"]
+    await ks.async_bind_edge_box("EC-1", "box-key-1")
+    phone = _Admin()
+    await _ingest_telemetry(hass, "box-key-1", {"trustedKeyIdPrefixes": [phone.key_id[:8]]})
+    await _ingest_telemetry(hass, "box-key-1", {"trustedKeyCount": 0})
+    assert "EC-1" not in (await ks.load()).box_key_prefixes
+
+    await _trust_over_lan(hass, admin, phone)
+    assert "EC-1" in (await ks.load()).box_pending_keys[phone.key_id]
+
+
 async def test_telemetry_without_a_key_list_leaves_pending_keys(hass: HomeAssistant, tmp_path):
     admin, _ = await _leave_setup(hass, tmp_path)
     ks = hass.data[DOMAIN]["keystore"]

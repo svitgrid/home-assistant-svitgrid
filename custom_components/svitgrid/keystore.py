@@ -186,6 +186,12 @@ class KeystoreState:
     # already trusts has to (`/edge/keys/add`). A box drops off its key's list
     # when it acks the `add_trusted_key` with success.
     box_pending_keys: dict[str, list[str]] = field(default_factory=dict)
+    # deviceId -> the key-id prefixes the box last reported holding
+    # (`trustedKeyIdPrefixes` on its ingest batches, 8 lowercase hex
+    # characters each). A key one of them names is never recorded as pending
+    # on that box: the S3 uploads every 5 minutes when idle, so waiting for
+    # its next batch left a phone it trusts told otherwise (svitgrid D-2354).
+    box_key_prefixes: dict[str, list[str]] = field(default_factory=dict)
 
     def edge_boxes_list(self) -> list[EdgeBoxEntry]:
         """Every adopted edge box, in insertion order."""
@@ -406,6 +412,11 @@ class SvitgridKeystore:
                 for k, v in dict(data.get("box_pending_keys") or {}).items()
                 if isinstance(v, list)
             },
+            box_key_prefixes={
+                str(k): [p for p in v if isinstance(p, str) and p]
+                for k, v in dict(data.get("box_key_prefixes") or {}).items()
+                if isinstance(v, list)
+            },
         )
 
     async def save(
@@ -444,6 +455,7 @@ class SvitgridKeystore:
         resolved_revoked = current.revoked_key_ids if current is not None else []
         resolved_edge_boxes = current.edge_boxes if current is not None else {}
         resolved_box_pending = current.box_pending_keys if current is not None else {}
+        resolved_box_prefixes = current.box_key_prefixes if current is not None else {}
         await self._write(
             KeystoreState(
                 api_key=api_key,
@@ -458,6 +470,7 @@ class SvitgridKeystore:
                 revoked_key_ids=resolved_revoked,
                 edge_boxes=resolved_edge_boxes,
                 box_pending_keys=resolved_box_pending,
+                box_key_prefixes=resolved_box_prefixes,
             )
         )
 
@@ -476,6 +489,9 @@ class SvitgridKeystore:
         if current is None or device_id not in current.edge_boxes:
             return False
         current.edge_boxes = {k: v for k, v in current.edge_boxes.items() if k != device_id}
+        current.box_key_prefixes = {
+            k: v for k, v in current.box_key_prefixes.items() if k != device_id
+        }
         await self._write(current)
         return True
 
@@ -786,11 +802,18 @@ class SvitgridKeystore:
             key_id: public_key_hex,
         }
         current.trusted_key_ids = sorted(current.trusted_public_keys_hex)
+        # A box whose last key list names the key holds it already: a phone
+        # it trusted before the move (svitgrid D-2354).
+        waiting = [
+            d
+            for d in current.edge_boxes
+            if not key_id.lower().startswith(tuple(current.box_key_prefixes.get(d, ())))
+        ]
+        pending = {k: v for k, v in current.box_pending_keys.items() if k != key_id}
+        if waiting:
+            pending[key_id] = waiting
         if current.edge_boxes:
-            current.box_pending_keys = {
-                **current.box_pending_keys,
-                key_id: list(current.edge_boxes),
-            }
+            current.box_pending_keys = pending
         await self._write(current)
 
     async def async_clear_box_pending(self, key_id: str, device_id: str) -> None:
@@ -816,15 +839,19 @@ class SvitgridKeystore:
         the box trusted before the move joins Home Assistant with its key
         pending on every box, and only the box can say it already holds it
         (svitgrid D-2354). Only clears: a key missing from the list stays as
-        it is. One write."""
-        wanted = tuple(p.lower() for p in prefixes if isinstance(p, str) and p)
+        it is. The list is kept, so a key approved later is not recorded as
+        pending on a box that already names it. At most one write."""
+        wanted = tuple(sorted({p.lower() for p in prefixes if isinstance(p, str) and p}))
         if not wanted:
             return
         current = await self.load()
         if current is None:
             return
+        # Kept for the next approval, which reads it (`async_trust_key`).
+        changed = current.box_key_prefixes.get(device_id) != list(wanted)
+        if changed:
+            current.box_key_prefixes = {**current.box_key_prefixes, device_id: list(wanted)}
         pending: dict[str, list[str]] = {}
-        changed = False
         for key_id, device_ids in current.box_pending_keys.items():
             if device_id in device_ids and key_id.lower().startswith(wanted):
                 device_ids = [d for d in device_ids if d != device_id]
@@ -834,6 +861,18 @@ class SvitgridKeystore:
         if not changed:
             return
         current.box_pending_keys = pending
+        await self._write(current)
+
+    async def async_forget_box_key_prefixes(self, device_id: str) -> None:
+        """Box `device_id` reported an empty key store (`trustedKeyCount: 0`,
+        no list): a key list kept from before, say before a factory reset,
+        no longer stands for it."""
+        current = await self.load()
+        if current is None or device_id not in current.box_key_prefixes:
+            return
+        current.box_key_prefixes = {
+            k: v for k, v in current.box_key_prefixes.items() if k != device_id
+        }
         await self._write(current)
 
     async def async_list_pending_box_keys(self) -> list[dict[str, Any]]:
