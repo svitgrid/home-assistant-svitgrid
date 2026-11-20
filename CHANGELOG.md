@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.34.2 — 2026-11-20
+
+### Fixed
+- **An ED-1's island readings go back to the cloud.** On the way back from
+  an edge island, the history Home Assistant held for the board's inverters
+  is uploaded too, with the history grant the app hands over on a local-only
+  install; a refused grant ends the upload instead of retrying for 30 days
+  (svitgrid D-2313, D-2317; needs the API live since 2026-11-20).
+- **A removed station's island history still reaches its own household.**
+  Removing the Svitgrid entry while an upload is unfinished hands it over:
+  it finishes on that station's own key or grant and never goes to a
+  household paired afterwards. The startup cleanup keeps the rows it still
+  needs (svitgrid D-2341).
+- **Removing the entry clears that station's island rules**, so a Home
+  Assistant paired to another household no longer runs them (svitgrid D-2328).
+- **An ED-1's key refusal reaches the app.** A phone the board doesn't trust
+  yet gets the "board doesn't know this phone's key" message instead of a
+  generic error, rules record the real reason, and the board page shows its
+  uptime (svitgrid D-2323, D-2325).
+- **A phone the board already trusts is no longer shown as pending** on an
+  edge island (svitgrid D-2354).
+
 ## 0.34.1 — 2026-11-19
 
 ### Fixed
