@@ -1060,3 +1060,99 @@ async def test_the_own_inverter_refused_by_key_still_holds_and_retries(tmp_path)
     result, wait_s = await up.step()
     assert result == "blocked"
     assert wait_s >= 3600
+
+
+# ── a removed entry's upload (svitgrid D-2341) ──────────────────────────
+#
+# The entry that went back from the island is removed before its upload
+# ends, and Home Assistant is paired to another household. The state keeps
+# what the upload needs (`removedEntry`), and the upload runs to the end on
+# the removed entry's own key, for its own household and inverters.
+
+REMOVED_AT = RETURN_AT + timedelta(minutes=4)
+
+
+def _removed(store: ReadingStore, *, own=(INV,)) -> None:
+    """The return at RETURN_AT with the cloud unreachable, a live row after
+    it that never went, then the entry's removal at REMOVED_AT."""
+    _returned(store)
+    store._append_sync({"inverterId": INV, "timestamp": _iso(UNTIL + timedelta(minutes=3))})
+    assert store._hand_over_history_sync(
+        DEVICE,
+        {
+            "apiKey": "key",
+            "apiBase": "https://api.example.test",
+            "householdId": "hh-1",
+            "inverterIds": list(own),
+            "ownUntil": _iso(REMOVED_AT),
+        },
+    )
+
+
+def test_the_hand_over_keeps_only_an_upload_in_progress(tmp_path):
+    store = _store(tmp_path)
+    store._note_cloud_copy_sync(DEVICE, False, {INV}, _iso(RETURN_AT))
+    # The cloud copy is still off: the owner never asked for the way back.
+    assert not store._hand_over_history_sync(DEVICE, {"apiKey": "key"})
+    assert store._history_state_sync(DEVICE) == {"status": "island"}
+    assert not store._hand_over_history_sync("nobody", {"apiKey": "key"})
+
+    store._note_cloud_copy_sync(DEVICE, True, {INV}, _iso(RETURN_AT))
+    assert store._hand_over_history_sync(DEVICE, {"apiKey": "key", "householdId": "hh-1"})
+    assert store._removed_history_states_sync() == {
+        DEVICE: store._history_state_sync(DEVICE),
+    }
+    assert store._history_state_sync(DEVICE)["removedEntry"]["householdId"] == "hh-1"
+
+
+@pytest.mark.asyncio
+async def test_a_removed_entrys_upload_sends_its_rows_and_then_drops_them(tmp_path):
+    store = _store(tmp_path)
+    _seed(store, raw_hours=2)
+    _removed(store)
+    # Another station's inverter, paired after the removal.
+    store._append_sync({"inverterId": "inv-b", "timestamp": _iso(REMOVED_AT)})
+    clock = _Clock(REMOVED_AT + timedelta(seconds=5))
+    cloud = _AnyCloud()
+
+    await _run_until_idle(_uploader(store, cloud, clock), clock)
+
+    assert set(cloud.by_inverter) == {INV}
+    assert {a[:2] for a in cloud.auth} == {("key", "hh-1")}
+    sent = {_parse(b["ts"]) for b in cloud.by_inverter[INV]}
+    # The island's rows, and the live one the cloud never got before the
+    # removal: nothing else will ever send it.
+    assert UNTIL - timedelta(minutes=5) in sent
+    assert UNTIL in sent
+    # Done: the state and the station's rows go, the other station's stay.
+    assert store._history_state_sync(DEVICE) is None
+    conn = store._connect_for_test()
+    left = [r[0] for r in conn.execute("SELECT inverter_id FROM readings_raw")]
+    conn.close()
+    assert left == ["inv-b"]
+
+
+@pytest.mark.asyncio
+async def test_a_removed_entrys_key_refused_ends_its_upload(tmp_path):
+    """No entry is left to be handed a new key, so a 401 never clears."""
+    store = _store(tmp_path)
+    _seed(store, raw_hours=2)
+    _removed(store)
+    clock = _Clock(REMOVED_AT + timedelta(seconds=5))
+    cloud = _RefusingCloud({INV})
+
+    results = await _run_until_idle(_uploader(store, cloud, clock), clock, max_steps=20)
+
+    assert "blocked" not in results
+    assert store._history_state_sync(DEVICE) is None
+
+
+@pytest.mark.asyncio
+async def test_a_removed_entrys_upload_given_up_after_30_days_drops_its_rows(tmp_path):
+    store = _store(tmp_path)
+    _seed(store, raw_hours=2)
+    _removed(store)
+    clock = _Clock(RETURN_AT + timedelta(days=31))
+
+    assert (await _uploader(store, _AnyCloud(), clock).step())[0] == "done"
+    assert store._history_state_sync(DEVICE) is None

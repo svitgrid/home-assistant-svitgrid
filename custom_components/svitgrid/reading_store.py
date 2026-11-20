@@ -1453,6 +1453,71 @@ class ReadingStore:
             conn.close()
         return new_state
 
+    # A removed entry's way back (svitgrid D-2341). The entry that went back
+    # from the island may be removed before its upload ends, and Home
+    # Assistant paired to another household. Nothing of the new pairing may
+    # send the earlier station's rows, so the state keeps what its own upload
+    # needs, `removedEntry`:
+    #
+    #   {"apiKey", "apiBase", "householdId", "inverterIds", "ownUntil"}
+    #
+    # `apiKey` is the removed entry's device key (empty for a grant, which
+    # the state already holds), `inverterIds` its own inverters, and
+    # `ownUntil` the removal: its live sender stopped there, so its own rows
+    # from `until` to the removal that never went go up as history too. Once
+    # the upload ends, the state and those rows go (`_drop_removed_history`).
+
+    def _hand_over_history_sync(self, device_id: str, removed: dict) -> bool:
+        """Keep `removed` in `device_id`'s upload in progress. False when it
+        has none: an island state stays as it is, since the owner never asked
+        for the way back, and a finished one has nothing left to send."""
+        state = self._history_state_sync(device_id)
+        if not state or state.get("status") != "uploading":
+            return False
+        self._set_history_state_sync(device_id, {**state, "removedEntry": dict(removed)})
+        return True
+
+    def _removed_history_states_sync(self) -> dict[str, dict]:
+        """The uploads in progress whose entry was removed, by device id."""
+        out: dict[str, dict] = {}
+        conn = _connect(self._db_path)
+        try:
+            rows = conn.execute(
+                "SELECT key, value FROM meta WHERE key LIKE 'history_upload:%'"
+            ).fetchall()
+        finally:
+            conn.close()
+        for row in rows:
+            try:
+                state = json.loads(row["value"])
+            except (TypeError, ValueError):
+                continue
+            if (
+                isinstance(state, dict)
+                and state.get("status") == "uploading"
+                and isinstance(state.get("removedEntry"), dict)
+            ):
+                out[row["key"][len("history_upload:") :]] = state
+        return out
+
+    def _drop_removed_history_sync(self, device_id: str, bounds: dict[str, str]) -> int:
+        """Delete a removed entry's finished upload: its state, and the raw rows
+        of each inverter in `bounds` from before its bound. Rows from the bound
+        on were never the removed station's to send. Returns the rows deleted."""
+        conn = _connect(self._db_path)
+        try:
+            deleted = 0
+            for inv, bound in sorted(bounds.items()):
+                cur = conn.execute(
+                    "DELETE FROM readings_raw WHERE inverter_id = ? AND ts < ?", (inv, bound)
+                )
+                deleted += cur.rowcount
+            conn.execute("DELETE FROM meta WHERE key = ?", (self._history_key(device_id),))
+            conn.commit()
+            return deleted
+        finally:
+            conn.close()
+
     def _mark_skipped_sync(self, keys: list[tuple[str, str]]) -> None:
         conn = _connect(self._db_path)
         try:
@@ -1579,6 +1644,15 @@ class ReadingStore:
 
     async def set_history_state(self, device_id: str, state: dict) -> None:
         await self._run(self._set_history_state_sync, device_id, state)
+
+    async def hand_over_history(self, device_id: str, removed: dict) -> bool:
+        return await self._run(self._hand_over_history_sync, device_id, removed)
+
+    async def removed_history_states(self) -> dict[str, dict]:
+        return await self._run(self._removed_history_states_sync)
+
+    async def drop_removed_history(self, device_id: str, bounds: dict[str, str]) -> int:
+        return await self._run(self._drop_removed_history_sync, device_id, bounds)
 
     async def mark_skipped(self, keys: list[tuple[str, str]]) -> None:
         await self._run(self._mark_skipped_sync, keys)

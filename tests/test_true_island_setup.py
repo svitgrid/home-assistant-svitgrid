@@ -696,3 +696,105 @@ async def test_a_local_only_entry_without_a_grant_uploads_nothing(
     await _seed_keystore(hass)
     _ok, m = await _setup(hass, _edge_move_entry())
     m["history_upload"].assert_not_called()
+
+
+# ── a removed entry's way back (svitgrid D-2341) ───────────────────────
+
+
+def _second_household_entry() -> MockConfigEntry:
+    """Home Assistant paired to another household after the removal."""
+    entry = _cloud_entry(cloud_ingest=True)
+    data = {
+        **entry.data,
+        "api_key": "key-of-b",
+        "edge_device_id": "ed-b",
+        "household_id": "hh-b",
+        "inverters": [{**entry.data["inverters"][0], "inverter_id": "inv-b"}],
+    }
+    return MockConfigEntry(domain=DOMAIN, version=2, title="Б", data=data, entry_id="e-b")
+
+
+@pytest.mark.asyncio
+async def test_a_removed_entrys_island_rows_reach_its_own_household_only(
+    hass, enable_custom_integrations, tmp_path
+):
+    """Round 2 (P-119): island with unsent rows, the cloud unreachable on the
+    way back, the entry removed, Home Assistant paired to another household,
+    then the cloud reachable again."""
+    from datetime import UTC, datetime, timedelta
+
+    from custom_components.svitgrid import async_unload_entry
+
+    hass.config.config_dir = str(tmp_path)
+    await _seed_keystore(hass)
+    store = _island_store(hass)
+    now = datetime.now(UTC).replace(microsecond=0)
+
+    def iso(t):
+        return t.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # 1. The island: the cloud copy off, rows stored and unsent.
+    store._note_cloud_copy_sync("ed-1", False, {"inv-direct"}, iso(now - timedelta(hours=2)))
+    island_row = now - timedelta(minutes=20)
+    store._append_sync({"inverterId": "inv-direct", "timestamp": iso(island_row), "pvPower": 1.0})
+
+    # 2. The way back with the cloud unreachable: the upload starts and sends
+    # nothing (`run_history_upload` is a mock here), and a live row after the
+    # return stays unsent.
+    entry_a = _cloud_entry(cloud_ingest=True)
+    await _setup(hass, entry_a)
+    until = datetime.fromisoformat(
+        store._history_state_sync("ed-1")["until"].replace("Z", "+00:00")
+    )
+    store._append_sync({"inverterId": "inv-direct", "timestamp": iso(until), "pvPower": 2.0})
+
+    # 3. The entry removed, then Home Assistant paired to household B.
+    with patch("custom_components.svitgrid.run_history_upload", new_callable=AsyncMock):
+        await async_unload_entry(hass, entry_a)
+        await hass.config_entries.async_remove(entry_a.entry_id)
+        await hass.async_block_till_done()
+    assert store._history_state_sync("ed-1")["removedEntry"]["householdId"] == "hh-1"
+    _ok, m = await _setup(hass, _second_household_entry())
+    store._append_sync({"inverterId": "inv-b", "timestamp": iso(now + timedelta(seconds=1))})
+
+    # B's own start has no upload; the removed entry's runs on its own key.
+    uploaders = [c.args[0] for c in m["history_upload"].call_args_list]
+    assert [u._device_id for u in uploaders] == ["ed-1"]
+    up = uploaders[0]
+    assert (up._api_key, up._household_id, up._inverter_ids) == (
+        "cloud-api-key",
+        "hh-1",
+        ["inv-direct"],
+    )
+
+    # 4. The cloud reachable again.
+    calls: list[tuple] = []
+    sent: dict[str, list] = {}
+
+    class _Cloud:
+        async def import_history(self, api_key, household_id, inverter_id, buckets, **kw):
+            calls.append((api_key, household_id, inverter_id))
+            sent.setdefault(inverter_id, []).extend(b["ts"] for b in buckets)
+            return 200, {"imported": len(buckets)}
+
+        async def import_history_totals(self, api_key, household_id, inverter_id, **kw):
+            calls.append((api_key, household_id, inverter_id))
+            return 200, {}
+
+    up._api = _Cloud()
+    up._now = lambda: now + timedelta(minutes=1)
+    for _ in range(50):
+        if (await up.step())[0] == "done":
+            break
+
+    assert calls and set(calls) == {("cloud-api-key", "hh-1", "inv-direct")}
+    floor = island_row - timedelta(minutes=island_row.minute % 5, seconds=island_row.second)
+    assert sorted(sent["inv-direct"]) == sorted(
+        {t.strftime("%Y-%m-%dT%H:%M:%S.000Z") for t in (floor, until)}
+    )
+    # Done: household A's rows and state are gone, household B's row stays.
+    assert store._history_state_sync("ed-1") is None
+    conn = store._connect_for_test()
+    left = {r[0] for r in conn.execute("SELECT inverter_id FROM readings_raw")}
+    conn.close()
+    assert left == {"inv-b"}

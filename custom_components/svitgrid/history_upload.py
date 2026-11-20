@@ -43,6 +43,7 @@ the inbound field names follow `packages/reading-core/src/normalize-reading.ts`.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -489,6 +490,13 @@ class HistoryUploader:
     household, and none of those clears by waiting. That inverter's phase is
     left out and the rest goes on. A 401 for the add-on's own inverter still
     holds, since a re-issued key clears it.
+
+    A removed entry's upload (svitgrid D-2341) runs on the key or grant its
+    state keeps (`removedEntry`), for that entry's household and inverters
+    only, never the entry paired after it. Its 401 is final too: no entry is
+    left to be handed a new key. Its own inverters go up to the removal, not
+    only to the return, because its live sender stopped there. Once it ends,
+    the state and the rows it covered are deleted.
     """
 
     def __init__(
@@ -518,6 +526,8 @@ class HistoryUploader:
         self._box_ids: set[str] = set()
         # Whether a 401 for the inverter being sent is final (see the class).
         self._final_401 = False
+        # Whether the entry that started this upload was removed (D-2341).
+        self._removed = False
 
     def _auth(self) -> dict[str, str]:
         return {"grant": self._grant} if self._grant else {}
@@ -526,6 +536,7 @@ class HistoryUploader:
         state = await self._store.history_state(self._device_id)
         if not state or state.get("status") != "uploading":
             return "done", 0
+        self._removed = isinstance(state.get("removedEntry"), dict)
         now = self._now()
         if now - _parse(state["returnAt"]) > GIVE_UP_AFTER:
             _LOGGER.warning("island history upload given up 30 days after the return")
@@ -536,7 +547,7 @@ class HistoryUploader:
         self._box_ids = set(history_box_inverters(state)) - set(self._inverter_ids)
         for inv in [*self._inverter_ids, *sorted(self._box_ids)]:
             progress = inverters.setdefault(inv, {})
-            self._final_401 = bool(self._grant) or inv in self._box_ids
+            self._final_401 = bool(self._grant) or inv in self._box_ids or self._removed
             for phase in ("buckets", "hours", "days"):
                 # A phase returns None when it moved its cursor without a
                 # request, or finished; it runs again until it is finished.
@@ -546,7 +557,30 @@ class HistoryUploader:
                         return result
         return await self._finish(state, "complete")
 
+    def _until(self, state: dict, inv: str) -> datetime:
+        """Where `inv`'s history ends: the return, or for a removed entry's own
+        inverter the removal, since no live sender sends its rows after it."""
+        until = _parse(state["until"])
+        own_until = (state.get("removedEntry") or {}).get("ownUntil")
+        if self._removed and own_until and inv not in self._box_ids:
+            with contextlib.suppress(TypeError, ValueError):
+                until = max(until, _parse(own_until))
+        return until
+
     async def _finish(self, state: dict, reason: str) -> tuple[str, float]:
+        if self._removed:
+            # Nothing of the removed station is left to send: its state and
+            # its rows go, so nothing can ever send them for another one.
+            bounds = {inv: _iso_s(self._until(state, inv)) for inv in self._inverter_ids}
+            for inv in history_box_inverters(state):
+                bounds.setdefault(inv, _iso_s(_parse(state["until"])))
+            deleted = await self._store.drop_removed_history(self._device_id, bounds)
+            _LOGGER.info(
+                "island history upload of a removed entry finished (%s); %d row(s) dropped",
+                reason,
+                deleted,
+            )
+            return "done", 0
         state["status"] = "done"
         state["reason"] = reason
         # The grant is a credential; a finished upload has no use for it
@@ -561,7 +595,7 @@ class HistoryUploader:
 
     # 1. 5-minute buckets ------------------------------------------------
     async def _buckets(self, state, inv, progress, now):
-        until = _parse(state["until"])
+        until = self._until(state, inv)
         # From the first whole hour inside the cloud's 5-minute window, so the
         # hour below it goes up whole as an hourly total. It only moves later:
         # after a long stop, the hours phase covers what fell out.
@@ -603,7 +637,7 @@ class HistoryUploader:
 
     # 2. hourly totals ---------------------------------------------------
     async def _hours(self, state, inv, progress, now):
-        until = _parse(state["until"])
+        until = self._until(state, inv)
         hours_from = _ceil(now - HOURLY_RETENTION, _HOUR) + _HOUR
         bucket_from = _parse(progress["bucketFrom"]) if progress.get("bucketFrom") else until
         target = min(bucket_from, _ceil(until, _HOUR))

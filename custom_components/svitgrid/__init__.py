@@ -89,7 +89,7 @@ from .outage_schedule import OutageSchedule, run_outage_schedule_loop
 from .panel import register_panel, remove_panel
 from .preset_refresh import refresh_entry_inverters
 from .reading_sender import Cadence, run_sender_loop
-from .reading_store import ReadingStore, history_keeps_inverters
+from .reading_store import ReadingStore, history_box_inverters, history_keeps_inverters
 from .readings_publisher import run_loop as run_readings_loop
 from .settings_sync import find_edge_settings_snapshot
 from .settings_sync import settings_sync_loop as run_settings_sync_loop
@@ -1266,6 +1266,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 name="svitgrid_history_upload",
             )
 
+    if store is not None:
+        # An earlier entry's way back that its removal left unfinished
+        # (svitgrid D-2341) runs on that entry's own key, beside this one.
+        await _start_removed_history_uploads(hass, store)
+
     if loops_active and not true_island:
         # The cloud loops. A true island starts none of them: a local-only
         # entry has no API key to poll with, and a cloud-paired island with the
@@ -1855,11 +1860,151 @@ async def _clear_entry_island_state(hass: HomeAssistant, entry: ConfigEntry) -> 
         _LOGGER.exception("Could not clear the island state of config entry %s", entry.entry_id)
 
 
+_REMOVED_HISTORY_TASKS = f"{DOMAIN}_removed_history_tasks"
+
+
+def _entry_device_ids(entry: ConfigEntry) -> set[str]:
+    """The history-upload state keys an entry owns."""
+    ids = {f"local:{entry.entry_id}"}
+    if entry.data.get("edge_device_id"):
+        ids.add(entry.data["edge_device_id"])
+    return ids
+
+
+async def _start_removed_history_uploads(
+    hass: HomeAssistant, store: ReadingStore, *, removing: str | None = None
+) -> None:
+    """Run each upload in progress whose entry was removed (svitgrid D-2341),
+    on the key or grant its state keeps, until it ends.
+
+    The tasks belong to Home Assistant, not to an entry: unloading the entry
+    paired after the removal does not stop them, and setting one up again
+    does not start a second. `removing` is the entry being removed, which is
+    still listed. Never raises.
+    """
+    try:
+        states = await store.removed_history_states()
+        current: set[str] = set()
+        for e in hass.config_entries.async_entries(DOMAIN):
+            if e.entry_id != removing:
+                current |= _entry_device_ids(e)
+        tasks: dict = hass.data.setdefault(_REMOVED_HISTORY_TASKS, {})
+        session = aiohttp_client.async_get_clientsession(hass)
+        for device_id, state in sorted(states.items()):
+            running = tasks.get(device_id)
+            if device_id in current or (running is not None and not running.done()):
+                continue
+            removed = state["removedEntry"]
+            grant = state.get("grant") if isinstance(state.get("grant"), str) else None
+            api_key = removed.get("apiKey") if isinstance(removed.get("apiKey"), str) else ""
+            household_id = removed.get("householdId")
+            if not isinstance(household_id, str) or not (api_key or grant):
+                _LOGGER.warning(
+                    "the island history of removed device %s has no key to upload with", device_id
+                )
+                continue
+            uploader = HistoryUploader(
+                store=store,
+                api_client=SvitgridApiClient(
+                    session, api_base=removed.get("apiBase") or DEFAULT_API_BASE
+                ),
+                api_key=api_key,
+                household_id=household_id,
+                device_id=device_id,
+                inverter_ids=sorted(
+                    i for i in removed.get("inverterIds") or () if isinstance(i, str) and i
+                ),
+                tz_name=hass.config.time_zone,
+                grant=grant,
+            )
+            _LOGGER.info("resuming the island history upload of removed device %s", device_id)
+            tasks[device_id] = hass.async_create_background_task(
+                run_history_upload(uploader, should_stop=lambda: hass.is_stopping),
+                name=f"svitgrid_removed_history_upload_{device_id}",
+            )
+    except Exception:  # noqa: BLE001
+        _LOGGER.exception("could not resume the island history upload of a removed entry")
+
+
+async def _hand_over_history_upload(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Keep the way back of the station `entry` set up going after its
+    removal (svitgrid D-2341).
+
+    Its rows outlive the removal (the prune keeps them), but the upload ran
+    only for the entry's own device, so with Home Assistant paired to another
+    household they never went. The state now keeps what the upload needs, as
+    the add-on already kept it: the device key the entry was paired with (a
+    copy of `entry.data["api_key"]`), or the history grant the state already
+    holds, with the household and the entry's own inverters. Only that
+    household's inverters are sent, on that household's key, so nothing of
+    it reaches the household paired next. Never raises.
+    """
+    try:
+        readings_path = os.path.join(hass.config.path(READINGS_DB_SUBDIR), READINGS_DB_FILE)
+        if not await hass.async_add_executor_job(os.path.exists, readings_path):
+            return
+        store = ReadingStore(hass, readings_path)
+        data = entry.data
+        now_iso = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        api_base = data.get("api_base") or DEFAULT_API_BASE
+        handed = False
+        device_id = data.get("edge_device_id")
+        if device_id and not data.get(CONF_LOCAL_ONLY):
+            state = await store.history_state(device_id)
+            api_key, household_id = data.get("api_key"), data.get("household_id")
+            if state and state.get("status") == "uploading" and api_key and household_id:
+                ks_state = await SvitgridKeystore(hass).load()
+                box_ids = {
+                    i
+                    for box in (ks_state.edge_boxes.values() if ks_state else ())
+                    for i in box.inverter_ids
+                } | set(history_box_inverters(state))
+                own = {
+                    i["inverter_id"] for i in _inverters_from_entry(entry) if i.get("inverter_id")
+                } - box_ids
+                handed |= await store.hand_over_history(
+                    device_id,
+                    {
+                        "apiKey": api_key,
+                        "apiBase": api_base,
+                        "householdId": household_id,
+                        "inverterIds": sorted(own),
+                        "ownUntil": now_iso,
+                    },
+                )
+        local_id = f"local:{entry.entry_id}"
+        state = await store.history_state(local_id)
+        if (
+            state
+            and isinstance(state.get("grant"), str)
+            and isinstance(state.get("householdId"), str)
+        ):
+            handed |= await store.hand_over_history(
+                local_id,
+                {
+                    "apiKey": "",
+                    "apiBase": api_base,
+                    "householdId": state["householdId"],
+                    "inverterIds": [],
+                },
+            )
+        if handed:
+            _LOGGER.info(
+                "config entry %s removed before its island history went up; it goes on",
+                entry.entry_id,
+            )
+            await _start_removed_history_uploads(hass, store, removing=entry.entry_id)
+    except Exception:  # noqa: BLE001
+        _LOGGER.exception("Could not hand over the island history upload of %s", entry.entry_id)
+
+
 async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """The entry is being deleted: revoke the island keys it adopted, and for
     a LAN pairing, untrust the app's signing key. Deleting the last entry
     also clears the island Telegram state, and the station's island rules
-    and household state go with it (svitgrid D-2328)."""
+    and household state go with it (svitgrid D-2328). An island history
+    upload it left unfinished goes on, on its own key (svitgrid D-2341)."""
+    await _hand_over_history_upload(hass, entry)
     await _revoke_entry_island_keys(hass, entry)
     await _untrust_entry_signing_keys(hass, entry)
     await _clear_telegram_if_last(hass, entry)
