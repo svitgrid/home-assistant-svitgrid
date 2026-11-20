@@ -1,0 +1,106 @@
+{
+  "note": "Deye hybrid settings written through set_inverter_setting (D-2343). One source for the phone harvester (lib/src/protocol/deye/deye_settings.dart), the S3 (components/deye_settings/deye_settings.c) and the API (src/utils/deye-settings-mapping.ts), each locked to this file by a test. Values cross every boundary in display units. Every register here is already decoded by the settings mirror (services/api/src/utils/register-mapping.ts). Writes are FC16 quantity 1; a bit setting is written by read-modify-write. Design: docs/superpowers/specs/2026-11-20-deye-settings-parity-design.md.",
+  "families": {
+    "threePhase": { "batteryModeRegister": 111 },
+    "onePhase": { "batteryModeRegister": 213 }
+  },
+  "batteryModeValues": { "voltage": 0, "soc": 1, "none": 2 },
+  "settings": [
+    {
+      "key": "shutdownSoc",
+      "mirrorKey": "shutdownSoc",
+      "page": "battSet3",
+      "encoding": "scalar",
+      "register3p": 115,
+      "register1p": 217,
+      "unit": "%",
+      "min": 0,
+      "max": 100,
+      "requiresBatteryMode": "soc",
+      "risk": "protective",
+      "writable": true
+    },
+    {
+      "key": "restartSoc",
+      "mirrorKey": "restartSoc",
+      "page": "battSet3",
+      "encoding": "scalar",
+      "register3p": 116,
+      "register1p": 218,
+      "unit": "%",
+      "min": 0,
+      "max": 100,
+      "requiresBatteryMode": "soc",
+      "risk": "protective",
+      "writable": true
+    },
+    {
+      "key": "lowBattSoc",
+      "mirrorKey": "lowSoc",
+      "page": "battSet3",
+      "encoding": "scalar",
+      "register3p": 117,
+      "register1p": 219,
+      "unit": "%",
+      "min": 0,
+      "max": 100,
+      "requiresBatteryMode": "soc",
+      "risk": "protective",
+      "writable": true
+    },
+    {
+      "key": "gridChargeStartSoc",
+      "mirrorKey": "gridChargeSoc",
+      "page": "battSet2",
+      "encoding": "scalar",
+      "register3p": 127,
+      "register1p": 229,
+      "unit": "%",
+      "min": 0,
+      "max": 100,
+      "requiresBatteryMode": "soc",
+      "risk": "routine",
+      "writable": true
+    },
+    {
+      "key": "gridChargeStartSocEnabled",
+      "mirrorKey": "gridChargeStartSocEnabled",
+      "page": "battSet2",
+      "encoding": "bit",
+      "register3p": 130,
+      "register1p": 232,
+      "mask": 2,
+      "risk": "routine",
+      "writable": true
+    },
+    {
+      "key": "maxSellPowerW",
+      "mirrorKey": "exportLimitW",
+      "page": "workMode1",
+      "encoding": "power",
+      "register3p": 143,
+      "register1p": 245,
+      "unit": "W",
+      "min": 0,
+      "maxIsRatedPower": true,
+      "notOnTenWattModels": true,
+      "risk": "routine",
+      "writable": true
+    },
+    {
+      "key": "genPortMode",
+      "mirrorKey": "generatorPortMode",
+      "page": "genPortUse",
+      "encoding": "choice",
+      "register3p": 133,
+      "register1p": 235,
+      "choices": [0, 1, 2],
+      "risk": "routine",
+      "writable": true
+    }
+  ],
+  "constraints": [
+    { "low": "shutdownSoc", "high": "lowBattSoc", "rule": "Shutdown must be below Low Batt." },
+    { "low": "shutdownSoc", "high": "restartSoc", "rule": "Shutdown must be below Restart." }
+  ]
+}

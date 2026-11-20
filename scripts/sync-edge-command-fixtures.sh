@@ -13,7 +13,8 @@
 # edge box authorizes for an island event's mode (svitgrid D-2288), which
 # test_envelope_check.py holds the island scheduler to. zigbee_device_profiles.json
 # (prod's `config/zigbeeDeviceProfiles`) is read at runtime, so it goes into the
-# integration itself.
+# integration itself, as does deye-settings.json, the Deye settings catalogue
+# harvest/deye_settings.py plans set_inverter_setting with (svitgrid D-2346).
 set -euo pipefail
 INVERTER_PROTOCOL_DIR="${1:-$HOME/git/svitgrid/packages/inverter_protocol}"
 FIXTURES_DIR="$(cd "$(dirname "$0")/.." && pwd)/tests/fixtures"
@@ -44,3 +45,8 @@ SRC="$INVERTER_PROTOCOL_DIR/fixtures/zigbee_device_profiles.json"
 [ -f "$SRC" ] || { echo "source not found: $SRC" >&2; exit 1; }
 cp "$SRC" "$INTEGRATION_DIR/zigbee_device_profiles.json"
 echo "vendored $SRC -> $INTEGRATION_DIR/zigbee_device_profiles.json"
+
+SRC="$INVERTER_PROTOCOL_DIR/deye-settings.json"
+[ -f "$SRC" ] || { echo "source not found: $SRC" >&2; exit 1; }
+cp "$SRC" "$INTEGRATION_DIR/harvest/deye_settings.json"
+echo "vendored $SRC -> $INTEGRATION_DIR/harvest/deye_settings.json"

@@ -27,6 +27,7 @@ from typing import Any
 from ..executors.base import BaseExecutor
 from . import charge_cap_guard as _bcc
 from .charge_cap_guard import BatteryChargeCurrentError, valid_prior
+from .deye_settings import apply_deye_setting, deye_three_phase
 from .register_spec import FieldWrite, RegisterSpec, SlotSpec, WriteCommand
 from .slot_soc_word import split_slot_soc_word
 from .transport import read_word, read_words, write_registers
@@ -273,6 +274,11 @@ class WriteExecutor(BaseExecutor):
         if spec is None:
             raise RuntimeError("spec_not_loaded")
 
+        # A Deye hybrid's settings pages (svitgrid D-2346). Any other model
+        # keeps answering it as unsupported, so the app's host fence decides.
+        if command_name == "set_inverter_setting":
+            return await self._deye_setting(spec, payload)
+
         # 2. Find command
         cmd = _find_command(spec, command_name)
         if cmd is None:
@@ -297,6 +303,27 @@ class WriteExecutor(BaseExecutor):
         result = {**head, **tail}
         result["written"] = head["written"] + tail["written"]
         return result
+
+    async def _deye_setting(self, spec: RegisterSpec, payload: dict[str, Any]) -> dict[str, Any]:
+        """One Deye setting, planned by the shared catalogue (deye_settings.py)."""
+        model_id = self._cfg.get("model_id")
+        if deye_three_phase(model_id) is None:
+            raise NotImplementedError(f"set_inverter_setting: no Deye settings for {model_id}")
+        unit_id = spec.default_slave_id
+
+        async def read(register: int) -> int | None:
+            return await read_word(self._hass, spec, self._cfg, unit_id, register)
+
+        async def write(register: int, word: int) -> None:
+            await write_registers(self._hass, spec, self._cfg, [(unit_id, register, word)])
+
+        return await apply_deye_setting(
+            model_id=model_id,
+            payload=payload,
+            read_word=read,
+            write_word=write,
+            sleep=self._sleep,
+        )
 
     async def _execute(
         self, spec: RegisterSpec, cmd: WriteCommand, payload: dict[str, Any]
