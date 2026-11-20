@@ -550,7 +550,10 @@ async def _hand_telegram_back(hass, left: list) -> None:
 class SvitgridKeysRevokeView(HomeAssistantView):
     """POST /api/svitgrid/keys/revoke — untrust a signing key.
 
-    `signedData`: `{action: "revoke_key", keyId, nonce, ts}`. When the key
+    `signedData`: `{action: "revoke_key", keyId, boxCommand?, nonce, ts}`.
+    `boxCommand` is `{payload: {keyIdToRevoke: keyId}, signature,
+    signerKeyId}`, the phone's signature for the edge boxes, which the boxes'
+    revoke carries (svitgrid D-2380). When the key
     belongs to a phone paired over the LAN, that phone's island key goes too,
     so it can neither sign nor read. 409 `last_admin_key` when it is the only
     trusted key: nothing could sign a command or a calendar write afterwards.
@@ -605,12 +608,37 @@ async def revoke_signed_key(
     from .telegram.views import unlink_device
 
     await unlink_device(hass, outcome["deviceId"])
-    # The box takes a revocation without a signature (`command_auth.c`). A box
-    # that never held the key acks it as a no-op.
+    # An older box takes a revocation without a signature (`command_auth.c`);
+    # since S3 2.182.0 it refuses one (`signature_required`) and keeps the
+    # key in one of its five places (svitgrid D-2380). The phone's signature
+    # for the box, `boxCommand`, travels untouched when it names this key. A
+    # box that never held the key acks it as a no-op.
     await _enqueue_for_every_box(
-        hass, REVOKE_TRUSTED_KEY_COMMAND, {"keyIdToRevoke": key_id}, signing=None, source="revoke"
+        hass,
+        REVOKE_TRUSTED_KEY_COMMAND,
+        {"keyIdToRevoke": key_id},
+        signing=_box_revoke_signing(signed.get("boxCommand"), key_id),
+        source="revoke",
     )
     return outcome, None
+
+
+def _box_revoke_signing(raw, key_id: str) -> dict | None:
+    """The phone's `{signature, signerKeyId}` for the box's revoke of
+    `key_id`, from the revoke's `boxCommand` (`payload` exactly
+    `{keyIdToRevoke: key_id}`). None for anything else, and the box then gets
+    the revoke unsigned, as before."""
+    if not isinstance(raw, dict):
+        return None
+    signature = raw.get("signature")
+    signer = raw.get("signerKeyId")
+    if raw.get("payload") != {"keyIdToRevoke": key_id}:
+        return None
+    if not isinstance(signature, str) or not signature:
+        return None
+    if not isinstance(signer, str) or not signer:
+        return None
+    return {"signature": signature, "signerKeyId": signer}
 
 
 async def _enqueue_for_every_box(

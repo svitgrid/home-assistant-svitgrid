@@ -1765,6 +1765,50 @@ async def test_revoke_enqueues_revoke_trusted_key_for_each_box(hass: HomeAssista
         assert row["signing"] is None
 
 
+async def test_revoke_forwards_the_phones_box_signature(hass: HomeAssistant, tmp_path):
+    """svitgrid D-2380: S3 2.182.0 refuses an unsigned revoke, so each box
+    kept the revoked key in one of its five places. The phone's signature for
+    the box, `boxCommand`, rides on the revoke and reaches every box."""
+    admin, queue = await _leave_setup(hass, tmp_path)
+    phone = _Admin()
+    await _trust_over_lan(hass, admin, phone)
+    box_command = {
+        "payload": {"keyIdToRevoke": phone.key_id},
+        "signature": "sig-box",
+        "signerKeyId": admin.key_id,
+    }
+
+    resp = await SvitgridKeysRevokeView().post(
+        _Req(hass, admin.request("revoke_key", keyId=phone.key_id, boxCommand=box_command))
+    )
+
+    assert resp.status == 200, _body(resp)
+    for device_id in ("EC-1", "EC-2"):
+        [row] = await _drain(queue, device_id)
+        assert row["payload"] == {"keyIdToRevoke": phone.key_id}
+        assert row["signing"] == {"signature": "sig-box", "signerKeyId": admin.key_id}
+
+
+async def test_revoke_ignores_a_box_signature_for_another_key(hass: HomeAssistant, tmp_path):
+    admin, queue = await _leave_setup(hass, tmp_path)
+    phone = _Admin()
+    await _trust_over_lan(hass, admin, phone)
+    box_command = {
+        "payload": {"keyIdToRevoke": "someone-else"},
+        "signature": "sig-box",
+        "signerKeyId": admin.key_id,
+    }
+
+    resp = await SvitgridKeysRevokeView().post(
+        _Req(hass, admin.request("revoke_key", keyId=phone.key_id, boxCommand=box_command))
+    )
+
+    assert resp.status == 200, _body(resp)
+    [row] = await _drain(queue, "EC-1")
+    assert row["payload"] == {"keyIdToRevoke": phone.key_id}
+    assert row["signing"] is None
+
+
 async def test_a_refused_revoke_enqueues_nothing(hass: HomeAssistant, tmp_path):
     admin, queue = await _leave_setup(hass, tmp_path)
 
