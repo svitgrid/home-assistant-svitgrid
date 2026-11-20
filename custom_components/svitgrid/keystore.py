@@ -18,6 +18,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
 from .const import LEGACY_ISLAND_DEVICE_ID, STORAGE_KEY, STORAGE_VERSION
+from .key_policy import holds_another_key
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -192,6 +193,22 @@ class KeystoreState:
     # on that box: the S3 uploads every 5 minutes when idle, so waiting for
     # its next batch left a phone it trusts told otherwise (svitgrid D-2354).
     box_key_prefixes: dict[str, list[str]] = field(default_factory=dict)
+    # Trust-on-first-use, as the S3 board keeps it (svitgrid D-2336, #1569
+    # item 2). Once the store has held a key, an empty store takes no unsigned
+    # first key: `_write` sets this whenever it stores a key. Only a new
+    # pairing in the Home Assistant admin UI (a config entry not in
+    # `paired_entry_ids`) reopens it.
+    tofu_closed: bool = False
+    # The config entries whose pairing this store has taken. Empty on a blob
+    # written before 0.35; `async_note_entry_pairing` fills it.
+    paired_entry_ids: list[str] = field(default_factory=list)
+
+    def is_new_pairing(self, entry_id: str) -> bool:
+        """True when `entry_id` is a config entry this store has not seen: the
+        owner added the integration in the Home Assistant admin UI, the
+        add-on's counterpart of a reset at the board. False on a blob that
+        predates the record (an upgrade), which only syncs."""
+        return bool(self.paired_entry_ids) and entry_id not in self.paired_entry_ids
 
     def edge_boxes_list(self) -> list[EdgeBoxEntry]:
         """Every adopted edge box, in insertion order."""
@@ -363,6 +380,8 @@ class SvitgridKeystore:
                 k: v for k, v in state.trusted_public_keys_hex.items() if k not in revoked
             }
         state.trusted_key_ids = [k for k in state.trusted_key_ids if k not in revoked]
+        if holds_another_key(state.trusted_public_keys_hex, state.public_key_hex):
+            state.tofu_closed = True
         await self._store.async_save(asdict(state))
         # getattr: tests build an instance with __new__ and a fake store.
         for listener in list(getattr(self, "_trust_listeners", ())):
@@ -417,6 +436,10 @@ class SvitgridKeystore:
                 for k, v in dict(data.get("box_key_prefixes") or {}).items()
                 if isinstance(v, list)
             },
+            tofu_closed=data.get("tofu_closed") is True,
+            paired_entry_ids=[
+                e for e in list(data.get("paired_entry_ids") or []) if isinstance(e, str) and e
+            ],
         )
 
     async def save(
@@ -456,6 +479,8 @@ class SvitgridKeystore:
         resolved_edge_boxes = current.edge_boxes if current is not None else {}
         resolved_box_pending = current.box_pending_keys if current is not None else {}
         resolved_box_prefixes = current.box_key_prefixes if current is not None else {}
+        resolved_tofu_closed = current.tofu_closed if current is not None else False
+        resolved_paired = current.paired_entry_ids if current is not None else []
         await self._write(
             KeystoreState(
                 api_key=api_key,
@@ -471,8 +496,37 @@ class SvitgridKeystore:
                 edge_boxes=resolved_edge_boxes,
                 box_pending_keys=resolved_box_pending,
                 box_key_prefixes=resolved_box_prefixes,
+                tofu_closed=resolved_tofu_closed,
+                paired_entry_ids=resolved_paired,
             )
         )
+
+    async def async_tofu_open(self) -> bool:
+        """Whether an empty store may take an unsigned first key: true for a
+        store that never held one, or after a new pairing emptied it."""
+        state = await self.load()
+        return state is None or not state.tofu_closed
+
+    async def async_note_entry_pairing(self, entry_id: str, entry_ids: list[str]) -> None:
+        """Record that the store has taken `entry_id`'s pairing, and set
+        trust-on-first-use from what the store holds now.
+
+        On a blob with no record yet (an upgrade, or the first setup), every
+        current entry in `entry_ids` is recorded, so a second entry is not
+        mistaken for a new pairing. A store that holds a key closes, as the
+        board's `trusted_keys_tofu_sync` does; an empty one stays open.
+        """
+        state = await self.load()
+        if state is None:
+            return
+        if not state.paired_entry_ids:
+            state.paired_entry_ids = sorted({*entry_ids, entry_id})
+        elif entry_id not in state.paired_entry_ids:
+            state.paired_entry_ids = [*state.paired_entry_ids, entry_id]
+        else:
+            return
+        state.tofu_closed = holds_another_key(state.trusted_public_keys_hex, state.public_key_hex)
+        await self._write(state)
 
     async def async_add_edge_box(self, entry: EdgeBoxEntry) -> None:
         """Store `entry`, replacing any entry with the same device id. A no-op

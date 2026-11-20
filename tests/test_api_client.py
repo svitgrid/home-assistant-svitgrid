@@ -638,6 +638,21 @@ class TestBatchHaVersion:
         await client.push_readings_batch(api_key="k" * 64, readings=[])
         assert "haVersion" not in session.post.call_args.kwargs["json"]
 
+    async def test_batch_body_carries_the_key_store_as_the_boards_telemetry(self):
+        """svitgrid D-2339: the add-on reports its trusted keys in the board's
+        shape, so the cloud sees which phones this Home Assistant trusts."""
+        session, _ = _mock_session_with_response(200, {"results": []})
+        client = SvitgridApiClient(session, api_base="https://api.example")
+        await client.push_readings_batch(api_key="k" * 64, readings=[])
+        assert "telemetry" not in session.post.call_args.kwargs["json"]
+
+        client.key_store_report = {"trustedKeyCount": 1, "trustedKeyIdPrefixes": ["0a1b2c3d"]}
+        await client.push_readings_batch(api_key="k" * 64, readings=[])
+        assert session.post.call_args.kwargs["json"]["telemetry"] == {
+            "trustedKeyCount": 1,
+            "trustedKeyIdPrefixes": ["0a1b2c3d"],
+        }
+
     def test_integration_version_reads_manifest(self):
         from custom_components.svitgrid.api_client import _integration_version
 

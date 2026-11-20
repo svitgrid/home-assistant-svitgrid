@@ -465,7 +465,7 @@ async def test_a_cloud_revoke_goes_on_the_denylist_and_is_acknowledged(hass: Hom
     assert owner.key_id in state.trusted_public_keys_hex
     ack = api.ack_command.await_args.kwargs["body"]
     assert ack["success"] is True
-    assert ack["result"] == {"revokedKeyId": phone.key_id}
+    assert ack["result"] == {"revokedKeyId": phone.key_id, "keyRevoked": True}
 
 
 async def test_a_cloud_revoke_reaches_the_running_poller_at_once(hass: HomeAssistant):
@@ -483,7 +483,10 @@ async def test_a_cloud_revoke_reaches_the_running_poller_at_once(hass: HomeAssis
 
     executor.dispatch.assert_not_awaited()
     acks = [c.kwargs["body"] for c in api.ack_command.await_args_list]
-    assert {"success": True, "result": {"revokedKeyId": phone.key_id}}.items() <= acks[0].items()
+    assert {
+        "success": True,
+        "result": {"revokedKeyId": phone.key_id, "keyRevoked": True},
+    }.items() <= acks[0].items()
 
 
 async def test_a_resync_does_not_trust_a_key_the_cloud_revoked(hass: HomeAssistant):
@@ -531,6 +534,9 @@ async def test_a_startup_resync_keeps_a_phone_paired_over_the_lan(hass: HomeAssi
 
 
 async def test_an_unknown_key_resync_keeps_a_phone_paired_over_the_lan(hass: HomeAssistant):
+    """The resync keeps the LAN phone, and since svitgrid D-2336 it does not
+    trust the newcomer the cloud lists: a new key arrives only as a signed
+    add_trusted_key (the approval sends one), as on the board."""
     owner, phone, newcomer = _Admin(), _Admin(), _Admin()
     ks, entry, _ = await _station(hass, owner)
     await add_phone(hass, entry, _claim_for(phone), ROLE_CONTROL)
@@ -549,10 +555,10 @@ async def test_an_unknown_key_resync_keeps_a_phone_paired_over_the_lan(hass: Hom
         await _run_one_poll(hass, ks, api, executor)
 
     assert api.get_trusted_keys.await_count == 2
-    assert executor.dispatch.await_count == 2
-    assert {owner.key_id, newcomer.key_id, phone.key_id} <= set(
-        (await ks.load()).trusted_public_keys_hex
-    )
+    assert executor.dispatch.await_count == 1
+    trusted = set((await ks.load()).trusted_public_keys_hex)
+    assert {owner.key_id, phone.key_id} <= trusted
+    assert newcomer.key_id not in trusted
 
 
 async def test_a_resync_does_not_trust_a_view_only_phone(hass: HomeAssistant):

@@ -280,10 +280,13 @@ async def test_resync_failure_leaves_the_existing_cache_intact(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_resync_drops_a_key_missing_from_a_non_empty_server_set(monkeypatch):
-    """A non-empty response is authoritative and complete, so the resync also
-    propagates revocations — it is a replace, not a merge."""
+    """A non-empty response is complete, so the resync propagates revocations:
+    a held key the server no longer lists is dropped. It never ADDS a key the
+    server lists and the store does not hold (svitgrid D-2336): that needs a
+    signed add_trusted_key, as on the board."""
     revoked_priv, revoked_pub_hex = generate_keypair()
     _, survivor_pub_hex = generate_keypair()
+    _, unsigned_pub_hex = generate_keypair()
     our_priv, our_pub_hex = generate_keypair()
 
     signed_event_data = {"commandId": "cmd-5", "command": "set_battery_charge"}
@@ -300,7 +303,10 @@ async def test_resync_drops_a_key_missing_from_a_non_empty_server_set(monkeypatc
     api.poll_commands = AsyncMock(return_value={"commands": [command]})
     api.ack_command = AsyncMock()
     api.get_trusted_keys = AsyncMock(
-        return_value=[{"keyId": "survivor-key", "publicKeyHex": survivor_pub_hex}]
+        return_value=[
+            {"keyId": "survivor-key", "publicKeyHex": survivor_pub_hex},
+            {"keyId": "unsigned-key", "publicKeyHex": unsigned_pub_hex},
+        ]
     )
     executor = MagicMock()
     executor.dispatch = AsyncMock(return_value={"ok": True})
@@ -310,7 +316,10 @@ async def test_resync_drops_a_key_missing_from_a_non_empty_server_set(monkeypatc
         return_value=MagicMock(
             api_key="k",
             signing_key_id="our-key",
-            trusted_public_keys_hex={"revoked-key": revoked_pub_hex},
+            trusted_public_keys_hex={
+                "revoked-key": revoked_pub_hex,
+                "survivor-key": survivor_pub_hex,
+            },
             load_private_key=MagicMock(return_value=our_priv),
         )
     )
@@ -329,6 +338,44 @@ async def test_resync_drops_a_key_missing_from_a_non_empty_server_set(monkeypatc
 
     executor.dispatch.assert_not_awaited()
     keystore.update_trusted_keys_hex.assert_awaited_with({"survivor-key": survivor_pub_hex})
+
+
+@pytest.mark.asyncio
+async def test_resync_never_drops_every_held_key(monkeypatch):
+    """The board refuses to revoke its last key. A server list that names none
+    of the held keys would empty the store, which then takes no key again
+    without a new pairing, so the resync keeps them (svitgrid D-2336)."""
+    _, held_pub_hex = generate_keypair()
+    _, other_pub_hex = generate_keypair()
+    our_priv, our_pub_hex = generate_keypair()
+
+    api = MagicMock()
+    api.poll_commands = AsyncMock(return_value={"commands": []})
+    api.get_trusted_keys = AsyncMock(
+        return_value=[{"keyId": "other-key", "publicKeyHex": other_pub_hex}]
+    )
+    keystore = AsyncMock()
+    keystore.load = AsyncMock(
+        return_value=MagicMock(
+            api_key="k",
+            signing_key_id="our-key",
+            trusted_public_keys_hex={"held-key": held_pub_hex},
+            load_private_key=MagicMock(return_value=our_priv),
+        )
+    )
+    keystore.update_trusted_keys_hex = AsyncMock()
+    monkeypatch.setattr(asyncio, "sleep", AsyncMock())
+
+    await poller_run_loop(
+        hass=_hass_one_iter(),
+        api_client=api,
+        keystore=keystore,
+        entry_data=_entry_data_for(our_priv, our_pub_hex),
+        executors_by_inverter={},
+        wake_event=None,
+    )
+
+    keystore.update_trusted_keys_hex.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -454,3 +501,52 @@ async def test_setup_entry_keeps_keys_learned_via_add_trusted_key(hass):
     state = await SvitgridKeystore(hass).load()
     assert state is not None
     assert state.trusted_public_keys_hex == {"phone-key": "04" + "ab" * 64}
+
+
+@pytest.mark.asyncio
+async def test_a_new_pairing_replaces_an_earlier_pairings_keys(hass):
+    """Adding the integration in the Home Assistant admin UI is the add-on's
+    reset at the board (svitgrid D-2336). Nothing else adds a key unsigned,
+    so a store re-paired into another household must take that pairing's
+    keys, not keep the previous owner's and refuse the new one's."""
+    keystore = SvitgridKeystore(hass)
+    await keystore.save(
+        api_key="old",
+        public_key_hex="pub",
+        private_key_pem="pem",
+        signing_key_id="sk",
+        trusted_key_ids=["old-owner"],
+        trusted_public_keys_hex={"old-owner": "04" + "ab" * 64},
+    )
+    await keystore.async_note_entry_pairing("an-earlier-entry", ["an-earlier-entry"])
+
+    entry = _entry()
+    entry.add_to_hass(hass)
+    hass.config_entries.async_update_entry(
+        entry,
+        data={
+            **entry.data,
+            "trusted_keys": [{"keyId": "new-owner", "publicKeyHex": "04" + "cd" * 64}],
+        },
+    )
+
+    with (
+        patch.object(ReadingStore, "get_lifecycle", AsyncMock(return_value=_ACTIVE_LIFECYCLE)),
+        patch.object(ReadingStore, "prune_inverters_not_in", AsyncMock(return_value=0)),
+        patch("custom_components.svitgrid.run_readings_loop", return_value=None),
+        patch("custom_components.svitgrid.run_command_loop", return_value=None),
+        patch("custom_components.svitgrid.run_mqtt_wake_loop", return_value=None),
+        patch("custom_components.svitgrid.run_sender_loop", return_value=None),
+        patch("custom_components.svitgrid.register_views"),
+        patch("custom_components.svitgrid.register_panel", new_callable=AsyncMock),
+        patch("custom_components.svitgrid.remove_panel"),
+        patch.object(hass.config_entries, "async_forward_entry_setups", return_value=True),
+    ):
+        await async_setup_entry(hass, entry)
+        await hass.async_block_till_done()
+
+    state = await SvitgridKeystore(hass).load()
+    assert state is not None
+    assert state.trusted_public_keys_hex == {"new-owner": "04" + "cd" * 64}
+    assert entry.entry_id in state.paired_entry_ids
+    assert state.tofu_closed is True

@@ -283,7 +283,9 @@ async def test_revoke_trusted_key_reads_the_field_the_api_sends():
     api_client.ack_command.assert_awaited_once()
     ack_body = api_client.ack_command.call_args.kwargs["body"]
     assert ack_body["success"] is True
-    assert ack_body["result"] == {"revokedKeyId": "admin-b"}
+    assert ack_body["result"] == {"revokedKeyId": "admin-b", "keyRevoked": True}
+    # "sig-from-the-app" is not a signature, so the board's report says so.
+    assert ack_body["keyAuth"] == {"signed": False}
 
 
 @pytest.mark.asyncio

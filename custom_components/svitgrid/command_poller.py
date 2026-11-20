@@ -25,6 +25,7 @@ from .command_auth import verify_signed_command
 from .const import (
     ADD_INVERTER_COMMAND,
     ADD_TRUSTED_KEY_COMMAND,
+    CLEAR_TRUSTED_KEYS_COMMAND,
     COMMAND_POLL_CEILING_S,
     COMMAND_POLL_INTERVAL_S,
     DISABLE_ISLAND_COMMAND,
@@ -62,10 +63,11 @@ from .harvest_config_apply import (
     probe_modbus_reachable,
 )
 from .inverter_entry import harvest_config_from_api, inverter_entry_from_api
+from .key_policy import decide_key_add, key_command_auth
 from .keystore import KeystoreState, SvitgridKeystore
 from .log_upload import _UPLOAD_LOCK, run_upload, window_error
 from .mqtt_control import apply_cadence
-from .signing import sign_payload
+from .signing import public_key_to_hex, sign_payload
 
 if TYPE_CHECKING:
     from .executors.base import BaseExecutor
@@ -140,6 +142,15 @@ def _lan_paired_keys(state: Any) -> dict[str, str]:
     return {}
 
 
+def _tofu_open(state: Any) -> bool:
+    """Whether an empty store may take an unsigned first key (svitgrid
+    D-2336). Open for anything that is not a real keystore state: an install
+    with no keystore keeps the behaviour it had."""
+    if isinstance(state, KeystoreState):
+        return not state.tofu_closed
+    return True
+
+
 async def process_command(
     *,
     command: dict[str, Any],
@@ -176,15 +187,15 @@ async def process_command(
     # === Arm 1: Internal trust commands ===
     if cmd_type == ADD_TRUSTED_KEY_COMMAND:
         payload = command.get("payload") or {}
-        key_id = payload.get("signingKeyId")
-        public_key_hex = payload.get("publicKeyHex")
-        if not key_id or not public_key_hex:
+        key_id = payload.get("signingKeyId") if isinstance(payload, dict) else None
+        if not key_id:
             _LOGGER.warning("Skipping malformed add_trusted_key %s: %s", cmd_id, payload)
             return
         # A key revoked over the LAN stays revoked. The cloud cannot tell an
         # owner's approval from the app re-pushing a key it still lists as
         # approved, so only a LAN pairing the owner approves trusts it again.
-        if keystore is not None and key_id in _revoked_ids(await keystore.load()):
+        ks_state = await keystore.load() if keystore is not None else None
+        if keystore is not None and key_id in _revoked_ids(ks_state):
             _LOGGER.warning(
                 "Refusing add_trusted_key %s: key %s was revoked on this Home Assistant",
                 cmd_id,
@@ -202,14 +213,40 @@ async def process_command(
                 executor_version=executor_version,
             )
             return
-        trusted_public_keys_hex[key_id] = public_key_hex
-        if keystore is not None:
-            await keystore.update_trusted_keys_hex(dict(trusted_public_keys_hex))
-        _LOGGER.info(
-            "Added trusted key %s to cache (now %d keys)",
-            key_id,
-            len(trusted_public_keys_hex),
+        # The board's rules (svitgrid D-2336): a held key is a no-op success,
+        # a new key needs a signature from a key held here, and an empty store
+        # takes an unsigned first key only until it has held one.
+        decision = decide_key_add(
+            trusted_public_keys_hex,
+            command,
+            tofu_open=_tofu_open(ks_state),
+            own_public_key_hex=public_key_to_hex(our_private_key.public_key()),
         )
+        if decision.outcome == "reject":
+            _LOGGER.warning(
+                "Refusing add_trusted_key %s for key %s: %s", cmd_id, key_id, decision.reason
+            )
+            await _send_signed_ack(
+                api_client=api_client,
+                api_key=api_key,
+                command_id=cmd_id,
+                success=False,
+                rejected=True,
+                reason=decision.reason,
+                our_private_key=our_private_key,
+                our_signing_key_id=our_signing_key_id,
+                executor_version=executor_version,
+            )
+            return
+        if decision.outcome == "proceed":
+            trusted_public_keys_hex[key_id] = payload["publicKeyHex"]
+            if keystore is not None:
+                await keystore.update_trusted_keys_hex(dict(trusted_public_keys_hex))
+            _LOGGER.info(
+                "Added trusted key %s to cache (now %d keys)",
+                key_id,
+                len(trusted_public_keys_hex),
+            )
         # Our OWN key arriving means the household just approved this
         # integration — the server fans an add_trusted_key out to every
         # executor when a key is approved, so this is the approval signal.
@@ -218,12 +255,21 @@ async def process_command(
         if activity is not None and key_id == our_signing_key_id:
             activity.set_signing_key_approved(True)
             _LOGGER.info("This integration's signing key is now approved.")
+        # The board's result fields, plus `addedKeyId`, which 0.34 and older
+        # sent.
+        result: dict[str, Any] = {
+            "addedKeyId": key_id,
+            "keyAdded": decision.outcome == "proceed",
+            "keyId": decision.board_key_id,
+        }
+        if decision.outcome == "already_held":
+            result["alreadyHeld"] = True
         await _send_signed_ack(
             api_client=api_client,
             api_key=api_key,
             command_id=cmd_id,
             success=True,
-            result={"addedKeyId": key_id},
+            result=result,
             our_private_key=our_private_key,
             our_signing_key_id=our_signing_key_id,
             executor_version=executor_version,
@@ -240,6 +286,9 @@ async def process_command(
         if not isinstance(key_id, str) or not key_id:
             _LOGGER.warning("Skipping malformed revoke_trusted_key %s: %s", cmd_id, payload)
             return
+        # Checked before the key goes: a phone that revokes its own key signs
+        # with it (svitgrid D-2339). Reported, not enforced.
+        key_auth = key_command_auth(trusted_public_keys_hex, command)
         trusted_public_keys_hex.pop(key_id, None)
         if keystore is not None:
             # Recorded as revoked, as a LAN revoke is, so that the server's
@@ -248,19 +297,39 @@ async def process_command(
             # keep this poller's cache in step.
             await keystore.async_untrust_key(key_id)
         _LOGGER.info(
-            "Revoked trusted key %s (now %d keys)",
+            "Revoked trusted key %s (now %d keys, signed=%s)",
             key_id,
             len(trusted_public_keys_hex),
+            key_auth["signed"],
         )
         await _send_signed_ack(
             api_client=api_client,
             api_key=api_key,
             command_id=cmd_id,
             success=True,
-            result={"revokedKeyId": key_id},
+            result={"revokedKeyId": key_id, "keyRevoked": True},
             our_private_key=our_private_key,
             our_signing_key_id=our_signing_key_id,
             executor_version=executor_version,
+            key_auth=key_auth,
+        )
+        return
+
+    if cmd_type == CLEAR_TRUSTED_KEYS_COMMAND:
+        # The add-on has never run a clear, and the server stopped sending one
+        # (#1560). It still says whether the clear was signed, as the board
+        # does, so the API can count it.
+        await _send_signed_ack(
+            api_client=api_client,
+            api_key=api_key,
+            command_id=cmd_id,
+            success=False,
+            rejected=True,
+            reason="unsupported",
+            our_private_key=our_private_key,
+            our_signing_key_id=our_signing_key_id,
+            executor_version=executor_version,
+            key_auth=key_command_auth(trusted_public_keys_hex, command),
         )
         return
 
@@ -1219,13 +1288,17 @@ async def _send_signed_ack(
     rejected: bool | None = None,
     reason: str | None = None,
     envelope_check: dict | None = None,
+    key_auth: dict | None = None,
 ) -> None:
     """Build + sign an ACK. commandId is FIRST in the signed payload
     (Plan A's enforceHaSignedAck requires it for replay protection).
 
     ``envelope_check`` (svitgrid D-1939) rides in the body OUTSIDE the
     signature: the API rebuilds the signed payload from the fixed ack fields
-    only, so a signed one would fail verification."""
+    only, so a signed one would fail verification.
+
+    ``key_auth`` (svitgrid D-2339) is the board's `keyAuth` for a clear or
+    revoke, and rides outside the signature for the same reason."""
     ack_fields: dict[str, Any] = {
         "success": success,
         "executorTime": _now_iso(),
@@ -1248,6 +1321,7 @@ async def _send_signed_ack(
             body={
                 **ack_fields,
                 **({"envelopeCheck": envelope_check} if envelope_check else {}),
+                **({"keyAuth": key_auth} if key_auth is not None else {}),
                 "signature": signature,
                 "signingKeyId": our_signing_key_id,
             },
@@ -1375,8 +1449,14 @@ async def _run_loop_body(
     _resync_state = {"at": None}
 
     async def _resync_trusted_keys(reason: str) -> None:
-        """Replace the cache with the server's approved set. REPLACE, not
-        merge: the response is complete, so this also propagates revocations.
+        """Bring the cache in line with the server's approved set, within
+        the board's rules (svitgrid D-2336): a key the server no longer lists
+        is dropped, but a key it lists and this store does not hold is never
+        added, because the list carries no signature. A new key arrives as a
+        signed `add_trusted_key`. The one exception is the board's
+        trust-on-first-use: a store that has never held a key, or one a new
+        pairing left empty, takes the whole list.
+
         Any failure (404 from an older API, network blip) leaves the existing
         cache untouched — a resync must never be able to disarm a working
         install."""
@@ -1384,6 +1464,7 @@ async def _run_loop_body(
         api_key = (entry_data or {}).get("api_key")
         revoked: set[str] = set()
         lan_paired: dict[str, str] = {}
+        ks_state = None
         if keystore is not None:
             ks_state = await keystore.load()
             if ks_state is not None:
@@ -1419,22 +1500,59 @@ async def _run_loop_body(
             fetched = {**fetched, **lan_paired}
         if fetched == trusted_public_keys_hex:
             return
-        # An EMPTY set is the one answer that could silently disarm control for
-        # a whole fleet if the endpoint ever got it wrong, and it is not a
-        # response a real household produces (its own integration key is
-        # approved too). Revocation keeps its own working push path
-        # (`revoke_trusted_key`), so refusing to act here costs nothing and
-        # removes the only way this repair could cause the outage it fixes.
-        if not fetched and trusted_public_keys_hex:
-            _LOGGER.warning(
-                "Trusted-key resync (%s) returned no approved keys; keeping the %d "
-                "cached key(s). Revocation arrives as revoke_trusted_key, not here.",
-                reason,
-                len(trusted_public_keys_hex),
-            )
-            return
+        if not trusted_public_keys_hex:
+            if not fetched:
+                return
+            if not _tofu_open(ks_state):
+                _LOGGER.warning(
+                    "Trusted-key resync (%s): the key store is empty and has held keys "
+                    "before, so it takes none of the %d key(s) the cloud lists. Add the "
+                    "Svitgrid integration again in Home Assistant to trust them.",
+                    reason,
+                    len(fetched),
+                )
+                return
+            updated = dict(fetched)
+        else:
+            # An EMPTY set is the one answer that could silently disarm control
+            # for a whole fleet if the endpoint ever got it wrong, and it is not
+            # a response a real household produces (its own integration key is
+            # approved too). Revocation keeps its own working push path
+            # (`revoke_trusted_key`), so refusing to act here costs nothing and
+            # removes the only way this repair could cause the outage it fixes.
+            if not fetched:
+                _LOGGER.warning(
+                    "Trusted-key resync (%s) returned no approved keys; keeping the %d "
+                    "cached key(s). Revocation arrives as revoke_trusted_key, not here.",
+                    reason,
+                    len(trusted_public_keys_hex),
+                )
+                return
+            updated = {k: v for k, v in trusted_public_keys_hex.items() if k in fetched}
+            unsigned = sorted(set(fetched) - set(trusted_public_keys_hex))
+            if unsigned:
+                _LOGGER.info(
+                    "Trusted-key resync (%s): not trusting %d key(s) the cloud lists "
+                    "without a signature: %s",
+                    reason,
+                    len(unsigned),
+                    ", ".join(k[:12] for k in unsigned),
+                )
+            # The board refuses to revoke its last key (#1569 item 3), and a
+            # resync that would drop every held key is the same lockout: the
+            # store, now empty, could take no key again without a new pairing.
+            if not updated:
+                _LOGGER.warning(
+                    "Trusted-key resync (%s): the cloud lists none of the %d held key(s); "
+                    "keeping them. A key is removed with a signed revoke_trusted_key.",
+                    reason,
+                    len(trusted_public_keys_hex),
+                )
+                return
+            if updated == trusted_public_keys_hex:
+                return
         trusted_public_keys_hex.clear()
-        trusted_public_keys_hex.update(fetched)
+        trusted_public_keys_hex.update(updated)
         if keystore is not None:
             await keystore.update_trusted_keys_hex(dict(trusted_public_keys_hex))
         _LOGGER.info(

@@ -191,6 +191,7 @@ READING_SOURCE = "edge"
 # Internal commands the add-on handles itself (never dispatched to an executor).
 ADD_TRUSTED_KEY_COMMAND = "add_trusted_key"
 REVOKE_TRUSTED_KEY_COMMAND = "revoke_trusted_key"
+CLEAR_TRUSTED_KEYS_COMMAND = "clear_trusted_keys"
 # Runtime cloud-endpoint switch (sub-project E) — operator flips a
 # household's migratedToProd flag, the D4 Cloud Function enqueues this
 # command, the integration validates the URL + reloads with new api_base.

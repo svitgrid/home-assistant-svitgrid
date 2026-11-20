@@ -73,6 +73,7 @@ from .island_event_store import IslandEventStore
 from .island_lan import _cloud_copy_of, is_true_island
 from .island_report import run_island_report_loop
 from .island_send import IslandSendRelay
+from .key_policy import key_store_report
 from .keystore import (
     ENTRY_ISLAND_DEVICE_IDS,
     ENTRY_TRUSTED_KEY_IDS,
@@ -858,8 +859,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # no error anywhere but the add-on log. The keystore wins whenever it holds
     # anything; the snapshot only seeds a keystore that has none (fresh install,
     # or a blob written before this field existed).
+    #
+    # A NEW pairing is the exception (svitgrid D-2336). Adding the integration
+    # in the Home Assistant admin UI is the add-on's reset at the board: the
+    # store takes that pairing's keys, plus the phones paired over the LAN,
+    # and drops the keys of an earlier pairing. Nothing else adds a key
+    # unsigned, so without this a store re-paired into another household
+    # would keep its previous owner's keys and refuse the new owner's.
     _existing = await keystore.load()
-    if _existing is not None and _existing.trusted_public_keys_hex:
+    if _existing is not None and _existing.is_new_pairing(entry.entry_id):
+        _trusted_public_keys_hex = {
+            **_trusted_public_keys_hex,
+            **_existing.lan_paired_trusted_keys(),
+        }
+        _trusted_key_ids = sorted(_trusted_public_keys_hex)
+    elif _existing is not None and _existing.trusted_public_keys_hex:
         _trusted_public_keys_hex = dict(_existing.trusted_public_keys_hex)
         _trusted_key_ids = sorted(_trusted_public_keys_hex)
     _identity = {
@@ -886,6 +900,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         **_identity,
         trusted_key_ids=_trusted_key_ids,
         trusted_public_keys_hex=_trusted_public_keys_hex,
+    )
+    # Records this pairing and sets trust-on-first-use from the store: open
+    # only while it holds no key.
+    await keystore.async_note_entry_pairing(
+        entry.entry_id,
+        [e.entry_id for e in hass.config_entries.async_entries(DOMAIN)],
     )
     # The pairing-time island key becomes a named roster entry, not the legacy
     # scalar the roster cannot identify (ivanursul/svitgrid#751). This also
@@ -936,6 +956,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         data = entry.data
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN]["keystore"] = keystore
+    # The key store rides each ingest batch as the board's `trustedKeyCount`
+    # and `trustedKeyIdPrefixes` (svitgrid D-2339), so the app sees which
+    # phones this Home Assistant trusts as it sees a board's.
+    if api_client is not None:
+        _ks_now = await keystore.load()
+        api_client.key_store_report = key_store_report(
+            dict(_ks_now.trusted_public_keys_hex) if _ks_now is not None else {}
+        )
+
+        def _report_key_store(keys: dict[str, str]) -> None:
+            api_client.key_store_report = key_store_report(keys)
+
+        entry.async_on_unload(keystore.subscribe_trust(_report_key_store))
 
     # True island: island mode on and the cloud copy off. The cloud then takes
     # no part in day-to-day operation (owner, 2026-10-15): no command poller,

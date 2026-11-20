@@ -147,6 +147,11 @@ class SvitgridApiClient:
     def __init__(self, session: aiohttp.ClientSession, api_base: str) -> None:
         self._session = session
         self._base = api_base.rstrip("/")
+        # The trusted-key store as the board reports it (`trustedKeyCount`,
+        # `trustedKeyIdPrefixes`), sent as the batch's `telemetry` (svitgrid
+        # D-2339). Set by setup and kept current by a keystore trust
+        # listener; None sends no telemetry, as before.
+        self.key_store_report: dict[str, Any] | None = None
 
     async def bootstrap(
         self, device_id: str, public_key_hex: str, signing_key_id: str
@@ -423,6 +428,8 @@ class SvitgridApiClient:
         ha_version = _integration_version()
         if ha_version:
             body["haVersion"] = ha_version
+        if self.key_store_report is not None:
+            body["telemetry"] = dict(self.key_store_report)
         async with self._session.post(url, headers={"x-api-key": api_key}, json=body) as resp:
             if resp.status >= 500:
                 _LOGGER.warning(
