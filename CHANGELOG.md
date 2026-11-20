@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.35.0 — 2026-11-20
+
+### Security
+- **Home Assistant adds a phone's key only as an ED-1 does.** A new key needs
+  the signature of a key Home Assistant already holds; an unsigned first key
+  is taken only by a store that has never held one, and adding the Svitgrid
+  integration again is its reset. The key resync no longer adds keys, and it
+  never removes them all. Revokes and clears report who signed them, and the
+  uploads report the held key count, as a board does
+  (svitgrid D-2336, D-2339; needs the API live since 2026-11-20).
+- **An ED-1 on an island gets the owner's signature for station changes.**
+  Pause, resume and inverter changes forward the phone's signature to the
+  box. Zigbee removals, power-on changes and a new box's inverters, which Home
+  Assistant builds itself, are signed by the phone too. A signature made for
+  another command is refused (svitgrid D-2204).
+- **A phone's revoke reaches the ED-1s signed**, so a removed phone loses its
+  place on each box instead of filling it (svitgrid D-2380).
+
+### Added
+- **Deye settings over the LAN.** A Deye read by Home Assistant writes the
+  seven settings the app offers (shutdown, restart and low battery levels, the
+  grid-charge start level, max sell power and the generator port use)
+  (svitgrid D-2346).
+
+All of these keep working with older app builds: without a signature a
+command goes as before.
+
 ## 0.34.2 — 2026-11-20
 
 ### Fixed
