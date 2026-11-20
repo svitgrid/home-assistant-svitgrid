@@ -117,8 +117,18 @@ class EdgeBoxExecutor(BaseExecutor):
         if row["state"] == "success":
             return {**(row["result"] or {}), "commandId": command_id}
         if row["state"] == "failed":
-            reason = row["reason"] or "edge_command_failed"
-            if row["rejected"] and reason.startswith("unsupported"):
+            # The box puts a refusal in the ack's `result`, as `{rejected:
+            # true, reason}` (`ack_command_rejected`, zigbee_poller.c), and
+            # sends no top-level reason (svitgrid D-2323).
+            result = row["result"] if isinstance(row["result"], dict) else {}
+            result_reason = result.get("reason")
+            reason = (
+                row["reason"]
+                or (result_reason if isinstance(result_reason, str) and result_reason else None)
+                or "edge_command_failed"
+            )
+            rejected = row["rejected"] or result.get("rejected") is True
+            if rejected and reason.startswith("unsupported"):
                 raise NotImplementedError(reason)
             raise RuntimeError(reason)
         raise TimeoutError("edge_ack_timeout")

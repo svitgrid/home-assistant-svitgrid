@@ -842,3 +842,53 @@ async def test_board_event_replayed_with_a_new_command_id_is_refused(hass):
     assert replay.status == 403
     assert json.loads(replay.body)["error"] == "replayed"
     assert len(executor.calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# The box's own refusal reaches the app (svitgrid D-2323)
+#
+# The ED-1 acks a refused signature as `{success: false, result: {rejected:
+# true, reason: "unknown_key"}}` (`ack_command_rejected`, zigbee_poller.c):
+# the reason rides in `result`, not at the top level. The app maps
+# `detail: unknown_key` of the 502 to the key copy
+# (`islandControlErrorMessage`, apps/mobile), so the body must carry it.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_box_refusal_of_an_unknown_key_answers_502_with_detail_unknown_key(hass, tmp_path):
+    import asyncio
+
+    from custom_components.svitgrid.edge_command_queue import EdgeCommandQueue
+    from custom_components.svitgrid.executors.edge_box import EdgeBoxExecutor
+
+    private_key = _trusted_key(hass)
+    queue = EdgeCommandQueue(str(tmp_path / "edge_commands.db"), None)
+    await queue.async_pending_count("EC-1")
+    _install_executor(hass, INVERTER_ID, EdgeBoxExecutor(queue, "EC-1", INVERTER_ID))
+    body = _app_set_inverter_setting_body(private_key, "admin-key-1")
+
+    async def box_refuses() -> None:
+        for _ in range(200):
+            row = await queue.async_next_pending("EC-1")
+            if row is not None:
+                # The body the box posts, as `EdgeCommandAckView` hands it on.
+                await queue.async_ack(
+                    row["id"],
+                    success=False,
+                    result={"rejected": True, "reason": "unknown_key"},
+                    rejected=None,
+                    reason=None,
+                    device_id="EC-1",
+                )
+                return
+            await asyncio.sleep(0.01)
+        raise AssertionError("nothing was queued for the box")
+
+    resp, _ = await asyncio.gather(
+        SvitgridCommandsView().post(_FakeRequest(hass, island_key_header=ISLAND_KEY, body=body)),
+        box_refuses(),
+    )
+
+    assert resp.status == 502
+    assert json.loads(resp.body) == {"error": "executor_error", "detail": "unknown_key"}

@@ -108,6 +108,49 @@ async def test_other_failed_ack_raises_runtime_error(tmp_path):
     assert _reason_for(info.value) == "write_failed"
 
 
+async def test_a_refusal_in_the_ack_result_raises_its_reason(tmp_path):
+    """The box puts a refusal's reason in `result` (`ack_command_rejected`,
+    zigbee_poller.c), not at the top of the ack (svitgrid D-2323)."""
+    queue = await _queue(tmp_path)
+    executor = EdgeBoxExecutor(queue, "EC-1", "inv-1")
+
+    with pytest.raises(RuntimeError) as info:
+        await asyncio.gather(
+            executor.dispatch("set_work_mode", {"mode": 1}, signing=SIGNING),
+            _box_acks(
+                queue,
+                "EC-1",
+                success=False,
+                result={"rejected": True, "reason": "unknown_key"},
+                rejected=None,
+                reason=None,
+            ),
+        )
+
+    assert str(info.value) == "unknown_key"
+    assert _reason_for(info.value) == "unknown_key"
+
+
+async def test_an_unsupported_refusal_in_the_ack_result_raises_not_implemented(tmp_path):
+    queue = await _queue(tmp_path)
+    executor = EdgeBoxExecutor(queue, "EC-1", "inv-1")
+
+    with pytest.raises(NotImplementedError) as info:
+        await asyncio.gather(
+            executor.dispatch("set_inverter_setting", {"key": "x"}, signing=SIGNING),
+            _box_acks(
+                queue,
+                "EC-1",
+                success=False,
+                result={"rejected": True, "reason": "unsupported_model"},
+                rejected=None,
+                reason=None,
+            ),
+        )
+
+    assert str(info.value) == "unsupported_model"
+
+
 async def test_timeout_raises_timeout_error(tmp_path):
     queue = await _queue(tmp_path)
     executor = EdgeBoxExecutor(queue, "EC-1", "inv-1", ack_timeout_s=0.05)
