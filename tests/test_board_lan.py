@@ -654,3 +654,99 @@ async def test_a_diagnostic_payload_must_be_an_object(hass: HomeAssistant, tmp_p
 
     assert resp.status == 400
     assert await queue.async_pending_count("EC-1") == 0
+
+
+# ── station changes carry the phone's signature (svitgrid D-2204) ───────────
+
+
+def _station_command(admin: _Admin, command: str, **signed_fields) -> dict:
+    """A phone-signed station change (`station_command_event_builder.dart`)."""
+    from custom_components.svitgrid.signing import sign_payload
+
+    signed = {
+        "command": command,
+        "deviceId": "EC-1",
+        "payloadSha256": "0" * 64,
+        "validUntil": "2026-10-29T10:20:00.000Z",
+        **signed_fields,
+    }
+    return {
+        "signedEventData": signed,
+        "signature": sign_payload(signed, admin.priv),
+        "signingKeyId": admin.key_id,
+    }
+
+
+@pytest.mark.parametrize("command", ["pause", "resume"])
+async def test_a_signed_pause_or_resume_reaches_the_box_with_its_signature(
+    hass: HomeAssistant, tmp_path, command
+):
+    from custom_components.svitgrid.edge_api import _command_for_box
+
+    admin, _, queue, _ = await _setup(hass, tmp_path)
+    box_command = _station_command(admin, command)
+
+    resp = await _send(hass, admin, "EC-1", command, boxCommand=box_command)
+
+    assert resp.status == 200, _body(resp)
+    row = await queue.async_next_pending("EC-1")
+    assert row["payload"] == {}
+    assert row["signing"] == box_command
+    sent = _command_for_box(row)
+    assert sent["signedEventData"] == box_command["signedEventData"]
+    assert sent["signature"] == box_command["signature"]
+
+
+async def test_a_signed_inverter_change_reaches_the_box_with_its_signature(
+    hass: HomeAssistant, tmp_path
+):
+    admin, _, queue, _ = await _setup(hass, tmp_path)
+    box_command = _station_command(admin, "update_inverter")
+
+    resp = await _send(
+        hass,
+        admin,
+        "EC-1",
+        "update_inverter",
+        payload={"inverterId": "inv-1", "ipAddress": "10.0.0.9"},
+        boxCommand=box_command,
+    )
+
+    assert resp.status == 200, _body(resp)
+    row = await queue.async_next_pending("EC-1")
+    assert row["payload"] == {"inverterId": "inv-1", "ipAddress": "10.0.0.9"}
+    assert row["signing"] == box_command
+
+
+async def test_an_unsigned_station_change_still_goes_from_an_older_app(
+    hass: HomeAssistant, tmp_path
+):
+    """The boards in the field report a missing signature and run it, so an
+    app before D-2204 keeps working (R-2)."""
+    admin, _, queue, _ = await _setup(hass, tmp_path)
+
+    resp = await _send(hass, admin, "EC-1", "pause")
+
+    assert resp.status == 200, _body(resp)
+    row = await queue.async_next_pending("EC-1")
+    assert row.get("signing") in (None, {})
+
+
+async def test_a_station_signature_over_another_command_is_refused(hass: HomeAssistant, tmp_path):
+    admin, _, queue, _ = await _setup(hass, tmp_path)
+
+    resp = await _send(hass, admin, "EC-1", "pause", boxCommand=_station_command(admin, "resume"))
+
+    assert resp.status == 400
+    assert _body(resp) == {"error": "box_signature_invalid"}
+    assert await queue.async_pending_count("EC-1") == 0
+
+
+async def test_reboot_never_forwards_a_signature(hass: HomeAssistant, tmp_path):
+    admin, _, queue, _ = await _setup(hass, tmp_path)
+
+    resp = await _send(hass, admin, "EC-1", "reboot", boxCommand=_station_command(admin, "reboot"))
+
+    assert resp.status == 200, _body(resp)
+    row = await queue.async_next_pending("EC-1")
+    assert row.get("signing") in (None, {})

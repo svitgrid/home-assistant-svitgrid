@@ -27,6 +27,14 @@ forwarded untouched; one signed for any other command is 400
 carry the cloud's payload untouched, and the board's answer comes back in
 the command's `result`.
 
+`pause`, `resume` and the three inverter commands are station changes
+(svitgrid D-2204): the box checks the owner's signature on them. An app
+from D-2204 on sends one in `boxCommand`, over `{command, deviceId,
+payloadSha256, validUntil}`, and it goes to the box untouched, as for
+`factory_reset`; one signed for another command is 400
+`box_signature_invalid`. An older app sends none, and the command still
+goes: the boards in the field report a missing signature and run it.
+
 `add_inverter`, `update_inverter` and `remove_inverter` carry the cloud's
 payload, which names `inverterId`: an inverter another box holds cannot be
 added (409), and one this box does not hold cannot be changed or removed
@@ -81,6 +89,10 @@ BOARD_COMMANDS = ("reboot", "pause", "resume")
 # trusts. A signature over any other command is never forwarded as one of
 # these (svitgrid D-2166).
 SIGNED_BOARD_COMMANDS = {"factory_reset": {"confirm": True}}
+# Station changes (svitgrid D-2204): the box checks the owner's signature on
+# them, so a `boxCommand` the phone signed for one is forwarded untouched. It
+# is optional: an app before D-2204 sends none, and today's boards run them.
+STATION_BOARD_COMMANDS = ("pause", "resume", "add_inverter", "update_inverter", "remove_inverter")
 # The box's own inverter list (svitgrid D-2168), each payload as the cloud
 # sends it and naming its `inverterId`. Home Assistant's list for the box
 # follows once the box confirms (`edge_api.apply_board_ack`).
@@ -137,6 +149,13 @@ def _payload_for(command: str, signed: dict) -> tuple[dict | None, web.Response 
 
 def _signing_for(command: str, signed: dict) -> tuple[dict | None, web.Response | None]:
     """The phone's signature for the box, for a command the box checks."""
+    if command in STATION_BOARD_COMMANDS:
+        if "boxCommand" not in signed:
+            return None, None
+        box_command = _box_command(signed.get("boxCommand"))
+        if box_command is None or box_command["signedEventData"].get("command") != command:
+            return None, _json_error(400, "box_signature_invalid")
+        return box_command, None
     if command not in SIGNED_BOARD_COMMANDS:
         return None, None
     if "boxCommand" not in signed:
