@@ -696,6 +696,9 @@ class _EdgeStore:
     async def get_edge_box_state(self, device_id):
         return self.box_states.get(device_id)
 
+    async def set_edge_box_state(self, device_id, state):
+        self.box_states[device_id] = state
+
     async def get_settings_snapshot(self, inverter_id):
         return self.snapshots.get(inverter_id)
 
@@ -1568,6 +1571,101 @@ async def test_edge_key_add_success_clears_pending(hass: HomeAssistant, tmp_path
     await _drain(queue, "EC-1")
     await _box_ack(hass, retry["EC-1"], api_key="box-key-1", result={"keyAdded": True})
     assert await ks.async_list_pending_box_keys() == []
+
+
+async def _ingest_telemetry(hass, api_key, telemetry):
+    from custom_components.svitgrid.edge_api import EdgeIngestBatchView
+
+    req = _Req(hass, {"readings": [], "telemetry": telemetry})
+    req.headers["X-API-Key"] = api_key
+    return await EdgeIngestBatchView().post(req)
+
+
+async def test_a_box_reporting_a_pending_key_clears_it_for_that_box(hass: HomeAssistant, tmp_path):
+    """A phone the box already trusted joins Home Assistant: Home Assistant
+    records the key as pending on every box, and the box's own key list,
+    which rides its telemetry as `trustedKeyIdPrefixes` (8 hex characters
+    each, cloud_uploader.c), settles it (svitgrid D-2354)."""
+    admin, _ = await _leave_setup(hass, tmp_path)
+    ks = hass.data[DOMAIN]["keystore"]
+    await ks.async_bind_edge_box("EC-1", "box-key-1")
+    await ks.async_bind_edge_box("EC-2", "box-key-2")
+    phone = _Admin()
+    other = _Admin()
+    await _trust_over_lan(hass, admin, phone)
+    await _trust_over_lan(hass, admin, other)
+
+    resp = await _ingest_telemetry(
+        hass,
+        "box-key-1",
+        {"trustedKeyCount": 2, "trustedKeyIdPrefixes": [phone.key_id[:8], "0badc0de"]},
+    )
+    assert resp.status == 200, _body(resp)
+    state = await ks.load()
+    assert state.box_pending_keys[phone.key_id] == ["EC-2"]
+    assert sorted(state.box_pending_keys[other.key_id]) == ["EC-1", "EC-2"]
+
+    await _ingest_telemetry(hass, "box-key-2", {"trustedKeyIdPrefixes": [phone.key_id[:8]]})
+    assert [k["keyId"] for k in await ks.async_list_pending_box_keys()] == [other.key_id]
+
+
+async def test_telemetry_without_a_key_list_leaves_pending_keys(hass: HomeAssistant, tmp_path):
+    admin, _ = await _leave_setup(hass, tmp_path)
+    ks = hass.data[DOMAIN]["keystore"]
+    await ks.async_bind_edge_box("EC-1", "box-key-1")
+    phone = _Admin()
+    await _trust_over_lan(hass, admin, phone)
+
+    for telemetry in (
+        {"uptime": 5},
+        {"trustedKeyIdPrefixes": "nope"},
+        {"trustedKeyIdPrefixes": [7, ""]},
+    ):
+        assert (await _ingest_telemetry(hass, "box-key-1", telemetry)).status == 200
+
+    assert sorted((await ks.load()).box_pending_keys[phone.key_id]) == ["EC-1", "EC-2"]
+
+
+async def test_a_signed_command_the_box_ran_clears_its_signers_pending_key(
+    hass: HomeAssistant, tmp_path
+):
+    """A box that ran a command signed by a key holds that key (svitgrid
+    D-2354), whatever its telemetry says."""
+    admin, queue = await _leave_setup(hass, tmp_path)
+    ks = hass.data[DOMAIN]["keystore"]
+    await ks.async_bind_edge_box("EC-1", "box-key-1")
+    phone = _Admin()
+    await _trust_over_lan(hass, admin, phone)
+
+    refused = await queue.async_enqueue(
+        "EC-1",
+        "set_work_mode",
+        {"mode": 1},
+        signing={"signedEventData": "{}", "signature": "x", "signingKeyId": phone.key_id},
+        inverter_id="inv-1",
+        source="executor",
+    )
+    ran = await queue.async_enqueue(
+        "EC-1",
+        "set_work_mode",
+        {"mode": 2},
+        signing={"signedEventData": "{}", "signature": "y", "signingKeyId": phone.key_id},
+        inverter_id="inv-1",
+        source="executor",
+    )
+    await _drain(queue, "EC-1")
+
+    await _box_ack(
+        hass,
+        refused,
+        api_key="box-key-1",
+        success=False,
+        result={"rejected": True, "reason": "unknown_key"},
+    )
+    assert sorted((await ks.load()).box_pending_keys[phone.key_id]) == ["EC-1", "EC-2"]
+
+    await _box_ack(hass, ran, api_key="box-key-1", result={})
+    assert (await ks.load()).box_pending_keys[phone.key_id] == ["EC-2"]
 
 
 async def test_pending_box_keys_list_each_keys_public_key_hex(hass: HomeAssistant, tmp_path):

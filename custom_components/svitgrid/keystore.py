@@ -807,6 +807,35 @@ class SvitgridKeystore:
         current.box_pending_keys = pending
         await self._write(current)
 
+    async def async_clear_box_pending_by_prefixes(
+        self, prefixes: list[str], device_id: str
+    ) -> None:
+        """Record that box `device_id` holds every pending key whose id starts
+        with one of `prefixes`: the box's own key list, as its telemetry
+        reports it (`trustedKeyIdPrefixes`, 8 hex characters each). A phone
+        the box trusted before the move joins Home Assistant with its key
+        pending on every box, and only the box can say it already holds it
+        (svitgrid D-2354). Only clears: a key missing from the list stays as
+        it is. One write."""
+        wanted = tuple(p.lower() for p in prefixes if isinstance(p, str) and p)
+        if not wanted:
+            return
+        current = await self.load()
+        if current is None:
+            return
+        pending: dict[str, list[str]] = {}
+        changed = False
+        for key_id, device_ids in current.box_pending_keys.items():
+            if device_id in device_ids and key_id.lower().startswith(wanted):
+                device_ids = [d for d in device_ids if d != device_id]
+                changed = True
+            if device_ids:
+                pending[key_id] = device_ids
+        if not changed:
+            return
+        current.box_pending_keys = pending
+        await self._write(current)
+
     async def async_list_pending_box_keys(self) -> list[dict[str, Any]]:
         """The keys trusted here that an adopted box does not hold yet:
         `[{keyId, label, publicKeyHex}]`. `label` names the phone the key is

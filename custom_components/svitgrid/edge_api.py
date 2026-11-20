@@ -40,6 +40,7 @@ from . import bms_roster, edge_reading_pipeline
 from .api_client import LogUploadFailed, LogUploadRefused
 from .bms_packs import valid_report as valid_bms_report
 from .const import ADD_TRUSTED_KEY_COMMAND, DOMAIN
+from .executors.edge_box import EDGE_SIGNED_COMMANDS
 from .island_auth import app_seen_within
 from .keystore import EdgeBoxEntry, KeystoreState
 from .settings_read_plan import onboarding_body, settings_snapshot_kind_for
@@ -790,6 +791,7 @@ class EdgeIngestBatchView(_EdgeView):
             await _store_socket_readings(entry_state, box, _iso_now(), body.get("socketReadings"))
         await _store_bms(request.app["hass"], entry_state, box, body.get("bms"))
         await _stamp_contact(store, box, body.get("telemetry"))
+        await _box_reports_keys(request.app["hass"], box, body.get("telemetry"))
         _contact_stamps(entry_state)[box.device_id] = _monotonic()
         return self.json(
             {
@@ -902,6 +904,30 @@ async def _box_holds_key(hass, box: EdgeBoxEntry, payload) -> None:
     if keystore is None or not isinstance(public_key_hex, str):
         return
     await keystore.async_clear_box_pending(compute_key_id(public_key_hex), box.device_id)
+
+
+async def _box_reports_keys(hass, box: EdgeBoxEntry, telemetry) -> None:
+    """The box's telemetry names the keys it trusts, by prefix
+    (`trustedKeyIdPrefixes`, cloud_uploader.c): none of them is pending on
+    it (svitgrid D-2354)."""
+    prefixes = telemetry.get("trustedKeyIdPrefixes") if isinstance(telemetry, dict) else None
+    keystore = (hass.data.get(DOMAIN) or {}).get("keystore")
+    if keystore is None or not isinstance(prefixes, list):
+        return
+    await keystore.async_clear_box_pending_by_prefixes(prefixes, box.device_id)
+
+
+async def _box_ran_signed(hass, box: EdgeBoxEntry, row: dict) -> None:
+    """The box ran a command it refuses without a signature, signed by
+    `signingKeyId`, so it holds that key: it is no longer pending on the box
+    (svitgrid D-2354). A command the box runs unsigned proves nothing."""
+    if row.get("command") not in EDGE_SIGNED_COMMANDS:
+        return
+    key_id = (row.get("signing") or {}).get("signingKeyId")
+    keystore = (hass.data.get(DOMAIN) or {}).get("keystore")
+    if keystore is None or not isinstance(key_id, str) or not key_id:
+        return
+    await keystore.async_clear_box_pending(key_id, box.device_id)
 
 
 async def _apply_set_state(hass, row: dict) -> None:
@@ -1038,6 +1064,8 @@ class EdgeCommandAckView(_EdgeView):
             return self.json({"success": False, "status": "unknown"})
         if row["command"] == ADD_TRUSTED_KEY_COMMAND and row["state"] == "success":
             await _box_holds_key(request.app["hass"], box, row["payload"])
+        if row["state"] == "success":
+            await _box_ran_signed(request.app["hass"], box, row)
         if row["command"] == "set_state" and row["state"] == "success":
             await _apply_set_state(request.app["hass"], row)
         if row.get("source") == "board":
