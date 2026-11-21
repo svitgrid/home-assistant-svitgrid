@@ -15,6 +15,8 @@
      "event": {"mode": "custom", "config": {"customConditions": [{"type": "dam_price", "op": "gte", "thresholdUahKwh": 6.5}], "customActions": [{"type": "work_mode", "value": 0}]}}},
     {"name": "custom: scheduled outage", "needsCloud": true,
      "event": {"mode": "custom", "config": {"customConditions": [{"type": "scheduled_outage", "inWindow": true}], "customActions": [{"type": "grid_charge_toggle", "enabled": true}]}}},
+    {"name": "custom: emergency outage in the region", "needsCloud": true,
+     "event": {"mode": "custom", "config": {"customConditions": [{"type": "emergency_outage", "active": true}], "customActions": [{"type": "grid_charge_toggle", "enabled": true}]}}},
     {"name": "rule: battery level and a cloud condition", "needsCloud": true,
      "event": {"mode": "custom", "schedule": {"recurrence": "always"}, "config": {"customConditions": [{"type": "battery_soc", "op": "lte", "threshold": 30}, {"type": "forecast_today", "op": "lte", "thresholdKwh": 10}], "customActions": [{"type": "grid_charge_toggle", "enabled": true}]}}},
     {"name": "rule: battery level only", "needsCloud": false,

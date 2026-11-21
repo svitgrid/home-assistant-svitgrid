@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **The emergency-outage rule condition is cloud-only.** A rule that waits
+  for emergency outages in the region is skipped on a true island and shown
+  as needing the cloud copy, like a scheduled-outage rule. Older versions
+  already never run it, because an unknown condition type fails closed.
+
 ## 0.35.0 — 2026-11-20
 
 ### Security

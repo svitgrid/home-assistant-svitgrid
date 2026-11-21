@@ -208,6 +208,8 @@ _CLOUD_CONDITION_TYPES: frozenset[str] = frozenset(
         "forecast_tomorrow",
         "dam_price",
         "scheduled_outage",
+        # The region's emergency-outage flag, from the cloud's outage document.
+        "emergency_outage",
     }
 )
 
