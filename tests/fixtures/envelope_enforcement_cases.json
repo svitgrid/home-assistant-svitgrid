@@ -1,5 +1,5 @@
 {
-  "_comment": "D-1939: what an executor does with a cloud command whose signature verified, given the envelope it carries. services/api/src/__tests__/envelope-replay.test.ts holds the cloud's rules (envelopeFailures, envelopeVerdict) to these cases, and the Home Assistant add-on vendors this file (scripts/sync-edge-command-fixtures.sh) and holds its envelope_check.py to the same answers. The target inverter is payload.inverterId, as on the add-on; an empty one skips the inverter check. `now` is the executor's clock and `clockSet` whether it is trustworthy. `failed` lists the binding and validity checks that did not hold, in the board's fixed order (envelope_check.c). `verdict` gives the action at each enforcement level: `off` (the server's envelopeEnforce is false), `switch` (it is true) and `always` (the S3's always-enforce build). `run` runs the command, `refuse` acks it rejected with `reason`, and `retry_later` neither runs nor acks it.",
+  "_comment": "D-1939: what an executor does with a cloud command whose signature verified, given the envelope it carries. services/api/src/__tests__/envelope-replay.test.ts holds the cloud's rules (envelopeFailures, envelopeVerdict) to these cases, and the Home Assistant add-on vendors this file (scripts/sync-edge-command-fixtures.sh) and holds its envelope_check.py to the same answers. The target inverter is payload.inverterId, as on the add-on; an empty one skips the inverter check. `now` is the executor's clock and `clockSet` whether it is trustworthy. `failed` lists the binding and validity checks that did not hold, in the board's fixed order (envelope_check.c). `verdict` gives the action at each enforcement level: `off` (the server's envelopeEnforce is false), `switch` (it is true) and `always` (the S3's always-enforce build). `run` runs the command, `refuse` acks it rejected with `reason`, and `retry_later` neither runs nor acks it. A planner_delegation (D-1714, removed 2026-11-21) fails planner_delegation alone and is refused with `command_mismatch` at every level, `off` included.",
   "now": "2026-11-18T12:00:00.000Z",
   "cases": [
     {
@@ -383,7 +383,7 @@
       "clockSet": true
     },
     {
-      "name": "a planner delegation naming the inverter",
+      "name": "a planner delegation naming the inverter is refused",
       "command": "set_work_mode",
       "payload": {
         "inverterId": "inv-A",
@@ -402,20 +402,95 @@
         "validUntil": "2026-01-01T00:00:00.000Z"
       },
       "failed": [
-        "authorized_commands_missing"
+        "planner_delegation"
       ],
       "verdict": {
         "off": {
-          "action": "run",
-          "reason": null
+          "action": "refuse",
+          "reason": "command_mismatch"
         },
         "switch": {
-          "action": "run",
-          "reason": null
+          "action": "refuse",
+          "reason": "command_mismatch"
         },
         "always": {
-          "action": "run",
-          "reason": null
+          "action": "refuse",
+          "reason": "command_mismatch"
+        }
+      },
+      "clockSet": true
+    },
+    {
+      "name": "a planner delegation on a board-level command is refused",
+      "command": "permit_join",
+      "payload": {
+        "duration": 120
+      },
+      "signedEventData": {
+        "type": "planner_delegation",
+        "householdId": "hh-1",
+        "inverterIds": [
+          "inv-B",
+          "inv-A"
+        ],
+        "allowedModes": [
+          "sell_to_grid"
+        ],
+        "validUntil": "2026-01-01T00:00:00.000Z"
+      },
+      "failed": [
+        "planner_delegation"
+      ],
+      "verdict": {
+        "off": {
+          "action": "refuse",
+          "reason": "command_mismatch"
+        },
+        "switch": {
+          "action": "refuse",
+          "reason": "command_mismatch"
+        },
+        "always": {
+          "action": "refuse",
+          "reason": "command_mismatch"
+        }
+      },
+      "clockSet": true
+    },
+    {
+      "name": "a planner delegation on a restore is refused",
+      "command": "restore_work_mode",
+      "payload": {
+        "inverterId": "inv-A",
+        "workMode": 0
+      },
+      "signedEventData": {
+        "type": "planner_delegation",
+        "householdId": "hh-1",
+        "inverterIds": [
+          "inv-B",
+          "inv-A"
+        ],
+        "allowedModes": [
+          "sell_to_grid"
+        ],
+        "validUntil": "2026-01-01T00:00:00.000Z"
+      },
+      "failed": [
+        "planner_delegation"
+      ],
+      "verdict": {
+        "off": {
+          "action": "refuse",
+          "reason": "command_mismatch"
+        },
+        "switch": {
+          "action": "refuse",
+          "reason": "command_mismatch"
+        },
+        "always": {
+          "action": "refuse",
+          "reason": "command_mismatch"
         }
       },
       "clockSet": true

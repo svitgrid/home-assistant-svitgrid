@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Security
+- **Home Assistant refuses a planner delegation.** The planner's 30-day
+  delegation was removed. A cloud command that carries one is refused with
+  `command_mismatch` and reported as `planner_delegation`, with the envelope
+  switch on or off, as an ED-1 on 2.184.0 and the phone station already do.
+  One valid delegation used to pass any signed write on the inverters it
+  listed (svitgrid D-1714, D-2486).
+
 ### Added
 - **The emergency-outage rule condition is cloud-only.** A rule that waits
   for emergency outages in the region is skipped on a true island and shown

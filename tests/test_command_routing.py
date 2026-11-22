@@ -238,6 +238,36 @@ async def test_switch_off_runs_the_command_and_reports_the_check(hass):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("envelope_enforce", [False, True])
+async def test_a_planner_delegation_is_refused_with_the_switch_off_too(hass, envelope_enforce):
+    """svitgrid D-1714: the planner's delegation was removed, so a delegation
+    authorizes nothing, whatever the poll's `envelopeEnforce` says."""
+    admin_priv, admin_pub_hex = generate_keypair()
+    executor = AsyncMock()
+    delegation = {
+        "type": "planner_delegation",
+        "householdId": "hh-1",
+        "inverterIds": ["ha-bbb"],
+        "allowedModes": ["sell_to_grid"],
+        "validUntil": "2099-01-01T00:00:00.000Z",
+    }
+    api_client, _ = await _process(
+        _enveloped_cmd("set_work_mode", admin_priv, delegation),
+        admin_pub_hex,
+        executor,
+        envelope_enforce=envelope_enforce,
+    )
+
+    executor.dispatch.assert_not_awaited()
+    body = api_client.ack_command.call_args.kwargs["body"]
+    assert body["success"] is False
+    assert body["rejected"] is True
+    assert body["reason"] == "command_mismatch"
+    assert body["envelopeCheck"]["failed"] == ["planner_delegation"]
+    assert body["envelopeCheck"]["shape"] == "planner_delegation"
+
+
+@pytest.mark.asyncio
 async def test_enforcing_runs_a_command_its_envelope_authorizes(hass):
     admin_priv, admin_pub_hex = generate_keypair()
     executor = AsyncMock()

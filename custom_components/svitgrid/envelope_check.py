@@ -8,13 +8,20 @@ and the mobile harvester (``envelope_check.dart``) do:
 
 - Is the command in its ``authorizedCommands``? An envelope with no such list
   but a string ``command`` (an owner's tap) authorizes exactly that command.
-- Does its ``inverterId`` (or a delegation's ``inverterIds``) name the target,
-  the command's ``payload.inverterId``?
+- Does its ``inverterId`` name the target, the command's
+  ``payload.inverterId``?
 - Is it still inside its ``validUntil``?
 
-What a failure does depends on the enforcement level. ``off`` (the poll's
-``envelopeEnforce`` is false) runs every command and only reports the failure
-in the ack's ``envelopeCheck``. ``switch`` (it is true) refuses on the board's
+A ``planner_delegation`` envelope fails ``planner_delegation`` and nothing
+else (svitgrid D-1714): the planner's delegation was removed on 2026-11-21,
+and one valid delegation would otherwise pass any signed write on the
+inverters it lists. Every level refuses it, ``off`` included, with the reason
+``command_mismatch``. This check runs only after the signature verified
+against a held trusted key.
+
+What any other failure does depends on the enforcement level. ``off`` (the
+poll's ``envelopeEnforce`` is false) runs the command and only reports the
+failure in the ack's ``envelopeCheck``. ``switch`` (it is true) refuses on the board's
 ENVELOPE_ENFORCE_MASK. ``always`` is the S3's always-enforce build; the add-on
 has no such build, and the level is here so the shared cases pin all three.
 
@@ -32,6 +39,8 @@ from typing import Any
 
 # Check names, in the board's fixed order.
 CHECK_ORDER = (
+    # D-1714: a removed planner delegation, refused at every level.
+    "planner_delegation",
     "authorized_commands_missing",
     "command_not_authorized",
     "inverter_id_missing",
@@ -40,10 +49,14 @@ CHECK_ORDER = (
     "envelope_no_clock",
     "envelope_expired",
 )
-_VALIDITY = frozenset(CHECK_ORDER[4:])
+_VALIDITY = frozenset({"valid_until_missing", "envelope_no_clock", "envelope_expired"})
 
+# ENVELOPE_ENFORCE_OFF_MASK: refused even with the server's switch off (D-1714).
+_ENFORCED_OFF = frozenset({"planner_delegation"})
 # ENVELOPE_ENFORCE_MASK: what the server's switch refuses.
-_ENFORCED_SWITCH = frozenset({"command_not_authorized", "valid_until_missing", "envelope_no_clock"})
+_ENFORCED_SWITCH = frozenset(
+    {"planner_delegation", "command_not_authorized", "valid_until_missing", "envelope_no_clock"}
+)
 # ENVELOPE_ENFORCE_ALWAYS_MASK.
 _ENFORCED_ALWAYS = frozenset(CHECK_ORDER)
 
@@ -60,10 +73,6 @@ _ISO_UTC = re.compile(
     r"^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?"
     r"(?:Z|([+-])(\d{2}):(\d{2}))$"
 )
-
-
-def _is_delegation(sed: Any) -> bool:
-    return isinstance(sed, dict) and sed.get("type") == "planner_delegation"
 
 
 def parse_iso8601_utc(value: Any) -> int | None:
@@ -98,6 +107,9 @@ def envelope_failures(
     hold. An empty ``target_inverter_id`` skips the inverter check. A
     ``now_epoch_s`` of None skips the validity checks."""
     sed = signed_event_data if isinstance(signed_event_data, dict) else {}
+    # D-1714: whatever a planner delegation lists, it authorizes nothing.
+    if sed.get("type") == "planner_delegation":
+        return ["planner_delegation"]
     failed: set[str] = set()
 
     authorized = sed.get("authorizedCommands")
@@ -111,17 +123,12 @@ def envelope_failures(
         failed.add("command_not_authorized")
 
     one = sed.get("inverterId")
-    many = sed.get("inverterIds")
-    has_one = isinstance(one, str) and one != ""
-    has_many = isinstance(many, list)
-    if not has_one and not has_many:
+    if not (isinstance(one, str) and one != ""):
         failed.add("inverter_id_missing")
-    elif target_inverter_id:
-        named = one == target_inverter_id if has_one else target_inverter_id in many
-        if not named:
-            failed.add("inverter_mismatch")
+    elif target_inverter_id and one != target_inverter_id:
+        failed.add("inverter_mismatch")
 
-    if now_epoch_s is not None and not _is_delegation(sed):
+    if now_epoch_s is not None:
         until = parse_iso8601_utc(sed.get("validUntil"))
         if until is None:
             failed.add("valid_until_missing")
@@ -141,15 +148,17 @@ def envelope_verdict(
     ``reason`` is the refusal's ack reason, and None unless the action is
     :data:`ACTION_REFUSE`. A restore runs without a clock (and, at
     ``always``, on an expired envelope), so the inverter is always put back.
-    A planner delegation names allowedModes, so a missing command list does
-    not count against it.
+    Any other level than ``switch`` and ``always`` is ``off``, which refuses
+    only a planner delegation (D-1714). ``signed_event_data`` is unused and
+    kept for the callers.
     """
-    if level not in (LEVEL_SWITCH, LEVEL_ALWAYS):
-        return ACTION_RUN, None
-    mask = _ENFORCED_ALWAYS if level == LEVEL_ALWAYS else _ENFORCED_SWITCH
+    if level == LEVEL_ALWAYS:
+        mask = _ENFORCED_ALWAYS
+    elif level == LEVEL_SWITCH:
+        mask = _ENFORCED_SWITCH
+    else:
+        mask = _ENFORCED_OFF
     enforced = [n for n in CHECK_ORDER if n in failed and n in mask]
-    if _is_delegation(signed_event_data):
-        enforced = [n for n in enforced if n != "authorized_commands_missing"]
     if command.startswith("restore_"):
         exempt = (
             {"envelope_no_clock", "envelope_expired"}
@@ -162,6 +171,9 @@ def envelope_verdict(
     if enforced == ["envelope_no_clock"]:
         return ACTION_RETRY_LATER, None
     first = enforced[0]
+    if first == "planner_delegation":
+        # A reason the app already explains (board_refusal_text.dart).
+        return ACTION_REFUSE, "command_mismatch"
     return ACTION_REFUSE, first if first.startswith("envelope_") else f"envelope_{first}"
 
 

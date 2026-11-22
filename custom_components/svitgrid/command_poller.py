@@ -1136,8 +1136,10 @@ async def process_command(
         # verified envelope authorizes this command for this inverter while
         # it is still valid. Every failure rides on the ack as
         # `envelopeCheck`; the poll's `envelopeEnforce` decides whether it
-        # refuses (the S3's ENVELOPE_ENFORCE_MASK). This host's clock is
-        # trusted, so a no-clock wait cannot arise here.
+        # refuses (the S3's ENVELOPE_ENFORCE_MASK). A planner delegation is
+        # refused with the switch off too (svitgrid D-1714), since the
+        # signature verified against a held trusted key. This host's clock
+        # is trusted, so a no-clock wait cannot arise here.
         now_s = int(time.time())
         failed = envelope_failures(
             signed_event_data,

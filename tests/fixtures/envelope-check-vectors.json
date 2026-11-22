@@ -1,12 +1,14 @@
 {
-  "_comment": "Shared vectors for the log-only envelope check (#954). Read by devices/edge-connector-v2/test/test_envelope_check.c and apps/mobile/test/core/signing/envelope_check_test.dart. Each case gives the verified signedEventData, the top-level command the executor is about to run, and the inverter it would run it on (empty when the executor does not know). `failed` lists the checks that did not hold, in this fixed order: authorized_commands_missing, command_not_authorized, inverter_id_missing, inverter_mismatch. `shape` is the envelope's `type`, or `untyped` for the buildSignedEventData shape that has none (older creates and every healer re-sign). An envelope with no authorizedCommands array but a string `command` (an owner tap or a board-level command) authorizes exactly that one command: a different top-level command fails command_not_authorized, and the envelope does not fail authorized_commands_missing. `enforced` names the checks that make the executor refuse a command; each case's `refuse` is true exactly when its `failed` list holds one of them, except envelope_no_clock on a restore_* command, which never refuses (rulings R1, R7). `reason` is the ack reason a refusing executor sends (`envelope_` plus the first enforced check in the fixed order, never doubled, so envelope_no_clock stays envelope_no_clock); null when the case does not refuse. `retryLater` is true when the only enforced failure is envelope_no_clock on a non-restore command: the executor sends no ack, so the command is redelivered once the clock is set.",
+  "_comment": "Shared vectors for the log-only envelope check (#954). Read by devices/edge-connector-v2/test/test_envelope_check.c and apps/mobile/test/core/signing/envelope_check_test.dart. Each case gives the verified signedEventData, the top-level command the executor is about to run, and the inverter it would run it on (empty when the executor does not know). `failed` lists the checks that did not hold, in this fixed order: planner_delegation, authorized_commands_missing, command_not_authorized, inverter_id_missing, inverter_mismatch. `shape` is the envelope's `type`, or `untyped` for the buildSignedEventData shape that has none (older creates and every healer re-sign). An envelope with no authorizedCommands array but a string `command` (an owner tap or a board-level command) authorizes exactly that one command: a different top-level command fails command_not_authorized, and the envelope does not fail authorized_commands_missing. `enforced` names the checks that make the executor refuse a command; each case's `refuse` is true exactly when its `failed` list holds one of them, except envelope_no_clock on a restore_* command, which never refuses (rulings R1, R7). `reason` is the ack reason a refusing executor sends (`envelope_` plus the first enforced check in the fixed order, never doubled, so envelope_no_clock stays envelope_no_clock); null when the case does not refuse. `retryLater` is true when the only enforced failure is envelope_no_clock on a non-restore command: the executor sends no ack, so the command is redelivered once the clock is set. planner_delegation (D-1714, removed 2026-11-21): the planner's 30-day delegation is no longer honoured. An envelope whose `type` is planner_delegation fails planner_delegation and nothing else, whatever it lists, and every executor that holds trusted keys refuses it at every level, enforcement off included (`enforcedOff`). Its reason is `command_mismatch`, a reason the app already explains, not `envelope_` plus the name. `refuseOff` and `reasonOff` give the answer with enforcement off; absent means the command runs (false, null).",
   "enforced": [
+    "planner_delegation",
     "command_not_authorized",
     "valid_until_missing",
     "envelope_no_clock"
   ],
-  "_alwaysComment": "D-1899: an S3 built with SVITGRID_FLEET_ENVELOPE_ENFORCE \"always\" refuses on enforcedAlways whatever the server says. envelope_no_clock and envelope_expired do not count against a restore_* command. A planner_delegation names allowedModes, not authorizedCommands, so authorized_commands_missing does not count against it either; its limits are a later design. refuseAlways and reasonAlways give the answer; the board's test and services/api/src/__tests__/envelope-replay.test.ts both read them.",
+  "_alwaysComment": "D-1899: an S3 built with SVITGRID_FLEET_ENVELOPE_ENFORCE \"always\" refuses on enforcedAlways whatever the server says. envelope_no_clock and envelope_expired do not count against a restore_* command. refuseAlways and reasonAlways give the answer; the board's test and services/api/src/__tests__/envelope-replay.test.ts both read them.",
   "enforcedAlways": [
+    "planner_delegation",
     "authorized_commands_missing",
     "command_not_authorized",
     "inverter_id_missing",
@@ -15,6 +17,10 @@
     "valid_until_missing",
     "envelope_no_clock",
     "envelope_expired"
+  ],
+  "_offComment": "D-1714: the checks an executor that holds trusted keys refuses on even while the server's envelopeEnforce is false. Only planner_delegation: the planner's delegation was removed, and a compromised cloud must not be able to replay one of the delegations still inside their validUntil.",
+  "enforcedOff": [
+    "planner_delegation"
   ],
   "_deviceScopedComment": "D-2283: board-level commands bind the board, not an inverter. For a command in deviceScopedCommands the inverter half of the check (inverter_id_missing, inverter_mismatch) does not apply: the envelope still has to authorize the command, and its validUntil still counts. The phone signs the island pair as {command, payload, validUntil} with no inverter and no deviceId, so without this an always-enforcing hub (D-1899) refused every move to Home Assistant and back. The board also reports a signed deviceId that names another board as device_mismatch (report only, not in these vectors, since the executors here do not know the board's id).",
   "deviceScopedCommands": [
@@ -186,7 +192,7 @@
       "reasonAlways": "envelope_authorized_commands_missing"
     },
     {
-      "name": "delegation envelope names the target in inverterIds",
+      "name": "planner delegation is refused on an inverter it lists",
       "command": "set_work_mode",
       "targetInverterId": "inv-A",
       "signedEventData": {
@@ -202,13 +208,100 @@
         "validUntil": "2027-01-01T00:00:00.000Z"
       },
       "failed": [
-        "authorized_commands_missing"
+        "planner_delegation"
       ],
       "shape": "planner_delegation",
-      "refuse": false,
-      "reason": null,
-      "refuseAlways": false,
-      "reasonAlways": null
+      "refuse": true,
+      "reason": "command_mismatch",
+      "refuseAlways": true,
+      "reasonAlways": "command_mismatch",
+      "refuseOff": true,
+      "reasonOff": "command_mismatch"
+    },
+    {
+      "name": "planner delegation is refused on a board-level command",
+      "command": "permit_join",
+      "targetInverterId": "",
+      "signedEventData": {
+        "type": "planner_delegation",
+        "householdId": "hh-1",
+        "inverterIds": [
+          "inv-B",
+          "inv-A"
+        ],
+        "allowedModes": [
+          "sell_to_grid"
+        ],
+        "validUntil": "2027-01-01T00:00:00.000Z"
+      },
+      "failed": [
+        "planner_delegation"
+      ],
+      "shape": "planner_delegation",
+      "refuse": true,
+      "reason": "command_mismatch",
+      "refuseAlways": true,
+      "reasonAlways": "command_mismatch",
+      "refuseOff": true,
+      "reasonOff": "command_mismatch"
+    },
+    {
+      "name": "planner delegation is refused on a restore",
+      "command": "restore_work_mode",
+      "targetInverterId": "inv-A",
+      "signedEventData": {
+        "type": "planner_delegation",
+        "householdId": "hh-1",
+        "inverterIds": [
+          "inv-B",
+          "inv-A"
+        ],
+        "allowedModes": [
+          "sell_to_grid"
+        ],
+        "validUntil": "2027-01-01T00:00:00.000Z"
+      },
+      "failed": [
+        "planner_delegation"
+      ],
+      "shape": "planner_delegation",
+      "refuse": true,
+      "reason": "command_mismatch",
+      "refuseAlways": true,
+      "reasonAlways": "command_mismatch",
+      "refuseOff": true,
+      "reasonOff": "command_mismatch"
+    },
+    {
+      "name": "planner delegation is refused even when it lists the command",
+      "command": "set_work_mode",
+      "targetInverterId": "inv-A",
+      "signedEventData": {
+        "type": "planner_delegation",
+        "householdId": "hh-1",
+        "inverterIds": [
+          "inv-B",
+          "inv-A"
+        ],
+        "allowedModes": [
+          "sell_to_grid"
+        ],
+        "validUntil": "2027-01-01T00:00:00.000Z",
+        "inverterId": "inv-A",
+        "authorizedCommands": [
+          "set_work_mode"
+        ]
+      },
+      "failed": [
+        "planner_delegation"
+      ],
+      "shape": "planner_delegation",
+      "refuse": true,
+      "reason": "command_mismatch",
+      "refuseAlways": true,
+      "reasonAlways": "command_mismatch",
+      "refuseOff": true,
+      "reasonOff": "command_mismatch"
     },
     {
       "name": "target unknown to the executor skips the inverter check",
@@ -1119,7 +1212,7 @@
       "reasonAlways": null
     }
   ],
-  "_validityComment": "Validity vectors (#955), log-only like the cases above. Each gives the verified signedEventData, the executor's clock (`now`, ISO 8601 UTC) and whether that clock is trustworthy (`clockSet`: false on a board SNTP has not answered yet). `failed` lists, in this fixed order: valid_until_missing, envelope_no_clock, envelope_expired. `expiredAgoS` is whole seconds since validUntil when expired, else null. A report also carries `eventId` (the envelope's scenarioId, or empty). A planner_delegation is not checked here: the harvester already refuses an expired one as envelope_expired. `command` is the top-level command being run, present where `refuse` depends on it (envelope_no_clock does not refuse restore_*). `refuse` and `retryLater` follow the same rules as the cases above. `bindingFailed` (absent means none) lists the binding checks from the cases above that fail for `command` against the same envelope, with the inverter check skipped; `refuse` and `retryLater` are judged on both lists together, so a binding failure next to envelope_no_clock is final, never retried. `signed_time_missing` follows envelope_expired in the fixed order; a case with `onIsland` true is judged on a board whose island endpoint is set (D-2288). Its eventId is the scenarioId, or an island event's id.",
+  "_validityComment": "Validity vectors (#955), log-only like the cases above. Each gives the verified signedEventData, the executor's clock (`now`, ISO 8601 UTC) and whether that clock is trustworthy (`clockSet`: false on a board SNTP has not answered yet). `failed` lists, in this fixed order: valid_until_missing, envelope_no_clock, envelope_expired. `expiredAgoS` is whole seconds since validUntil when expired, else null. A report also carries `eventId` (the envelope's scenarioId, or empty). A planner_delegation is not checked here: its binding check alone refuses it (bindingFailed planner_delegation). `command` is the top-level command being run, present where `refuse` depends on it (envelope_no_clock does not refuse restore_*). `refuse` and `retryLater` follow the same rules as the cases above. `bindingFailed` (absent means none) lists the binding checks from the cases above that fail for `command` against the same envelope, with the inverter check skipped; `refuse` and `retryLater` are judged on both lists together, so a binding failure next to envelope_no_clock is final, never retried. `signed_time_missing` follows envelope_expired in the fixed order; a case with `onIsland` true is judged on a board whose island endpoint is set (D-2288). Its eventId is the scenarioId, or an island event's id.",
   "validityCases": [
     {
       "name": "valid envelope",
@@ -1332,12 +1425,14 @@
       "expiredAgoS": null,
       "eventId": "",
       "bindingFailed": [
-        "authorized_commands_missing"
+        "planner_delegation"
       ],
-      "refuse": false,
-      "reason": null,
-      "refuseAlways": false,
-      "reasonAlways": null
+      "refuse": true,
+      "reason": "command_mismatch",
+      "refuseAlways": true,
+      "reasonAlways": "command_mismatch",
+      "refuseOff": true,
+      "reasonOff": "command_mismatch"
     },
     {
       "name": "restore on a board without a clock",
@@ -1389,12 +1484,43 @@
       "eventId": "",
       "command": "set_work_mode",
       "bindingFailed": [
-        "authorized_commands_missing"
+        "planner_delegation"
       ],
-      "refuse": false,
-      "reason": null,
-      "refuseAlways": false,
-      "reasonAlways": null
+      "refuse": true,
+      "reason": "command_mismatch",
+      "refuseAlways": true,
+      "reasonAlways": "command_mismatch",
+      "refuseOff": true,
+      "reasonOff": "command_mismatch"
+    },
+    {
+      "name": "planner delegation on a board without a clock",
+      "now": "1970-01-01T00:00:12.000Z",
+      "clockSet": false,
+      "signedEventData": {
+        "type": "planner_delegation",
+        "householdId": "hh-1",
+        "inverterIds": [
+          "inv-A"
+        ],
+        "allowedModes": [
+          "sell_to_grid"
+        ],
+        "validUntil": "2027-01-01T00:00:00.000Z"
+      },
+      "failed": [],
+      "expiredAgoS": null,
+      "eventId": "",
+      "command": "set_work_mode",
+      "bindingFailed": [
+        "planner_delegation"
+      ],
+      "refuse": true,
+      "reason": "command_mismatch",
+      "refuseAlways": true,
+      "reasonAlways": "command_mismatch",
+      "refuseOff": true,
+      "reasonOff": "command_mismatch"
     },
     {
       "name": "no clock and a command the envelope does not authorize",
