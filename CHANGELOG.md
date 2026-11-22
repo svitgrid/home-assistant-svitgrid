@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.35.1 — 2026-11-22
 
 ### Security
 - **Home Assistant refuses a planner delegation.** The planner's 30-day
