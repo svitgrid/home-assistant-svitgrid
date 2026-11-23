@@ -1,0 +1,225 @@
+{
+  "modelId": "solis_s6_eh1p_10k_l_plus",
+  "version": 1,
+  "source": "generated",
+  "verified": false,
+  "protocol": "modbus_tcp",
+  "port": 502,
+  "defaultSlaveId": 1,
+  "flags": {
+    "pvPowerFromVoltageCurrent": true,
+    "gridPositiveIsExport": true,
+    "usesInputRegisters": true
+  },
+  "reads": [
+    {
+      "field": "batterySoc",
+      "address": 33139,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "batteryVoltage",
+      "address": 33133,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "batteryPower",
+      "address": 33149,
+      "words": 2,
+      "signed": true,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "batteryCurrent",
+      "address": 33134,
+      "signed": true,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "gridPower",
+      "address": 33130,
+      "words": 2,
+      "signed": true,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "gridVoltageL1",
+      "address": 33073,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "gridFrequency",
+      "address": 33094,
+      "scale": 0.01,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "loadPower",
+      "address": 33147,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv1Voltage",
+      "address": 33049,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv1Current",
+      "address": 33050,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv2Voltage",
+      "address": 33051,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "pv2Current",
+      "address": 33052,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "dailyPvEnergy",
+      "address": 33035,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "dailyGridImportEnergy",
+      "address": 33171,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "dailyGridExportEnergy",
+      "address": 33175,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "dailyLoadEnergy",
+      "address": 33179,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "dailyBatteryChargeEnergy",
+      "address": 33163,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "dailyBatteryDischargeEnergy",
+      "address": 33167,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "bmsChargeCurrentLimit",
+      "address": 33143,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    },
+    {
+      "field": "bmsDischargeCurrentLimit",
+      "address": 33144,
+      "scale": 0.1,
+      "functionCode": "FC04"
+    }
+  ],
+  "derivations": [
+    {
+      "field": "batteryPower",
+      "op": "builtin",
+      "inputs": [
+        "batteryPower"
+      ],
+      "builtin": "battery_sign_normalize"
+    },
+    {
+      "field": "gridPower",
+      "op": "builtin",
+      "inputs": [
+        "gridPower"
+      ],
+      "builtin": "grid_sign_normalize"
+    },
+    {
+      "field": "pv1Power",
+      "op": "builtin",
+      "inputs": [
+        "pv1Voltage",
+        "pv1Current"
+      ],
+      "builtin": "pv_power_from_vi"
+    },
+    {
+      "field": "pv2Power",
+      "op": "builtin",
+      "inputs": [
+        "pv2Voltage",
+        "pv2Current"
+      ],
+      "builtin": "pv_power_from_vi"
+    },
+    {
+      "field": "totalPvPower",
+      "op": "sum",
+      "inputs": [
+        "pv1Power",
+        "pv2Power"
+      ]
+    }
+  ],
+  "writes": [],
+  "transport": "modbus_tcp",
+  "batches": [
+    {
+      "startRegister": 33035,
+      "count": 39,
+      "functionCode": "FC04",
+      "unitId": 1
+    },
+    {
+      "startRegister": 33094,
+      "count": 40,
+      "functionCode": "FC04",
+      "unitId": 1
+    },
+    {
+      "startRegister": 33134,
+      "count": 38,
+      "functionCode": "FC04",
+      "unitId": 1
+    },
+    {
+      "startRegister": 33175,
+      "count": 5,
+      "functionCode": "FC04",
+      "unitId": 1
+    }
+  ],
+  "maxBatchRegisters": 40,
+  "sourceRefs": [
+    {
+      "project": "Solis RS485_MODBUS(ESINV-33000ID) hybrid protocol, 2020-09-15",
+      "url": "https://forum.iobroker.net/assets/uploads/files/1619515984065-_without-control-hybrid-en-2020.9.15_rs485_modbus-esinv-33000id-hybrid-inverter.pdf",
+      "retrievedAt": "2026-10-26",
+      "independentOf": "solis_esinv_33000id"
+    },
+    {
+      "project": "candlerb/solis_exporter",
+      "url": "https://github.com/candlerb/solis_exporter/blob/HEAD/docs/packet_log/index.md",
+      "retrievedAt": "2026-10-26",
+      "independentOf": "solis_esinv_33000id"
+    }
+  ],
+  "confidence": "single_source"
+}

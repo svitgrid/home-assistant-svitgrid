@@ -133,6 +133,22 @@ def grid_answered(spec: RegisterSpec, raw: RawRegisters) -> bool:
     return any(reads.get(f) is not None for f in wanted)
 
 
+def _absent_by_spec(spec: RegisterSpec) -> frozenset[str]:
+    """Standard fields the Dart reader reports absent rather than 0 for this
+    spec, mirroring `ModelRegisterDecoder`:
+    - batterySoc, when the spec reads a battery voltage but no SOC
+      (`hasBatterySoc`; the MUST PV1800/PH1800 shape);
+    - dailyPvEnergy, when the spec has no daily PV register, total or per
+      string (`hasDailyPvEnergy`)."""
+    read = {r.field for r in spec.reads} | {x.field for x in spec.derivations}
+    absent = set()
+    if "batteryVoltage" in read and "batterySoc" not in read:
+        absent.add("batterySoc")
+    if not read & {"dailyPvEnergy", "dailyPv1Energy", "dailyPv2Energy", "dailyPv3Energy"}:
+        absent.add("dailyPvEnergy")
+    return frozenset(absent)
+
+
 def sanitize(fields: dict[str, float | None], spec: RegisterSpec) -> dict[str, float | None]:
     """Re-apply the spec-derivable reader clamps (spec §3.2).
 
@@ -144,8 +160,9 @@ def sanitize(fields: dict[str, float | None], spec: RegisterSpec) -> dict[str, f
     batteryVoltage (HV/LV) and Huawei pvPower>=0 are NOT reproduced
     (model-property-dependent) — the cloud validator backstops."""
     out = dict(fields)
+    absent = _absent_by_spec(spec)
     for f in _STANDARD_ZERO_FIELDS:
-        if f not in out:
+        if f not in out and f not in absent:
             out[f] = 0.0
     soc = out.get("batterySoc")
     if soc is not None:

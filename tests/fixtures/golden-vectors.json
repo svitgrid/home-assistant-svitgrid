@@ -1,5 +1,5 @@
 {
-  "sourceCommit": "2afdc1cd24fbc24e99b4b59f98f824919f880a08",
+  "sourceCommit": "3cdae2784b4c89f6181511d31d57219297d211fb",
   "vectors": [
     {
       "modelId": "deye_sg04lp3",
@@ -220,6 +220,12 @@
             "scale": 0.1
           },
           {
+            "field": "inverterTemperature",
+            "address": 541,
+            "scale": 0.1,
+            "offset": -100.0
+          },
+          {
             "field": "bmsChargeCurrentLimit",
             "address": 212
           },
@@ -302,6 +308,14 @@
             "op": "builtin",
             "inputs": [
               "batteryTemperature"
+            ],
+            "builtin": "battery_temp_clamp"
+          },
+          {
+            "field": "inverterTemperature",
+            "op": "builtin",
+            "inputs": [
+              "inverterTemperature"
             ],
             "builtin": "battery_temp_clamp"
           },
@@ -743,6 +757,12 @@
             "scale": 0.1
           },
           {
+            "field": "inverterTemperature",
+            "address": 541,
+            "scale": 0.1,
+            "offset": -100.0
+          },
+          {
             "field": "bmsChargeCurrentLimit",
             "address": 212
           },
@@ -825,6 +845,14 @@
             "op": "builtin",
             "inputs": [
               "batteryTemperature"
+            ],
+            "builtin": "battery_temp_clamp"
+          },
+          {
+            "field": "inverterTemperature",
+            "op": "builtin",
+            "inputs": [
+              "inverterTemperature"
             ],
             "builtin": "battery_temp_clamp"
           },
@@ -1259,6 +1287,12 @@
             "scale": 0.1
           },
           {
+            "field": "inverterTemperature",
+            "address": 541,
+            "scale": 0.1,
+            "offset": -100.0
+          },
+          {
             "field": "bmsChargeCurrentLimit",
             "address": 212
           },
@@ -1341,6 +1375,14 @@
             "op": "builtin",
             "inputs": [
               "batteryTemperature"
+            ],
+            "builtin": "battery_temp_clamp"
+          },
+          {
+            "field": "inverterTemperature",
+            "op": "builtin",
+            "inputs": [
+              "inverterTemperature"
             ],
             "builtin": "battery_temp_clamp"
           },
@@ -1676,6 +1718,12 @@
             "scale": 0.1
           },
           {
+            "field": "inverterTemperature",
+            "address": 91,
+            "scale": 0.1,
+            "offset": -100.0
+          },
+          {
             "field": "bmsChargeCurrentLimit",
             "address": 314
           },
@@ -1757,6 +1805,14 @@
             "op": "builtin",
             "inputs": [
               "batteryTemperature"
+            ],
+            "builtin": "battery_temp_clamp"
+          },
+          {
+            "field": "inverterTemperature",
+            "op": "builtin",
+            "inputs": [
+              "inverterTemperature"
             ],
             "builtin": "battery_temp_clamp"
           },
@@ -2062,6 +2118,12 @@
             "scale": 0.1
           },
           {
+            "field": "inverterTemperature",
+            "address": 91,
+            "scale": 0.1,
+            "offset": -100.0
+          },
+          {
             "field": "bmsChargeCurrentLimit",
             "address": 314
           },
@@ -2143,6 +2205,14 @@
             "op": "builtin",
             "inputs": [
               "batteryTemperature"
+            ],
+            "builtin": "battery_temp_clamp"
+          },
+          {
+            "field": "inverterTemperature",
+            "op": "builtin",
+            "inputs": [
+              "inverterTemperature"
             ],
             "builtin": "battery_temp_clamp"
           },
@@ -2463,6 +2533,12 @@
             "scale": 0.1
           },
           {
+            "field": "inverterTemperature",
+            "address": 91,
+            "scale": 0.1,
+            "offset": -100.0
+          },
+          {
             "field": "bmsChargeCurrentLimit",
             "address": 314
           },
@@ -2544,6 +2620,14 @@
             "op": "builtin",
             "inputs": [
               "batteryTemperature"
+            ],
+            "builtin": "battery_temp_clamp"
+          },
+          {
+            "field": "inverterTemperature",
+            "op": "builtin",
+            "inputs": [
+              "inverterTemperature"
             ],
             "builtin": "battery_temp_clamp"
           },
@@ -2850,6 +2934,12 @@
             "scale": 0.1
           },
           {
+            "field": "inverterTemperature",
+            "address": 91,
+            "scale": 0.1,
+            "offset": -100.0
+          },
+          {
             "field": "bmsChargeCurrentLimit",
             "address": 314
           },
@@ -2931,6 +3021,14 @@
             "op": "builtin",
             "inputs": [
               "batteryTemperature"
+            ],
+            "builtin": "battery_temp_clamp"
+          },
+          {
+            "field": "inverterTemperature",
+            "op": "builtin",
+            "inputs": [
+              "inverterTemperature"
             ],
             "builtin": "battery_temp_clamp"
           },
@@ -3236,6 +3334,12 @@
             "scale": 0.1
           },
           {
+            "field": "inverterTemperature",
+            "address": 91,
+            "scale": 0.1,
+            "offset": -100.0
+          },
+          {
             "field": "bmsChargeCurrentLimit",
             "address": 314
           },
@@ -3317,6 +3421,14 @@
             "op": "builtin",
             "inputs": [
               "batteryTemperature"
+            ],
+            "builtin": "battery_temp_clamp"
+          },
+          {
+            "field": "inverterTemperature",
+            "op": "builtin",
+            "inputs": [
+              "inverterTemperature"
             ],
             "builtin": "battery_temp_clamp"
           },
@@ -3615,6 +3727,12 @@
             "scale": 0.1
           },
           {
+            "field": "inverterTemperature",
+            "address": 91,
+            "scale": 0.1,
+            "offset": -100.0
+          },
+          {
             "field": "bmsChargeCurrentLimit",
             "address": 314
           },
@@ -3696,6 +3814,14 @@
             "op": "builtin",
             "inputs": [
               "batteryTemperature"
+            ],
+            "builtin": "battery_temp_clamp"
+          },
+          {
+            "field": "inverterTemperature",
+            "op": "builtin",
+            "inputs": [
+              "inverterTemperature"
             ],
             "builtin": "battery_temp_clamp"
           },
@@ -4001,6 +4127,12 @@
             "scale": 0.1
           },
           {
+            "field": "inverterTemperature",
+            "address": 91,
+            "scale": 0.1,
+            "offset": -100.0
+          },
+          {
             "field": "bmsChargeCurrentLimit",
             "address": 314
           },
@@ -4082,6 +4214,14 @@
             "op": "builtin",
             "inputs": [
               "batteryTemperature"
+            ],
+            "builtin": "battery_temp_clamp"
+          },
+          {
+            "field": "inverterTemperature",
+            "op": "builtin",
+            "inputs": [
+              "inverterTemperature"
             ],
             "builtin": "battery_temp_clamp"
           },
@@ -4380,6 +4520,12 @@
             "scale": 0.1
           },
           {
+            "field": "inverterTemperature",
+            "address": 91,
+            "scale": 0.1,
+            "offset": -100.0
+          },
+          {
             "field": "bmsChargeCurrentLimit",
             "address": 314
           },
@@ -4461,6 +4607,14 @@
             "op": "builtin",
             "inputs": [
               "batteryTemperature"
+            ],
+            "builtin": "battery_temp_clamp"
+          },
+          {
+            "field": "inverterTemperature",
+            "op": "builtin",
+            "inputs": [
+              "inverterTemperature"
             ],
             "builtin": "battery_temp_clamp"
           },
@@ -4759,6 +4913,12 @@
             "scale": 0.1
           },
           {
+            "field": "inverterTemperature",
+            "address": 91,
+            "scale": 0.1,
+            "offset": -100.0
+          },
+          {
             "field": "bmsChargeCurrentLimit",
             "address": 314
           },
@@ -4840,6 +5000,14 @@
             "op": "builtin",
             "inputs": [
               "batteryTemperature"
+            ],
+            "builtin": "battery_temp_clamp"
+          },
+          {
+            "field": "inverterTemperature",
+            "op": "builtin",
+            "inputs": [
+              "inverterTemperature"
             ],
             "builtin": "battery_temp_clamp"
           },
@@ -5228,6 +5396,12 @@
             "scale": 0.1
           },
           {
+            "field": "inverterTemperature",
+            "address": 541,
+            "scale": 0.1,
+            "offset": -100.0
+          },
+          {
             "field": "bmsChargeCurrentLimit",
             "address": 212
           },
@@ -5299,6 +5473,14 @@
             "op": "builtin",
             "inputs": [
               "batteryTemperature"
+            ],
+            "builtin": "battery_temp_clamp"
+          },
+          {
+            "field": "inverterTemperature",
+            "op": "builtin",
+            "inputs": [
+              "inverterTemperature"
             ],
             "builtin": "battery_temp_clamp"
           },
@@ -5734,6 +5916,12 @@
             "scale": 0.1
           },
           {
+            "field": "inverterTemperature",
+            "address": 541,
+            "scale": 0.1,
+            "offset": -100.0
+          },
+          {
             "field": "bmsChargeCurrentLimit",
             "address": 212
           },
@@ -5805,6 +5993,14 @@
             "op": "builtin",
             "inputs": [
               "batteryTemperature"
+            ],
+            "builtin": "battery_temp_clamp"
+          },
+          {
+            "field": "inverterTemperature",
+            "op": "builtin",
+            "inputs": [
+              "inverterTemperature"
             ],
             "builtin": "battery_temp_clamp"
           },
@@ -6240,6 +6436,12 @@
             "scale": 0.1
           },
           {
+            "field": "inverterTemperature",
+            "address": 541,
+            "scale": 0.1,
+            "offset": -100.0
+          },
+          {
             "field": "bmsChargeCurrentLimit",
             "address": 212
           },
@@ -6311,6 +6513,14 @@
             "op": "builtin",
             "inputs": [
               "batteryTemperature"
+            ],
+            "builtin": "battery_temp_clamp"
+          },
+          {
+            "field": "inverterTemperature",
+            "op": "builtin",
+            "inputs": [
+              "inverterTemperature"
             ],
             "builtin": "battery_temp_clamp"
           },
@@ -6746,6 +6956,12 @@
             "scale": 0.1
           },
           {
+            "field": "inverterTemperature",
+            "address": 541,
+            "scale": 0.1,
+            "offset": -100.0
+          },
+          {
             "field": "bmsChargeCurrentLimit",
             "address": 212
           },
@@ -6817,6 +7033,14 @@
             "op": "builtin",
             "inputs": [
               "batteryTemperature"
+            ],
+            "builtin": "battery_temp_clamp"
+          },
+          {
+            "field": "inverterTemperature",
+            "op": "builtin",
+            "inputs": [
+              "inverterTemperature"
             ],
             "builtin": "battery_temp_clamp"
           },
@@ -7272,6 +7496,12 @@
             "scale": 0.1
           },
           {
+            "field": "inverterTemperature",
+            "address": 541,
+            "scale": 0.1,
+            "offset": -100.0
+          },
+          {
             "field": "bmsChargeCurrentLimit",
             "address": 212
           },
@@ -7343,6 +7573,14 @@
             "op": "builtin",
             "inputs": [
               "batteryTemperature"
+            ],
+            "builtin": "battery_temp_clamp"
+          },
+          {
+            "field": "inverterTemperature",
+            "op": "builtin",
+            "inputs": [
+              "inverterTemperature"
             ],
             "builtin": "battery_temp_clamp"
           },
@@ -7892,6 +8130,12 @@
             "scale": 0.01
           },
           {
+            "field": "inverterTemperature",
+            "address": 32087,
+            "signed": true,
+            "scale": 0.1
+          },
+          {
             "field": "runningState",
             "address": 32089
           }
@@ -7904,6 +8148,14 @@
               "gridPower"
             ],
             "builtin": "grid_sign_normalize"
+          },
+          {
+            "field": "inverterTemperature",
+            "op": "builtin",
+            "inputs": [
+              "inverterTemperature"
+            ],
+            "builtin": "battery_temp_clamp"
           },
           {
             "field": "dailyGridImportEnergy",
@@ -8076,6 +8328,12 @@
             "scale": 0.01
           },
           {
+            "field": "inverterTemperature",
+            "address": 32087,
+            "signed": true,
+            "scale": 0.1
+          },
+          {
             "field": "runningState",
             "address": 32089
           }
@@ -8088,6 +8346,14 @@
               "gridPower"
             ],
             "builtin": "grid_sign_normalize"
+          },
+          {
+            "field": "inverterTemperature",
+            "op": "builtin",
+            "inputs": [
+              "inverterTemperature"
+            ],
+            "builtin": "battery_temp_clamp"
           },
           {
             "field": "dailyGridImportEnergy",
@@ -8260,6 +8526,12 @@
             "scale": 0.01
           },
           {
+            "field": "inverterTemperature",
+            "address": 32087,
+            "signed": true,
+            "scale": 0.1
+          },
+          {
             "field": "runningState",
             "address": 32089
           }
@@ -8272,6 +8544,14 @@
               "gridPower"
             ],
             "builtin": "grid_sign_normalize"
+          },
+          {
+            "field": "inverterTemperature",
+            "op": "builtin",
+            "inputs": [
+              "inverterTemperature"
+            ],
+            "builtin": "battery_temp_clamp"
           },
           {
             "field": "dailyGridImportEnergy",
@@ -8436,6 +8716,12 @@
             "scale": 0.1
           },
           {
+            "field": "inverterTemperature",
+            "address": 91,
+            "scale": 0.1,
+            "offset": -100.0
+          },
+          {
             "field": "bmsChargeCurrentLimit",
             "address": 314
           },
@@ -8517,6 +8803,14 @@
             "op": "builtin",
             "inputs": [
               "batteryTemperature"
+            ],
+            "builtin": "battery_temp_clamp"
+          },
+          {
+            "field": "inverterTemperature",
+            "op": "builtin",
+            "inputs": [
+              "inverterTemperature"
             ],
             "builtin": "battery_temp_clamp"
           },
@@ -8822,6 +9116,12 @@
             "scale": 0.1
           },
           {
+            "field": "inverterTemperature",
+            "address": 91,
+            "scale": 0.1,
+            "offset": -100.0
+          },
+          {
             "field": "bmsChargeCurrentLimit",
             "address": 314
           },
@@ -8903,6 +9203,14 @@
             "op": "builtin",
             "inputs": [
               "batteryTemperature"
+            ],
+            "builtin": "battery_temp_clamp"
+          },
+          {
+            "field": "inverterTemperature",
+            "op": "builtin",
+            "inputs": [
+              "inverterTemperature"
             ],
             "builtin": "battery_temp_clamp"
           },
@@ -9208,6 +9516,12 @@
             "scale": 0.1
           },
           {
+            "field": "inverterTemperature",
+            "address": 91,
+            "scale": 0.1,
+            "offset": -100.0
+          },
+          {
             "field": "bmsChargeCurrentLimit",
             "address": 314
           },
@@ -9289,6 +9603,14 @@
             "op": "builtin",
             "inputs": [
               "batteryTemperature"
+            ],
+            "builtin": "battery_temp_clamp"
+          },
+          {
+            "field": "inverterTemperature",
+            "op": "builtin",
+            "inputs": [
+              "inverterTemperature"
             ],
             "builtin": "battery_temp_clamp"
           },
@@ -9594,6 +9916,12 @@
             "scale": 0.1
           },
           {
+            "field": "inverterTemperature",
+            "address": 91,
+            "scale": 0.1,
+            "offset": -100.0
+          },
+          {
             "field": "bmsChargeCurrentLimit",
             "address": 314
           },
@@ -9675,6 +10003,14 @@
             "op": "builtin",
             "inputs": [
               "batteryTemperature"
+            ],
+            "builtin": "battery_temp_clamp"
+          },
+          {
+            "field": "inverterTemperature",
+            "op": "builtin",
+            "inputs": [
+              "inverterTemperature"
             ],
             "builtin": "battery_temp_clamp"
           },
@@ -9973,6 +10309,12 @@
             "scale": 0.1
           },
           {
+            "field": "inverterTemperature",
+            "address": 91,
+            "scale": 0.1,
+            "offset": -100.0
+          },
+          {
             "field": "bmsChargeCurrentLimit",
             "address": 314
           },
@@ -10054,6 +10396,14 @@
             "op": "builtin",
             "inputs": [
               "batteryTemperature"
+            ],
+            "builtin": "battery_temp_clamp"
+          },
+          {
+            "field": "inverterTemperature",
+            "op": "builtin",
+            "inputs": [
+              "inverterTemperature"
             ],
             "builtin": "battery_temp_clamp"
           },
@@ -10458,6 +10808,12 @@
             "scale": 0.1
           },
           {
+            "field": "inverterTemperature",
+            "address": 541,
+            "scale": 0.1,
+            "offset": -100.0
+          },
+          {
             "field": "bmsChargeCurrentLimit",
             "address": 212
           },
@@ -10544,6 +10900,14 @@
             "builtin": "battery_temp_clamp"
           },
           {
+            "field": "inverterTemperature",
+            "op": "builtin",
+            "inputs": [
+              "inverterTemperature"
+            ],
+            "builtin": "battery_temp_clamp"
+          },
+          {
             "field": "totalPvPower",
             "op": "sum",
             "inputs": [
@@ -10580,7 +10944,7 @@
             "fields": [
               {
                 "payloadField": "batteryChargeCurrentA",
-                "address": 210,
+                "address": 108,
                 "limits": {
                   "min": 0,
                   "max": 350
@@ -10868,6 +11232,12 @@
             "scale": 0.1
           },
           {
+            "field": "inverterTemperature",
+            "address": 91,
+            "scale": 0.1,
+            "offset": -100.0
+          },
+          {
             "field": "bmsChargeCurrentLimit",
             "address": 314
           },
@@ -10953,6 +11323,14 @@
             "builtin": "battery_temp_clamp"
           },
           {
+            "field": "inverterTemperature",
+            "op": "builtin",
+            "inputs": [
+              "inverterTemperature"
+            ],
+            "builtin": "battery_temp_clamp"
+          },
+          {
             "field": "totalPvPower",
             "op": "sum",
             "inputs": [
@@ -10986,7 +11364,7 @@
             "fields": [
               {
                 "payloadField": "batteryChargeCurrentA",
-                "address": 108,
+                "address": 210,
                 "limits": {
                   "min": 0,
                   "max": 350
@@ -12703,7 +13081,7 @@
         "port": 8899,
         "defaultSlaveId": 1,
         "flags": {
-          "batteryPositiveIsDischarge": true
+          "gridPositiveIsExport": true
         },
         "reads": [
           {
@@ -12843,6 +13221,14 @@
             "builtin": "battery_sign_normalize"
           },
           {
+            "field": "gridPower",
+            "op": "builtin",
+            "inputs": [
+              "gridPower"
+            ],
+            "builtin": "grid_sign_normalize"
+          },
+          {
             "field": "batteryTemperature",
             "op": "builtin",
             "inputs": [
@@ -12907,9 +13293,9 @@
       },
       "expectedFields": {
         "batterySoc": 82.0,
-        "batteryPower": 3000.0,
+        "batteryPower": -3000.0,
         "batteryVoltage": 50.0,
-        "gridPower": 2840.0,
+        "gridPower": -2840.0,
         "loadPower": 5000.0,
         "totalPvPower": 4840.0,
         "dailyPvEnergy": 18.5
@@ -12926,7 +13312,7 @@
         "port": 8899,
         "defaultSlaveId": 1,
         "flags": {
-          "batteryPositiveIsDischarge": true
+          "gridPositiveIsExport": true
         },
         "reads": [
           {
@@ -13066,6 +13452,14 @@
             "builtin": "battery_sign_normalize"
           },
           {
+            "field": "gridPower",
+            "op": "builtin",
+            "inputs": [
+              "gridPower"
+            ],
+            "builtin": "grid_sign_normalize"
+          },
+          {
             "field": "batteryTemperature",
             "op": "builtin",
             "inputs": [
@@ -13130,9 +13524,9 @@
       },
       "expectedFields": {
         "batterySoc": 82.0,
-        "batteryPower": 3000.0,
+        "batteryPower": -3000.0,
         "batteryVoltage": 50.0,
-        "gridPower": 2840.0,
+        "gridPower": -2840.0,
         "loadPower": 5000.0,
         "totalPvPower": 4840.0,
         "dailyPvEnergy": 18.5
@@ -21079,6 +21473,12 @@
             "address": 34,
             "scale": 0.1,
             "functionCode": "FC04"
+          },
+          {
+            "field": "inverterTemperature",
+            "address": 64,
+            "signed": true,
+            "functionCode": "FC04"
           }
         ],
         "derivations": [
@@ -21131,6 +21531,14 @@
             "builtin": "battery_temp_clamp"
           },
           {
+            "field": "inverterTemperature",
+            "op": "builtin",
+            "inputs": [
+              "inverterTemperature"
+            ],
+            "builtin": "battery_temp_clamp"
+          },
+          {
             "field": "totalPvPower",
             "op": "sum",
             "inputs": [
@@ -21149,8 +21557,8 @@
             "unitId": 1
           },
           {
-            "startRegister": 67,
-            "count": 1,
+            "startRegister": 64,
+            "count": 4,
             "functionCode": "FC04",
             "unitId": 1
           },
@@ -21438,6 +21846,12 @@
             "functionCode": "FC04"
           },
           {
+            "field": "inverterTemperature",
+            "address": 8,
+            "signed": true,
+            "functionCode": "FC04"
+          },
+          {
             "field": "bmsChargeCurrentLimit",
             "address": 36,
             "scale": 0.1,
@@ -21472,6 +21886,14 @@
             "op": "builtin",
             "inputs": [
               "batteryTemperature"
+            ],
+            "builtin": "battery_temp_clamp"
+          },
+          {
+            "field": "inverterTemperature",
+            "op": "builtin",
+            "inputs": [
+              "inverterTemperature"
             ],
             "builtin": "battery_temp_clamp"
           },
@@ -21567,6 +21989,5482 @@
         "loadPower": 2050.0,
         "totalPvPower": 1222.0,
         "dailyPvEnergy": 12.9
+      }
+    },
+    {
+      "modelId": "must_pv18_1012",
+      "spec": {
+        "modelId": "must_pv18_1012",
+        "version": 1,
+        "source": "generated",
+        "verified": false,
+        "protocol": "modbus_tcp",
+        "port": 8899,
+        "defaultSlaveId": 4,
+        "flags": {
+          "batteryPositiveIsDischarge": true
+        },
+        "reads": [
+          {
+            "field": "batteryVoltage",
+            "address": 25205,
+            "signed": true,
+            "scale": 0.1,
+            "unitId": 4
+          },
+          {
+            "field": "batteryPower",
+            "address": 25273,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "batteryCurrent",
+            "address": 25274,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "gridPower",
+            "address": 25214,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "gridVoltageL1",
+            "address": 25207,
+            "signed": true,
+            "scale": 0.1,
+            "unitId": 4
+          },
+          {
+            "field": "gridFrequency",
+            "address": 25226,
+            "signed": true,
+            "scale": 0.01,
+            "unitId": 4
+          },
+          {
+            "field": "loadPower",
+            "address": 25215,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "pv1Voltage",
+            "address": 15205,
+            "signed": true,
+            "scale": 0.1,
+            "unitId": 4
+          },
+          {
+            "field": "pv1Power",
+            "address": 15208,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "inverterTemperature",
+            "address": 25233,
+            "signed": true,
+            "unitId": 4
+          }
+        ],
+        "derivations": [
+          {
+            "field": "batteryPower",
+            "op": "builtin",
+            "inputs": [
+              "batteryPower"
+            ],
+            "builtin": "battery_sign_normalize"
+          },
+          {
+            "field": "inverterTemperature",
+            "op": "builtin",
+            "inputs": [
+              "inverterTemperature"
+            ],
+            "builtin": "battery_temp_clamp"
+          },
+          {
+            "field": "totalPvPower",
+            "op": "sum",
+            "inputs": [
+              "pv1Power"
+            ]
+          }
+        ],
+        "writes": [],
+        "transport": "modbus_tcp",
+        "batches": [
+          {
+            "startRegister": 15205,
+            "count": 4,
+            "functionCode": "FC03",
+            "unitId": 4
+          },
+          {
+            "startRegister": 25205,
+            "count": 70,
+            "functionCode": "FC03",
+            "unitId": 4
+          }
+        ],
+        "maxBatchRegisters": 74,
+        "sourceRefs": [
+          {
+            "project": "MUST \"PV1800 Modbus RTU Protocol\" edition 1.04.15 (2023), re-hosted on the mukaschultze/ha-must-inverter wiki",
+            "url": "https://github.com/mukaschultze/ha-must-inverter/wiki/Resources",
+            "retrievedAt": "2026-10-24",
+            "independentOf": "must_vendor_modbus_xlsx"
+          },
+          {
+            "project": "MUST PowerMonitor Rs485.dll, decompiled (slave 4, 19200 8N1, FC03, read plan 15201 x 21 and 25201 x 74, one sample frame)",
+            "url": "https://github.com/aquarat/must_inverter",
+            "retrievedAt": "2026-10-24",
+            "independentOf": "must_vendor_modbus_xlsx"
+          },
+          {
+            "project": "mukaschultze/ha-must-inverter (PV1800, PH1800 and PV1900 sensors; the forbidden read ranges)",
+            "url": "https://github.com/mukaschultze/ha-must-inverter",
+            "retrievedAt": "2026-10-24",
+            "independentOf": "must_vendor_modbus_xlsx"
+          }
+        ],
+        "confidence": "single_source",
+        "forbiddenReadRanges": [
+          [
+            10009,
+            10100
+          ],
+          [
+            20017,
+            20100
+          ]
+        ]
+      },
+      "rawRegisters": {
+        "4": {
+          "15201": 2,
+          "15202": 1,
+          "15203": 2,
+          "15204": 0,
+          "15205": 1123,
+          "15206": 522,
+          "15207": 98,
+          "15208": 511,
+          "15209": 35,
+          "15210": 65483,
+          "15211": 1,
+          "15212": 1,
+          "15213": 0,
+          "15214": 0,
+          "15215": 48,
+          "15216": 800,
+          "15217": 1,
+          "15218": 2345,
+          "15219": 120,
+          "15220": 5,
+          "15221": 30,
+          "25201": 2,
+          "25202": 230,
+          "25203": 5200,
+          "25204": 0,
+          "25205": 522,
+          "25206": 2300,
+          "25207": 2301,
+          "25208": 3850,
+          "25209": 12,
+          "25210": 15,
+          "25211": 0,
+          "25212": 14,
+          "25213": 300,
+          "25214": 0,
+          "25215": 288,
+          "25216": 6,
+          "25217": 320,
+          "25218": 0,
+          "25219": 310,
+          "25220": 0,
+          "25221": 20,
+          "25222": 0,
+          "25223": 15,
+          "25224": 0,
+          "25225": 5000,
+          "25226": 5001,
+          "25227": 0,
+          "25228": 0,
+          "25229": 1,
+          "25230": 0,
+          "25231": 1,
+          "25232": 0,
+          "25233": 38,
+          "25234": 45,
+          "25235": 36,
+          "25236": 0,
+          "25237": 1,
+          "25238": 0,
+          "25239": 1,
+          "25240": 0,
+          "25241": 1,
+          "25242": 0,
+          "25243": 0,
+          "25244": 0,
+          "25245": 0,
+          "25246": 1234,
+          "25247": 0,
+          "25248": 987,
+          "25249": 0,
+          "25250": 456,
+          "25251": 0,
+          "25252": 0,
+          "25253": 1,
+          "25254": 1500,
+          "25255": 0,
+          "25256": 800,
+          "25257": 0,
+          "25258": 0,
+          "25259": 0,
+          "25260": 321,
+          "25261": 0,
+          "25262": 0,
+          "25263": 0,
+          "25264": 0,
+          "25265": 0,
+          "25266": 0,
+          "25267": 0,
+          "25268": 0,
+          "25269": 65535,
+          "25270": 65535,
+          "25271": 10405,
+          "25272": 10415,
+          "25273": 65390,
+          "25274": 65534
+        }
+      },
+      "expectedFields": {
+        "batterySoc": null,
+        "batteryPower": 146.0,
+        "batteryVoltage": 52.2,
+        "gridPower": 0.0,
+        "loadPower": 288.0,
+        "totalPvPower": 511.0,
+        "dailyPvEnergy": null
+      }
+    },
+    {
+      "modelId": "must_pv18_1512",
+      "spec": {
+        "modelId": "must_pv18_1512",
+        "version": 1,
+        "source": "generated",
+        "verified": false,
+        "protocol": "modbus_tcp",
+        "port": 8899,
+        "defaultSlaveId": 4,
+        "flags": {
+          "batteryPositiveIsDischarge": true
+        },
+        "reads": [
+          {
+            "field": "batteryVoltage",
+            "address": 25205,
+            "signed": true,
+            "scale": 0.1,
+            "unitId": 4
+          },
+          {
+            "field": "batteryPower",
+            "address": 25273,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "batteryCurrent",
+            "address": 25274,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "gridPower",
+            "address": 25214,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "gridVoltageL1",
+            "address": 25207,
+            "signed": true,
+            "scale": 0.1,
+            "unitId": 4
+          },
+          {
+            "field": "gridFrequency",
+            "address": 25226,
+            "signed": true,
+            "scale": 0.01,
+            "unitId": 4
+          },
+          {
+            "field": "loadPower",
+            "address": 25215,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "pv1Voltage",
+            "address": 15205,
+            "signed": true,
+            "scale": 0.1,
+            "unitId": 4
+          },
+          {
+            "field": "pv1Power",
+            "address": 15208,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "inverterTemperature",
+            "address": 25233,
+            "signed": true,
+            "unitId": 4
+          }
+        ],
+        "derivations": [
+          {
+            "field": "batteryPower",
+            "op": "builtin",
+            "inputs": [
+              "batteryPower"
+            ],
+            "builtin": "battery_sign_normalize"
+          },
+          {
+            "field": "inverterTemperature",
+            "op": "builtin",
+            "inputs": [
+              "inverterTemperature"
+            ],
+            "builtin": "battery_temp_clamp"
+          },
+          {
+            "field": "totalPvPower",
+            "op": "sum",
+            "inputs": [
+              "pv1Power"
+            ]
+          }
+        ],
+        "writes": [],
+        "transport": "modbus_tcp",
+        "batches": [
+          {
+            "startRegister": 15205,
+            "count": 4,
+            "functionCode": "FC03",
+            "unitId": 4
+          },
+          {
+            "startRegister": 25205,
+            "count": 70,
+            "functionCode": "FC03",
+            "unitId": 4
+          }
+        ],
+        "maxBatchRegisters": 74,
+        "sourceRefs": [
+          {
+            "project": "MUST \"PV1800 Modbus RTU Protocol\" edition 1.04.15 (2023), re-hosted on the mukaschultze/ha-must-inverter wiki",
+            "url": "https://github.com/mukaschultze/ha-must-inverter/wiki/Resources",
+            "retrievedAt": "2026-10-24",
+            "independentOf": "must_vendor_modbus_xlsx"
+          },
+          {
+            "project": "MUST PowerMonitor Rs485.dll, decompiled (slave 4, 19200 8N1, FC03, read plan 15201 x 21 and 25201 x 74, one sample frame)",
+            "url": "https://github.com/aquarat/must_inverter",
+            "retrievedAt": "2026-10-24",
+            "independentOf": "must_vendor_modbus_xlsx"
+          },
+          {
+            "project": "mukaschultze/ha-must-inverter (PV1800, PH1800 and PV1900 sensors; the forbidden read ranges)",
+            "url": "https://github.com/mukaschultze/ha-must-inverter",
+            "retrievedAt": "2026-10-24",
+            "independentOf": "must_vendor_modbus_xlsx"
+          }
+        ],
+        "confidence": "single_source",
+        "forbiddenReadRanges": [
+          [
+            10009,
+            10100
+          ],
+          [
+            20017,
+            20100
+          ]
+        ]
+      },
+      "rawRegisters": {
+        "4": {
+          "15201": 2,
+          "15202": 1,
+          "15203": 2,
+          "15204": 0,
+          "15205": 1123,
+          "15206": 522,
+          "15207": 98,
+          "15208": 511,
+          "15209": 35,
+          "15210": 65483,
+          "15211": 1,
+          "15212": 1,
+          "15213": 0,
+          "15214": 0,
+          "15215": 48,
+          "15216": 800,
+          "15217": 1,
+          "15218": 2345,
+          "15219": 120,
+          "15220": 5,
+          "15221": 30,
+          "25201": 2,
+          "25202": 230,
+          "25203": 5200,
+          "25204": 0,
+          "25205": 522,
+          "25206": 2300,
+          "25207": 2301,
+          "25208": 3850,
+          "25209": 12,
+          "25210": 15,
+          "25211": 0,
+          "25212": 14,
+          "25213": 300,
+          "25214": 0,
+          "25215": 288,
+          "25216": 6,
+          "25217": 320,
+          "25218": 0,
+          "25219": 310,
+          "25220": 0,
+          "25221": 20,
+          "25222": 0,
+          "25223": 15,
+          "25224": 0,
+          "25225": 5000,
+          "25226": 5001,
+          "25227": 0,
+          "25228": 0,
+          "25229": 1,
+          "25230": 0,
+          "25231": 1,
+          "25232": 0,
+          "25233": 38,
+          "25234": 45,
+          "25235": 36,
+          "25236": 0,
+          "25237": 1,
+          "25238": 0,
+          "25239": 1,
+          "25240": 0,
+          "25241": 1,
+          "25242": 0,
+          "25243": 0,
+          "25244": 0,
+          "25245": 0,
+          "25246": 1234,
+          "25247": 0,
+          "25248": 987,
+          "25249": 0,
+          "25250": 456,
+          "25251": 0,
+          "25252": 0,
+          "25253": 1,
+          "25254": 1500,
+          "25255": 0,
+          "25256": 800,
+          "25257": 0,
+          "25258": 0,
+          "25259": 0,
+          "25260": 321,
+          "25261": 0,
+          "25262": 0,
+          "25263": 0,
+          "25264": 0,
+          "25265": 0,
+          "25266": 0,
+          "25267": 0,
+          "25268": 0,
+          "25269": 65535,
+          "25270": 65535,
+          "25271": 10405,
+          "25272": 10415,
+          "25273": 65390,
+          "25274": 65534
+        }
+      },
+      "expectedFields": {
+        "batterySoc": null,
+        "batteryPower": 146.0,
+        "batteryVoltage": 52.2,
+        "gridPower": 0.0,
+        "loadPower": 288.0,
+        "totalPvPower": 511.0,
+        "dailyPvEnergy": null
+      }
+    },
+    {
+      "modelId": "must_pv18_2012",
+      "spec": {
+        "modelId": "must_pv18_2012",
+        "version": 1,
+        "source": "generated",
+        "verified": false,
+        "protocol": "modbus_tcp",
+        "port": 8899,
+        "defaultSlaveId": 4,
+        "flags": {
+          "batteryPositiveIsDischarge": true
+        },
+        "reads": [
+          {
+            "field": "batteryVoltage",
+            "address": 25205,
+            "signed": true,
+            "scale": 0.1,
+            "unitId": 4
+          },
+          {
+            "field": "batteryPower",
+            "address": 25273,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "batteryCurrent",
+            "address": 25274,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "gridPower",
+            "address": 25214,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "gridVoltageL1",
+            "address": 25207,
+            "signed": true,
+            "scale": 0.1,
+            "unitId": 4
+          },
+          {
+            "field": "gridFrequency",
+            "address": 25226,
+            "signed": true,
+            "scale": 0.01,
+            "unitId": 4
+          },
+          {
+            "field": "loadPower",
+            "address": 25215,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "pv1Voltage",
+            "address": 15205,
+            "signed": true,
+            "scale": 0.1,
+            "unitId": 4
+          },
+          {
+            "field": "pv1Power",
+            "address": 15208,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "inverterTemperature",
+            "address": 25233,
+            "signed": true,
+            "unitId": 4
+          }
+        ],
+        "derivations": [
+          {
+            "field": "batteryPower",
+            "op": "builtin",
+            "inputs": [
+              "batteryPower"
+            ],
+            "builtin": "battery_sign_normalize"
+          },
+          {
+            "field": "inverterTemperature",
+            "op": "builtin",
+            "inputs": [
+              "inverterTemperature"
+            ],
+            "builtin": "battery_temp_clamp"
+          },
+          {
+            "field": "totalPvPower",
+            "op": "sum",
+            "inputs": [
+              "pv1Power"
+            ]
+          }
+        ],
+        "writes": [],
+        "transport": "modbus_tcp",
+        "batches": [
+          {
+            "startRegister": 15205,
+            "count": 4,
+            "functionCode": "FC03",
+            "unitId": 4
+          },
+          {
+            "startRegister": 25205,
+            "count": 70,
+            "functionCode": "FC03",
+            "unitId": 4
+          }
+        ],
+        "maxBatchRegisters": 74,
+        "sourceRefs": [
+          {
+            "project": "MUST \"PV1800 Modbus RTU Protocol\" edition 1.04.15 (2023), re-hosted on the mukaschultze/ha-must-inverter wiki",
+            "url": "https://github.com/mukaschultze/ha-must-inverter/wiki/Resources",
+            "retrievedAt": "2026-10-24",
+            "independentOf": "must_vendor_modbus_xlsx"
+          },
+          {
+            "project": "MUST PowerMonitor Rs485.dll, decompiled (slave 4, 19200 8N1, FC03, read plan 15201 x 21 and 25201 x 74, one sample frame)",
+            "url": "https://github.com/aquarat/must_inverter",
+            "retrievedAt": "2026-10-24",
+            "independentOf": "must_vendor_modbus_xlsx"
+          },
+          {
+            "project": "mukaschultze/ha-must-inverter (PV1800, PH1800 and PV1900 sensors; the forbidden read ranges)",
+            "url": "https://github.com/mukaschultze/ha-must-inverter",
+            "retrievedAt": "2026-10-24",
+            "independentOf": "must_vendor_modbus_xlsx"
+          }
+        ],
+        "confidence": "single_source",
+        "forbiddenReadRanges": [
+          [
+            10009,
+            10100
+          ],
+          [
+            20017,
+            20100
+          ]
+        ]
+      },
+      "rawRegisters": {
+        "4": {
+          "15201": 2,
+          "15202": 1,
+          "15203": 2,
+          "15204": 0,
+          "15205": 1123,
+          "15206": 522,
+          "15207": 98,
+          "15208": 511,
+          "15209": 35,
+          "15210": 65483,
+          "15211": 1,
+          "15212": 1,
+          "15213": 0,
+          "15214": 0,
+          "15215": 48,
+          "15216": 800,
+          "15217": 1,
+          "15218": 2345,
+          "15219": 120,
+          "15220": 5,
+          "15221": 30,
+          "25201": 2,
+          "25202": 230,
+          "25203": 5200,
+          "25204": 0,
+          "25205": 522,
+          "25206": 2300,
+          "25207": 2301,
+          "25208": 3850,
+          "25209": 12,
+          "25210": 15,
+          "25211": 0,
+          "25212": 14,
+          "25213": 300,
+          "25214": 0,
+          "25215": 288,
+          "25216": 6,
+          "25217": 320,
+          "25218": 0,
+          "25219": 310,
+          "25220": 0,
+          "25221": 20,
+          "25222": 0,
+          "25223": 15,
+          "25224": 0,
+          "25225": 5000,
+          "25226": 5001,
+          "25227": 0,
+          "25228": 0,
+          "25229": 1,
+          "25230": 0,
+          "25231": 1,
+          "25232": 0,
+          "25233": 38,
+          "25234": 45,
+          "25235": 36,
+          "25236": 0,
+          "25237": 1,
+          "25238": 0,
+          "25239": 1,
+          "25240": 0,
+          "25241": 1,
+          "25242": 0,
+          "25243": 0,
+          "25244": 0,
+          "25245": 0,
+          "25246": 1234,
+          "25247": 0,
+          "25248": 987,
+          "25249": 0,
+          "25250": 456,
+          "25251": 0,
+          "25252": 0,
+          "25253": 1,
+          "25254": 1500,
+          "25255": 0,
+          "25256": 800,
+          "25257": 0,
+          "25258": 0,
+          "25259": 0,
+          "25260": 321,
+          "25261": 0,
+          "25262": 0,
+          "25263": 0,
+          "25264": 0,
+          "25265": 0,
+          "25266": 0,
+          "25267": 0,
+          "25268": 0,
+          "25269": 65535,
+          "25270": 65535,
+          "25271": 10405,
+          "25272": 10415,
+          "25273": 65390,
+          "25274": 65534
+        }
+      },
+      "expectedFields": {
+        "batterySoc": null,
+        "batteryPower": 146.0,
+        "batteryVoltage": 52.2,
+        "gridPower": 0.0,
+        "loadPower": 288.0,
+        "totalPvPower": 511.0,
+        "dailyPvEnergy": null
+      }
+    },
+    {
+      "modelId": "must_pv18_3024",
+      "spec": {
+        "modelId": "must_pv18_3024",
+        "version": 1,
+        "source": "generated",
+        "verified": false,
+        "protocol": "modbus_tcp",
+        "port": 8899,
+        "defaultSlaveId": 4,
+        "flags": {
+          "batteryPositiveIsDischarge": true
+        },
+        "reads": [
+          {
+            "field": "batteryVoltage",
+            "address": 25205,
+            "signed": true,
+            "scale": 0.1,
+            "unitId": 4
+          },
+          {
+            "field": "batteryPower",
+            "address": 25273,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "batteryCurrent",
+            "address": 25274,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "gridPower",
+            "address": 25214,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "gridVoltageL1",
+            "address": 25207,
+            "signed": true,
+            "scale": 0.1,
+            "unitId": 4
+          },
+          {
+            "field": "gridFrequency",
+            "address": 25226,
+            "signed": true,
+            "scale": 0.01,
+            "unitId": 4
+          },
+          {
+            "field": "loadPower",
+            "address": 25215,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "pv1Voltage",
+            "address": 15205,
+            "signed": true,
+            "scale": 0.1,
+            "unitId": 4
+          },
+          {
+            "field": "pv1Power",
+            "address": 15208,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "inverterTemperature",
+            "address": 25233,
+            "signed": true,
+            "unitId": 4
+          }
+        ],
+        "derivations": [
+          {
+            "field": "batteryPower",
+            "op": "builtin",
+            "inputs": [
+              "batteryPower"
+            ],
+            "builtin": "battery_sign_normalize"
+          },
+          {
+            "field": "inverterTemperature",
+            "op": "builtin",
+            "inputs": [
+              "inverterTemperature"
+            ],
+            "builtin": "battery_temp_clamp"
+          },
+          {
+            "field": "totalPvPower",
+            "op": "sum",
+            "inputs": [
+              "pv1Power"
+            ]
+          }
+        ],
+        "writes": [],
+        "transport": "modbus_tcp",
+        "batches": [
+          {
+            "startRegister": 15205,
+            "count": 4,
+            "functionCode": "FC03",
+            "unitId": 4
+          },
+          {
+            "startRegister": 25205,
+            "count": 70,
+            "functionCode": "FC03",
+            "unitId": 4
+          }
+        ],
+        "maxBatchRegisters": 74,
+        "sourceRefs": [
+          {
+            "project": "MUST \"PV1800 Modbus RTU Protocol\" edition 1.04.15 (2023), re-hosted on the mukaschultze/ha-must-inverter wiki",
+            "url": "https://github.com/mukaschultze/ha-must-inverter/wiki/Resources",
+            "retrievedAt": "2026-10-24",
+            "independentOf": "must_vendor_modbus_xlsx"
+          },
+          {
+            "project": "MUST PowerMonitor Rs485.dll, decompiled (slave 4, 19200 8N1, FC03, read plan 15201 x 21 and 25201 x 74, one sample frame)",
+            "url": "https://github.com/aquarat/must_inverter",
+            "retrievedAt": "2026-10-24",
+            "independentOf": "must_vendor_modbus_xlsx"
+          },
+          {
+            "project": "mukaschultze/ha-must-inverter (PV1800, PH1800 and PV1900 sensors; the forbidden read ranges)",
+            "url": "https://github.com/mukaschultze/ha-must-inverter",
+            "retrievedAt": "2026-10-24",
+            "independentOf": "must_vendor_modbus_xlsx"
+          }
+        ],
+        "confidence": "single_source",
+        "forbiddenReadRanges": [
+          [
+            10009,
+            10100
+          ],
+          [
+            20017,
+            20100
+          ]
+        ]
+      },
+      "rawRegisters": {
+        "4": {
+          "15201": 2,
+          "15202": 1,
+          "15203": 2,
+          "15204": 0,
+          "15205": 1123,
+          "15206": 522,
+          "15207": 98,
+          "15208": 511,
+          "15209": 35,
+          "15210": 65483,
+          "15211": 1,
+          "15212": 1,
+          "15213": 0,
+          "15214": 0,
+          "15215": 48,
+          "15216": 800,
+          "15217": 1,
+          "15218": 2345,
+          "15219": 120,
+          "15220": 5,
+          "15221": 30,
+          "25201": 2,
+          "25202": 230,
+          "25203": 5200,
+          "25204": 0,
+          "25205": 522,
+          "25206": 2300,
+          "25207": 2301,
+          "25208": 3850,
+          "25209": 12,
+          "25210": 15,
+          "25211": 0,
+          "25212": 14,
+          "25213": 300,
+          "25214": 0,
+          "25215": 288,
+          "25216": 6,
+          "25217": 320,
+          "25218": 0,
+          "25219": 310,
+          "25220": 0,
+          "25221": 20,
+          "25222": 0,
+          "25223": 15,
+          "25224": 0,
+          "25225": 5000,
+          "25226": 5001,
+          "25227": 0,
+          "25228": 0,
+          "25229": 1,
+          "25230": 0,
+          "25231": 1,
+          "25232": 0,
+          "25233": 38,
+          "25234": 45,
+          "25235": 36,
+          "25236": 0,
+          "25237": 1,
+          "25238": 0,
+          "25239": 1,
+          "25240": 0,
+          "25241": 1,
+          "25242": 0,
+          "25243": 0,
+          "25244": 0,
+          "25245": 0,
+          "25246": 1234,
+          "25247": 0,
+          "25248": 987,
+          "25249": 0,
+          "25250": 456,
+          "25251": 0,
+          "25252": 0,
+          "25253": 1,
+          "25254": 1500,
+          "25255": 0,
+          "25256": 800,
+          "25257": 0,
+          "25258": 0,
+          "25259": 0,
+          "25260": 321,
+          "25261": 0,
+          "25262": 0,
+          "25263": 0,
+          "25264": 0,
+          "25265": 0,
+          "25266": 0,
+          "25267": 0,
+          "25268": 0,
+          "25269": 65535,
+          "25270": 65535,
+          "25271": 10405,
+          "25272": 10415,
+          "25273": 65390,
+          "25274": 65534
+        }
+      },
+      "expectedFields": {
+        "batterySoc": null,
+        "batteryPower": 146.0,
+        "batteryVoltage": 52.2,
+        "gridPower": 0.0,
+        "loadPower": 288.0,
+        "totalPvPower": 511.0,
+        "dailyPvEnergy": null
+      }
+    },
+    {
+      "modelId": "must_pv18_3224",
+      "spec": {
+        "modelId": "must_pv18_3224",
+        "version": 1,
+        "source": "generated",
+        "verified": false,
+        "protocol": "modbus_tcp",
+        "port": 8899,
+        "defaultSlaveId": 4,
+        "flags": {
+          "batteryPositiveIsDischarge": true
+        },
+        "reads": [
+          {
+            "field": "batteryVoltage",
+            "address": 25205,
+            "signed": true,
+            "scale": 0.1,
+            "unitId": 4
+          },
+          {
+            "field": "batteryPower",
+            "address": 25273,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "batteryCurrent",
+            "address": 25274,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "gridPower",
+            "address": 25214,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "gridVoltageL1",
+            "address": 25207,
+            "signed": true,
+            "scale": 0.1,
+            "unitId": 4
+          },
+          {
+            "field": "gridFrequency",
+            "address": 25226,
+            "signed": true,
+            "scale": 0.01,
+            "unitId": 4
+          },
+          {
+            "field": "loadPower",
+            "address": 25215,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "pv1Voltage",
+            "address": 15205,
+            "signed": true,
+            "scale": 0.1,
+            "unitId": 4
+          },
+          {
+            "field": "pv1Power",
+            "address": 15208,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "inverterTemperature",
+            "address": 25233,
+            "signed": true,
+            "unitId": 4
+          }
+        ],
+        "derivations": [
+          {
+            "field": "batteryPower",
+            "op": "builtin",
+            "inputs": [
+              "batteryPower"
+            ],
+            "builtin": "battery_sign_normalize"
+          },
+          {
+            "field": "inverterTemperature",
+            "op": "builtin",
+            "inputs": [
+              "inverterTemperature"
+            ],
+            "builtin": "battery_temp_clamp"
+          },
+          {
+            "field": "totalPvPower",
+            "op": "sum",
+            "inputs": [
+              "pv1Power"
+            ]
+          }
+        ],
+        "writes": [],
+        "transport": "modbus_tcp",
+        "batches": [
+          {
+            "startRegister": 15205,
+            "count": 4,
+            "functionCode": "FC03",
+            "unitId": 4
+          },
+          {
+            "startRegister": 25205,
+            "count": 70,
+            "functionCode": "FC03",
+            "unitId": 4
+          }
+        ],
+        "maxBatchRegisters": 74,
+        "sourceRefs": [
+          {
+            "project": "MUST \"PV1800 Modbus RTU Protocol\" edition 1.04.15 (2023), re-hosted on the mukaschultze/ha-must-inverter wiki",
+            "url": "https://github.com/mukaschultze/ha-must-inverter/wiki/Resources",
+            "retrievedAt": "2026-10-24",
+            "independentOf": "must_vendor_modbus_xlsx"
+          },
+          {
+            "project": "MUST PowerMonitor Rs485.dll, decompiled (slave 4, 19200 8N1, FC03, read plan 15201 x 21 and 25201 x 74, one sample frame)",
+            "url": "https://github.com/aquarat/must_inverter",
+            "retrievedAt": "2026-10-24",
+            "independentOf": "must_vendor_modbus_xlsx"
+          },
+          {
+            "project": "mukaschultze/ha-must-inverter (PV1800, PH1800 and PV1900 sensors; the forbidden read ranges)",
+            "url": "https://github.com/mukaschultze/ha-must-inverter",
+            "retrievedAt": "2026-10-24",
+            "independentOf": "must_vendor_modbus_xlsx"
+          }
+        ],
+        "confidence": "single_source",
+        "forbiddenReadRanges": [
+          [
+            10009,
+            10100
+          ],
+          [
+            20017,
+            20100
+          ]
+        ]
+      },
+      "rawRegisters": {
+        "4": {
+          "15201": 2,
+          "15202": 1,
+          "15203": 2,
+          "15204": 0,
+          "15205": 1123,
+          "15206": 522,
+          "15207": 98,
+          "15208": 511,
+          "15209": 35,
+          "15210": 65483,
+          "15211": 1,
+          "15212": 1,
+          "15213": 0,
+          "15214": 0,
+          "15215": 48,
+          "15216": 800,
+          "15217": 1,
+          "15218": 2345,
+          "15219": 120,
+          "15220": 5,
+          "15221": 30,
+          "25201": 2,
+          "25202": 230,
+          "25203": 5200,
+          "25204": 0,
+          "25205": 522,
+          "25206": 2300,
+          "25207": 2301,
+          "25208": 3850,
+          "25209": 12,
+          "25210": 15,
+          "25211": 0,
+          "25212": 14,
+          "25213": 300,
+          "25214": 0,
+          "25215": 288,
+          "25216": 6,
+          "25217": 320,
+          "25218": 0,
+          "25219": 310,
+          "25220": 0,
+          "25221": 20,
+          "25222": 0,
+          "25223": 15,
+          "25224": 0,
+          "25225": 5000,
+          "25226": 5001,
+          "25227": 0,
+          "25228": 0,
+          "25229": 1,
+          "25230": 0,
+          "25231": 1,
+          "25232": 0,
+          "25233": 38,
+          "25234": 45,
+          "25235": 36,
+          "25236": 0,
+          "25237": 1,
+          "25238": 0,
+          "25239": 1,
+          "25240": 0,
+          "25241": 1,
+          "25242": 0,
+          "25243": 0,
+          "25244": 0,
+          "25245": 0,
+          "25246": 1234,
+          "25247": 0,
+          "25248": 987,
+          "25249": 0,
+          "25250": 456,
+          "25251": 0,
+          "25252": 0,
+          "25253": 1,
+          "25254": 1500,
+          "25255": 0,
+          "25256": 800,
+          "25257": 0,
+          "25258": 0,
+          "25259": 0,
+          "25260": 321,
+          "25261": 0,
+          "25262": 0,
+          "25263": 0,
+          "25264": 0,
+          "25265": 0,
+          "25266": 0,
+          "25267": 0,
+          "25268": 0,
+          "25269": 65535,
+          "25270": 65535,
+          "25271": 10405,
+          "25272": 10415,
+          "25273": 65390,
+          "25274": 65534
+        }
+      },
+      "expectedFields": {
+        "batterySoc": null,
+        "batteryPower": 146.0,
+        "batteryVoltage": 52.2,
+        "gridPower": 0.0,
+        "loadPower": 288.0,
+        "totalPvPower": 511.0,
+        "dailyPvEnergy": null
+      }
+    },
+    {
+      "modelId": "must_pv18_3524",
+      "spec": {
+        "modelId": "must_pv18_3524",
+        "version": 1,
+        "source": "generated",
+        "verified": false,
+        "protocol": "modbus_tcp",
+        "port": 8899,
+        "defaultSlaveId": 4,
+        "flags": {
+          "batteryPositiveIsDischarge": true
+        },
+        "reads": [
+          {
+            "field": "batteryVoltage",
+            "address": 25205,
+            "signed": true,
+            "scale": 0.1,
+            "unitId": 4
+          },
+          {
+            "field": "batteryPower",
+            "address": 25273,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "batteryCurrent",
+            "address": 25274,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "gridPower",
+            "address": 25214,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "gridVoltageL1",
+            "address": 25207,
+            "signed": true,
+            "scale": 0.1,
+            "unitId": 4
+          },
+          {
+            "field": "gridFrequency",
+            "address": 25226,
+            "signed": true,
+            "scale": 0.01,
+            "unitId": 4
+          },
+          {
+            "field": "loadPower",
+            "address": 25215,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "pv1Voltage",
+            "address": 15205,
+            "signed": true,
+            "scale": 0.1,
+            "unitId": 4
+          },
+          {
+            "field": "pv1Power",
+            "address": 15208,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "inverterTemperature",
+            "address": 25233,
+            "signed": true,
+            "unitId": 4
+          }
+        ],
+        "derivations": [
+          {
+            "field": "batteryPower",
+            "op": "builtin",
+            "inputs": [
+              "batteryPower"
+            ],
+            "builtin": "battery_sign_normalize"
+          },
+          {
+            "field": "inverterTemperature",
+            "op": "builtin",
+            "inputs": [
+              "inverterTemperature"
+            ],
+            "builtin": "battery_temp_clamp"
+          },
+          {
+            "field": "totalPvPower",
+            "op": "sum",
+            "inputs": [
+              "pv1Power"
+            ]
+          }
+        ],
+        "writes": [],
+        "transport": "modbus_tcp",
+        "batches": [
+          {
+            "startRegister": 15205,
+            "count": 4,
+            "functionCode": "FC03",
+            "unitId": 4
+          },
+          {
+            "startRegister": 25205,
+            "count": 70,
+            "functionCode": "FC03",
+            "unitId": 4
+          }
+        ],
+        "maxBatchRegisters": 74,
+        "sourceRefs": [
+          {
+            "project": "MUST \"PV1800 Modbus RTU Protocol\" edition 1.04.15 (2023), re-hosted on the mukaschultze/ha-must-inverter wiki",
+            "url": "https://github.com/mukaschultze/ha-must-inverter/wiki/Resources",
+            "retrievedAt": "2026-10-24",
+            "independentOf": "must_vendor_modbus_xlsx"
+          },
+          {
+            "project": "MUST PowerMonitor Rs485.dll, decompiled (slave 4, 19200 8N1, FC03, read plan 15201 x 21 and 25201 x 74, one sample frame)",
+            "url": "https://github.com/aquarat/must_inverter",
+            "retrievedAt": "2026-10-24",
+            "independentOf": "must_vendor_modbus_xlsx"
+          },
+          {
+            "project": "mukaschultze/ha-must-inverter (PV1800, PH1800 and PV1900 sensors; the forbidden read ranges)",
+            "url": "https://github.com/mukaschultze/ha-must-inverter",
+            "retrievedAt": "2026-10-24",
+            "independentOf": "must_vendor_modbus_xlsx"
+          }
+        ],
+        "confidence": "single_source",
+        "forbiddenReadRanges": [
+          [
+            10009,
+            10100
+          ],
+          [
+            20017,
+            20100
+          ]
+        ]
+      },
+      "rawRegisters": {
+        "4": {
+          "15201": 2,
+          "15202": 1,
+          "15203": 2,
+          "15204": 0,
+          "15205": 1123,
+          "15206": 522,
+          "15207": 98,
+          "15208": 511,
+          "15209": 35,
+          "15210": 65483,
+          "15211": 1,
+          "15212": 1,
+          "15213": 0,
+          "15214": 0,
+          "15215": 48,
+          "15216": 800,
+          "15217": 1,
+          "15218": 2345,
+          "15219": 120,
+          "15220": 5,
+          "15221": 30,
+          "25201": 2,
+          "25202": 230,
+          "25203": 5200,
+          "25204": 0,
+          "25205": 522,
+          "25206": 2300,
+          "25207": 2301,
+          "25208": 3850,
+          "25209": 12,
+          "25210": 15,
+          "25211": 0,
+          "25212": 14,
+          "25213": 300,
+          "25214": 0,
+          "25215": 288,
+          "25216": 6,
+          "25217": 320,
+          "25218": 0,
+          "25219": 310,
+          "25220": 0,
+          "25221": 20,
+          "25222": 0,
+          "25223": 15,
+          "25224": 0,
+          "25225": 5000,
+          "25226": 5001,
+          "25227": 0,
+          "25228": 0,
+          "25229": 1,
+          "25230": 0,
+          "25231": 1,
+          "25232": 0,
+          "25233": 38,
+          "25234": 45,
+          "25235": 36,
+          "25236": 0,
+          "25237": 1,
+          "25238": 0,
+          "25239": 1,
+          "25240": 0,
+          "25241": 1,
+          "25242": 0,
+          "25243": 0,
+          "25244": 0,
+          "25245": 0,
+          "25246": 1234,
+          "25247": 0,
+          "25248": 987,
+          "25249": 0,
+          "25250": 456,
+          "25251": 0,
+          "25252": 0,
+          "25253": 1,
+          "25254": 1500,
+          "25255": 0,
+          "25256": 800,
+          "25257": 0,
+          "25258": 0,
+          "25259": 0,
+          "25260": 321,
+          "25261": 0,
+          "25262": 0,
+          "25263": 0,
+          "25264": 0,
+          "25265": 0,
+          "25266": 0,
+          "25267": 0,
+          "25268": 0,
+          "25269": 65535,
+          "25270": 65535,
+          "25271": 10405,
+          "25272": 10415,
+          "25273": 65390,
+          "25274": 65534
+        }
+      },
+      "expectedFields": {
+        "batterySoc": null,
+        "batteryPower": 146.0,
+        "batteryVoltage": 52.2,
+        "gridPower": 0.0,
+        "loadPower": 288.0,
+        "totalPvPower": 511.0,
+        "dailyPvEnergy": null
+      }
+    },
+    {
+      "modelId": "must_pv18_3624",
+      "spec": {
+        "modelId": "must_pv18_3624",
+        "version": 1,
+        "source": "generated",
+        "verified": false,
+        "protocol": "modbus_tcp",
+        "port": 8899,
+        "defaultSlaveId": 4,
+        "flags": {
+          "batteryPositiveIsDischarge": true
+        },
+        "reads": [
+          {
+            "field": "batteryVoltage",
+            "address": 25205,
+            "signed": true,
+            "scale": 0.1,
+            "unitId": 4
+          },
+          {
+            "field": "batteryPower",
+            "address": 25273,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "batteryCurrent",
+            "address": 25274,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "gridPower",
+            "address": 25214,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "gridVoltageL1",
+            "address": 25207,
+            "signed": true,
+            "scale": 0.1,
+            "unitId": 4
+          },
+          {
+            "field": "gridFrequency",
+            "address": 25226,
+            "signed": true,
+            "scale": 0.01,
+            "unitId": 4
+          },
+          {
+            "field": "loadPower",
+            "address": 25215,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "pv1Voltage",
+            "address": 15205,
+            "signed": true,
+            "scale": 0.1,
+            "unitId": 4
+          },
+          {
+            "field": "pv1Power",
+            "address": 15208,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "inverterTemperature",
+            "address": 25233,
+            "signed": true,
+            "unitId": 4
+          }
+        ],
+        "derivations": [
+          {
+            "field": "batteryPower",
+            "op": "builtin",
+            "inputs": [
+              "batteryPower"
+            ],
+            "builtin": "battery_sign_normalize"
+          },
+          {
+            "field": "inverterTemperature",
+            "op": "builtin",
+            "inputs": [
+              "inverterTemperature"
+            ],
+            "builtin": "battery_temp_clamp"
+          },
+          {
+            "field": "totalPvPower",
+            "op": "sum",
+            "inputs": [
+              "pv1Power"
+            ]
+          }
+        ],
+        "writes": [],
+        "transport": "modbus_tcp",
+        "batches": [
+          {
+            "startRegister": 15205,
+            "count": 4,
+            "functionCode": "FC03",
+            "unitId": 4
+          },
+          {
+            "startRegister": 25205,
+            "count": 70,
+            "functionCode": "FC03",
+            "unitId": 4
+          }
+        ],
+        "maxBatchRegisters": 74,
+        "sourceRefs": [
+          {
+            "project": "MUST \"PV1800 Modbus RTU Protocol\" edition 1.04.15 (2023), re-hosted on the mukaschultze/ha-must-inverter wiki",
+            "url": "https://github.com/mukaschultze/ha-must-inverter/wiki/Resources",
+            "retrievedAt": "2026-10-24",
+            "independentOf": "must_vendor_modbus_xlsx"
+          },
+          {
+            "project": "MUST PowerMonitor Rs485.dll, decompiled (slave 4, 19200 8N1, FC03, read plan 15201 x 21 and 25201 x 74, one sample frame)",
+            "url": "https://github.com/aquarat/must_inverter",
+            "retrievedAt": "2026-10-24",
+            "independentOf": "must_vendor_modbus_xlsx"
+          },
+          {
+            "project": "mukaschultze/ha-must-inverter (PV1800, PH1800 and PV1900 sensors; the forbidden read ranges)",
+            "url": "https://github.com/mukaschultze/ha-must-inverter",
+            "retrievedAt": "2026-10-24",
+            "independentOf": "must_vendor_modbus_xlsx"
+          }
+        ],
+        "confidence": "single_source",
+        "forbiddenReadRanges": [
+          [
+            10009,
+            10100
+          ],
+          [
+            20017,
+            20100
+          ]
+        ]
+      },
+      "rawRegisters": {
+        "4": {
+          "15201": 2,
+          "15202": 1,
+          "15203": 2,
+          "15204": 0,
+          "15205": 1123,
+          "15206": 522,
+          "15207": 98,
+          "15208": 511,
+          "15209": 35,
+          "15210": 65483,
+          "15211": 1,
+          "15212": 1,
+          "15213": 0,
+          "15214": 0,
+          "15215": 48,
+          "15216": 800,
+          "15217": 1,
+          "15218": 2345,
+          "15219": 120,
+          "15220": 5,
+          "15221": 30,
+          "25201": 2,
+          "25202": 230,
+          "25203": 5200,
+          "25204": 0,
+          "25205": 522,
+          "25206": 2300,
+          "25207": 2301,
+          "25208": 3850,
+          "25209": 12,
+          "25210": 15,
+          "25211": 0,
+          "25212": 14,
+          "25213": 300,
+          "25214": 0,
+          "25215": 288,
+          "25216": 6,
+          "25217": 320,
+          "25218": 0,
+          "25219": 310,
+          "25220": 0,
+          "25221": 20,
+          "25222": 0,
+          "25223": 15,
+          "25224": 0,
+          "25225": 5000,
+          "25226": 5001,
+          "25227": 0,
+          "25228": 0,
+          "25229": 1,
+          "25230": 0,
+          "25231": 1,
+          "25232": 0,
+          "25233": 38,
+          "25234": 45,
+          "25235": 36,
+          "25236": 0,
+          "25237": 1,
+          "25238": 0,
+          "25239": 1,
+          "25240": 0,
+          "25241": 1,
+          "25242": 0,
+          "25243": 0,
+          "25244": 0,
+          "25245": 0,
+          "25246": 1234,
+          "25247": 0,
+          "25248": 987,
+          "25249": 0,
+          "25250": 456,
+          "25251": 0,
+          "25252": 0,
+          "25253": 1,
+          "25254": 1500,
+          "25255": 0,
+          "25256": 800,
+          "25257": 0,
+          "25258": 0,
+          "25259": 0,
+          "25260": 321,
+          "25261": 0,
+          "25262": 0,
+          "25263": 0,
+          "25264": 0,
+          "25265": 0,
+          "25266": 0,
+          "25267": 0,
+          "25268": 0,
+          "25269": 65535,
+          "25270": 65535,
+          "25271": 10405,
+          "25272": 10415,
+          "25273": 65390,
+          "25274": 65534
+        }
+      },
+      "expectedFields": {
+        "batterySoc": null,
+        "batteryPower": 146.0,
+        "batteryVoltage": 52.2,
+        "gridPower": 0.0,
+        "loadPower": 288.0,
+        "totalPvPower": 511.0,
+        "dailyPvEnergy": null
+      }
+    },
+    {
+      "modelId": "must_pv18_4024",
+      "spec": {
+        "modelId": "must_pv18_4024",
+        "version": 1,
+        "source": "generated",
+        "verified": false,
+        "protocol": "modbus_tcp",
+        "port": 8899,
+        "defaultSlaveId": 4,
+        "flags": {
+          "batteryPositiveIsDischarge": true
+        },
+        "reads": [
+          {
+            "field": "batteryVoltage",
+            "address": 25205,
+            "signed": true,
+            "scale": 0.1,
+            "unitId": 4
+          },
+          {
+            "field": "batteryPower",
+            "address": 25273,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "batteryCurrent",
+            "address": 25274,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "gridPower",
+            "address": 25214,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "gridVoltageL1",
+            "address": 25207,
+            "signed": true,
+            "scale": 0.1,
+            "unitId": 4
+          },
+          {
+            "field": "gridFrequency",
+            "address": 25226,
+            "signed": true,
+            "scale": 0.01,
+            "unitId": 4
+          },
+          {
+            "field": "loadPower",
+            "address": 25215,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "pv1Voltage",
+            "address": 15205,
+            "signed": true,
+            "scale": 0.1,
+            "unitId": 4
+          },
+          {
+            "field": "pv1Power",
+            "address": 15208,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "inverterTemperature",
+            "address": 25233,
+            "signed": true,
+            "unitId": 4
+          }
+        ],
+        "derivations": [
+          {
+            "field": "batteryPower",
+            "op": "builtin",
+            "inputs": [
+              "batteryPower"
+            ],
+            "builtin": "battery_sign_normalize"
+          },
+          {
+            "field": "inverterTemperature",
+            "op": "builtin",
+            "inputs": [
+              "inverterTemperature"
+            ],
+            "builtin": "battery_temp_clamp"
+          },
+          {
+            "field": "totalPvPower",
+            "op": "sum",
+            "inputs": [
+              "pv1Power"
+            ]
+          }
+        ],
+        "writes": [],
+        "transport": "modbus_tcp",
+        "batches": [
+          {
+            "startRegister": 15205,
+            "count": 4,
+            "functionCode": "FC03",
+            "unitId": 4
+          },
+          {
+            "startRegister": 25205,
+            "count": 70,
+            "functionCode": "FC03",
+            "unitId": 4
+          }
+        ],
+        "maxBatchRegisters": 74,
+        "sourceRefs": [
+          {
+            "project": "MUST \"PV1800 Modbus RTU Protocol\" edition 1.04.15 (2023), re-hosted on the mukaschultze/ha-must-inverter wiki",
+            "url": "https://github.com/mukaschultze/ha-must-inverter/wiki/Resources",
+            "retrievedAt": "2026-10-24",
+            "independentOf": "must_vendor_modbus_xlsx"
+          },
+          {
+            "project": "MUST PowerMonitor Rs485.dll, decompiled (slave 4, 19200 8N1, FC03, read plan 15201 x 21 and 25201 x 74, one sample frame)",
+            "url": "https://github.com/aquarat/must_inverter",
+            "retrievedAt": "2026-10-24",
+            "independentOf": "must_vendor_modbus_xlsx"
+          },
+          {
+            "project": "mukaschultze/ha-must-inverter (PV1800, PH1800 and PV1900 sensors; the forbidden read ranges)",
+            "url": "https://github.com/mukaschultze/ha-must-inverter",
+            "retrievedAt": "2026-10-24",
+            "independentOf": "must_vendor_modbus_xlsx"
+          }
+        ],
+        "confidence": "single_source",
+        "forbiddenReadRanges": [
+          [
+            10009,
+            10100
+          ],
+          [
+            20017,
+            20100
+          ]
+        ]
+      },
+      "rawRegisters": {
+        "4": {
+          "15201": 2,
+          "15202": 1,
+          "15203": 2,
+          "15204": 0,
+          "15205": 1123,
+          "15206": 522,
+          "15207": 98,
+          "15208": 511,
+          "15209": 35,
+          "15210": 65483,
+          "15211": 1,
+          "15212": 1,
+          "15213": 0,
+          "15214": 0,
+          "15215": 48,
+          "15216": 800,
+          "15217": 1,
+          "15218": 2345,
+          "15219": 120,
+          "15220": 5,
+          "15221": 30,
+          "25201": 2,
+          "25202": 230,
+          "25203": 5200,
+          "25204": 0,
+          "25205": 522,
+          "25206": 2300,
+          "25207": 2301,
+          "25208": 3850,
+          "25209": 12,
+          "25210": 15,
+          "25211": 0,
+          "25212": 14,
+          "25213": 300,
+          "25214": 0,
+          "25215": 288,
+          "25216": 6,
+          "25217": 320,
+          "25218": 0,
+          "25219": 310,
+          "25220": 0,
+          "25221": 20,
+          "25222": 0,
+          "25223": 15,
+          "25224": 0,
+          "25225": 5000,
+          "25226": 5001,
+          "25227": 0,
+          "25228": 0,
+          "25229": 1,
+          "25230": 0,
+          "25231": 1,
+          "25232": 0,
+          "25233": 38,
+          "25234": 45,
+          "25235": 36,
+          "25236": 0,
+          "25237": 1,
+          "25238": 0,
+          "25239": 1,
+          "25240": 0,
+          "25241": 1,
+          "25242": 0,
+          "25243": 0,
+          "25244": 0,
+          "25245": 0,
+          "25246": 1234,
+          "25247": 0,
+          "25248": 987,
+          "25249": 0,
+          "25250": 456,
+          "25251": 0,
+          "25252": 0,
+          "25253": 1,
+          "25254": 1500,
+          "25255": 0,
+          "25256": 800,
+          "25257": 0,
+          "25258": 0,
+          "25259": 0,
+          "25260": 321,
+          "25261": 0,
+          "25262": 0,
+          "25263": 0,
+          "25264": 0,
+          "25265": 0,
+          "25266": 0,
+          "25267": 0,
+          "25268": 0,
+          "25269": 65535,
+          "25270": 65535,
+          "25271": 10405,
+          "25272": 10415,
+          "25273": 65390,
+          "25274": 65534
+        }
+      },
+      "expectedFields": {
+        "batterySoc": null,
+        "batteryPower": 146.0,
+        "batteryVoltage": 52.2,
+        "gridPower": 0.0,
+        "loadPower": 288.0,
+        "totalPvPower": 511.0,
+        "dailyPvEnergy": null
+      }
+    },
+    {
+      "modelId": "must_pv18_5048",
+      "spec": {
+        "modelId": "must_pv18_5048",
+        "version": 1,
+        "source": "generated",
+        "verified": false,
+        "protocol": "modbus_tcp",
+        "port": 8899,
+        "defaultSlaveId": 4,
+        "flags": {
+          "batteryPositiveIsDischarge": true
+        },
+        "reads": [
+          {
+            "field": "batteryVoltage",
+            "address": 25205,
+            "signed": true,
+            "scale": 0.1,
+            "unitId": 4
+          },
+          {
+            "field": "batteryPower",
+            "address": 25273,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "batteryCurrent",
+            "address": 25274,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "gridPower",
+            "address": 25214,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "gridVoltageL1",
+            "address": 25207,
+            "signed": true,
+            "scale": 0.1,
+            "unitId": 4
+          },
+          {
+            "field": "gridFrequency",
+            "address": 25226,
+            "signed": true,
+            "scale": 0.01,
+            "unitId": 4
+          },
+          {
+            "field": "loadPower",
+            "address": 25215,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "pv1Voltage",
+            "address": 15205,
+            "signed": true,
+            "scale": 0.1,
+            "unitId": 4
+          },
+          {
+            "field": "pv1Power",
+            "address": 15208,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "inverterTemperature",
+            "address": 25233,
+            "signed": true,
+            "unitId": 4
+          }
+        ],
+        "derivations": [
+          {
+            "field": "batteryPower",
+            "op": "builtin",
+            "inputs": [
+              "batteryPower"
+            ],
+            "builtin": "battery_sign_normalize"
+          },
+          {
+            "field": "inverterTemperature",
+            "op": "builtin",
+            "inputs": [
+              "inverterTemperature"
+            ],
+            "builtin": "battery_temp_clamp"
+          },
+          {
+            "field": "totalPvPower",
+            "op": "sum",
+            "inputs": [
+              "pv1Power"
+            ]
+          }
+        ],
+        "writes": [],
+        "transport": "modbus_tcp",
+        "batches": [
+          {
+            "startRegister": 15205,
+            "count": 4,
+            "functionCode": "FC03",
+            "unitId": 4
+          },
+          {
+            "startRegister": 25205,
+            "count": 70,
+            "functionCode": "FC03",
+            "unitId": 4
+          }
+        ],
+        "maxBatchRegisters": 74,
+        "sourceRefs": [
+          {
+            "project": "MUST \"PV1800 Modbus RTU Protocol\" edition 1.04.15 (2023), re-hosted on the mukaschultze/ha-must-inverter wiki",
+            "url": "https://github.com/mukaschultze/ha-must-inverter/wiki/Resources",
+            "retrievedAt": "2026-10-24",
+            "independentOf": "must_vendor_modbus_xlsx"
+          },
+          {
+            "project": "MUST PowerMonitor Rs485.dll, decompiled (slave 4, 19200 8N1, FC03, read plan 15201 x 21 and 25201 x 74, one sample frame)",
+            "url": "https://github.com/aquarat/must_inverter",
+            "retrievedAt": "2026-10-24",
+            "independentOf": "must_vendor_modbus_xlsx"
+          },
+          {
+            "project": "mukaschultze/ha-must-inverter (PV1800, PH1800 and PV1900 sensors; the forbidden read ranges)",
+            "url": "https://github.com/mukaschultze/ha-must-inverter",
+            "retrievedAt": "2026-10-24",
+            "independentOf": "must_vendor_modbus_xlsx"
+          }
+        ],
+        "confidence": "single_source",
+        "forbiddenReadRanges": [
+          [
+            10009,
+            10100
+          ],
+          [
+            20017,
+            20100
+          ]
+        ]
+      },
+      "rawRegisters": {
+        "4": {
+          "15201": 2,
+          "15202": 1,
+          "15203": 2,
+          "15204": 0,
+          "15205": 1123,
+          "15206": 522,
+          "15207": 98,
+          "15208": 511,
+          "15209": 35,
+          "15210": 65483,
+          "15211": 1,
+          "15212": 1,
+          "15213": 0,
+          "15214": 0,
+          "15215": 48,
+          "15216": 800,
+          "15217": 1,
+          "15218": 2345,
+          "15219": 120,
+          "15220": 5,
+          "15221": 30,
+          "25201": 2,
+          "25202": 230,
+          "25203": 5200,
+          "25204": 0,
+          "25205": 522,
+          "25206": 2300,
+          "25207": 2301,
+          "25208": 3850,
+          "25209": 12,
+          "25210": 15,
+          "25211": 0,
+          "25212": 14,
+          "25213": 300,
+          "25214": 0,
+          "25215": 288,
+          "25216": 6,
+          "25217": 320,
+          "25218": 0,
+          "25219": 310,
+          "25220": 0,
+          "25221": 20,
+          "25222": 0,
+          "25223": 15,
+          "25224": 0,
+          "25225": 5000,
+          "25226": 5001,
+          "25227": 0,
+          "25228": 0,
+          "25229": 1,
+          "25230": 0,
+          "25231": 1,
+          "25232": 0,
+          "25233": 38,
+          "25234": 45,
+          "25235": 36,
+          "25236": 0,
+          "25237": 1,
+          "25238": 0,
+          "25239": 1,
+          "25240": 0,
+          "25241": 1,
+          "25242": 0,
+          "25243": 0,
+          "25244": 0,
+          "25245": 0,
+          "25246": 1234,
+          "25247": 0,
+          "25248": 987,
+          "25249": 0,
+          "25250": 456,
+          "25251": 0,
+          "25252": 0,
+          "25253": 1,
+          "25254": 1500,
+          "25255": 0,
+          "25256": 800,
+          "25257": 0,
+          "25258": 0,
+          "25259": 0,
+          "25260": 321,
+          "25261": 0,
+          "25262": 0,
+          "25263": 0,
+          "25264": 0,
+          "25265": 0,
+          "25266": 0,
+          "25267": 0,
+          "25268": 0,
+          "25269": 65535,
+          "25270": 65535,
+          "25271": 10405,
+          "25272": 10415,
+          "25273": 65390,
+          "25274": 65534
+        }
+      },
+      "expectedFields": {
+        "batterySoc": null,
+        "batteryPower": 146.0,
+        "batteryVoltage": 52.2,
+        "gridPower": 0.0,
+        "loadPower": 288.0,
+        "totalPvPower": 511.0,
+        "dailyPvEnergy": null
+      }
+    },
+    {
+      "modelId": "must_pv18_5248",
+      "spec": {
+        "modelId": "must_pv18_5248",
+        "version": 1,
+        "source": "generated",
+        "verified": false,
+        "protocol": "modbus_tcp",
+        "port": 8899,
+        "defaultSlaveId": 4,
+        "flags": {
+          "batteryPositiveIsDischarge": true
+        },
+        "reads": [
+          {
+            "field": "batteryVoltage",
+            "address": 25205,
+            "signed": true,
+            "scale": 0.1,
+            "unitId": 4
+          },
+          {
+            "field": "batteryPower",
+            "address": 25273,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "batteryCurrent",
+            "address": 25274,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "gridPower",
+            "address": 25214,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "gridVoltageL1",
+            "address": 25207,
+            "signed": true,
+            "scale": 0.1,
+            "unitId": 4
+          },
+          {
+            "field": "gridFrequency",
+            "address": 25226,
+            "signed": true,
+            "scale": 0.01,
+            "unitId": 4
+          },
+          {
+            "field": "loadPower",
+            "address": 25215,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "pv1Voltage",
+            "address": 15205,
+            "signed": true,
+            "scale": 0.1,
+            "unitId": 4
+          },
+          {
+            "field": "pv1Power",
+            "address": 15208,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "inverterTemperature",
+            "address": 25233,
+            "signed": true,
+            "unitId": 4
+          }
+        ],
+        "derivations": [
+          {
+            "field": "batteryPower",
+            "op": "builtin",
+            "inputs": [
+              "batteryPower"
+            ],
+            "builtin": "battery_sign_normalize"
+          },
+          {
+            "field": "inverterTemperature",
+            "op": "builtin",
+            "inputs": [
+              "inverterTemperature"
+            ],
+            "builtin": "battery_temp_clamp"
+          },
+          {
+            "field": "totalPvPower",
+            "op": "sum",
+            "inputs": [
+              "pv1Power"
+            ]
+          }
+        ],
+        "writes": [],
+        "transport": "modbus_tcp",
+        "batches": [
+          {
+            "startRegister": 15205,
+            "count": 4,
+            "functionCode": "FC03",
+            "unitId": 4
+          },
+          {
+            "startRegister": 25205,
+            "count": 70,
+            "functionCode": "FC03",
+            "unitId": 4
+          }
+        ],
+        "maxBatchRegisters": 74,
+        "sourceRefs": [
+          {
+            "project": "MUST \"PV1800 Modbus RTU Protocol\" edition 1.04.15 (2023), re-hosted on the mukaschultze/ha-must-inverter wiki",
+            "url": "https://github.com/mukaschultze/ha-must-inverter/wiki/Resources",
+            "retrievedAt": "2026-10-24",
+            "independentOf": "must_vendor_modbus_xlsx"
+          },
+          {
+            "project": "MUST PowerMonitor Rs485.dll, decompiled (slave 4, 19200 8N1, FC03, read plan 15201 x 21 and 25201 x 74, one sample frame)",
+            "url": "https://github.com/aquarat/must_inverter",
+            "retrievedAt": "2026-10-24",
+            "independentOf": "must_vendor_modbus_xlsx"
+          },
+          {
+            "project": "mukaschultze/ha-must-inverter (PV1800, PH1800 and PV1900 sensors; the forbidden read ranges)",
+            "url": "https://github.com/mukaschultze/ha-must-inverter",
+            "retrievedAt": "2026-10-24",
+            "independentOf": "must_vendor_modbus_xlsx"
+          }
+        ],
+        "confidence": "single_source",
+        "forbiddenReadRanges": [
+          [
+            10009,
+            10100
+          ],
+          [
+            20017,
+            20100
+          ]
+        ]
+      },
+      "rawRegisters": {
+        "4": {
+          "15201": 2,
+          "15202": 1,
+          "15203": 2,
+          "15204": 0,
+          "15205": 1123,
+          "15206": 522,
+          "15207": 98,
+          "15208": 511,
+          "15209": 35,
+          "15210": 65483,
+          "15211": 1,
+          "15212": 1,
+          "15213": 0,
+          "15214": 0,
+          "15215": 48,
+          "15216": 800,
+          "15217": 1,
+          "15218": 2345,
+          "15219": 120,
+          "15220": 5,
+          "15221": 30,
+          "25201": 2,
+          "25202": 230,
+          "25203": 5200,
+          "25204": 0,
+          "25205": 522,
+          "25206": 2300,
+          "25207": 2301,
+          "25208": 3850,
+          "25209": 12,
+          "25210": 15,
+          "25211": 0,
+          "25212": 14,
+          "25213": 300,
+          "25214": 0,
+          "25215": 288,
+          "25216": 6,
+          "25217": 320,
+          "25218": 0,
+          "25219": 310,
+          "25220": 0,
+          "25221": 20,
+          "25222": 0,
+          "25223": 15,
+          "25224": 0,
+          "25225": 5000,
+          "25226": 5001,
+          "25227": 0,
+          "25228": 0,
+          "25229": 1,
+          "25230": 0,
+          "25231": 1,
+          "25232": 0,
+          "25233": 38,
+          "25234": 45,
+          "25235": 36,
+          "25236": 0,
+          "25237": 1,
+          "25238": 0,
+          "25239": 1,
+          "25240": 0,
+          "25241": 1,
+          "25242": 0,
+          "25243": 0,
+          "25244": 0,
+          "25245": 0,
+          "25246": 1234,
+          "25247": 0,
+          "25248": 987,
+          "25249": 0,
+          "25250": 456,
+          "25251": 0,
+          "25252": 0,
+          "25253": 1,
+          "25254": 1500,
+          "25255": 0,
+          "25256": 800,
+          "25257": 0,
+          "25258": 0,
+          "25259": 0,
+          "25260": 321,
+          "25261": 0,
+          "25262": 0,
+          "25263": 0,
+          "25264": 0,
+          "25265": 0,
+          "25266": 0,
+          "25267": 0,
+          "25268": 0,
+          "25269": 65535,
+          "25270": 65535,
+          "25271": 10405,
+          "25272": 10415,
+          "25273": 65390,
+          "25274": 65534
+        }
+      },
+      "expectedFields": {
+        "batterySoc": null,
+        "batteryPower": 146.0,
+        "batteryVoltage": 52.2,
+        "gridPower": 0.0,
+        "loadPower": 288.0,
+        "totalPvPower": 511.0,
+        "dailyPvEnergy": null
+      }
+    },
+    {
+      "modelId": "must_pv18_6048",
+      "spec": {
+        "modelId": "must_pv18_6048",
+        "version": 1,
+        "source": "generated",
+        "verified": false,
+        "protocol": "modbus_tcp",
+        "port": 8899,
+        "defaultSlaveId": 4,
+        "flags": {
+          "batteryPositiveIsDischarge": true
+        },
+        "reads": [
+          {
+            "field": "batteryVoltage",
+            "address": 25205,
+            "signed": true,
+            "scale": 0.1,
+            "unitId": 4
+          },
+          {
+            "field": "batteryPower",
+            "address": 25273,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "batteryCurrent",
+            "address": 25274,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "gridPower",
+            "address": 25214,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "gridVoltageL1",
+            "address": 25207,
+            "signed": true,
+            "scale": 0.1,
+            "unitId": 4
+          },
+          {
+            "field": "gridFrequency",
+            "address": 25226,
+            "signed": true,
+            "scale": 0.01,
+            "unitId": 4
+          },
+          {
+            "field": "loadPower",
+            "address": 25215,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "pv1Voltage",
+            "address": 15205,
+            "signed": true,
+            "scale": 0.1,
+            "unitId": 4
+          },
+          {
+            "field": "pv1Power",
+            "address": 15208,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "inverterTemperature",
+            "address": 25233,
+            "signed": true,
+            "unitId": 4
+          }
+        ],
+        "derivations": [
+          {
+            "field": "batteryPower",
+            "op": "builtin",
+            "inputs": [
+              "batteryPower"
+            ],
+            "builtin": "battery_sign_normalize"
+          },
+          {
+            "field": "inverterTemperature",
+            "op": "builtin",
+            "inputs": [
+              "inverterTemperature"
+            ],
+            "builtin": "battery_temp_clamp"
+          },
+          {
+            "field": "totalPvPower",
+            "op": "sum",
+            "inputs": [
+              "pv1Power"
+            ]
+          }
+        ],
+        "writes": [],
+        "transport": "modbus_tcp",
+        "batches": [
+          {
+            "startRegister": 15205,
+            "count": 4,
+            "functionCode": "FC03",
+            "unitId": 4
+          },
+          {
+            "startRegister": 25205,
+            "count": 70,
+            "functionCode": "FC03",
+            "unitId": 4
+          }
+        ],
+        "maxBatchRegisters": 74,
+        "sourceRefs": [
+          {
+            "project": "MUST \"PV1800 Modbus RTU Protocol\" edition 1.04.15 (2023), re-hosted on the mukaschultze/ha-must-inverter wiki",
+            "url": "https://github.com/mukaschultze/ha-must-inverter/wiki/Resources",
+            "retrievedAt": "2026-10-24",
+            "independentOf": "must_vendor_modbus_xlsx"
+          },
+          {
+            "project": "MUST PowerMonitor Rs485.dll, decompiled (slave 4, 19200 8N1, FC03, read plan 15201 x 21 and 25201 x 74, one sample frame)",
+            "url": "https://github.com/aquarat/must_inverter",
+            "retrievedAt": "2026-10-24",
+            "independentOf": "must_vendor_modbus_xlsx"
+          },
+          {
+            "project": "mukaschultze/ha-must-inverter (PV1800, PH1800 and PV1900 sensors; the forbidden read ranges)",
+            "url": "https://github.com/mukaschultze/ha-must-inverter",
+            "retrievedAt": "2026-10-24",
+            "independentOf": "must_vendor_modbus_xlsx"
+          }
+        ],
+        "confidence": "single_source",
+        "forbiddenReadRanges": [
+          [
+            10009,
+            10100
+          ],
+          [
+            20017,
+            20100
+          ]
+        ]
+      },
+      "rawRegisters": {
+        "4": {
+          "15201": 2,
+          "15202": 1,
+          "15203": 2,
+          "15204": 0,
+          "15205": 1123,
+          "15206": 522,
+          "15207": 98,
+          "15208": 511,
+          "15209": 35,
+          "15210": 65483,
+          "15211": 1,
+          "15212": 1,
+          "15213": 0,
+          "15214": 0,
+          "15215": 48,
+          "15216": 800,
+          "15217": 1,
+          "15218": 2345,
+          "15219": 120,
+          "15220": 5,
+          "15221": 30,
+          "25201": 2,
+          "25202": 230,
+          "25203": 5200,
+          "25204": 0,
+          "25205": 522,
+          "25206": 2300,
+          "25207": 2301,
+          "25208": 3850,
+          "25209": 12,
+          "25210": 15,
+          "25211": 0,
+          "25212": 14,
+          "25213": 300,
+          "25214": 0,
+          "25215": 288,
+          "25216": 6,
+          "25217": 320,
+          "25218": 0,
+          "25219": 310,
+          "25220": 0,
+          "25221": 20,
+          "25222": 0,
+          "25223": 15,
+          "25224": 0,
+          "25225": 5000,
+          "25226": 5001,
+          "25227": 0,
+          "25228": 0,
+          "25229": 1,
+          "25230": 0,
+          "25231": 1,
+          "25232": 0,
+          "25233": 38,
+          "25234": 45,
+          "25235": 36,
+          "25236": 0,
+          "25237": 1,
+          "25238": 0,
+          "25239": 1,
+          "25240": 0,
+          "25241": 1,
+          "25242": 0,
+          "25243": 0,
+          "25244": 0,
+          "25245": 0,
+          "25246": 1234,
+          "25247": 0,
+          "25248": 987,
+          "25249": 0,
+          "25250": 456,
+          "25251": 0,
+          "25252": 0,
+          "25253": 1,
+          "25254": 1500,
+          "25255": 0,
+          "25256": 800,
+          "25257": 0,
+          "25258": 0,
+          "25259": 0,
+          "25260": 321,
+          "25261": 0,
+          "25262": 0,
+          "25263": 0,
+          "25264": 0,
+          "25265": 0,
+          "25266": 0,
+          "25267": 0,
+          "25268": 0,
+          "25269": 65535,
+          "25270": 65535,
+          "25271": 10405,
+          "25272": 10415,
+          "25273": 65390,
+          "25274": 65534
+        }
+      },
+      "expectedFields": {
+        "batterySoc": null,
+        "batteryPower": 146.0,
+        "batteryVoltage": 52.2,
+        "gridPower": 0.0,
+        "loadPower": 288.0,
+        "totalPvPower": 511.0,
+        "dailyPvEnergy": null
+      }
+    },
+    {
+      "modelId": "must_ph18_5248",
+      "spec": {
+        "modelId": "must_ph18_5248",
+        "version": 1,
+        "source": "generated",
+        "verified": false,
+        "protocol": "modbus_tcp",
+        "port": 8899,
+        "defaultSlaveId": 4,
+        "flags": {
+          "batteryPositiveIsDischarge": true
+        },
+        "reads": [
+          {
+            "field": "batteryVoltage",
+            "address": 25205,
+            "signed": true,
+            "scale": 0.1,
+            "unitId": 4
+          },
+          {
+            "field": "batteryPower",
+            "address": 25273,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "batteryCurrent",
+            "address": 25274,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "gridPower",
+            "address": 25214,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "gridVoltageL1",
+            "address": 25207,
+            "signed": true,
+            "scale": 0.1,
+            "unitId": 4
+          },
+          {
+            "field": "gridFrequency",
+            "address": 25226,
+            "signed": true,
+            "scale": 0.01,
+            "unitId": 4
+          },
+          {
+            "field": "loadPower",
+            "address": 25215,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "pv1Voltage",
+            "address": 15205,
+            "signed": true,
+            "scale": 0.1,
+            "unitId": 4
+          },
+          {
+            "field": "pv1Power",
+            "address": 15208,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "inverterTemperature",
+            "address": 25233,
+            "signed": true,
+            "unitId": 4
+          }
+        ],
+        "derivations": [
+          {
+            "field": "batteryPower",
+            "op": "builtin",
+            "inputs": [
+              "batteryPower"
+            ],
+            "builtin": "battery_sign_normalize"
+          },
+          {
+            "field": "inverterTemperature",
+            "op": "builtin",
+            "inputs": [
+              "inverterTemperature"
+            ],
+            "builtin": "battery_temp_clamp"
+          },
+          {
+            "field": "totalPvPower",
+            "op": "sum",
+            "inputs": [
+              "pv1Power"
+            ]
+          }
+        ],
+        "writes": [],
+        "transport": "modbus_tcp",
+        "batches": [
+          {
+            "startRegister": 15205,
+            "count": 4,
+            "functionCode": "FC03",
+            "unitId": 4
+          },
+          {
+            "startRegister": 25205,
+            "count": 70,
+            "functionCode": "FC03",
+            "unitId": 4
+          }
+        ],
+        "maxBatchRegisters": 74,
+        "sourceRefs": [
+          {
+            "project": "MUST \"PV1800 Modbus RTU Protocol\" edition 1.04.15 (2023), re-hosted on the mukaschultze/ha-must-inverter wiki",
+            "url": "https://github.com/mukaschultze/ha-must-inverter/wiki/Resources",
+            "retrievedAt": "2026-10-24",
+            "independentOf": "must_vendor_modbus_xlsx"
+          },
+          {
+            "project": "MUST PowerMonitor Rs485.dll, decompiled (slave 4, 19200 8N1, FC03, read plan 15201 x 21 and 25201 x 74, one sample frame)",
+            "url": "https://github.com/aquarat/must_inverter",
+            "retrievedAt": "2026-10-24",
+            "independentOf": "must_vendor_modbus_xlsx"
+          },
+          {
+            "project": "mukaschultze/ha-must-inverter (PV1800, PH1800 and PV1900 sensors; the forbidden read ranges)",
+            "url": "https://github.com/mukaschultze/ha-must-inverter",
+            "retrievedAt": "2026-10-24",
+            "independentOf": "must_vendor_modbus_xlsx"
+          }
+        ],
+        "confidence": "single_source",
+        "forbiddenReadRanges": [
+          [
+            10009,
+            10100
+          ],
+          [
+            20017,
+            20100
+          ]
+        ]
+      },
+      "rawRegisters": {
+        "4": {
+          "15201": 2,
+          "15202": 1,
+          "15203": 2,
+          "15204": 0,
+          "15205": 1123,
+          "15206": 522,
+          "15207": 98,
+          "15208": 511,
+          "15209": 35,
+          "15210": 65483,
+          "15211": 1,
+          "15212": 1,
+          "15213": 0,
+          "15214": 0,
+          "15215": 48,
+          "15216": 800,
+          "15217": 1,
+          "15218": 2345,
+          "15219": 120,
+          "15220": 5,
+          "15221": 30,
+          "25201": 2,
+          "25202": 230,
+          "25203": 5200,
+          "25204": 0,
+          "25205": 522,
+          "25206": 2300,
+          "25207": 2301,
+          "25208": 3850,
+          "25209": 12,
+          "25210": 15,
+          "25211": 0,
+          "25212": 14,
+          "25213": 300,
+          "25214": 0,
+          "25215": 288,
+          "25216": 6,
+          "25217": 320,
+          "25218": 0,
+          "25219": 310,
+          "25220": 0,
+          "25221": 20,
+          "25222": 0,
+          "25223": 15,
+          "25224": 0,
+          "25225": 5000,
+          "25226": 5001,
+          "25227": 0,
+          "25228": 0,
+          "25229": 1,
+          "25230": 0,
+          "25231": 1,
+          "25232": 0,
+          "25233": 38,
+          "25234": 45,
+          "25235": 36,
+          "25236": 0,
+          "25237": 1,
+          "25238": 0,
+          "25239": 1,
+          "25240": 0,
+          "25241": 1,
+          "25242": 0,
+          "25243": 0,
+          "25244": 0,
+          "25245": 0,
+          "25246": 1234,
+          "25247": 0,
+          "25248": 987,
+          "25249": 0,
+          "25250": 456,
+          "25251": 0,
+          "25252": 0,
+          "25253": 1,
+          "25254": 1500,
+          "25255": 0,
+          "25256": 800,
+          "25257": 0,
+          "25258": 0,
+          "25259": 0,
+          "25260": 321,
+          "25261": 0,
+          "25262": 0,
+          "25263": 0,
+          "25264": 0,
+          "25265": 0,
+          "25266": 0,
+          "25267": 0,
+          "25268": 0,
+          "25269": 65535,
+          "25270": 65535,
+          "25271": 10405,
+          "25272": 10415,
+          "25273": 65390,
+          "25274": 65534
+        }
+      },
+      "expectedFields": {
+        "batterySoc": null,
+        "batteryPower": 146.0,
+        "batteryVoltage": 52.2,
+        "gridPower": 0.0,
+        "loadPower": 288.0,
+        "totalPvPower": 511.0,
+        "dailyPvEnergy": null
+      }
+    },
+    {
+      "modelId": "must_pv19_4024",
+      "spec": {
+        "modelId": "must_pv19_4024",
+        "version": 1,
+        "source": "generated",
+        "verified": false,
+        "protocol": "modbus_tcp",
+        "port": 8899,
+        "defaultSlaveId": 4,
+        "flags": {
+          "batteryPositiveIsDischarge": true,
+          "gridPositiveIsExport": true
+        },
+        "reads": [
+          {
+            "field": "batterySoc",
+            "address": 113,
+            "unitId": 4
+          },
+          {
+            "field": "batteryVoltage",
+            "address": 25205,
+            "signed": true,
+            "scale": 0.1,
+            "unitId": 4
+          },
+          {
+            "field": "batteryPower",
+            "address": 25273,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "batteryCurrent",
+            "address": 25274,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "gridPower",
+            "address": 25214,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "gridVoltageL1",
+            "address": 25207,
+            "signed": true,
+            "scale": 0.1,
+            "unitId": 4
+          },
+          {
+            "field": "gridFrequency",
+            "address": 25226,
+            "signed": true,
+            "scale": 0.01,
+            "unitId": 4
+          },
+          {
+            "field": "loadPower",
+            "address": 25215,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "pv1Voltage",
+            "address": 15205,
+            "signed": true,
+            "scale": 0.1,
+            "unitId": 4
+          },
+          {
+            "field": "pv2Voltage",
+            "address": 16205,
+            "signed": true,
+            "scale": 0.1,
+            "unitId": 4
+          },
+          {
+            "field": "pv2Current",
+            "address": 16207,
+            "signed": true,
+            "scale": 0.1,
+            "unitId": 4
+          },
+          {
+            "field": "pv1Power",
+            "address": 15208,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "pv2Power",
+            "address": 16208,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "inverterTemperature",
+            "address": 25233,
+            "signed": true,
+            "unitId": 4
+          }
+        ],
+        "derivations": [
+          {
+            "field": "batteryPower",
+            "op": "builtin",
+            "inputs": [
+              "batteryPower"
+            ],
+            "builtin": "battery_sign_normalize"
+          },
+          {
+            "field": "gridPower",
+            "op": "builtin",
+            "inputs": [
+              "gridPower"
+            ],
+            "builtin": "grid_sign_normalize"
+          },
+          {
+            "field": "inverterTemperature",
+            "op": "builtin",
+            "inputs": [
+              "inverterTemperature"
+            ],
+            "builtin": "battery_temp_clamp"
+          },
+          {
+            "field": "totalPvPower",
+            "op": "sum",
+            "inputs": [
+              "pv1Power",
+              "pv2Power"
+            ]
+          }
+        ],
+        "writes": [],
+        "transport": "modbus_tcp",
+        "batches": [
+          {
+            "startRegister": 113,
+            "count": 1,
+            "functionCode": "FC03",
+            "unitId": 4
+          },
+          {
+            "startRegister": 15205,
+            "count": 4,
+            "functionCode": "FC03",
+            "unitId": 4
+          },
+          {
+            "startRegister": 16205,
+            "count": 4,
+            "functionCode": "FC03",
+            "unitId": 4
+          },
+          {
+            "startRegister": 25205,
+            "count": 70,
+            "functionCode": "FC03",
+            "unitId": 4
+          }
+        ],
+        "maxBatchRegisters": 74,
+        "sourceRefs": [
+          {
+            "project": "MUST \"PV1800 Modbus RTU Protocol\" edition 1.04.15 (2023), re-hosted on the mukaschultze/ha-must-inverter wiki",
+            "url": "https://github.com/mukaschultze/ha-must-inverter/wiki/Resources",
+            "retrievedAt": "2026-10-24",
+            "independentOf": "must_vendor_modbus_xlsx"
+          },
+          {
+            "project": "MUST PowerMonitor Rs485.dll, decompiled (slave 4, 19200 8N1, FC03, read plan 15201 x 21 and 25201 x 74, one sample frame)",
+            "url": "https://github.com/aquarat/must_inverter",
+            "retrievedAt": "2026-10-24",
+            "independentOf": "must_vendor_modbus_xlsx"
+          },
+          {
+            "project": "mukaschultze/ha-must-inverter (PV1800, PH1800 and PV1900 sensors; the forbidden read ranges)",
+            "url": "https://github.com/mukaschultze/ha-must-inverter",
+            "retrievedAt": "2026-10-24",
+            "independentOf": "must_vendor_modbus_xlsx"
+          }
+        ],
+        "confidence": "single_source",
+        "forbiddenReadRanges": [
+          [
+            10009,
+            10100
+          ],
+          [
+            20017,
+            20100
+          ]
+        ]
+      },
+      "rawRegisters": {
+        "4": {
+          "15201": 2,
+          "15202": 1,
+          "15203": 2,
+          "15204": 0,
+          "15205": 1123,
+          "15206": 522,
+          "15207": 98,
+          "15208": 511,
+          "15209": 35,
+          "15210": 65483,
+          "15211": 1,
+          "15212": 1,
+          "15213": 0,
+          "15214": 0,
+          "15215": 48,
+          "15216": 800,
+          "15217": 1,
+          "15218": 2345,
+          "15219": 120,
+          "15220": 5,
+          "15221": 30,
+          "25201": 2,
+          "25202": 230,
+          "25203": 6200,
+          "25204": 0,
+          "25205": 522,
+          "25206": 2300,
+          "25207": 2301,
+          "25208": 3850,
+          "25209": 12,
+          "25210": 15,
+          "25211": 0,
+          "25212": 14,
+          "25213": 300,
+          "25214": 0,
+          "25215": 288,
+          "25216": 6,
+          "25217": 320,
+          "25218": 0,
+          "25219": 310,
+          "25220": 0,
+          "25221": 20,
+          "25222": 0,
+          "25223": 15,
+          "25224": 0,
+          "25225": 5000,
+          "25226": 5001,
+          "25227": 0,
+          "25228": 0,
+          "25229": 1,
+          "25230": 0,
+          "25231": 1,
+          "25232": 0,
+          "25233": 38,
+          "25234": 45,
+          "25235": 36,
+          "25236": 0,
+          "25237": 1,
+          "25238": 0,
+          "25239": 1,
+          "25240": 0,
+          "25241": 1,
+          "25242": 0,
+          "25243": 0,
+          "25244": 0,
+          "25245": 0,
+          "25246": 1234,
+          "25247": 0,
+          "25248": 987,
+          "25249": 0,
+          "25250": 456,
+          "25251": 0,
+          "25252": 0,
+          "25253": 1,
+          "25254": 1500,
+          "25255": 0,
+          "25256": 800,
+          "25257": 0,
+          "25258": 0,
+          "25259": 0,
+          "25260": 321,
+          "25261": 0,
+          "25262": 0,
+          "25263": 0,
+          "25264": 0,
+          "25265": 0,
+          "25266": 0,
+          "25267": 0,
+          "25268": 0,
+          "25269": 65535,
+          "25270": 65535,
+          "25271": 10405,
+          "25272": 10415,
+          "25273": 65156,
+          "25274": 65529,
+          "16205": 1056,
+          "16206": 0,
+          "16207": 23,
+          "16208": 243,
+          "113": 87,
+          "114": 98
+        }
+      },
+      "expectedFields": {
+        "batterySoc": 87.0,
+        "batteryPower": 380.0,
+        "batteryVoltage": 52.2,
+        "gridPower": 0.0,
+        "loadPower": 288.0,
+        "totalPvPower": 754.0,
+        "dailyPvEnergy": null
+      }
+    },
+    {
+      "modelId": "must_pv19_6048",
+      "spec": {
+        "modelId": "must_pv19_6048",
+        "version": 1,
+        "source": "generated",
+        "verified": false,
+        "protocol": "modbus_tcp",
+        "port": 8899,
+        "defaultSlaveId": 4,
+        "flags": {
+          "batteryPositiveIsDischarge": true,
+          "gridPositiveIsExport": true
+        },
+        "reads": [
+          {
+            "field": "batterySoc",
+            "address": 113,
+            "unitId": 4
+          },
+          {
+            "field": "batteryVoltage",
+            "address": 25205,
+            "signed": true,
+            "scale": 0.1,
+            "unitId": 4
+          },
+          {
+            "field": "batteryPower",
+            "address": 25273,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "batteryCurrent",
+            "address": 25274,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "gridPower",
+            "address": 25214,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "gridVoltageL1",
+            "address": 25207,
+            "signed": true,
+            "scale": 0.1,
+            "unitId": 4
+          },
+          {
+            "field": "gridFrequency",
+            "address": 25226,
+            "signed": true,
+            "scale": 0.01,
+            "unitId": 4
+          },
+          {
+            "field": "loadPower",
+            "address": 25215,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "pv1Voltage",
+            "address": 15205,
+            "signed": true,
+            "scale": 0.1,
+            "unitId": 4
+          },
+          {
+            "field": "pv2Voltage",
+            "address": 16205,
+            "signed": true,
+            "scale": 0.1,
+            "unitId": 4
+          },
+          {
+            "field": "pv2Current",
+            "address": 16207,
+            "signed": true,
+            "scale": 0.1,
+            "unitId": 4
+          },
+          {
+            "field": "pv1Power",
+            "address": 15208,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "pv2Power",
+            "address": 16208,
+            "signed": true,
+            "unitId": 4
+          },
+          {
+            "field": "inverterTemperature",
+            "address": 25233,
+            "signed": true,
+            "unitId": 4
+          }
+        ],
+        "derivations": [
+          {
+            "field": "batteryPower",
+            "op": "builtin",
+            "inputs": [
+              "batteryPower"
+            ],
+            "builtin": "battery_sign_normalize"
+          },
+          {
+            "field": "gridPower",
+            "op": "builtin",
+            "inputs": [
+              "gridPower"
+            ],
+            "builtin": "grid_sign_normalize"
+          },
+          {
+            "field": "inverterTemperature",
+            "op": "builtin",
+            "inputs": [
+              "inverterTemperature"
+            ],
+            "builtin": "battery_temp_clamp"
+          },
+          {
+            "field": "totalPvPower",
+            "op": "sum",
+            "inputs": [
+              "pv1Power",
+              "pv2Power"
+            ]
+          }
+        ],
+        "writes": [],
+        "transport": "modbus_tcp",
+        "batches": [
+          {
+            "startRegister": 113,
+            "count": 1,
+            "functionCode": "FC03",
+            "unitId": 4
+          },
+          {
+            "startRegister": 15205,
+            "count": 4,
+            "functionCode": "FC03",
+            "unitId": 4
+          },
+          {
+            "startRegister": 16205,
+            "count": 4,
+            "functionCode": "FC03",
+            "unitId": 4
+          },
+          {
+            "startRegister": 25205,
+            "count": 70,
+            "functionCode": "FC03",
+            "unitId": 4
+          }
+        ],
+        "maxBatchRegisters": 74,
+        "sourceRefs": [
+          {
+            "project": "MUST \"PV1800 Modbus RTU Protocol\" edition 1.04.15 (2023), re-hosted on the mukaschultze/ha-must-inverter wiki",
+            "url": "https://github.com/mukaschultze/ha-must-inverter/wiki/Resources",
+            "retrievedAt": "2026-10-24",
+            "independentOf": "must_vendor_modbus_xlsx"
+          },
+          {
+            "project": "MUST PowerMonitor Rs485.dll, decompiled (slave 4, 19200 8N1, FC03, read plan 15201 x 21 and 25201 x 74, one sample frame)",
+            "url": "https://github.com/aquarat/must_inverter",
+            "retrievedAt": "2026-10-24",
+            "independentOf": "must_vendor_modbus_xlsx"
+          },
+          {
+            "project": "mukaschultze/ha-must-inverter (PV1800, PH1800 and PV1900 sensors; the forbidden read ranges)",
+            "url": "https://github.com/mukaschultze/ha-must-inverter",
+            "retrievedAt": "2026-10-24",
+            "independentOf": "must_vendor_modbus_xlsx"
+          }
+        ],
+        "confidence": "single_source",
+        "forbiddenReadRanges": [
+          [
+            10009,
+            10100
+          ],
+          [
+            20017,
+            20100
+          ]
+        ]
+      },
+      "rawRegisters": {
+        "4": {
+          "15201": 2,
+          "15202": 1,
+          "15203": 2,
+          "15204": 0,
+          "15205": 1123,
+          "15206": 522,
+          "15207": 98,
+          "15208": 511,
+          "15209": 35,
+          "15210": 65483,
+          "15211": 1,
+          "15212": 1,
+          "15213": 0,
+          "15214": 0,
+          "15215": 48,
+          "15216": 800,
+          "15217": 1,
+          "15218": 2345,
+          "15219": 120,
+          "15220": 5,
+          "15221": 30,
+          "25201": 2,
+          "25202": 230,
+          "25203": 6200,
+          "25204": 0,
+          "25205": 522,
+          "25206": 2300,
+          "25207": 2301,
+          "25208": 3850,
+          "25209": 12,
+          "25210": 15,
+          "25211": 0,
+          "25212": 14,
+          "25213": 300,
+          "25214": 0,
+          "25215": 288,
+          "25216": 6,
+          "25217": 320,
+          "25218": 0,
+          "25219": 310,
+          "25220": 0,
+          "25221": 20,
+          "25222": 0,
+          "25223": 15,
+          "25224": 0,
+          "25225": 5000,
+          "25226": 5001,
+          "25227": 0,
+          "25228": 0,
+          "25229": 1,
+          "25230": 0,
+          "25231": 1,
+          "25232": 0,
+          "25233": 38,
+          "25234": 45,
+          "25235": 36,
+          "25236": 0,
+          "25237": 1,
+          "25238": 0,
+          "25239": 1,
+          "25240": 0,
+          "25241": 1,
+          "25242": 0,
+          "25243": 0,
+          "25244": 0,
+          "25245": 0,
+          "25246": 1234,
+          "25247": 0,
+          "25248": 987,
+          "25249": 0,
+          "25250": 456,
+          "25251": 0,
+          "25252": 0,
+          "25253": 1,
+          "25254": 1500,
+          "25255": 0,
+          "25256": 800,
+          "25257": 0,
+          "25258": 0,
+          "25259": 0,
+          "25260": 321,
+          "25261": 0,
+          "25262": 0,
+          "25263": 0,
+          "25264": 0,
+          "25265": 0,
+          "25266": 0,
+          "25267": 0,
+          "25268": 0,
+          "25269": 65535,
+          "25270": 65535,
+          "25271": 10405,
+          "25272": 10415,
+          "25273": 65156,
+          "25274": 65529,
+          "16205": 1056,
+          "16206": 0,
+          "16207": 23,
+          "16208": 243,
+          "113": 87,
+          "114": 98
+        }
+      },
+      "expectedFields": {
+        "batterySoc": 87.0,
+        "batteryPower": 380.0,
+        "batteryVoltage": 52.2,
+        "gridPower": 0.0,
+        "loadPower": 288.0,
+        "totalPvPower": 754.0,
+        "dailyPvEnergy": null
+      }
+    },
+    {
+      "modelId": "solis_s6_eh1p_l_plus",
+      "spec": {
+        "modelId": "solis_s6_eh1p_l_plus",
+        "version": 1,
+        "source": "generated",
+        "verified": false,
+        "protocol": "modbus_tcp",
+        "port": 502,
+        "defaultSlaveId": 1,
+        "flags": {
+          "pvPowerFromVoltageCurrent": true,
+          "gridPositiveIsExport": true,
+          "usesInputRegisters": true
+        },
+        "reads": [
+          {
+            "field": "batterySoc",
+            "address": 33139,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "batteryVoltage",
+            "address": 33133,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "batteryPower",
+            "address": 33149,
+            "words": 2,
+            "signed": true,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "batteryCurrent",
+            "address": 33134,
+            "signed": true,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "gridPower",
+            "address": 33130,
+            "words": 2,
+            "signed": true,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "gridVoltageL1",
+            "address": 33073,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "gridFrequency",
+            "address": 33094,
+            "scale": 0.01,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "loadPower",
+            "address": 33147,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv1Voltage",
+            "address": 33049,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv1Current",
+            "address": 33050,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv2Voltage",
+            "address": 33051,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv2Current",
+            "address": 33052,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyPvEnergy",
+            "address": 33035,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyGridImportEnergy",
+            "address": 33171,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyGridExportEnergy",
+            "address": 33175,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyLoadEnergy",
+            "address": 33179,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyBatteryChargeEnergy",
+            "address": 33163,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyBatteryDischargeEnergy",
+            "address": 33167,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "bmsChargeCurrentLimit",
+            "address": 33143,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "bmsDischargeCurrentLimit",
+            "address": 33144,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          }
+        ],
+        "derivations": [
+          {
+            "field": "batteryPower",
+            "op": "builtin",
+            "inputs": [
+              "batteryPower"
+            ],
+            "builtin": "battery_sign_normalize"
+          },
+          {
+            "field": "gridPower",
+            "op": "builtin",
+            "inputs": [
+              "gridPower"
+            ],
+            "builtin": "grid_sign_normalize"
+          },
+          {
+            "field": "pv1Power",
+            "op": "builtin",
+            "inputs": [
+              "pv1Voltage",
+              "pv1Current"
+            ],
+            "builtin": "pv_power_from_vi"
+          },
+          {
+            "field": "pv2Power",
+            "op": "builtin",
+            "inputs": [
+              "pv2Voltage",
+              "pv2Current"
+            ],
+            "builtin": "pv_power_from_vi"
+          },
+          {
+            "field": "totalPvPower",
+            "op": "sum",
+            "inputs": [
+              "pv1Power",
+              "pv2Power"
+            ]
+          }
+        ],
+        "writes": [],
+        "transport": "modbus_tcp",
+        "batches": [
+          {
+            "startRegister": 33035,
+            "count": 39,
+            "functionCode": "FC04",
+            "unitId": 1
+          },
+          {
+            "startRegister": 33094,
+            "count": 40,
+            "functionCode": "FC04",
+            "unitId": 1
+          },
+          {
+            "startRegister": 33134,
+            "count": 38,
+            "functionCode": "FC04",
+            "unitId": 1
+          },
+          {
+            "startRegister": 33175,
+            "count": 5,
+            "functionCode": "FC04",
+            "unitId": 1
+          }
+        ],
+        "maxBatchRegisters": 40,
+        "sourceRefs": [
+          {
+            "project": "Solis RS485_MODBUS(ESINV-33000ID) hybrid protocol, 2020-09-15",
+            "url": "https://forum.iobroker.net/assets/uploads/files/1619515984065-_without-control-hybrid-en-2020.9.15_rs485_modbus-esinv-33000id-hybrid-inverter.pdf",
+            "retrievedAt": "2026-10-26",
+            "independentOf": "solis_esinv_33000id"
+          },
+          {
+            "project": "candlerb/solis_exporter",
+            "url": "https://github.com/candlerb/solis_exporter/blob/HEAD/docs/packet_log/index.md",
+            "retrievedAt": "2026-10-26",
+            "independentOf": "solis_esinv_33000id"
+          }
+        ],
+        "confidence": "single_source"
+      },
+      "rawRegisters": {
+        "1": {
+          "33035": 184,
+          "33049": 3215,
+          "33050": 42,
+          "33051": 3108,
+          "33052": 39,
+          "33053": 0,
+          "33054": 0,
+          "33055": 0,
+          "33056": 0,
+          "33073": 2397,
+          "33074": 2401,
+          "33075": 2389,
+          "33094": 5000,
+          "33130": 65535,
+          "33131": 65109,
+          "33133": 490,
+          "33134": 28,
+          "33135": 1,
+          "33139": 52,
+          "33143": 740,
+          "33144": 740,
+          "33147": 302,
+          "33149": 0,
+          "33150": 137,
+          "33163": 62,
+          "33167": 41,
+          "33171": 73,
+          "33175": 12,
+          "33179": 151
+        }
+      },
+      "expectedFields": {
+        "batterySoc": 52.0,
+        "batteryPower": 137.0,
+        "batteryVoltage": 49.0,
+        "gridPower": 427.0,
+        "loadPower": 302.0,
+        "totalPvPower": 2562.42,
+        "dailyPvEnergy": 18.400000000000002
+      }
+    },
+    {
+      "modelId": "solis_s6_eh1p_10k_l_plus",
+      "spec": {
+        "modelId": "solis_s6_eh1p_10k_l_plus",
+        "version": 1,
+        "source": "generated",
+        "verified": false,
+        "protocol": "modbus_tcp",
+        "port": 502,
+        "defaultSlaveId": 1,
+        "flags": {
+          "pvPowerFromVoltageCurrent": true,
+          "gridPositiveIsExport": true,
+          "usesInputRegisters": true
+        },
+        "reads": [
+          {
+            "field": "batterySoc",
+            "address": 33139,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "batteryVoltage",
+            "address": 33133,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "batteryPower",
+            "address": 33149,
+            "words": 2,
+            "signed": true,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "batteryCurrent",
+            "address": 33134,
+            "signed": true,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "gridPower",
+            "address": 33130,
+            "words": 2,
+            "signed": true,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "gridVoltageL1",
+            "address": 33073,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "gridFrequency",
+            "address": 33094,
+            "scale": 0.01,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "loadPower",
+            "address": 33147,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv1Voltage",
+            "address": 33049,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv1Current",
+            "address": 33050,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv2Voltage",
+            "address": 33051,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv2Current",
+            "address": 33052,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyPvEnergy",
+            "address": 33035,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyGridImportEnergy",
+            "address": 33171,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyGridExportEnergy",
+            "address": 33175,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyLoadEnergy",
+            "address": 33179,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyBatteryChargeEnergy",
+            "address": 33163,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyBatteryDischargeEnergy",
+            "address": 33167,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "bmsChargeCurrentLimit",
+            "address": 33143,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "bmsDischargeCurrentLimit",
+            "address": 33144,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          }
+        ],
+        "derivations": [
+          {
+            "field": "batteryPower",
+            "op": "builtin",
+            "inputs": [
+              "batteryPower"
+            ],
+            "builtin": "battery_sign_normalize"
+          },
+          {
+            "field": "gridPower",
+            "op": "builtin",
+            "inputs": [
+              "gridPower"
+            ],
+            "builtin": "grid_sign_normalize"
+          },
+          {
+            "field": "pv1Power",
+            "op": "builtin",
+            "inputs": [
+              "pv1Voltage",
+              "pv1Current"
+            ],
+            "builtin": "pv_power_from_vi"
+          },
+          {
+            "field": "pv2Power",
+            "op": "builtin",
+            "inputs": [
+              "pv2Voltage",
+              "pv2Current"
+            ],
+            "builtin": "pv_power_from_vi"
+          },
+          {
+            "field": "totalPvPower",
+            "op": "sum",
+            "inputs": [
+              "pv1Power",
+              "pv2Power"
+            ]
+          }
+        ],
+        "writes": [],
+        "transport": "modbus_tcp",
+        "batches": [
+          {
+            "startRegister": 33035,
+            "count": 39,
+            "functionCode": "FC04",
+            "unitId": 1
+          },
+          {
+            "startRegister": 33094,
+            "count": 40,
+            "functionCode": "FC04",
+            "unitId": 1
+          },
+          {
+            "startRegister": 33134,
+            "count": 38,
+            "functionCode": "FC04",
+            "unitId": 1
+          },
+          {
+            "startRegister": 33175,
+            "count": 5,
+            "functionCode": "FC04",
+            "unitId": 1
+          }
+        ],
+        "maxBatchRegisters": 40,
+        "sourceRefs": [
+          {
+            "project": "Solis RS485_MODBUS(ESINV-33000ID) hybrid protocol, 2020-09-15",
+            "url": "https://forum.iobroker.net/assets/uploads/files/1619515984065-_without-control-hybrid-en-2020.9.15_rs485_modbus-esinv-33000id-hybrid-inverter.pdf",
+            "retrievedAt": "2026-10-26",
+            "independentOf": "solis_esinv_33000id"
+          },
+          {
+            "project": "candlerb/solis_exporter",
+            "url": "https://github.com/candlerb/solis_exporter/blob/HEAD/docs/packet_log/index.md",
+            "retrievedAt": "2026-10-26",
+            "independentOf": "solis_esinv_33000id"
+          }
+        ],
+        "confidence": "single_source"
+      },
+      "rawRegisters": {
+        "1": {
+          "33035": 184,
+          "33049": 3215,
+          "33050": 42,
+          "33051": 3108,
+          "33052": 39,
+          "33053": 0,
+          "33054": 0,
+          "33055": 0,
+          "33056": 0,
+          "33073": 2397,
+          "33074": 2401,
+          "33075": 2389,
+          "33094": 5000,
+          "33130": 65535,
+          "33131": 65109,
+          "33133": 490,
+          "33134": 28,
+          "33135": 1,
+          "33139": 52,
+          "33143": 740,
+          "33144": 740,
+          "33147": 302,
+          "33149": 0,
+          "33150": 137,
+          "33163": 62,
+          "33167": 41,
+          "33171": 73,
+          "33175": 12,
+          "33179": 151
+        }
+      },
+      "expectedFields": {
+        "batterySoc": 52.0,
+        "batteryPower": 137.0,
+        "batteryVoltage": 49.0,
+        "gridPower": 427.0,
+        "loadPower": 302.0,
+        "totalPvPower": 2562.42,
+        "dailyPvEnergy": 18.400000000000002
+      }
+    },
+    {
+      "modelId": "solis_rhi_48es_5g",
+      "spec": {
+        "modelId": "solis_rhi_48es_5g",
+        "version": 1,
+        "source": "generated",
+        "verified": false,
+        "protocol": "modbus_tcp",
+        "port": 502,
+        "defaultSlaveId": 1,
+        "flags": {
+          "pvPowerFromVoltageCurrent": true,
+          "gridPositiveIsExport": true,
+          "usesInputRegisters": true
+        },
+        "reads": [
+          {
+            "field": "batterySoc",
+            "address": 33139,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "batteryVoltage",
+            "address": 33133,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "batteryPower",
+            "address": 33149,
+            "words": 2,
+            "signed": true,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "batteryCurrent",
+            "address": 33134,
+            "signed": true,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "gridPower",
+            "address": 33130,
+            "words": 2,
+            "signed": true,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "gridVoltageL1",
+            "address": 33073,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "gridFrequency",
+            "address": 33094,
+            "scale": 0.01,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "loadPower",
+            "address": 33147,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv1Voltage",
+            "address": 33049,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv1Current",
+            "address": 33050,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv2Voltage",
+            "address": 33051,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv2Current",
+            "address": 33052,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyPvEnergy",
+            "address": 33035,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyGridImportEnergy",
+            "address": 33171,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyGridExportEnergy",
+            "address": 33175,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyLoadEnergy",
+            "address": 33179,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyBatteryChargeEnergy",
+            "address": 33163,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyBatteryDischargeEnergy",
+            "address": 33167,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "bmsChargeCurrentLimit",
+            "address": 33143,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "bmsDischargeCurrentLimit",
+            "address": 33144,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          }
+        ],
+        "derivations": [
+          {
+            "field": "batteryPower",
+            "op": "builtin",
+            "inputs": [
+              "batteryPower"
+            ],
+            "builtin": "battery_sign_normalize"
+          },
+          {
+            "field": "gridPower",
+            "op": "builtin",
+            "inputs": [
+              "gridPower"
+            ],
+            "builtin": "grid_sign_normalize"
+          },
+          {
+            "field": "pv1Power",
+            "op": "builtin",
+            "inputs": [
+              "pv1Voltage",
+              "pv1Current"
+            ],
+            "builtin": "pv_power_from_vi"
+          },
+          {
+            "field": "pv2Power",
+            "op": "builtin",
+            "inputs": [
+              "pv2Voltage",
+              "pv2Current"
+            ],
+            "builtin": "pv_power_from_vi"
+          },
+          {
+            "field": "totalPvPower",
+            "op": "sum",
+            "inputs": [
+              "pv1Power",
+              "pv2Power"
+            ]
+          }
+        ],
+        "writes": [],
+        "transport": "modbus_tcp",
+        "batches": [
+          {
+            "startRegister": 33035,
+            "count": 39,
+            "functionCode": "FC04",
+            "unitId": 1
+          },
+          {
+            "startRegister": 33094,
+            "count": 40,
+            "functionCode": "FC04",
+            "unitId": 1
+          },
+          {
+            "startRegister": 33134,
+            "count": 38,
+            "functionCode": "FC04",
+            "unitId": 1
+          },
+          {
+            "startRegister": 33175,
+            "count": 5,
+            "functionCode": "FC04",
+            "unitId": 1
+          }
+        ],
+        "maxBatchRegisters": 40,
+        "sourceRefs": [
+          {
+            "project": "Solis RS485_MODBUS(ESINV-33000ID) hybrid protocol, 2020-09-15",
+            "url": "https://forum.iobroker.net/assets/uploads/files/1619515984065-_without-control-hybrid-en-2020.9.15_rs485_modbus-esinv-33000id-hybrid-inverter.pdf",
+            "retrievedAt": "2026-10-26",
+            "independentOf": "solis_esinv_33000id"
+          },
+          {
+            "project": "candlerb/solis_exporter",
+            "url": "https://github.com/candlerb/solis_exporter/blob/HEAD/docs/packet_log/index.md",
+            "retrievedAt": "2026-10-26",
+            "independentOf": "solis_esinv_33000id"
+          }
+        ],
+        "confidence": "single_source"
+      },
+      "rawRegisters": {
+        "1": {
+          "33035": 184,
+          "33049": 3215,
+          "33050": 42,
+          "33051": 3108,
+          "33052": 39,
+          "33053": 0,
+          "33054": 0,
+          "33055": 0,
+          "33056": 0,
+          "33073": 2397,
+          "33074": 2401,
+          "33075": 2389,
+          "33094": 5000,
+          "33130": 65535,
+          "33131": 65109,
+          "33133": 490,
+          "33134": 28,
+          "33135": 1,
+          "33139": 52,
+          "33143": 740,
+          "33144": 740,
+          "33147": 302,
+          "33149": 0,
+          "33150": 137,
+          "33163": 62,
+          "33167": 41,
+          "33171": 73,
+          "33175": 12,
+          "33179": 151
+        }
+      },
+      "expectedFields": {
+        "batterySoc": 52.0,
+        "batteryPower": 137.0,
+        "batteryVoltage": 49.0,
+        "gridPower": 427.0,
+        "loadPower": 302.0,
+        "totalPvPower": 2562.42,
+        "dailyPvEnergy": 18.400000000000002
+      }
+    },
+    {
+      "modelId": "solis_s6_eh3p_nv_yd_l",
+      "spec": {
+        "modelId": "solis_s6_eh3p_nv_yd_l",
+        "version": 1,
+        "source": "generated",
+        "verified": false,
+        "protocol": "modbus_tcp",
+        "port": 502,
+        "defaultSlaveId": 1,
+        "flags": {
+          "pvPowerFromVoltageCurrent": true,
+          "gridPositiveIsExport": true,
+          "usesInputRegisters": true
+        },
+        "reads": [
+          {
+            "field": "batterySoc",
+            "address": 33139,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "batteryVoltage",
+            "address": 33133,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "batteryPower",
+            "address": 33149,
+            "words": 2,
+            "signed": true,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "batteryCurrent",
+            "address": 33134,
+            "signed": true,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "gridPower",
+            "address": 33130,
+            "words": 2,
+            "signed": true,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "gridVoltageL1",
+            "address": 33073,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "gridVoltageL2",
+            "address": 33074,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "gridVoltageL3",
+            "address": 33075,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "gridFrequency",
+            "address": 33094,
+            "scale": 0.01,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "loadPower",
+            "address": 33147,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv1Voltage",
+            "address": 33049,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv1Current",
+            "address": 33050,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv2Voltage",
+            "address": 33051,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv2Current",
+            "address": 33052,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyPvEnergy",
+            "address": 33035,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyGridImportEnergy",
+            "address": 33171,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyGridExportEnergy",
+            "address": 33175,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyLoadEnergy",
+            "address": 33179,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyBatteryChargeEnergy",
+            "address": 33163,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyBatteryDischargeEnergy",
+            "address": 33167,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "bmsChargeCurrentLimit",
+            "address": 33143,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "bmsDischargeCurrentLimit",
+            "address": 33144,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          }
+        ],
+        "derivations": [
+          {
+            "field": "batteryPower",
+            "op": "builtin",
+            "inputs": [
+              "batteryPower"
+            ],
+            "builtin": "battery_sign_normalize"
+          },
+          {
+            "field": "gridPower",
+            "op": "builtin",
+            "inputs": [
+              "gridPower"
+            ],
+            "builtin": "grid_sign_normalize"
+          },
+          {
+            "field": "pv1Power",
+            "op": "builtin",
+            "inputs": [
+              "pv1Voltage",
+              "pv1Current"
+            ],
+            "builtin": "pv_power_from_vi"
+          },
+          {
+            "field": "pv2Power",
+            "op": "builtin",
+            "inputs": [
+              "pv2Voltage",
+              "pv2Current"
+            ],
+            "builtin": "pv_power_from_vi"
+          },
+          {
+            "field": "totalPvPower",
+            "op": "sum",
+            "inputs": [
+              "pv1Power",
+              "pv2Power"
+            ]
+          }
+        ],
+        "writes": [],
+        "transport": "modbus_tcp",
+        "batches": [
+          {
+            "startRegister": 33035,
+            "count": 40,
+            "functionCode": "FC04",
+            "unitId": 1
+          },
+          {
+            "startRegister": 33075,
+            "count": 20,
+            "functionCode": "FC04",
+            "unitId": 1
+          },
+          {
+            "startRegister": 33130,
+            "count": 38,
+            "functionCode": "FC04",
+            "unitId": 1
+          },
+          {
+            "startRegister": 33171,
+            "count": 9,
+            "functionCode": "FC04",
+            "unitId": 1
+          }
+        ],
+        "maxBatchRegisters": 40,
+        "sourceRefs": [
+          {
+            "project": "Solis RS485_MODBUS(ESINV-33000ID) hybrid protocol, 2020-09-15",
+            "url": "https://forum.iobroker.net/assets/uploads/files/1619515984065-_without-control-hybrid-en-2020.9.15_rs485_modbus-esinv-33000id-hybrid-inverter.pdf",
+            "retrievedAt": "2026-10-26",
+            "independentOf": "solis_esinv_33000id"
+          },
+          {
+            "project": "candlerb/solis_exporter",
+            "url": "https://github.com/candlerb/solis_exporter/blob/HEAD/docs/packet_log/index.md",
+            "retrievedAt": "2026-10-26",
+            "independentOf": "solis_esinv_33000id"
+          }
+        ],
+        "confidence": "single_source"
+      },
+      "rawRegisters": {
+        "1": {
+          "33035": 184,
+          "33049": 3215,
+          "33050": 42,
+          "33051": 3108,
+          "33052": 39,
+          "33053": 0,
+          "33054": 0,
+          "33055": 0,
+          "33056": 0,
+          "33073": 2397,
+          "33074": 2401,
+          "33075": 2389,
+          "33094": 5000,
+          "33130": 65535,
+          "33131": 65109,
+          "33133": 490,
+          "33134": 28,
+          "33135": 1,
+          "33139": 52,
+          "33143": 740,
+          "33144": 740,
+          "33147": 302,
+          "33149": 0,
+          "33150": 137,
+          "33163": 62,
+          "33167": 41,
+          "33171": 73,
+          "33175": 12,
+          "33179": 151
+        }
+      },
+      "expectedFields": {
+        "batterySoc": 52.0,
+        "batteryPower": 137.0,
+        "batteryVoltage": 49.0,
+        "gridPower": 427.0,
+        "loadPower": 302.0,
+        "totalPvPower": 2562.42,
+        "dailyPvEnergy": 18.400000000000002
+      }
+    },
+    {
+      "modelId": "solis_s6_eh3p_h",
+      "spec": {
+        "modelId": "solis_s6_eh3p_h",
+        "version": 1,
+        "source": "generated",
+        "verified": false,
+        "protocol": "modbus_tcp",
+        "port": 502,
+        "defaultSlaveId": 1,
+        "flags": {
+          "pvPowerFromVoltageCurrent": true,
+          "gridPositiveIsExport": true,
+          "usesInputRegisters": true
+        },
+        "reads": [
+          {
+            "field": "batterySoc",
+            "address": 33139,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "batteryVoltage",
+            "address": 33133,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "batteryPower",
+            "address": 33149,
+            "words": 2,
+            "signed": true,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "batteryCurrent",
+            "address": 33134,
+            "signed": true,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "gridPower",
+            "address": 33130,
+            "words": 2,
+            "signed": true,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "gridVoltageL1",
+            "address": 33073,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "gridVoltageL2",
+            "address": 33074,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "gridVoltageL3",
+            "address": 33075,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "gridFrequency",
+            "address": 33094,
+            "scale": 0.01,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "loadPower",
+            "address": 33147,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv1Voltage",
+            "address": 33049,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv1Current",
+            "address": 33050,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv2Voltage",
+            "address": 33051,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv2Current",
+            "address": 33052,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv3Voltage",
+            "address": 33053,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv3Current",
+            "address": 33054,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv4Voltage",
+            "address": 33055,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "pv4Current",
+            "address": 33056,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyPvEnergy",
+            "address": 33035,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyGridImportEnergy",
+            "address": 33171,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyGridExportEnergy",
+            "address": 33175,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyLoadEnergy",
+            "address": 33179,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyBatteryChargeEnergy",
+            "address": 33163,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "dailyBatteryDischargeEnergy",
+            "address": 33167,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "bmsChargeCurrentLimit",
+            "address": 33143,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          },
+          {
+            "field": "bmsDischargeCurrentLimit",
+            "address": 33144,
+            "scale": 0.1,
+            "functionCode": "FC04"
+          }
+        ],
+        "derivations": [
+          {
+            "field": "batteryPower",
+            "op": "builtin",
+            "inputs": [
+              "batteryPower"
+            ],
+            "builtin": "battery_sign_normalize"
+          },
+          {
+            "field": "gridPower",
+            "op": "builtin",
+            "inputs": [
+              "gridPower"
+            ],
+            "builtin": "grid_sign_normalize"
+          },
+          {
+            "field": "pv1Power",
+            "op": "builtin",
+            "inputs": [
+              "pv1Voltage",
+              "pv1Current"
+            ],
+            "builtin": "pv_power_from_vi"
+          },
+          {
+            "field": "pv2Power",
+            "op": "builtin",
+            "inputs": [
+              "pv2Voltage",
+              "pv2Current"
+            ],
+            "builtin": "pv_power_from_vi"
+          },
+          {
+            "field": "pv3Power",
+            "op": "builtin",
+            "inputs": [
+              "pv3Voltage",
+              "pv3Current"
+            ],
+            "builtin": "pv_power_from_vi"
+          },
+          {
+            "field": "pv4Power",
+            "op": "builtin",
+            "inputs": [
+              "pv4Voltage",
+              "pv4Current"
+            ],
+            "builtin": "pv_power_from_vi"
+          },
+          {
+            "field": "totalPvPower",
+            "op": "sum",
+            "inputs": [
+              "pv1Power",
+              "pv2Power",
+              "pv3Power",
+              "pv4Power"
+            ]
+          }
+        ],
+        "writes": [],
+        "transport": "modbus_tcp",
+        "batches": [
+          {
+            "startRegister": 33035,
+            "count": 40,
+            "functionCode": "FC04",
+            "unitId": 1
+          },
+          {
+            "startRegister": 33075,
+            "count": 20,
+            "functionCode": "FC04",
+            "unitId": 1
+          },
+          {
+            "startRegister": 33130,
+            "count": 38,
+            "functionCode": "FC04",
+            "unitId": 1
+          },
+          {
+            "startRegister": 33171,
+            "count": 9,
+            "functionCode": "FC04",
+            "unitId": 1
+          }
+        ],
+        "maxBatchRegisters": 40,
+        "sourceRefs": [
+          {
+            "project": "Solis RS485_MODBUS(ESINV-33000ID) hybrid protocol, 2020-09-15",
+            "url": "https://forum.iobroker.net/assets/uploads/files/1619515984065-_without-control-hybrid-en-2020.9.15_rs485_modbus-esinv-33000id-hybrid-inverter.pdf",
+            "retrievedAt": "2026-10-26",
+            "independentOf": "solis_esinv_33000id"
+          },
+          {
+            "project": "candlerb/solis_exporter",
+            "url": "https://github.com/candlerb/solis_exporter/blob/HEAD/docs/packet_log/index.md",
+            "retrievedAt": "2026-10-26",
+            "independentOf": "solis_esinv_33000id"
+          }
+        ],
+        "confidence": "single_source"
+      },
+      "rawRegisters": {
+        "1": {
+          "33035": 184,
+          "33049": 3215,
+          "33050": 42,
+          "33051": 3108,
+          "33052": 39,
+          "33053": 0,
+          "33054": 0,
+          "33055": 0,
+          "33056": 0,
+          "33073": 2397,
+          "33074": 2401,
+          "33075": 2389,
+          "33094": 5000,
+          "33130": 65535,
+          "33131": 65109,
+          "33133": 490,
+          "33134": 28,
+          "33135": 1,
+          "33139": 52,
+          "33143": 740,
+          "33144": 740,
+          "33147": 302,
+          "33149": 0,
+          "33150": 137,
+          "33163": 62,
+          "33167": 41,
+          "33171": 73,
+          "33175": 12,
+          "33179": 151
+        }
+      },
+      "expectedFields": {
+        "batterySoc": 52.0,
+        "batteryPower": 137.0,
+        "batteryVoltage": 49.0,
+        "gridPower": 427.0,
+        "loadPower": 302.0,
+        "totalPvPower": 2562.42,
+        "dailyPvEnergy": 18.400000000000002
+      }
+    },
+    {
+      "modelId": "goodwe_es_g2",
+      "spec": {
+        "modelId": "goodwe_es_g2",
+        "version": 1,
+        "source": "generated",
+        "verified": false,
+        "protocol": "modbus_tcp",
+        "port": 502,
+        "defaultSlaveId": 1,
+        "flags": {
+          "batteryPositiveIsDischarge": true,
+          "gridPositiveIsExport": true
+        },
+        "reads": [
+          {
+            "field": "batterySoc",
+            "address": 37007
+          },
+          {
+            "field": "batteryVoltage",
+            "address": 35180,
+            "scale": 0.1
+          },
+          {
+            "field": "batteryPower",
+            "address": 35182,
+            "words": 2,
+            "signed": true
+          },
+          {
+            "field": "batteryCurrent",
+            "address": 35181,
+            "signed": true,
+            "scale": 0.1
+          },
+          {
+            "field": "batteryTemperature",
+            "address": 37003,
+            "scale": 0.1
+          },
+          {
+            "field": "gridPower",
+            "address": 35140,
+            "signed": true
+          },
+          {
+            "field": "gridVoltageL1",
+            "address": 35121,
+            "scale": 0.1
+          },
+          {
+            "field": "gridFrequency",
+            "address": 35123,
+            "scale": 0.01
+          },
+          {
+            "field": "loadPower",
+            "address": 35172,
+            "signed": true
+          },
+          {
+            "field": "pv1Voltage",
+            "address": 35103,
+            "scale": 0.1
+          },
+          {
+            "field": "pv1Current",
+            "address": 35104,
+            "scale": 0.1
+          },
+          {
+            "field": "pv2Voltage",
+            "address": 35107,
+            "scale": 0.1
+          },
+          {
+            "field": "pv2Current",
+            "address": 35108,
+            "scale": 0.1
+          },
+          {
+            "field": "pv1Power",
+            "address": 35105,
+            "words": 2
+          },
+          {
+            "field": "pv2Power",
+            "address": 35109,
+            "words": 2
+          },
+          {
+            "field": "dailyPvEnergy",
+            "address": 35193,
+            "words": 2,
+            "scale": 0.1
+          },
+          {
+            "field": "dailyGridImportEnergy",
+            "address": 35202,
+            "scale": 0.1
+          },
+          {
+            "field": "dailyGridExportEnergy",
+            "address": 35199,
+            "scale": 0.1
+          },
+          {
+            "field": "dailyLoadEnergy",
+            "address": 35205,
+            "scale": 0.1
+          },
+          {
+            "field": "dailyBatteryChargeEnergy",
+            "address": 35208,
+            "scale": 0.1
+          },
+          {
+            "field": "dailyBatteryDischargeEnergy",
+            "address": 35211,
+            "scale": 0.1
+          },
+          {
+            "field": "bmsChargeCurrentLimit",
+            "address": 37004
+          },
+          {
+            "field": "bmsDischargeCurrentLimit",
+            "address": 37005
+          }
+        ],
+        "derivations": [
+          {
+            "field": "batteryPower",
+            "op": "builtin",
+            "inputs": [
+              "batteryPower"
+            ],
+            "builtin": "battery_sign_normalize"
+          },
+          {
+            "field": "gridPower",
+            "op": "builtin",
+            "inputs": [
+              "gridPower"
+            ],
+            "builtin": "grid_sign_normalize"
+          },
+          {
+            "field": "batteryTemperature",
+            "op": "builtin",
+            "inputs": [
+              "batteryTemperature"
+            ],
+            "builtin": "battery_temp_clamp"
+          },
+          {
+            "field": "totalPvPower",
+            "op": "sum",
+            "inputs": [
+              "pv1Power",
+              "pv2Power"
+            ]
+          }
+        ],
+        "writes": [],
+        "transport": "modbus_tcp",
+        "batches": [
+          {
+            "startRegister": 35103,
+            "count": 100,
+            "functionCode": "FC03",
+            "unitId": 1
+          },
+          {
+            "startRegister": 35205,
+            "count": 7,
+            "functionCode": "FC03",
+            "unitId": 1
+          },
+          {
+            "startRegister": 37003,
+            "count": 5,
+            "functionCode": "FC03",
+            "unitId": 1
+          }
+        ],
+        "maxBatchRegisters": 100,
+        "sourceRefs": [
+          {
+            "project": "GoodWe Modbus Protocol Hybrid v1.2, 2024-02-02",
+            "url": "https://en.goodwe.com/Ftp/EN/Downloads/GW_Third-Party-EMS-Protocol_MODBUS-EN.pdf",
+            "retrievedAt": "2026-11-23",
+            "independentOf": "goodwe_arm745_modbus"
+          },
+          {
+            "project": "marcelblijleven/goodwe 0.4.10 (et.py)",
+            "url": "https://github.com/marcelblijleven/goodwe/blob/HEAD/goodwe/et.py",
+            "retrievedAt": "2026-11-23",
+            "independentOf": "goodwe_arm745_modbus"
+          }
+        ],
+        "confidence": "single_source"
+      },
+      "rawRegisters": {
+        "1": {
+          "35000": 121,
+          "35001": 8000,
+          "35002": 0,
+          "35003": 13624,
+          "35004": 12336,
+          "35005": 12357,
+          "35006": 21315,
+          "35007": 12854,
+          "35008": 13900,
+          "35009": 13111,
+          "35010": 12344,
+          "35011": 18263,
+          "35012": 13872,
+          "35013": 12336,
+          "35014": 17747,
+          "35015": 12848,
+          "35016": 6,
+          "35017": 6,
+          "35018": 4237,
+          "35019": 16,
+          "35020": 497,
+          "35021": 12340,
+          "35022": 12343,
+          "35023": 12333,
+          "35024": 12342,
+          "35025": 11603,
+          "35026": 13362,
+          "35027": 12338,
+          "35028": 12594,
+          "35029": 12333,
+          "35030": 12598,
+          "35031": 11603,
+          "35032": 12337,
+          "35100": 6667,
+          "35101": 5888,
+          "35102": 8457,
+          "35103": 3215,
+          "35104": 42,
+          "35105": 0,
+          "35106": 1350,
+          "35107": 3108,
+          "35108": 39,
+          "35109": 0,
+          "35110": 1200,
+          "35121": 2312,
+          "35123": 5001,
+          "35140": 65036,
+          "35172": 1840,
+          "35176": 412,
+          "35180": 528,
+          "35181": 65506,
+          "35182": 65535,
+          "35183": 64036,
+          "35184": 1,
+          "35193": 0,
+          "35194": 115,
+          "35199": 24,
+          "35202": 61,
+          "35205": 98,
+          "35208": 33,
+          "35211": 17,
+          "37003": 250,
+          "37004": 80,
+          "37005": 150,
+          "37007": 36,
+          "37008": 100
+        }
+      },
+      "expectedFields": {
+        "batterySoc": 36.0,
+        "batteryPower": 1500.0,
+        "batteryVoltage": 52.800000000000004,
+        "gridPower": 500.0,
+        "loadPower": 1840.0,
+        "totalPvPower": 2550.0,
+        "dailyPvEnergy": 11.5
       }
     }
   ]

@@ -1,0 +1,151 @@
+{
+  "modelId": "must_pv18_3224",
+  "version": 1,
+  "source": "generated",
+  "verified": false,
+  "protocol": "modbus_tcp",
+  "port": 8899,
+  "defaultSlaveId": 4,
+  "flags": {
+    "batteryPositiveIsDischarge": true
+  },
+  "reads": [
+    {
+      "field": "batteryVoltage",
+      "address": 25205,
+      "signed": true,
+      "scale": 0.1,
+      "unitId": 4
+    },
+    {
+      "field": "batteryPower",
+      "address": 25273,
+      "signed": true,
+      "unitId": 4
+    },
+    {
+      "field": "batteryCurrent",
+      "address": 25274,
+      "signed": true,
+      "unitId": 4
+    },
+    {
+      "field": "gridPower",
+      "address": 25214,
+      "signed": true,
+      "unitId": 4
+    },
+    {
+      "field": "gridVoltageL1",
+      "address": 25207,
+      "signed": true,
+      "scale": 0.1,
+      "unitId": 4
+    },
+    {
+      "field": "gridFrequency",
+      "address": 25226,
+      "signed": true,
+      "scale": 0.01,
+      "unitId": 4
+    },
+    {
+      "field": "loadPower",
+      "address": 25215,
+      "signed": true,
+      "unitId": 4
+    },
+    {
+      "field": "pv1Voltage",
+      "address": 15205,
+      "signed": true,
+      "scale": 0.1,
+      "unitId": 4
+    },
+    {
+      "field": "pv1Power",
+      "address": 15208,
+      "signed": true,
+      "unitId": 4
+    },
+    {
+      "field": "inverterTemperature",
+      "address": 25233,
+      "signed": true,
+      "unitId": 4
+    }
+  ],
+  "derivations": [
+    {
+      "field": "batteryPower",
+      "op": "builtin",
+      "inputs": [
+        "batteryPower"
+      ],
+      "builtin": "battery_sign_normalize"
+    },
+    {
+      "field": "inverterTemperature",
+      "op": "builtin",
+      "inputs": [
+        "inverterTemperature"
+      ],
+      "builtin": "battery_temp_clamp"
+    },
+    {
+      "field": "totalPvPower",
+      "op": "sum",
+      "inputs": [
+        "pv1Power"
+      ]
+    }
+  ],
+  "writes": [],
+  "transport": "modbus_tcp",
+  "batches": [
+    {
+      "startRegister": 15205,
+      "count": 4,
+      "functionCode": "FC03",
+      "unitId": 4
+    },
+    {
+      "startRegister": 25205,
+      "count": 70,
+      "functionCode": "FC03",
+      "unitId": 4
+    }
+  ],
+  "maxBatchRegisters": 74,
+  "sourceRefs": [
+    {
+      "project": "MUST \"PV1800 Modbus RTU Protocol\" edition 1.04.15 (2023), re-hosted on the mukaschultze/ha-must-inverter wiki",
+      "url": "https://github.com/mukaschultze/ha-must-inverter/wiki/Resources",
+      "retrievedAt": "2026-10-24",
+      "independentOf": "must_vendor_modbus_xlsx"
+    },
+    {
+      "project": "MUST PowerMonitor Rs485.dll, decompiled (slave 4, 19200 8N1, FC03, read plan 15201 x 21 and 25201 x 74, one sample frame)",
+      "url": "https://github.com/aquarat/must_inverter",
+      "retrievedAt": "2026-10-24",
+      "independentOf": "must_vendor_modbus_xlsx"
+    },
+    {
+      "project": "mukaschultze/ha-must-inverter (PV1800, PH1800 and PV1900 sensors; the forbidden read ranges)",
+      "url": "https://github.com/mukaschultze/ha-must-inverter",
+      "retrievedAt": "2026-10-24",
+      "independentOf": "must_vendor_modbus_xlsx"
+    }
+  ],
+  "confidence": "single_source",
+  "forbiddenReadRanges": [
+    [
+      10009,
+      10100
+    ],
+    [
+      20017,
+      20100
+    ]
+  ]
+}

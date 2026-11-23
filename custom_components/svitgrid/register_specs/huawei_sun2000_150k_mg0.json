@@ -117,6 +117,12 @@
       "scale": 0.01
     },
     {
+      "field": "inverterTemperature",
+      "address": 32087,
+      "signed": true,
+      "scale": 0.1
+    },
+    {
       "field": "runningState",
       "address": 32089
     }
@@ -129,6 +135,14 @@
         "gridPower"
       ],
       "builtin": "grid_sign_normalize"
+    },
+    {
+      "field": "inverterTemperature",
+      "op": "builtin",
+      "inputs": [
+        "inverterTemperature"
+      ],
+      "builtin": "battery_temp_clamp"
     },
     {
       "field": "dailyGridImportEnergy",

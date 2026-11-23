@@ -1,0 +1,202 @@
+{
+  "modelId": "goodwe_es_g2",
+  "version": 1,
+  "source": "generated",
+  "verified": false,
+  "protocol": "modbus_tcp",
+  "port": 502,
+  "defaultSlaveId": 1,
+  "flags": {
+    "batteryPositiveIsDischarge": true,
+    "gridPositiveIsExport": true
+  },
+  "reads": [
+    {
+      "field": "batterySoc",
+      "address": 37007
+    },
+    {
+      "field": "batteryVoltage",
+      "address": 35180,
+      "scale": 0.1
+    },
+    {
+      "field": "batteryPower",
+      "address": 35182,
+      "words": 2,
+      "signed": true
+    },
+    {
+      "field": "batteryCurrent",
+      "address": 35181,
+      "signed": true,
+      "scale": 0.1
+    },
+    {
+      "field": "batteryTemperature",
+      "address": 37003,
+      "scale": 0.1
+    },
+    {
+      "field": "gridPower",
+      "address": 35140,
+      "signed": true
+    },
+    {
+      "field": "gridVoltageL1",
+      "address": 35121,
+      "scale": 0.1
+    },
+    {
+      "field": "gridFrequency",
+      "address": 35123,
+      "scale": 0.01
+    },
+    {
+      "field": "loadPower",
+      "address": 35172,
+      "signed": true
+    },
+    {
+      "field": "pv1Voltage",
+      "address": 35103,
+      "scale": 0.1
+    },
+    {
+      "field": "pv1Current",
+      "address": 35104,
+      "scale": 0.1
+    },
+    {
+      "field": "pv2Voltage",
+      "address": 35107,
+      "scale": 0.1
+    },
+    {
+      "field": "pv2Current",
+      "address": 35108,
+      "scale": 0.1
+    },
+    {
+      "field": "pv1Power",
+      "address": 35105,
+      "words": 2
+    },
+    {
+      "field": "pv2Power",
+      "address": 35109,
+      "words": 2
+    },
+    {
+      "field": "dailyPvEnergy",
+      "address": 35193,
+      "words": 2,
+      "scale": 0.1
+    },
+    {
+      "field": "dailyGridImportEnergy",
+      "address": 35202,
+      "scale": 0.1
+    },
+    {
+      "field": "dailyGridExportEnergy",
+      "address": 35199,
+      "scale": 0.1
+    },
+    {
+      "field": "dailyLoadEnergy",
+      "address": 35205,
+      "scale": 0.1
+    },
+    {
+      "field": "dailyBatteryChargeEnergy",
+      "address": 35208,
+      "scale": 0.1
+    },
+    {
+      "field": "dailyBatteryDischargeEnergy",
+      "address": 35211,
+      "scale": 0.1
+    },
+    {
+      "field": "bmsChargeCurrentLimit",
+      "address": 37004
+    },
+    {
+      "field": "bmsDischargeCurrentLimit",
+      "address": 37005
+    }
+  ],
+  "derivations": [
+    {
+      "field": "batteryPower",
+      "op": "builtin",
+      "inputs": [
+        "batteryPower"
+      ],
+      "builtin": "battery_sign_normalize"
+    },
+    {
+      "field": "gridPower",
+      "op": "builtin",
+      "inputs": [
+        "gridPower"
+      ],
+      "builtin": "grid_sign_normalize"
+    },
+    {
+      "field": "batteryTemperature",
+      "op": "builtin",
+      "inputs": [
+        "batteryTemperature"
+      ],
+      "builtin": "battery_temp_clamp"
+    },
+    {
+      "field": "totalPvPower",
+      "op": "sum",
+      "inputs": [
+        "pv1Power",
+        "pv2Power"
+      ]
+    }
+  ],
+  "writes": [],
+  "transport": "modbus_tcp",
+  "batches": [
+    {
+      "startRegister": 35103,
+      "count": 100,
+      "functionCode": "FC03",
+      "unitId": 1
+    },
+    {
+      "startRegister": 35205,
+      "count": 7,
+      "functionCode": "FC03",
+      "unitId": 1
+    },
+    {
+      "startRegister": 37003,
+      "count": 5,
+      "functionCode": "FC03",
+      "unitId": 1
+    }
+  ],
+  "maxBatchRegisters": 100,
+  "sourceRefs": [
+    {
+      "project": "GoodWe Modbus Protocol Hybrid v1.2, 2024-02-02",
+      "url": "https://en.goodwe.com/Ftp/EN/Downloads/GW_Third-Party-EMS-Protocol_MODBUS-EN.pdf",
+      "retrievedAt": "2026-11-23",
+      "independentOf": "goodwe_arm745_modbus"
+    },
+    {
+      "project": "marcelblijleven/goodwe 0.4.10 (et.py)",
+      "url": "https://github.com/marcelblijleven/goodwe/blob/HEAD/goodwe/et.py",
+      "retrievedAt": "2026-11-23",
+      "independentOf": "goodwe_arm745_modbus"
+    }
+  ],
+  "confidence": "single_source"
+}

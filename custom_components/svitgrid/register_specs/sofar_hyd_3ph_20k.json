@@ -7,7 +7,7 @@
   "port": 8899,
   "defaultSlaveId": 1,
   "flags": {
-    "batteryPositiveIsDischarge": true
+    "gridPositiveIsExport": true
   },
   "reads": [
     {
@@ -145,6 +145,14 @@
         "batteryPower"
       ],
       "builtin": "battery_sign_normalize"
+    },
+    {
+      "field": "gridPower",
+      "op": "builtin",
+      "inputs": [
+        "gridPower"
+      ],
+      "builtin": "grid_sign_normalize"
     },
     {
       "field": "batteryTemperature",
